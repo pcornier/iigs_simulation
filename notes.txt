@@ -1,0 +1,109 @@
+
+About 40 columns display mode
+-----------------------------
+
+from https://retrocomputing.stackexchange.com/questions/2534/what-are-the-screen-holes-in-apple-ii-graphics
+
+      TOP/         MIDDLE/      BOTTOM/      (SCREEN HOLES)
+BASE  FIRST 40     SECOND 40    THIRD 40     UNUSED 8
+ADDR  #  RANGE     #  RANGE     #  RANGE     RANGE
+$400  00 $400-427  08 $428-44F  16 $450-477  $478-47F
+$480  01 $480-4A7  09 $4A8-4CF  17 $4D0-4F7  $4F8-4FF
+$500  02 $500-527  10 $528-54F  18 $550-577  $578-57F
+$580  03 $580-5A7  11 $5A8-5CF  19 $5D0-5F7  $5F8-5FF
+$600  04 $600-627  12 $628-64F  20 $650-677  $678-67F
+$680  05 $680-6A7  13 $6A8-6CF  21 $6D0-6F7  $6F8-6FF
+$700  06 $700-727  14 $728-74F  22 $750-777  $778-77F
+$780  07 $780-7A7  15 $7A8-7CF  23 $7D0-7F7  $7F8-7FF
+
+
+banks are
+---------
+00-01 Fast RAM on motherboard 2x64k
+02-05 Fast RAM extension 256k
+02-12 Fast RAM extension 1Mb
+02-3F Fast RAM extension 4Mb
+E0-E1 Slow RAM system + video 2x64k
+F0-FD ROM extension 896k
+FE-FF ROM motherboard
+
+memory map
+----------
+00/0000-01FF stack and zero-pages
+00/0200-02FF keyboard buffer
+00/0300-03EF free
+00/03D0-03FF ProDOS vector table
+00/0400-07FF Text screen -> slow ram E0/0400-07FF
+00/0800-7FFF stack and zero-pages
+00/8000-BFFF stack and ProDOS system - 16
+00/C000-CFFF I/O also mapped to 01, E0 and E1
+00/D000-DFFF 2x2K banks MEV
+00/E000-FFFF 12K + previous 4K = Language Card (LC) = 16K MEV
+
+01/0000-03FF user
+01/0400-07FF Text screen 80 columns (even columns)
+01/0800-BFFF user
+
+E0/0000-03FF system variables
+E0/0400-07FF screen text and I/O
+E0/0800-1FFF text page 2 and I/O buffer
+E0/2000-3FFF HGR graphic screen page 1
+E0/4000-5FFF HGR2 graphic screen page 2
+E0/6000-BFFF user
+E0/C000-CFFF I/O addresses and interrupts
+E0/D000-FFFF 16K MEV - system reserved
+
+E1/0000-03FF vectors and system variables
+E1/0400-07FF Text screen 80 columns (odd columns)
+E1/0800-1FFF text page 2 and I/O buffer
+E1/2000-3FFF double HGR graphic screen page or
+E1/2000-9FFF high res graphic screen (quick-draw screen)
+E1/A000-BFFF user
+E1/C000-CFFF I/O addresses and interrupts
+E1/D000-FFFF 16K MEV reserved for AppleTalk
+
+shadow register
+---------------
+bit 6 = 0 to shadow I/O and "Language card". When IOLC shadowing is on, the RAM at $C000-CFFF is folded into a second bank at $D000
+bit 4 = 0 to shadow aux hi-res page (used with bits 1 and 2 to inhibit shadowing in bank $01)
+bit 3 = 0 to shadow 32K video buffer ($2000-9FFF in bank $00)
+bit 2 = 0 to shadow hi-res page 2 ($4000-5FFF in banks $00 and $01)
+bit 1 = 0 to shadow hi-res page 1 ($2000-3FFF in banks $00 and $01)
+bit 0 = 0 to shadow text pages ($400-7FF in both banks $00 and $01. Text page 2, $800-BFF, is never shadowed.)
+RESET clears this register, enabling all shadowing.
+
+bit6 - 00: C000-CFFF -> E0: I/O space | 01 -> E0 | E1 -> E0
+         00: D000-DFFF -> E0: D000-DFFF (D000-D7FF/D800-DFFF) bank0/bank1 language cards
+         01: D000-DFFF -> E1: D000-DFFF aux bank0/bank1 language cards
+bit4 - 01: 2000-5FFF -> 01: RAM?
+bit3 - 00: 2000-9FFF -> E0: 2000-9FFF
+bit2 - 00: 4000-5FFF -> E0: hires page 2 | 01: 4000-5FFF -> E1: double hires page 2
+bit1 - 00: 2000-3FFF -> E0: hires page 1 | 01: 2000-3FFF -> E1: double hires page 1
+bit0 - 00: 0400-07FF -> E0: text page    | 01: 0400-07FF -> E1: 80-column text page
+
+ROM slots
+---------
+from c100 to cfff ROM slots expansion
+SLTROMSEL register c02b (r/w)
+bit 0 - reserved
+slot 1 - bit 1 $c100 printer
+slot 2 - bit 2 $c200 modem
+slot 3 - bit 3 $c300 text port / N.A. for Appple IIgs
+slot 4 - bit 4 $c400 mouse port
+slot 5 - bit 5 $c500 3.5 floppy disk
+slot 6 - bit 6 $c600 5.25 floppy disk
+slot 7 - bit 7 $c700 scsi hard drive / appletalk?
+
+memory -> rom
+c700 -> c500 or c700, c500 when enabled, why?
+c600 -> c600
+c500 -> c500
+c400 -> c400
+c300 -> c300
+c200 -> c200
+
+some good documents:
+Hardware Reference: http://www.applelogic.org/files/GSHARDWAREREF.pdf
+Apple IIGS Graphics and Sound College: https://www.kansasfest.org/wp-content/uploads/1992-heineman-gs.pdf
+Schematic: https://downloads.reactivemicro.com/Apple%20II%20Items/Hardware/IIgs/Schematic/
+Assembly Programming IIGS: https://apple2.gs/downloads/library/APPLE%20IIGS_assembly_language_programming.PDF

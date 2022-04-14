@@ -1,0 +1,8 @@
+`verilator_config
+public -module "P65C816" -var "ADDR_BUS"
+public -module "P65C816" -var "VPA"
+public -module "P65C816" -var "VDA"
+public -module "P65C816" -var "A"
+public -module "P65C816" -var "X"
+public -module "P65C816" -var "Y"
+public -module "top" -var "fastram"

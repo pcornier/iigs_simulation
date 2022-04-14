@@ -1,0 +1,263 @@
+[*]
+[*] GTKWave Analyzer v3.3.98 (w)1999-2019 BSI
+[*] Tue Apr 12 15:28:17 2022
+[*]
+[dumpfile] "/mnt/c/Users/cornier/pier.cornier@gmail.com/DriveSyncFiles/iigs/verilator/dump.vcd"
+[dumpfile_mtime] "Tue Apr 12 15:12:34 2022"
+[dumpfile_size] 152603631
+[savefile] "/mnt/c/Users/cornier/pier.cornier@gmail.com/DriveSyncFiles/iigs/verilator/conf.gtkw"
+[timestart] 20762008
+[size] 1110 905
+[pos] -1 -1
+*-7.400499 20762233 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] TOP.
+[treeopen] TOP.top.
+[treeopen] TOP.top.core.
+[treeopen] TOP.top.core.cpu.
+[sst_width] 213
+[signals_width] 249
+[sst_expanded] 1
+[sst_vpaned_height] 238
+@c00024
+[color] 6
+TOP.top.core.dbg_pc_counter[19:0]
+@28
+[color] 6
+(0)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(1)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(2)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(3)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(4)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(5)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(6)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(7)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(8)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(9)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(10)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(11)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(12)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(13)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(14)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(15)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(16)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(17)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(18)TOP.top.core.dbg_pc_counter[19:0]
+[color] 6
+(19)TOP.top.core.dbg_pc_counter[19:0]
+@1401200
+-group_end
+@28
+TOP.top.core.reset
+@22
+[color] 1
+TOP.top.core.cpu.PC[15:0]
+@c00023
+TOP.top.bank[7:0]
+@28
+(0)TOP.top.bank[7:0]
+(1)TOP.top.bank[7:0]
+(2)TOP.top.bank[7:0]
+(3)TOP.top.bank[7:0]
+(4)TOP.top.bank[7:0]
+(5)TOP.top.bank[7:0]
+(6)TOP.top.bank[7:0]
+(7)TOP.top.bank[7:0]
+@1401201
+-group_end
+@22
+TOP.top.core.cpu_addr[23:0]
+@28
+TOP.top.core.cpu.VPA
+TOP.top.core.cpu.VDA
+@800200
+-regs
+@22
+TOP.top.core.cpu.A[15:0]
+TOP.top.core.cpu.X[15:0]
+TOP.top.core.cpu.Y[15:0]
+@1000200
+-regs
+@22
+TOP.top.core.cpu.SP[15:0]
+[color] 3
+TOP.top.core.cpu_din[7:0]
+@c00022
+[color] 3
+TOP.top.core.cpu_dout[7:0]
+@28
+[color] 3
+(0)TOP.top.core.cpu_dout[7:0]
+[color] 3
+(1)TOP.top.core.cpu_dout[7:0]
+[color] 3
+(2)TOP.top.core.cpu_dout[7:0]
+[color] 3
+(3)TOP.top.core.cpu_dout[7:0]
+[color] 3
+(4)TOP.top.core.cpu_dout[7:0]
+[color] 3
+(5)TOP.top.core.cpu_dout[7:0]
+[color] 3
+(6)TOP.top.core.cpu_dout[7:0]
+[color] 3
+(7)TOP.top.core.cpu_dout[7:0]
+@1401200
+-group_end
+@28
+[color] 1
+TOP.top.core.cpu_we
+[color] 2
+TOP.top.rom1_ce
+[color] 2
+TOP.top.rom2_ce
+[color] 2
+TOP.top.fastram_ce
+[color] 2
+TOP.top.slowram_ce
+[color] 2
+TOP.top.core.IO
+@c00200
+-ADB
+@22
+TOP.top.core.adb.din[7:0]
+TOP.top.core.adb.dout[7:0]
+@28
+TOP.top.core.adb.state[1:0]
+@24
+TOP.top.core.adb.pending_data[2:0]
+TOP.top.core.adb.cmd_len[2:0]
+@28
+TOP.top.core.adb.data_int
+@22
+TOP.top.core.adb.cmd[7:0]
+@28
+TOP.top.core.adb.strobe
+TOP.top.core.adb.cen
+@22
+TOP.top.core.adb.data[31:0]
+@1401200
+-ADB
+@c00200
+-RTC
+@28
+TOP.top.core.prtc.addr
+@c00022
+TOP.top.core.prtc.din[7:0]
+@28
+(0)TOP.top.core.prtc.din[7:0]
+(1)TOP.top.core.prtc.din[7:0]
+(2)TOP.top.core.prtc.din[7:0]
+(3)TOP.top.core.prtc.din[7:0]
+(4)TOP.top.core.prtc.din[7:0]
+(5)TOP.top.core.prtc.din[7:0]
+(6)TOP.top.core.prtc.din[7:0]
+(7)TOP.top.core.prtc.din[7:0]
+@1401200
+-group_end
+@c00022
+TOP.top.core.prtc.dout[7:0]
+@28
+(0)TOP.top.core.prtc.dout[7:0]
+(1)TOP.top.core.prtc.dout[7:0]
+(2)TOP.top.core.prtc.dout[7:0]
+(3)TOP.top.core.prtc.dout[7:0]
+(4)TOP.top.core.prtc.dout[7:0]
+(5)TOP.top.core.prtc.dout[7:0]
+(6)TOP.top.core.prtc.dout[7:0]
+(7)TOP.top.core.prtc.dout[7:0]
+@1401200
+-group_end
+@c00022
++{DATA c033[7:0]} TOP.top.core.prtc.c033[7:0]
+@28
+(0)TOP.top.core.prtc.c033[7:0]
+(1)TOP.top.core.prtc.c033[7:0]
+(2)TOP.top.core.prtc.c033[7:0]
+(3)TOP.top.core.prtc.c033[7:0]
+(4)TOP.top.core.prtc.c033[7:0]
+(5)TOP.top.core.prtc.c033[7:0]
+(6)TOP.top.core.prtc.c033[7:0]
+(7)TOP.top.core.prtc.c033[7:0]
+@1401200
+-group_end
+@c00022
++{CTL c034[7:0]} TOP.top.core.prtc.c034[7:0]
+@28
+(0)TOP.top.core.prtc.c034[7:0]
+(1)TOP.top.core.prtc.c034[7:0]
+(2)TOP.top.core.prtc.c034[7:0]
+(3)TOP.top.core.prtc.c034[7:0]
+(4)TOP.top.core.prtc.c034[7:0]
+(5)TOP.top.core.prtc.c034[7:0]
+(6)TOP.top.core.prtc.c034[7:0]
+(7)TOP.top.core.prtc.c034[7:0]
+@1401200
+-group_end
+@24
+TOP.top.core.prtc.state[2:0]
+@22
+TOP.top.core.prtc.clk_reg1[7:0]
+@28
+TOP.top.core.prtc.cen
+TOP.top.core.prtc.strobe
+@22
+TOP.top.core.prtc.clock_data[31:0]
+@1401200
+-RTC
+@c00022
+TOP.top.fastram.addr[22:0]
+@28
+(0)TOP.top.fastram.addr[22:0]
+(1)TOP.top.fastram.addr[22:0]
+(2)TOP.top.fastram.addr[22:0]
+(3)TOP.top.fastram.addr[22:0]
+(4)TOP.top.fastram.addr[22:0]
+(5)TOP.top.fastram.addr[22:0]
+(6)TOP.top.fastram.addr[22:0]
+(7)TOP.top.fastram.addr[22:0]
+(8)TOP.top.fastram.addr[22:0]
+(9)TOP.top.fastram.addr[22:0]
+(10)TOP.top.fastram.addr[22:0]
+(11)TOP.top.fastram.addr[22:0]
+(12)TOP.top.fastram.addr[22:0]
+(13)TOP.top.fastram.addr[22:0]
+(14)TOP.top.fastram.addr[22:0]
+(15)TOP.top.fastram.addr[22:0]
+(16)TOP.top.fastram.addr[22:0]
+(17)TOP.top.fastram.addr[22:0]
+(18)TOP.top.fastram.addr[22:0]
+(19)TOP.top.fastram.addr[22:0]
+(20)TOP.top.fastram.addr[22:0]
+(21)TOP.top.fastram.addr[22:0]
+(22)TOP.top.fastram.addr[22:0]
+@1401200
+-group_end
+@28
+TOP.top.fastram.wr
+@22
+TOP.top.fastram.din[7:0]
+TOP.top.fastram.dout[7:0]
+@28
+TOP.top.fastram.ce
+@22
+TOP.top.fastram.dbg[7:0]
+[pattern_trace] 1
+[pattern_trace] 0
