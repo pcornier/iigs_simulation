@@ -173,6 +173,16 @@ P65C816 cpu(
   .VPB(cpu_vpb)
 );
 
+/*
+always @(posedge clk_sys)
+begin
+	if (fast_clk)
+	begin
+		$display("cpu_addr %x cpu_din %x cpu_dout %x cpu_we %x ",cpu_addr,cpu_din,cpu_dout,cpu_we);
+	end
+end
+*/
+
 reg [19:0] dbg_pc_counter;
 always @(posedge cpu_vpa or posedge cpu_vda or posedge reset)
   if (reset)

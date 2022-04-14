@@ -50,7 +50,14 @@ V_OPT =  --x-assign fast --x-initial fast --noassert
 CC_OPT = 
 
 V_SRC = \
-	sim.v 
+	sim.v  \
+	$(RTL)/fastram.v \
+	$(RTL)/slowram.v \
+	$(RTL)/rom.v \
+	$(RTL)/prtc.v \
+	$(RTL)/adb.v \
+	$(RTL)/iigs.v
+
 
 
 

@@ -329,21 +329,21 @@ int main(int argc, char** argv, char** env) {
   }
 
   // // print screen (40x24) at end of sim
-  // printf("-- dump --\n\n");
-  // int addr = 0x400;
-  // for (int s = 0; s < 3; s++) {
-  //   addr = 0x400 + s*0x28;
-  //   for (int r = 0; r < 8; r++) {
-  //     printf("\t%04X:\t|", addr);
-  //     for (int x=0; x<40;x++) {
-  //       int c = top->top->__PVT__fastram__DOT__ram[addr+x]&0x7f;
-  //       printf("%c", c);
-  //     }
-  //     addr += 128;
-  //     printf("| seg %d\n", s);
-  //   }
-  // }
-  // printf("\n\n");
+   printf("-- dump --\n\n");
+   int addr = 0x400;
+   for (int s = 0; s < 3; s++) {
+     addr = 0x400 + s*0x28;
+     for (int r = 0; r < 8; r++) {
+       printf("\t%04X:\t|", addr);
+       for (int x=0; x<40;x++) {
+         int c = top->top->__PVT__fastram__DOT__ram[addr+x]&0x7f;
+         printf("%c", c);
+       }
+       addr += 128;
+       printf("| seg %d\n", s);
+     }
+   }
+   printf("\n\n");
 
   if (start_trace != -1) tfp->close();
   if (txtdmp != -1) ofile.close();

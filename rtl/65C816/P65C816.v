@@ -8,34 +8,34 @@ module P65C816(CLK, RST_N, CE, RDY_IN, NMI_N, IRQ_N, ABORT_N, D_IN, D_OUT, A_OUT
 
    input         RDY_IN;
    input         NMI_N;
-   input         IRQ_N;
+   input         IRQ_N/*verilator public_flat*/;
    input         ABORT_N;
-   input [7:0]   D_IN;
-   output [7:0]  D_OUT;
-   output [23:0] A_OUT;
-   output        WE;
+   input [7:0]   D_IN/*verilator public_flat*/;
+   output [7:0]  D_OUT/*verilator public_flat*/;
+   output [23:0] A_OUT/*verilator public_flat*/;
+   output        WE/*verilator public_flat*/;
    reg           WE;
    output        RDY_OUT;
-   output        VPA;
+   output        VPA/*verilator public_flat*/;
    reg           VPA;
-   output        VDA;
+   output        VDA/*verilator public_flat*/;
    reg           VDA;
-   output        MLB;
+   output        MLB/*verilator public_flat*/;
    reg           MLB;
-   output        VPB;
+   output        VPB/*verilator public_flat*/;
    reg           VPB;
 
 
-   reg [15:0]    A;
-   reg [15:0]    X;
-   reg [15:0]    Y;
-   reg [15:0]    D;
-   reg [15:0]    SP;
-   reg [15:0]    T;
-   reg [7:0]     PBR;
-   reg [7:0]     DBR;
-   reg [8:0]     P;
-   wire [15:0]   PC;
+   reg [15:0]    A/*verilator public_flat*/;
+   reg [15:0]    X/*verilator public_flat*/;
+   reg [15:0]    Y/*verilator public_flat*/;
+   reg [15:0]    D/*verilator public_flat*/;
+   reg [15:0]    SP/*verilator public_flat*/;
+   reg [15:0]    T/*verilator public_flat*/;
+   reg [7:0]     PBR/*verilator public_flat*/;
+   reg [7:0]     DBR/*verilator public_flat*/;
+   reg [8:0]     P/*verilator public_flat*/;
+   wire [15:0]   PC/*verilator public_flat*/;
 
    reg [7:0]     DR;
    wire          EF;
