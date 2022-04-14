@@ -1,7 +1,13 @@
 
 
+
+generate the rom files:
 ```
 cd verilator
+make roms
+```
+
+```
 make
 ./obj_dir/Vtop -t 15 -l 2 -s 20
 gtkwave conf.gtkw
