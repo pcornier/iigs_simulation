@@ -52,6 +52,8 @@ const char* windowTitle_Audio = "Audio output";
 bool showDebugLog = true;
 DebugConsole console;
 MemoryEditor mem_edit;
+char pc_breakpoint[10] = "";
+bool pc_break_enabled;
 
 // HPS emulator
 // ------------
@@ -360,11 +362,10 @@ int main(int argc, char** argv, char** env) {
 		mem_edit.DrawContents(&top->emu__DOT__top__DOT__slowram__DOT__ram, 65536, 0);
 		ImGui::End();
 
-        //SData/*15:0*/ emu__DOT__top__DOT__core__DOT__cpu__DOT__SB;
-        //SData/*15:0*/ emu__DOT__top__DOT__core__DOT__cpu__DOT__T;
-        //SData/*8:0*/ emu__DOT__top__DOT__core__DOT__cpu__DOT__P;
 	
 		ImGui::Begin("CPU Registers");
+		ImGui::Checkbox("Break", &pc_break_enabled); ImGui::SameLine();
+		ImGui::InputTextWithHint("Address", "0000", pc_breakpoint, IM_ARRAYSIZE(pc_breakpoint),ImGuiInputTextFlags_CharsHexadecimal);
 		ImGui::Spacing();
 		ImGui::Text("A       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A);
 		ImGui::Text("X       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__X);
@@ -506,7 +507,18 @@ fprintf(stderr,"filePath: %s\n",filePath.c_str());
 
 		// Run simulation
 		if (run_enable) {
-			for (int step = 0; step < batchSize; step++) { verilate(); }
+			for (int step = 0; step < batchSize; step++) { 
+				long addr = strtol(pc_breakpoint, NULL, 16);
+				if (top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC==addr && pc_break_enabled)
+				{
+					run_enable=false;
+					// break!
+				}
+				else{
+
+					verilate(); 
+				}
+			}
 		}
 		else {
 			if (single_step) { verilate(); }
