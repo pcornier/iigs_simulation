@@ -61,6 +61,37 @@ always @(*) begin
 	endcase
 end
 
+reg [12:0] BASEADDR;
+always @(*) begin
+	case (V[7:3])
+		5'h00: BASEADDR= 13'h000;
+		5'h01: BASEADDR= 13'h080;
+		5'h02: BASEADDR= 13'h100;
+		5'h03: BASEADDR= 13'h180;
+		5'h04: BASEADDR= 13'h200;
+		5'h05: BASEADDR= 13'h280;
+		5'h06: BASEADDR= 13'h300;
+		5'h07: BASEADDR= 13'h380;
+
+		5'h08: BASEADDR= 13'h028;
+		5'h09: BASEADDR= 13'h0A8;
+		5'h0A: BASEADDR= 13'h128;
+		5'h0B: BASEADDR= 13'h1A8;
+		5'h0C: BASEADDR= 13'h228;
+		5'h0D: BASEADDR= 13'h2A8;
+		5'h0E: BASEADDR= 13'h328;
+		5'h0F: BASEADDR= 13'h3A8;
+
+		5'h10: BASEADDR= 13'h050;
+		5'h11: BASEADDR= 13'h0D0;
+		5'h12: BASEADDR= 13'h150;
+		5'h13: BASEADDR= 13'h1D0;
+		5'h14: BASEADDR= 13'h250;
+		5'h15: BASEADDR= 13'h2D0;
+		5'h16: BASEADDR= 13'h350;
+		5'h17: BASEADDR= 13'h3D0;
+	endcase
+end
 
 rom #(.memfile("chr.mem"),.AW(12)) charrom(
   .clock(clk),
@@ -79,35 +110,7 @@ wire [2:0] chpos_x = 3'd7 - H[2:0];
 wire [2:0] chpos_y = V[2:0];
 wire [5:0] chram_x = H[8:3];
 
-//wire [5:0] chram_y = V[4:3]*'h28+{offset,4'b0};
-wire [22:0] chram_y = base_y+offset;
-
-
-reg [22:0] base_y;
-reg [5:0] oldV;
-reg [22:0] offset;
-always @(posedge clk) if (ce_pix)
-begin
-        oldV<=V[8:3];
-	if (V==0) begin
-		base_y<='h400;
-		offset<=0;
-	end
-	else
-	begin
-		if (oldV!=V[8:3]) begin
-			$display("*** add 80");
-		base_y<=base_y+'h80;
-		if (!(V[8:3] % 'd8))
-		begin
-			base_y<='h400;
-			offset<=offset+'h28;
-		end
-	end
-	end
-end
-
-
+wire [12:0] chram_y = BASEADDR;
 
 //assign a = H > 'd511 ? 1'b0 : V > 'd255 ? 1'b0 : chrom_data_out[chpos_x[2:0]];
 wire  a = chrom_data_out['h7-chpos_x[2:0]];
@@ -117,13 +120,13 @@ assign G = a ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
 assign B = a ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
 
 //assign a = chrom_data_out[chpos_x[2:0]];
-assign video_addr = {chram_y, chram_x} + 'h400 ;
+assign video_addr = chram_y + chram_x +'h400 ;
 assign chrom_addr = {1'b0, 1'b0,video_data[7:0], chpos_y};
 
 
 always @(posedge clk) if (ce_pix)
 begin
-	$display("V %x oldV %x chram_y %x base_y %x offset %x video_addr %x video_data %x video_data %x %c %x \n",V[8:3],oldV,chram_y,base_y,offset,video_addr,video_data,video_data[6:0],video_data[6:0],chrom_data_out);
+//	$display("V %x oldV %x chram_y %x base_y %x offset %x video_addr %x video_data %x video_data %x %c %x \n",V[8:3],oldV,chram_y,base_y,offset,video_addr,video_data,video_data[6:0],video_data[6:0],chrom_data_out);
 end
 
 
