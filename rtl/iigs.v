@@ -12,6 +12,7 @@ module iigs(
   input [7:0] din,
   output reg [7:0] shadow,
   output reg [7:0] TEXTCOLOR,
+  output reg [3:0] BORDERCOLOR,
   output we
 );
 
@@ -105,6 +106,8 @@ always @(posedge clk_sys) begin
           prtc_strobe <= 1'b1;
           prtc_addr <= ~addr[0];
           prtc_din <= cpu_dout;
+	  if (~addr[0])
+		  BORDERCOLOR=cpu_dout[3:0];
         end
         12'h035: shadow <= cpu_dout;
         12'h03c: SOUNDCTL <= cpu_dout;

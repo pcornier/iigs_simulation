@@ -337,7 +337,8 @@ int main(int argc, char** argv, char** env) {
        printf("\t%04X:\t|", addr);
        for (int x=0; x<40;x++) {
          int c = top->top->__PVT__fastram__DOT__ram[addr+x]&0x7f;
-         printf("%c", c);
+         int c2 = top->top->__PVT__fastram__DOT__ram[addr+x];
+         printf("%c %x", c,c2);
        }
        addr += 128;
        printf("| seg %d\n", s);

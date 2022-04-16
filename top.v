@@ -36,13 +36,15 @@ iigs core(
   .dout(dout),
   .din(din),
   .we(we),
-  .TEXTCOLOR(TEXTCOLOR)
+  .TEXTCOLOR(TEXTCOLOR),
+  .BORDERCOLOR(BORDERCOLOR)
 
 );
 
 parameter RAMSIZE = 16; // 16x64k = 1MB, max = 127x64k = 8MB
 
 wire [7:0] TEXTCOLOR;
+wire [3:0] BORDERCOLOR;
 
 wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
@@ -151,7 +153,8 @@ vdc vdc(
         .B(B),
         .video_addr(video_addr),
         .video_data(video_data),
-	.TEXTCOLOR(TEXTCOLOR)
+	.TEXTCOLOR(TEXTCOLOR),
+	.BORDERCOLOR(BORDERCOLOR)
 );
 
 

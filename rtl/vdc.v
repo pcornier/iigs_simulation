@@ -4,12 +4,13 @@ input clk,
 input ce_pix,
 input[9:0] H,
 input[8:0] V,
-output [7:0] R,
-output [7:0] G,
-output [7:0] B,
+output reg [7:0] R,
+output reg [7:0] G,
+output reg [7:0] B,
 output [22:0] video_addr,
 input [7:0] video_data,
-input [7:0] TEXTCOLOR
+input [7:0] TEXTCOLOR,
+input [3:0] BORDERCOLOR
 );
 
 
@@ -17,6 +18,27 @@ input [7:0] TEXTCOLOR
 
 
 
+reg [11:0] BORGB;
+always @(*) begin
+	case (BORDERCOLOR)
+		4'h0: BORGB = 12'h000;          /* 0x0 black */
+		4'h1: BORGB = 12'hd03;          /* 0x1 deep red */
+		4'h2: BORGB = 12'h009;          /* 0x2 dark blue */
+		4'h3: BORGB = 12'hd0d;          /* 0x3 purple */
+		4'h4: BORGB = 12'h070;          /* 0x4 dark green */
+		4'h5: BORGB = 12'h555;          /* 0x5 dark gray */
+		4'h6: BORGB = 12'h22f;          /* 0x6 medium blue */
+		4'h7: BORGB = 12'h6af;          /* 0x7 light blue */
+		4'h8: BORGB = 12'h852;          /* 0x8 brown */
+		4'h9: BORGB = 12'hf60;          /* 0x9 orange */
+		4'ha: BORGB = 12'haaa;          /* 0xa light gray */
+		4'hb: BORGB = 12'hf98;          /* 0xb pink */
+		4'hc: BORGB = 12'h0d0;          /* 0xc green */
+		4'hd: BORGB = 12'hff0;          /* 0xd yellow */
+		4'he: BORGB = 12'h0f9;          /* 0xe aquamarine */
+		4'hf: BORGB = 12'hfff;          /* 0xf white */
+	endcase
+end
 reg [11:0] TRGB;
 always @(*) begin
 	case (TEXTCOLOR[7:4])
@@ -63,7 +85,7 @@ end
 
 reg [12:0] BASEADDR;
 always @(*) begin
-	case (V[7:3])
+	case (V[7:3]-2)
 		5'h00: BASEADDR= 13'h000;
 		5'h01: BASEADDR= 13'h080;
 		5'h02: BASEADDR= 13'h100;
@@ -106,18 +128,57 @@ wire [11:0] chrom_addr;
 
 
 // just do 1 video mode for now
-wire [2:0] chpos_x = 3'd7 - H[2:0];
+//wire [2:0] chpos_x = 3'd7 - H[2:0];
 wire [2:0] chpos_y = V[2:0];
-wire [5:0] chram_x = H[8:3];
+reg [5:0] chram_x;// = H[8:3];
 
 wire [12:0] chram_y = BASEADDR;
 
 //assign a = H > 'd511 ? 1'b0 : V > 'd255 ? 1'b0 : chrom_data_out[chpos_x[2:0]];
-wire  a = chrom_data_out['h7-chpos_x[2:0]];
 
-assign R = a ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
-assign G = a ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
-assign B = a ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
+
+
+wire  a = chrom_data_out[xpos[3:1]];
+
+
+//
+// Text Mode chars are 7 bits wide, not 8
+//
+reg [3:0] xpos;
+always @(posedge clk) if(ce_pix)
+begin
+	if (H<32)
+	begin
+		xpos<=0;
+		chram_x<=0;
+	end
+	else
+	begin
+
+		xpos<=xpos+1;
+		if (xpos==13) begin
+			xpos<=0;
+			chram_x<=chram_x+1;
+		end
+	end
+//$display("xpos[3:1] %x xpos %x",xpos[3:1],xpos);
+//$display("chram_x[6:1] %x chram_x %x",chram_x[6:1],chram_x);
+
+if (H < 'd32 || H > 'd32+'d560 || V < 'd16 || V > 207)
+begin
+R <= {BORGB[11:8],BORGB[11:8]};
+G <= {BORGB[7:4],BORGB[7:4]};
+B <= {BORGB[3:0],BORGB[3:0]};
+end
+else
+begin
+R <= ~a ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
+G <= ~a ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
+B <= ~a ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
+
+end
+end
+
 
 //assign a = chrom_data_out[chpos_x[2:0]];
 assign video_addr = chram_y + chram_x +'h400 ;

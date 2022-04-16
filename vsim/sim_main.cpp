@@ -79,13 +79,13 @@ const int input_menu = 12;
 
 // Video
 // -----
-#define VGA_WIDTH 320
+#define VGA_WIDTH 700
 #define VGA_HEIGHT 240
 #define VGA_ROTATE 0  // 90 degrees anti-clockwise
 #define VGA_SCALE_X vga_scale
 #define VGA_SCALE_Y vga_scale
 SimVideo video(VGA_WIDTH, VGA_HEIGHT, VGA_ROTATE);
-float vga_scale = 2.5;
+float vga_scale = 1.0;
 
 // Verilog module
 // --------------
