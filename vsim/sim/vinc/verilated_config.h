@@ -18,8 +18,8 @@
 
 /// Verilator product name, e.g. "Verilator"
 // Autoconf substitutes this with the strings from AC_INIT.
-#define VERILATOR_PRODUCT "@PACKAGE_NAME@"
+#define VERILATOR_PRODUCT "Verilator"
 
 /// Verilator version name, e.g. "1.000 2000-01-01"
 // Autoconf substitutes this with the strings from AC_INIT.
-#define VERILATOR_VERSION "@PACKAGE_VERSION@"
+#define VERILATOR_VERSION "4.204 2021-06-12"

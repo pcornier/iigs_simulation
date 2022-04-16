@@ -1,0 +1,6 @@
+vsim/.vs/*
+vsim/obj_dir/*
+vsim/x64/*
+vsim/roms/*
+vsim/traces/*
+vsim/imgui.ini

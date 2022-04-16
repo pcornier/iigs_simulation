@@ -2,7 +2,7 @@
 `include "P65C816.vh"
 
 module P65C816(CLK, RST_N, CE, RDY_IN, NMI_N, IRQ_N, ABORT_N, D_IN, D_OUT, A_OUT, WE, RDY_OUT, VPA, VDA, MLB, VPB);
-   input         CLK;
+   input         CLK/*verilator public_flat*/;
    input         RST_N;
    input         CE;
 
@@ -44,7 +44,7 @@ module P65C816(CLK, RST_N, CE, RDY_IN, NMI_N, IRQ_N, ABORT_N, D_IN, D_OUT, A_OUT
    reg           oldXF;
    wire [15:0]   SB;
    wire [15:0]   DB;
-   wire          EN;
+   wire          EN/*verilator public_flat*/;
    MCode_r          MC;
    reg [7:0]     IR;
    wire [7:0]    NextIR;

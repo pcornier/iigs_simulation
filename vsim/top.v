@@ -41,6 +41,11 @@ wire rom2_ce = (bank == 8'h0 && addr >= 16'hc100) || bank == 8'hff;
 wire fastram_ce = bank < RAMSIZE; // bank[7] == 0;
 wire slowram_ce = bank == 8'he0 || bank == 8'he1;
 
+// always @(posedge clk_sys)
+// begin
+//   $display("rom1_ce: %b rom2_ce: %b ", rom1_ce, rom2_ce);
+// end
+
 wire [7:0] din =
   rom1_ce ? rom1_dout :
   rom2_ce ? rom2_dout :
