@@ -11,6 +11,7 @@ module iigs(
   output [7:0] dout,
   input [7:0] din,
   output reg [7:0] shadow,
+  output reg [7:0] TEXTCOLOR,
   output we
 );
 
@@ -49,6 +50,7 @@ reg [7:0] SOUNDDATA;
 reg [7:0] SLTROMSEL;
 reg [7:0] SOUNDADRL;
 reg [7:0] SOUNDADRH;
+//reg [7:0] TEXTCOLOR;
 reg [7:0] LOWRES;
 reg [7:0] SPKR;
 reg [7:0] RD80VID;
@@ -94,6 +96,7 @@ always @(posedge clk_sys) begin
           adb_rw <= 1'b0;
         end
         12'h007: SETINTCxROM <= cpu_dout;
+        12'h022: TEXTCOLOR <= cpu_dout;
         12'h029: WVIDEO <= cpu_dout;
         12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;

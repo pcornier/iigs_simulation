@@ -1,22 +1,32 @@
+`timescale 1ns / 1ps
 
-module rom #(parameter memfile="")
+//-------------------------------------------------------------------------------------------------
+module rom
+//-------------------------------------------------------------------------------------------------
+#
 (
-  input clk,
-  input [15:0] addr,
-  output [7:0] dout,
-  input ce
+	parameter AW = 16,
+	parameter DW = 8,
+	parameter memfile = "rom8x16K.hex"
+) (
+	input  wire         clock,
+	input  wire         ce,
+	output reg [DW-1:0] q,
+	input  wire[AW-1:0] address
 );
+//-------------------------------------------------------------------------------------------------
 
-reg [7:0] q;
-reg [7:0] mem[65535:0];
+    initial begin
+        $display("rom Loading rom. %s",memfile);
+        $display(memfile);
+        if (memfile>0)
+                $readmemh(memfile, d);
+    end
 
-assign dout = ce ? q : 8'd0;
+reg[DW-1:0] d[(2**AW)-1:0];
 
-initial begin
-  $readmemh(memfile, mem);
-end
+always @(posedge clock) if(ce) q<= d[address];
 
-always @(posedge clk)
-  q <= mem[addr];
-
+//-------------------------------------------------------------------------------------------------
 endmodule
+//-------------------------------------------------------------------------------------------------

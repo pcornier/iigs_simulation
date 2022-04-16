@@ -46,7 +46,7 @@ module P65C816(CLK, RST_N, CE, RDY_IN, NMI_N, IRQ_N, ABORT_N, D_IN, D_OUT, A_OUT
    wire [15:0]   DB;
    wire          EN;
    MCode_r          MC;
-   reg [7:0]     IR;
+   reg [7:0]     IR/*verilator public_flat*/;
    wire [7:0]    NextIR;
    reg [3:0]     STATE;
    reg [3:0]     NextState;

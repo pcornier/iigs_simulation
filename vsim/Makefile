@@ -51,11 +51,13 @@ CC_OPT =
 
 V_SRC = \
 	sim.v  \
+	../top.v \
 	$(RTL)/fastram.v \
 	$(RTL)/slowram.v \
 	$(RTL)/rom.v \
 	$(RTL)/prtc.v \
 	$(RTL)/adb.v \
+	$(RTL)/vdc.v \
 	$(RTL)/iigs.v
 
 

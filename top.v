@@ -1,7 +1,15 @@
 
 module top(
   input reset,
-  input clk_sys
+  input clk_sys,
+  input ce_pix,
+  output [7:0] R,
+  output [7:0] G,
+  output [7:0] B,
+  output HBlank,
+  output VBlank,
+  output HS,
+  output VS
 );
 
 wire [7:0] bank;
@@ -27,11 +35,14 @@ iigs core(
   .addr(addr),
   .dout(dout),
   .din(din),
-  .we(we)
+  .we(we),
+  .TEXTCOLOR(TEXTCOLOR)
 
 );
 
 parameter RAMSIZE = 16; // 16x64k = 1MB, max = 127x64k = 8MB
+
+wire [7:0] TEXTCOLOR;
 
 wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
@@ -49,21 +60,21 @@ wire [7:0] din =
   8'hff;
 
 rom #(.memfile("rom1.mem")) rom1(
-  .clk(clk_sys),
-  .addr(addr),
-  .dout(rom1_dout),
+  .clock(clk_sys),
+  .address(addr),
+  .q(rom1_dout),
   .ce(rom1_ce)
 );
 
 rom #(.memfile("rom2.mem")) rom2(
-  .clk(clk_sys),
-  .addr(addr),
-  .dout(rom2_dout),
+  .clock(clk_sys),
+  .address(addr),
+  .q(rom2_dout),
   .ce(rom2_ce)
 );
 
 // 8M 2.5MHz fast ram
-
+/*
 fastram fastram(
   .clk(clk_sys),
   .addr({ bank[6:0], addr }),
@@ -72,6 +83,26 @@ fastram fastram(
   .wr(we),
   .ce(fastram_ce)
 );
+*/
+
+dpram #(.widthad_a(23)) fastram
+(
+	.clock_a(clk_sys),
+	.address_a({ bank[6:0], addr }),
+	.data_a(dout),
+	.q_a(fastram_dout),
+	.wren_a(we),
+	.ce_a(fastram_ce),
+
+	.clock_b(clk_sys),
+	.address_b(video_addr),
+	.data_b(0),
+	.q_b(video_data),
+	.wren_b(1'b0)
+
+	//.ce_b(1'b1)
+);
+
 
 // 128k 1MHz slow ram
 // TODO: when 00-01 shadows on E0-E1, there's a copy mechanism 0x->Ex and it is
@@ -86,5 +117,42 @@ slowram slowram(
   .wr(we),
   .ce(slowram_ce)
 );
+
+wire [9:0] H;
+wire [8:0] V;
+
+jtframe_vtimer vtimer(
+    .clk(clk_sys),
+    .pxl_cen(ce_pix),
+    .H(H),
+    .vdump(V),
+   .LHBL(hblank_n),
+   .LVBL(vblank_n),
+   .HS(HS),
+   .VS(VS)
+);
+
+wire hblank_n;
+wire vblank_n;
+
+assign HBlank = ~hblank_n;
+assign VBlank = ~vblank_n;
+
+wire [22:0] video_addr;
+wire [7:0] video_data;
+
+vdc vdc(
+        .clk(clk_sys),
+        .ce_pix(ce_pix),
+        .H(H),
+        .V(V),
+        .R(R),
+        .G(G),
+        .B(B),
+        .video_addr(video_addr),
+        .video_data(video_data),
+	.TEXTCOLOR(TEXTCOLOR)
+);
+
 
 endmodule

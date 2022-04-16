@@ -175,7 +175,17 @@ int verilate() {
 
 		if (clk_sys.IsRising()) {
 
-
+#if 0
+		if (top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA){
+			static int OLDPC=0;
+			if (OLDPC!=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC) {
+				OLDPC=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC;
+				printf("%02X:%04X\n", 
+						top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR,
+						top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
+			}
+		}
+#endif
 
 
 			main_time++;
@@ -383,6 +393,7 @@ int main(int argc, char** argv, char** env) {
 		ImGui::Text("VDA:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VDA);
 		ImGui::Text("VPA:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA);
 		ImGui::Text("VPB:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB);
+		ImGui::Text("IR:      0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__IR);
 		ImGui::End();
 		//ImGui::Spacing();
 

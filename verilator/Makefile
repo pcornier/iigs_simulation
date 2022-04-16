@@ -13,3 +13,4 @@ verilator:
 roms:
 	hexdump -v -n 65536 -e '1/1 "%02X" "\n"' ../doc/APPLE2GS.ROM > ./rom1.mem
 	hexdump -v -s 65536 -e '1/1 "%02X" "\n"' ../doc/APPLE2GS.ROM > ./rom2.mem
+	hexdump -v -e '1/1 "%02X" "\n"' ../doc/*.chr > ./chr.mem

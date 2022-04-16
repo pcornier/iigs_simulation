@@ -105,19 +105,36 @@ wire UART_DSR;
 
 top top (
 	.reset(reset),
-	.clk_sys(clk_sys)
+	.clk_sys(clk_sys),
+	.ce_pix(ce_pix),
+	.R(VGA_R),
+	.G(VGA_G),
+	.B(VGA_B),
+	.HBlank(hblank),
+	.VBlank(vblank),
+	.HS(hsync),
+	.VS(vsync)
 );
-/*
-assign VGA_R=R;
-assign VGA_G=G;
-assign VGA_B=B;
+
+reg ce_pix;
+always @(posedge clk_sys) begin
+        reg div ;
+
+        div <= ~div;
+        ce_pix <=  &div ;
+end
+
+wire hsync,vsync;
+
+assign CE_PIXEL=ce_pix;
+
 assign VGA_HS=hsync;
 assign VGA_VS=vsync;
+
 assign VGA_HB=hblank;
 assign VGA_VB=vblank;
 
-assign CE_PIXEL=ce_5m3;
-*/
+
 
 
 
