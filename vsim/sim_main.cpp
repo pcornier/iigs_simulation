@@ -39,7 +39,7 @@ using namespace std;
 int initialReset = 48;
 bool run_enable = 1;
 bool adam_mode = 1;
-int batchSize = 50;
+int batchSize = 10000;
 //int batchSize = 100;
 bool single_step = 0;
 bool multi_step = 0;
@@ -126,16 +126,15 @@ void resetSim() {
 bool stop_on_log_mismatch = 1;
 bool debug_6502 = 1;
 int cpu_sync;
-long cpu_sync_count;
+long cpu_instruction_count;
 int cpu_clock;
 int cpu_clock_last;
-unsigned char vda_last;
-unsigned char vpa_last;
 const int ins_size = 48;
 int ins_index = 0;
 unsigned short ins_pc[ins_size];
 unsigned char ins_in[ins_size];
 unsigned long ins_ma[ins_size];
+unsigned char ins_dbr[ins_size];
 bool ins_formatted[ins_size];
 std::string ins_str[ins_size];
 
@@ -155,23 +154,22 @@ bool writeLog(const char* line)
 		bool match = true;
 
 		std::string c_line = std::string(line);
-		std::string c = "CPU > " + c_line;
+		std::string c = "%6d  CPU > " + c_line;
 		if (log_index < log_mame.size()) {
 			std::string m_line = log_mame.at(log_index);
-			std::string m = "MAME > " + m_line;
-			std::string f = fmt::format("{0}: {1} {2}", log_index, m, c);
-			//			console.AddLog(f.c_str());
+			std::string m = "%6d MAME > " + m_line;
 			if (stop_on_log_mismatch && m_line != c_line) {
-				console.AddLog("DIFF at %06x", ins_pc[0]);
-				//console.AddLog(m.c_str());
-				//console.AddLog(c.c_str());
+				console.AddLog("DIFF at %06d - %06x", cpu_instruction_count, ins_pc[0]);
+				console.AddLog(m.c_str(), cpu_instruction_count);
+				console.AddLog(c.c_str(), cpu_instruction_count);
 				match = false;
 			}
-			console.AddLog(m.c_str());
-			console.AddLog(c.c_str());
+			else {
+				console.AddLog(c.c_str(), cpu_instruction_count);
+			}
 		}
 		else {
-			console.AddLog(c.c_str());
+			console.AddLog(c.c_str(), cpu_instruction_count);
 		}
 
 		log_index++;
@@ -193,12 +191,16 @@ enum instruction_type {
 	relative,
 	relativeLong,
 	accumulator,
+	direct24,
+	direct24X,
+	direct24Y,
 	indirect,
 	indirectX,
 	indirectY,
 	longValue,
-	longAbsoluteX,
-	longAbsoluteY
+	longX,
+	longY,
+	stack
 };
 
 enum operand_type {
@@ -388,21 +390,29 @@ void DumpInstruction() {
 	case 0x9A: sta = "txs"; break;
 	case 0xBA: sta = "tsx"; break;
 	case 0xBB: sta = "tyx"; break;
-	case 0x0C: sta = "tsb"; opType = byte3; break;
+	case 0x0C: sta = "tsb"; type = absolute; opType = byte3; break;
 	case 0x1B: sta = "tcs"; break;
+	case 0x5B: sta = "tcd"; break;
 
 	case 0x08: sta = "php"; break;
+	case 0x0B: sta = "phd"; break;
+	case 0x2B: sta = "pld"; break;
+	case 0xAB: sta = "plb"; break;
+	case 0x8B: sta = "phb"; break;
+	case 0x4B: sta = "phk"; break;
 	case 0x28: sta = "plp"; break;
 	case 0xfb: sta = "xce"; break;
 
 	case 0x18: sta = "clc"; break;
 	case 0x58: sta = "cli"; break;
-	case 0xB8: sta = "clo"; break;
+	case 0xB8: sta = "clv"; break;
 	case 0xD8: sta = "cld"; break;
 
 	case 0xE8: sta = "inx"; break;
 	case 0xC8: sta = "iny"; break;
+	case 0x1A: sta = "ina"; break;
 
+	case 0x70: sta = "bvs"; type = relativeLong; break;
 	case 0x80: sta = "bra"; type = relativeLong; break;
 
 	case 0x38: sta = "sec"; break;
@@ -411,8 +421,10 @@ void DumpInstruction() {
 	case 0xF8: sta = "sed"; break;
 
 	case 0x48: sta = "pha"; break;
+	case 0x5A: sta = "phy"; break;
 	case 0x68: sta = "pla"; break;
 	case 0xF4: sta = "pea"; type = absolute; break;
+	case 0x62: sta = "per"; type = relativeLong; break;
 
 	case 0x0A: sta = "asl"; type = accumulator; break;
 	case 0x06: sta = "asl"; type = zeroPage; break;
@@ -423,7 +435,8 @@ void DumpInstruction() {
 	case 0x09: sta = "ora"; type = immediate; break;
 	case 0x05: sta = "ora"; type = zeroPage; break;
 	case 0x15: sta = "ora"; type = zeroPageX; break;
-	case 0x0D: sta = "ora"; type = absolute; break;
+	case 0x1F: sta = "ora"; type = longX; break;
+	case 0x0D: sta = "ora"; type = absolute; opType = byte2; break;
 	case 0x1D: sta = "ora"; type = absoluteX; break;
 	case 0x19: sta = "ora"; type = absoluteY; break;
 	case 0x01: sta = "ora"; type = indirectX; break;
@@ -455,7 +468,10 @@ void DumpInstruction() {
 	case 0xF1: sta = "sbc"; type = indirectY; break;
 
 	case 0xC9: sta = "cmp"; type = immediate; break;
+	case 0xCD: sta = "cmp"; type = absolute; break;
 	case 0xC5: sta = "cmp"; type = zeroPageX; break;
+
+	case 0xD9: sta = "cmp"; type = absoluteY; break;
 	case 0xDD: sta = "cmp"; type = absoluteX; break;
 
 	case 0xE0: sta = "cpx"; type = immediate; break;
@@ -465,6 +481,8 @@ void DumpInstruction() {
 	case 0xC0: sta = "cpy"; type = immediate; break;
 	case 0xC4: sta = "cpy"; type = zeroPage; break;
 	case 0xCC: sta = "cpy"; type = absolute; break;
+
+	case 0xC2: sta = "rep"; type = immediate; break;
 
 	case 0xA2: sta = "ldx"; type = immediate; break;
 	case 0xA6: sta = "ldx"; type = zeroPage; break;
@@ -479,19 +497,28 @@ void DumpInstruction() {
 	case 0xBC: sta = "ldy"; type = absoluteX; break;
 
 	case 0xA9: sta = "lda"; type = immediate; break;
+	case 0xA3: sta = "lda"; type = stack; break;
 	case 0xA5: sta = "lda"; type = zeroPage; break;
+	case 0xA7: sta = "lda"; type = direct24; break;
+	case 0xAF: sta = "lda"; type = longValue; break;
+	case 0xB7: sta = "lda"; type = direct24Y; break;
 	case 0xB5: sta = "lda"; type = zeroPageX; break;
 	case 0xAD: sta = "lda"; type = absolute; opType = byte3; break;
 	case 0xBD: sta = "lda"; type = absoluteX; break;
-	case 0xBF: sta = "lda"; type = longAbsoluteX; break;
+	case 0xBF: sta = "lda"; type = longX; break;
 	case 0xB9: sta = "lda"; type = absoluteY; break;
 	case 0xA1: sta = "lda"; type = indirectX; break;
 	case 0xB1: sta = "lda"; type = indirectY; break;
 
+	case 0xDF: sta = "cmp"; type = longX; break;
+
+	case 0x1C: sta = "trb"; type = absolute; break;
 
 	case 0x8D: sta = "sta"; type = absolute; opType = byte3; break;
 	case 0x85: sta = "sta"; type = zeroPage; break;
+	case 0x87: sta = "sta"; type = direct24; break;
 	case 0x95: sta = "sta"; type = zeroPageX; break;
+	case 0x9F: sta = "sta"; type = longX; break;
 	case 0x9D: sta = "sta"; type = absoluteX; break;
 	case 0x99: sta = "sta"; type = absoluteY; break;
 	case 0x81: sta = "sta"; type = indirectX; break;
@@ -505,6 +532,8 @@ void DumpInstruction() {
 	case 0x84: sta = "sty"; type = zeroPage; break;
 	case 0x94: sta = "sty"; type = zeroPageX; break;
 	case 0x8C: sta = "sty"; type = absolute; break;
+	case 0x64: sta = "stz"; type = zeroPage;  break;
+	case 0x9C: sta = "stz"; type = absolute;  opType = byte3; break;
 
 	case 0x69: sta = "adc"; type = immediate; break;
 	case 0x65: sta = "adc"; type = zeroPage; break;
@@ -513,13 +542,19 @@ void DumpInstruction() {
 	case 0x7D: sta = "adc"; type = absoluteX; break;
 	case 0x79: sta = "adc"; type = absoluteY; break;
 
+	case 0x3b: sta = "tsc"; break;
+	case 0x7b: sta = "tdc"; break;
+
 	case 0xC6: sta = "dec"; type = zeroPage;  break;
 	case 0xD6: sta = "dec"; type = zeroPageX;  break;
 	case 0xCE: sta = "dec"; type = absolute;  break;
 	case 0xDE: sta = "dec"; type = absoluteX;  break;
 
+	case 0x3A: sta = "dea"; break;
 	case 0xCA: sta = "dex"; break;
 	case 0x88: sta = "dey"; break;
+
+	case 0xEB: sta = "xba"; break;
 
 	case 0x24: sta = "bit"; type = zeroPage; break;
 	case 0x2C: sta = "bit"; type = absolute; break;
@@ -533,6 +568,7 @@ void DumpInstruction() {
 	case 0x10: sta = "bpl"; type = relative; break;
 
 	case 0x2a: sta = "rol"; type = accumulator; break;
+	case 0x6a: sta = "ror"; type = accumulator; break;
 
 	case 0x4A: sta = "lsr"; type = accumulator; break;
 	case 0x46: sta = "lsr"; type = zeroPage; break;
@@ -548,6 +584,8 @@ void DumpInstruction() {
 	case 0x4C: sta = "jmp"; type = absolute; break;
 	case 0x6C: sta = "jmp"; type = indirect; break;
 
+	case 0x6B: sta = "rtl";  break;
+
 	default: sta = "???"; f = "\t\tPC={0:X} arg1={1:X} arg2={2:X} IN0={3:X} IN1={4:X} IN2={5:X} IN3={6:X} IN4={7:X} MA0={8:X} MA1={9:X} MA2={10:X} MA3={11:X} MA4={12:X}";
 	}
 
@@ -555,17 +593,24 @@ void DumpInstruction() {
 
 	if (ins_index > 1) {
 
-		if (ins_index > 3 && opType == byte3) {
+		if (opType == byte3) {
 			unsigned long operand = ins_in[1];
 			operand |= (ins_in[2] << 8);
 			operand |= (ins_in[3] << 16);
+
+			if (ins_index <= 3) {
+				operand = ins_in[1];
+				operand |= (ins_in[2] << 8);
+				operand |= (ins_dbr[1] << 16);
+			}
+			//console.AddLog("%d %x", ins_index, operand);
 
 			int item = 0;
 			while (gs_vectors[item].addr != 0xffff)
 			{
 				if (gs_vectors[item].addr == operand)
 				{
-					ins_str[1] = ">";
+					ins_str[1] = type == longValue ? ">" : "";
 					ins_str[1].append(gs_vectors[item].name);
 					type = formatted;
 					break;
@@ -574,7 +619,7 @@ void DumpInstruction() {
 			}
 		}
 
-		if (type != formatted && opType != none) {
+		if (type != formatted && (opType == byte2 || (opType == byte3 && ins_index == 3))) {
 
 			unsigned short operand = ins_in[1];
 			if (ins_index > 2) {
@@ -598,28 +643,44 @@ void DumpInstruction() {
 
 	f = "{2:s}";
 	unsigned long relativeAddress = ins_ma[0] + ((signed char)ins_in[1]) + 2;
+	if (sta == "per") {
+		relativeAddress++; // I HATE THIS
+	}
 	unsigned char maHigh0 = (unsigned char)(ins_ma[0] >> 16) & 0xff;
 	unsigned char maHigh1 = (unsigned char)(ins_ma[1] >> 16) & 0xff;
 
 	signed char signedIn1 = ins_in[1];
-	std::string signedIn1Formatted = signedIn1 < 0 ? fmt::format("-${0:02x}", signedIn1 * -1) : fmt::format("${0:02x}", signedIn1);
+	std::string signedIn1Formatted = signedIn1 < 0 ? fmt::format("-${0:x}", signedIn1 * -1) : fmt::format("${0:x}", signedIn1);
 
 	switch (type) {
 	case implied: f = ""; break;
 	case formatted: arg1 = ins_str[1]; f = " {2:s}"; break;
-	case immediate: arg1 = fmt::format(" #${0:02x}", ins_in[1]); break;
+	case immediate:
+		if (ins_index == 3) {
+			arg1 = fmt::format(" #${0:02x}{1:02x}", ins_in[2], ins_in[1]);
+		}
+		else {
+			arg1 = fmt::format(" #${0:02x}", ins_in[1]);
+		}
+		break;
 	case absolute: arg1 = fmt::format(" ${0:02x}{1:02x}", ins_in[2], ins_in[1]); break;
-	case absoluteX: arg1 = fmt::format(" ${0:02x}{1:02x}, x", ins_in[2], ins_in[1]); break;
-	case absoluteY: arg1 = fmt::format(" ${0:02x}{1:02x}, y", ins_in[2], ins_in[1]); break;
-	case zeroPage: arg1 = fmt::format(" #${0:02x}", ins_in[1]); break;
-	case zeroPageX: arg1 = fmt::format(" #${0:02x}, x", ins_in[1]); break;
-	case zeroPageY: arg1 = fmt::format(" #${0:02x}, y", ins_in[1]); break;
-	case indirect: arg1 = fmt::format(" #${0:02x}", ins_in[1]); break;
-	case indirectX: arg1 = fmt::format(" #${0:02x}, x", ins_in[1]); break;
-	case indirectY: arg1 = fmt::format(" #${0:02x}, y", ins_in[1]); break;
-	case longValue: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x}", ins_in[4], ins_in[2], ins_in[1]); break;
-	case longAbsoluteX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", maHigh1, ins_in[2], ins_in[1]); break;
-	case longAbsoluteY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", maHigh1, ins_in[2], ins_in[1]); break;
+	case absoluteX: arg1 = fmt::format(" ${0:02x}{1:02x},x", ins_in[2], ins_in[1]); break;
+	case absoluteY: arg1 = fmt::format(" ${0:02x}{1:02x},y", ins_in[2], ins_in[1]); break;
+	case zeroPage: arg1 = fmt::format(" ${0:02x}", ins_in[1]); break;
+	case direct24: arg1 = fmt::format(" [${0:02x}]", ins_in[1]); break;
+	case direct24X: arg1 = fmt::format(" [${0:02x}],x", ins_in[1]); break;
+	case direct24Y: arg1 = fmt::format(" [${0:02x}],y", ins_in[1]); break;
+	case zeroPageX: arg1 = fmt::format(" ${0:02x},x", ins_in[1]); break;
+	case zeroPageY: arg1 = fmt::format(" ${0:02x},y", ins_in[1]); break;
+	case indirect: arg1 = fmt::format(" (${0:02x})", ins_in[1]); break;
+	case indirectX: arg1 = fmt::format(" (${0:02x}),x", ins_in[1]); break;
+	case indirectY: arg1 = fmt::format(" (${0:02x}),y", ins_in[1]); break;
+	case stack: arg1 = fmt::format(" ${0:x},s", ins_in[1]); break;
+	case longValue: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x}", ins_in[3], ins_in[2], ins_in[1]); break;
+	case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", ins_in[3], ins_in[2], ins_in[1]); break;
+	case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", ins_in[3], ins_in[2], ins_in[1]); break;
+		//case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", maHigh1, ins_in[2], ins_in[1]); break;
+		//case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", maHigh1, ins_in[2], ins_in[1]); break;
 	case accumulator: arg1 = "a"; break;
 	case relative: arg1 = fmt::format(" {0:04x} ({1})", relativeAddress, signedIn1Formatted);		break;
 	case relativeLong: arg1 = fmt::format(" {0:06x} ({1})", relativeAddress, signedIn1Formatted);		break;
@@ -633,7 +694,7 @@ void DumpInstruction() {
 	if (!writeLog(log.c_str())) {
 		run_enable = 0;
 	}
-
+	cpu_instruction_count++;
 	//if (sta == "???") {
 	//	console.AddLog(log.c_str());
 	//	run_enable = 0;
@@ -692,24 +753,15 @@ int verilate() {
 				unsigned char en = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__EN;
 				if (en) {
 
-
 					unsigned char vpa = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA;
 					unsigned char vda = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VDA;
 					unsigned char vpb = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB;
-					unsigned char mlb = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__MLB;
 					unsigned char din = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D_IN;
 					unsigned long addr = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
-
 					unsigned char nextstate = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__NextState;
 
-					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x}/{6:x} NEXT={7:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, vda_last, nextstate).c_str());
+					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
-					vda_last = vda;
-					vpa_last = vpa;
-
-
-					bool vpa_rising = ((vpa == 1 && vpa_last == 0));
-					bool vda_rising = ((vda == 1 && vda_last == 0));
 
 					if (vpa && nextstate == 1) {
 						//console.AddLog(fmt::format("LOG? ins_index ={0:x} ins_pc[0]={1:06x} ", ins_index, ins_pc[0]).c_str());
@@ -723,15 +775,30 @@ int verilate() {
 							ins_ma[i] = 0;
 							ins_formatted[i] = false;
 						}
+
+						std::string log = fmt::format("{0:06d} > ", cpu_instruction_count);
+						log.append(fmt::format("A={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A));
+						log.append(fmt::format("X={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__X));
+						log.append(fmt::format("Y={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__Y));
+
+						log.append(fmt::format("M={0:x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__MF));
+						log.append(fmt::format("E={0:x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__EF));
+						log.append(fmt::format("D={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D));
+						//ImGui::Text("D       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D);
+						//ImGui::Text("SP      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP);
+						//ImGui::Text("DBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR);
+						//ImGui::Text("PBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR);
+						//ImGui::Text("PC      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
+						console.AddLog(log.c_str());
 					}
 
-					if (vpa || vda) {
+					if ((vpa || vda) && !(vpa == 0 && vda == 1)) {
 						ins_pc[ins_index] = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC;
 						if (ins_pc[ins_index] > 0) {
 							ins_in[ins_index] = din;
 							ins_ma[ins_index] = addr;
-
-							console.AddLog(fmt::format("! PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} I={6:x}", ins_pc[ins_index], ins_in[ins_index], ins_ma[ins_index], vpa, vpb, vda, ins_index).c_str());
+							ins_dbr[ins_index] = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR;
+							//console.AddLog(fmt::format("! PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} I={6:x}", ins_pc[ins_index], ins_in[ins_index], ins_ma[ins_index], vpa, vpb, vda, ins_index).c_str());
 
 							ins_index++;
 							if (ins_index > ins_size - 1) { ins_index = 0; }

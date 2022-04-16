@@ -38,12 +38,12 @@ module P65C816(CLK, RST_N, CE, RDY_IN, NMI_N, IRQ_N, ABORT_N, D_IN, D_OUT, A_OUT
    wire [15:0]   PC/*verilator public_flat*/;
 
    reg [7:0]     DR;
-   wire          EF;
-   wire          XF;
-   wire          MF;
+   wire          EF/*verilator public_flat*/;
+   wire          XF/*verilator public_flat*/;
+   wire          MF/*verilator public_flat*/;
    reg           oldXF;
    wire [15:0]   SB;
-   wire [15:0]   DB;
+   wire [15:0]   DB/*verilator public_flat*/;
    wire          EN/*verilator public_flat*/;
    MCode_r          MC;
    reg [7:0]     IR;
