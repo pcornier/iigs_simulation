@@ -157,16 +157,16 @@ begin
 	else
 	begin
 
-		xpos<=xpos+1;
-		if (xpos==13) begin
+		xpos<=xpos+1'b1;
+		if (xpos=='d13) begin
 			xpos<=0;
-			chram_x<=chram_x+1;
+			chram_x<=chram_x+1'b1;
 		end
 	end
 //$display("xpos[3:1] %x xpos %x",xpos[3:1],xpos);
 //$display("chram_x[6:1] %x chram_x %x",chram_x[6:1],chram_x);
 
-if (H < 'd32 || H > 'd32+'d560 || V < 'd16 || V > 207)
+if (H < 'd32 || H > 'd32+'d560 || V < 'd16 || V > 'd207)
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -183,8 +183,8 @@ end
 
 
 //assign a = chrom_data_out[chpos_x[2:0]];
-assign video_addr = chram_y + chram_x +'h400 ;
-assign chrom_addr = {1'b0, 1'b0,video_data[7:0], chpos_y};
+assign video_addr = chram_y + chram_x +23'h400 ;
+assign chrom_addr = { 1'b0,video_data[7:0], chpos_y};
 
 
 always @(posedge clk) if (ce_pix)
