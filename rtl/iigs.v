@@ -28,7 +28,7 @@ reg [7:0] slot_dout;
 assign { bank, addr } = addr_bus;
 assign dout = cpu_dout;
 assign we = cpu_we;
-assign valid = cpu_vpa | cpu_vda;
+wire valid = cpu_vpa | cpu_vda;
 
 reg [7:0] prtc_din;
 wire [7:0] prtc_dout;
@@ -188,13 +188,14 @@ begin
 	end
 end
 */
-
+`ifdef VERILATOR
 reg [19:0] dbg_pc_counter;
 always @(posedge cpu_vpa or posedge cpu_vda or posedge reset)
   if (reset)
     dbg_pc_counter <= 20'd0;
   else if (cpu_vpa & cpu_vda)
     dbg_pc_counter <= dbg_pc_counter + 20'd1;
+`endif
 
 adb adb(
   .clk(clk_sys),

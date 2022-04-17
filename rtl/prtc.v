@@ -31,6 +31,7 @@ reg [1:0] checksum_state;
 reg [1:0] checksum_writes;
 reg [31:0] checksum;
 reg [7:0] counter;
+reg [7:0] clk_reg1;
 always @(posedge clk) begin
   case (checksum_state)
     2'd1: begin
@@ -55,10 +56,7 @@ always @(posedge clk) begin
       if (checksum_writes == 2'd3) checksum_state <= 2'd0;
     end
   endcase
-end
 
-reg [7:0] clk_reg1;
-always @(posedge clk) begin
 
   // c033 (DATA)
   if (addr == 1'b0) begin

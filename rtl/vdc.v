@@ -84,8 +84,9 @@ always @(*) begin
 end
 
 reg [12:0] BASEADDR;
+wire  [ 4:0] vert = V[7:3]-5'h02;
 always @(*) begin
-	case (V[7:3]-2)
+	case (vert)
 		5'h00: BASEADDR= 13'h000;
 		5'h01: BASEADDR= 13'h080;
 		5'h02: BASEADDR= 13'h100;
@@ -112,6 +113,7 @@ always @(*) begin
 		5'h15: BASEADDR= 13'h2D0;
 		5'h16: BASEADDR= 13'h350;
 		5'h17: BASEADDR= 13'h3D0;
+		default: BASEADDR = 13'h000;
 	endcase
 end
 

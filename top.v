@@ -41,7 +41,11 @@ iigs core(
 
 );
 
+`ifdef VERILATOR
 parameter RAMSIZE = 16; // 16x64k = 1MB, max = 127x64k = 8MB
+`else
+parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
+`endif
 
 wire [7:0] TEXTCOLOR;
 wire [3:0] BORDERCOLOR;
@@ -87,7 +91,11 @@ fastram fastram(
 );
 */
 
+`ifdef VERILATOR
 dpram #(.widthad_a(23)) fastram
+`else
+dpram #(.widthad_a(16)) fastram
+`endif
 (
 	.clock_a(clk_sys),
 	.address_a({ bank[6:0], addr }),
