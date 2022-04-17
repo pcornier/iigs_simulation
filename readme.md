@@ -3,8 +3,9 @@
 
 generate the rom files:
 ```
-cd verilator
-make roms
+cd roms
+#download  apple2gs.zip from mame froms
+make 
 ```
 
 ```
