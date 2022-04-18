@@ -52,6 +52,15 @@ CC_OPT =
 V_SRC = \
 	sim.v  \
 	../top.v \
+	$(RTL)/65C816/P65C816_pkg.sv \
+	$(RTL)/65C816/P65C816.sv \
+	$(RTL)/65C816/AddrGen.sv \
+	$(RTL)/65C816/BCDAdder.v \
+	$(RTL)/65C816/AddSubBCD.sv \
+	$(RTL)/65C816/ALU.sv \
+	$(RTL)/65C816/bit_adder.v \
+	$(RTL)/65C816/adder4.v \
+	$(RTL)/65C816/mcode.sv \
 	$(RTL)/fastram.v \
 	$(RTL)/slowram.v \
 	$(RTL)/rom.v \
