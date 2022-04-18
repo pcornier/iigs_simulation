@@ -1,12 +1,14 @@
+import P65C816_pkg::*;
 
-module mcode(CLK, RST_N, EN, IR, STATE, M);
-   input       CLK;
-   input       RST_N;
-   input       EN;
-   input [7:0] IR;
-   input [3:0] STATE;
-   output MCode_r   M;
-
+module mcode
+  (
+   input       CLK,
+   input       RST_N,
+   input       EN,
+   input [7:0] IR,
+   input [3:0] STATE,
+   output MCode_r   M
+   );
 parameter [51:0] M_TAB[0:2047] = '{
 {3'b111, 3'b000, 2'b00, 3'b000, 2'b00, 2'b00, 8'b00000000, 3'b001, 3'b000, 3'b000, 2'b00, 6'b000000, 5'b00000, 2'b00, 3'b000, 2'b00},
 {3'b000, 3'b010, 2'b00, 3'b000, 2'b00, 2'b00, 8'b00000000, 3'b000, 3'b011, 3'b000, 2'b00, 6'b000000, 5'b00000, 2'b00, 3'b100, 2'b10},
@@ -2096,7 +2098,7 @@ parameter [51:0] M_TAB[0:2047] = '{
             if (STATE == 4'b0000)
                MI <= {3'b000, 3'b000, 2'b00, 3'b000, 2'b00, 2'b00, 8'b00000000, 3'b001, 3'b000, 3'b000, 2'b00, 6'b000000, 5'b00000, 2'b00, 3'b000, 2'b11};
             else
-               MI <= M_TAB[({IR, STATE2[2:0]})];
+              MI <= M_TAB[({IR, STATE2[2:0]})];
          end
       end
    end
