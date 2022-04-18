@@ -2,6 +2,7 @@
 module top(
   input reset,
   input clk_sys,
+  input clk_vid,
   input ce_pix,
   output [7:0] R,
   output [7:0] G,
@@ -104,7 +105,7 @@ dpram #(.widthad_a(16)) fastram
 	.wren_a(we),
 	.ce_a(fastram_ce),
 
-	.clock_b(clk_sys),
+	.clock_b(clk_vid),
 	.address_b(video_addr),
 	.data_b(0),
 	.q_b(video_data),
@@ -130,9 +131,9 @@ slowram slowram(
 
 wire [9:0] H;
 wire [8:0] V;
-
+/*
 jtframe_vtimer vtimer(
-    .clk(clk_sys),
+    .clk(clk_vid),
     .pxl_cen(ce_pix),
     .H(H),
     .vdump(V),
@@ -141,18 +142,32 @@ jtframe_vtimer vtimer(
    .HS(HS),
    .VS(VS)
 );
-
 wire hblank_n;
 wire vblank_n;
 
 assign HBlank = ~hblank_n;
 assign VBlank = ~vblank_n;
+*/
+video_timing video_timing(
+.clk_vid(clk_vid),
+.ce_pix(ce_pix),
+.hsync(HS),
+.vsync(VS),
+.hblank(HBlank),
+.vblank(VBlank),
+.hpos(H),
+.vpos(V)
+);
+
+
+
 
 wire [22:0] video_addr;
 wire [7:0] video_data;
 
 vdc vdc(
         .clk(clk_sys),
+        .clk_vid(clk_vid),
         .ce_pix(ce_pix),
         .H(H),
         .V(V),

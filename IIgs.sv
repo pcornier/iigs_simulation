@@ -217,12 +217,13 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-wire clk_sys;
+wire clk_sys,clk_vid;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_sys)
+	.outclk_0(clk_vid),
+	.outclk_1(clk_sys)
 );
 
 wire reset = RESET | status[0] | buttons[1];
@@ -232,6 +233,7 @@ wire reset = RESET | status[0] | buttons[1];
 top top (
 	.reset(reset),
 	.clk_sys(clk_sys),
+	.clk_vid(clk_vid),
 	.ce_pix(ce_pix),
 	.R(VGA_R),
 	.G(VGA_G),
@@ -243,13 +245,18 @@ top top (
 );
 
 reg ce_pix;
-always @(posedge clk_sys) begin
-        reg div ;
-
-        div <= ~div;
-        ce_pix <=  &div ;
+always @(posedge clk_vid) begin
+	reg [1:0] div;
+	
+	div <= div + 1'd1;
+	ce_pix <= !div;
 end
-
+/*
+reg ce_pix;
+always @(posedge clk_vid) begin	
+	ce_pix <= ~ce_pix;
+end
+*/
 wire hsync,vsync;
 wire hblank,vblank;
 assign CE_PIXEL=ce_pix;
@@ -260,7 +267,7 @@ assign VGA_VS=vsync;
 //assign VGA_HB=hblank;
 //assign VGA_VB=vblank;
 assign VGA_DE =  ~(vblank | hblank);
-assign CLK_VIDEO=clk_sys;
+assign CLK_VIDEO=clk_vid;
 
 
 

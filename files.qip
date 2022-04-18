@@ -3,7 +3,7 @@ set_global_assignment -name QIP_FILE rtl/65C816vhdl/65C816.qip
 set_global_assignment -name VERILOG_FILE rtl/adb.v
 set_global_assignment -name VERILOG_FILE rtl/fastram.v
 set_global_assignment -name VERILOG_FILE rtl/slowram.v
-set_global_assignment -name VERILOG_FILE rtl/jtframe_vtimer.v
+set_global_assignment -name VERILOG_FILE rtl/video_timing.v
 set_global_assignment -name VERILOG_FILE rtl/prtc.v
 set_global_assignment -name VERILOG_FILE rtl/rom.v
 set_global_assignment -name VERILOG_FILE rtl/vdc.v

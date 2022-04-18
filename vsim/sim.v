@@ -106,6 +106,7 @@ wire UART_DSR;
 top top (
 	.reset(reset),
 	.clk_sys(clk_sys),
+	.clk_vid(clk_sys),
 	.ce_pix(ce_pix),
 	.R(VGA_R),
 	.G(VGA_G),
@@ -116,6 +117,8 @@ top top (
 	.VS(vsync)
 );
 
+wire ce_pix=1'b1;
+/*
 reg ce_pix;
 always @(posedge clk_sys) begin
         reg div ;
@@ -123,6 +126,7 @@ always @(posedge clk_sys) begin
         div <= ~div;
         ce_pix <=  &div ;
 end
+*/
 
 wire hsync,vsync;
 

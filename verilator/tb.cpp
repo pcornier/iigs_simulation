@@ -21,8 +21,8 @@ bool paused = false;
 SDL_Window* window;
 SDL_Surface* screen;
 SDL_Surface* canvas;
-int width = 480;
-int height = 340;
+int width = 640;
+int height = 300;
 bool dump_manual;
 
 void sigHandler(int s) {
@@ -178,6 +178,8 @@ int main(int argc, char** argv, char** env) {
       top->reset = cycles < 1'000'000;
 
       top->clk_sys = !top->clk_sys;
+      top->clk_vid = top->clk_sys;
+      top->ce_pix = 1;
 
       top->eval();
 
@@ -199,7 +201,7 @@ int main(int argc, char** argv, char** env) {
 
       oldfetch = fetch;
 
-      /*
+      
       if (dirty) {
 
         SDL_BlitSurface(canvas, NULL, screen, NULL);
@@ -210,9 +212,8 @@ int main(int argc, char** argv, char** env) {
         dirty = false;
       }
 
-      if (cycles % 16 == 0) {
-
-        if (top->vga_hs != hb && !top->vga_hs) {
+      if (cycles % 4 == 0) {
+        if (top->HS!= hb && !top->HS) {
           hcount = 0;
           vcount++;
         }
@@ -220,21 +221,21 @@ int main(int argc, char** argv, char** env) {
           hcount++;
         }
 
-        if (top->vga_vs != vb && !top->vga_vs) {
+        if (top->VS != vb && !top->VS) {
           dirty = true;
           vcount = 0;
         }
 
-        hb = top->vga_hs;
-        vb = top->vga_vs;
+        hb = top->HS;
+        vb = top->VS;
 
         if (hcount >= 0 && hcount < width && vcount >= 0 && vcount < height) {
-          int c = top->vga_red << 16 | top->vga_green << 8 | top->vga_blue;
+          int c = top->R << 16 | top->G << 8 | top->B ;
           setPixel(canvas, hcount, vcount, c);
         }
 
       }
-      */
+      
 
       if (cycles % 1'000'000 == 0) {
         sprintf(title, "sim: %d/%d", (int)hcycles, stop_sim);

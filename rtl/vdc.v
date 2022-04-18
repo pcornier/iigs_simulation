@@ -1,6 +1,7 @@
 
 module vdc (
 input clk,
+input clk_vid,
 input ce_pix,
 input[9:0] H,
 input[8:0] V,
@@ -118,7 +119,7 @@ always @(*) begin
 end
 
 rom #(.memfile("chr.mem"),.AW(12)) charrom(
-  .clock(clk),
+  .clock(clk_vid),
   .address(chrom_addr),
   .q(chrom_data_out),
   .ce(1'b1)
@@ -147,7 +148,7 @@ wire  a = chrom_data_out[xpos[3:1]];
 // Text Mode chars are 7 bits wide, not 8
 //
 reg [3:0] xpos;
-always @(posedge clk) if(ce_pix)
+always @(posedge clk_vid) if(ce_pix)
 begin
 	if (H<32)
 	begin
@@ -187,7 +188,7 @@ assign video_addr = chram_y + chram_x +23'h400 ;
 assign chrom_addr = { 1'b0,video_data[7:0], chpos_y};
 
 
-always @(posedge clk) if (ce_pix)
+always @(posedge clk_vid) if (ce_pix)
 begin
 //	$display("V %x oldV %x chram_y %x base_y %x offset %x video_addr %x video_data %x video_data %x %c %x \n",V[8:3],oldV,chram_y,base_y,offset,video_addr,video_data,video_data[6:0],video_data[6:0],chrom_data_out);
 end
