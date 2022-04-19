@@ -70,9 +70,9 @@ wire [7:0] din =
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
   slot_internalrom_ce ?  rom2_dout :
-  8'hff;
+  8'h80;
 
-wire slot_dout = 'h00;
+wire slot_dout = 'h80;
 
 rom #(.memfile("rom1.mem")) rom1(
   .clock(clk_sys),

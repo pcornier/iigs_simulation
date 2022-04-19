@@ -49,6 +49,7 @@ reg [7:0] SETINTCxROM;
 reg [7:0] CYAREG;
 reg [7:0] SOUNDCTL;
 reg [7:0] SOUNDDATA;
+reg [7:0] DISKREG;
 //reg [7:0] SLTROMSEL;
 reg [7:0] SOUNDADRL;
 reg [7:0] SOUNDADRH;
@@ -116,11 +117,16 @@ always @(posedge clk_sys) begin
         12'h03d: SOUNDDATA <= cpu_dout;
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
+        12'h054: $display("TEXTPAGE1 54");
+        12'h055: $display("TEXTPAGE2 55");
         12'h056: LOWRES <= cpu_dout;
         // $C068: bit0 stays high during boot sequence, why?
         // if bit0=1 it means that internal ROM at SCx00 is selected
         // does it mean slot cards are not accessible?
         12'h068: STATEREG <= { cpu_dout[7:1], 1'b1 };
+  12'h0ee: begin DISKREG <= cpu_dout;end
+	default:
+		$display("IO_WR %x %x",addr[11:0],cpu_dout);
       endcase
     else
       // read
@@ -156,6 +162,9 @@ always @(posedge clk_sys) begin
         12'h079, 12'h07a, 12'h07b, 12'h07c,
         12'h07d, 12'h07e, 12'h07f:
           io_dout <= din;
+  12'h0ee: begin $display("EE"); io_dout <= DISKREG;end
+	default:
+		$display("IO_RD %x ",addr[11:0]);
       endcase
   end
 end

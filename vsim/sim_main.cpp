@@ -446,6 +446,7 @@ void DumpInstruction() {
 	case 0x11: sta = "ora"; type = indirectY; break;
 
 	case 0x49: sta = "eor"; type = immediate; break;
+	case 0x4d: sta = "eor"; type = absolute; break;
 	case 0x45: sta = "eor"; type = zeroPage; break;
 	case 0x55: sta = "eor"; type = zeroPageX; break;
 	case 0x5d: sta = "eor"; type = absoluteX; break;
@@ -592,6 +593,8 @@ void DumpInstruction() {
 	case 0x6C: sta = "jmp"; type = indirect; break;
 
 	case 0x6B: sta = "rtl";  break;
+
+	case 0xEA: sta = "nop";  break;
 
 	default: sta = "???"; f = "\t\tPC={0:X} arg1={1:X} arg2={2:X} IN0={3:X} IN1={4:X} IN2={5:X} IN3={6:X} IN4={7:X} MA0={8:X} MA1={9:X} MA2={10:X} MA3={11:X} MA4={12:X}";
 	}
@@ -996,6 +999,7 @@ int main(int argc, char** argv, char** env) {
 		if (ImGui::Button("Start running")) { run_enable = 1; } ImGui::SameLine();
 		if (ImGui::Button("Stop running")) { run_enable = 0; } ImGui::SameLine();
 		ImGui::Checkbox("RUN", &run_enable);
+		ImGui::Checkbox("STOPONDIFF", &stop_on_log_mismatch);
 		//ImGui::PopItemWidth();
 		ImGui::SliderInt("Run batch size", &batchSize, 1, 250000);
 		if (single_step == 1) { single_step = 0; }
