@@ -202,7 +202,8 @@ enum instruction_type {
 	longValue,
 	longX,
 	longY,
-	stack
+	stack,
+	srcdst
 };
 
 enum operand_type {
@@ -576,7 +577,7 @@ void DumpInstruction() {
 	case 0x4A: sta = "lsr"; type = accumulator; break;
 	case 0x46: sta = "lsr"; type = zeroPage; break;
 
-	case 0x54: sta = "mvn"; type = absolute; break;
+	case 0x54: sta = "mvn"; type = srcdst; break;
 
 	case 0xE6: sta = "inc"; type = zeroPage; break;
 	case 0xF6: sta = "inc"; type = zeroPageX; break;
@@ -668,6 +669,7 @@ void DumpInstruction() {
 			arg1 = fmt::format(" #${0:02x}", ins_in[1]);
 		}
 		break;
+	case srcdst: arg1 = fmt::format(" ${0:02x}, ${1:02x}", ins_in[2], ins_in[1]); break;
 	case absolute: arg1 = fmt::format(" ${0:02x}{1:02x}", ins_in[2], ins_in[1]); break;
 	case absoluteX: arg1 = fmt::format(" ${0:02x}{1:02x},x", ins_in[2], ins_in[1]); break;
 	case absoluteY: arg1 = fmt::format(" ${0:02x}{1:02x},y", ins_in[2], ins_in[1]); break;
