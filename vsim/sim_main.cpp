@@ -570,10 +570,13 @@ void DumpInstruction() {
 	case 0x10: sta = "bpl"; type = relative; break;
 
 	case 0x2a: sta = "rol"; type = accumulator; break;
+	case 0x2e: sta = "rol"; type = absolute ; break;
 	case 0x6a: sta = "ror"; type = accumulator; break;
 
 	case 0x4A: sta = "lsr"; type = accumulator; break;
 	case 0x46: sta = "lsr"; type = zeroPage; break;
+
+	case 0x54: sta = "mvn"; type = absolute; break;
 
 	case 0xE6: sta = "inc"; type = zeroPage; break;
 	case 0xF6: sta = "inc"; type = zeroPageX; break;
