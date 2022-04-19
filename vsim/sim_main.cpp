@@ -197,6 +197,7 @@ enum instruction_type {
 	direct24X,
 	direct24Y,
 	indirect,
+	indirectLong,
 	indirectX,
 	indirectY,
 	longValue,
@@ -399,9 +400,11 @@ void DumpInstruction() {
 
 	case 0x08: sta = "php"; break;
 	case 0x0B: sta = "phd"; break;
+	case 0xDA: sta = "phx"; break;
 	case 0x2B: sta = "pld"; break;
 	case 0xAB: sta = "plb"; break;
 	case 0x7A: sta = "ply"; break;
+	case 0xFA: sta = "plx"; break;
 	case 0x8B: sta = "phb"; break;
 	case 0x4B: sta = "phk"; break;
 	case 0x28: sta = "plp"; break;
@@ -420,7 +423,7 @@ void DumpInstruction() {
 	case 0x80: sta = "bra"; type = relativeLong; break;
 
 	case 0x38: sta = "sec"; break;
-	case 0xe2: sta = "sep"; type = immediate;  break;
+	case 0xe2: sta = "sep"; type = immediate; break;
 	case 0x78: sta = "sei"; break;
 	case 0xF8: sta = "sed"; break;
 
@@ -474,7 +477,8 @@ void DumpInstruction() {
 
 	case 0xC9: sta = "cmp"; type = immediate; break;
 	case 0xCD: sta = "cmp"; type = absolute; break;
-	case 0xC5: sta = "cmp"; type = zeroPageX; break;
+	case 0xC5: sta = "cmp"; type = absolute; opType = byte2; break;
+	case 0xD1: sta = "cmp"; type = indirectY; opType = byte2; break;
 
 	case 0xD9: sta = "cmp"; type = absoluteY; break;
 	case 0xDD: sta = "cmp"; type = absoluteX; break;
@@ -505,7 +509,7 @@ void DumpInstruction() {
 	case 0xA3: sta = "lda"; type = stack; break;
 	case 0xA5: sta = "lda"; type = zeroPage; opType = byte2;  break;
 	case 0xA7: sta = "lda"; type = direct24; break;
-	case 0xAF: sta = "lda"; type = longValue; break;
+	case 0xAF: sta = "lda"; type = longValue; opType = byte3; break;
 	case 0xB7: sta = "lda"; type = direct24Y; break;
 	case 0xB5: sta = "lda"; type = zeroPageX; break;
 	case 0xAD: sta = "lda"; type = absolute; opType = byte3; break;
@@ -540,9 +544,10 @@ void DumpInstruction() {
 	case 0x8C: sta = "sty"; type = absolute; break;
 	case 0x64: sta = "stz"; type = zeroPage;  break;
 	case 0x9C: sta = "stz"; type = absolute;  opType = byte3; break;
+	case 0x9E: sta = "stz"; type = absoluteX;  opType = byte2; break;
 
 	case 0x69: sta = "adc"; type = immediate; break;
-	case 0x65: sta = "adc"; type = zeroPage; break;
+	case 0x65: sta = "adc"; type = zeroPage; opType = byte2; break;
 	case 0x75: sta = "adc"; type = zeroPageX; break;
 	case 0x6D: sta = "adc"; type = absolute; break;
 	case 0x7D: sta = "adc"; type = absoluteX; break;
@@ -566,12 +571,12 @@ void DumpInstruction() {
 	case 0x2C: sta = "bit"; type = absolute; opType = byte3; break;
 
 	case 0x30: sta = "bmi"; type = relativeLong; break;
-	case 0x90: sta = "bcc"; type = relative; break;
-	case 0xB0: sta = "bcs"; type = relative; break;
-	case 0xD0: sta = "bne"; type = relative; break;
+	case 0x90: sta = "bcc"; type = relativeLong; break;
+	case 0xB0: sta = "bcs"; type = relativeLong; break;
+	case 0xD0: sta = "bne"; type = relativeLong; break;
 	case 0xF0: sta = "beq"; type = relativeLong; break;
-	case 0x50: sta = "bvc"; type = relative; break;
-	case 0x10: sta = "bpl"; type = relative; break;
+	case 0x50: sta = "bvc"; type = relativeLong; break;
+	case 0x10: sta = "bpl"; type = relativeLong; break;
 
 	case 0x2a: sta = "rol"; type = accumulator; break;
 	case 0x2e: sta = "rol"; type = absolute; break;
@@ -583,7 +588,7 @@ void DumpInstruction() {
 	case 0x54: sta = "mvn"; type = srcdst; break;
 	case 0x44: sta = "mvp"; type = srcdst; break;
 
-	case 0xE6: sta = "inc"; type = zeroPage; break;
+	case 0xE6: sta = "inc"; type = zeroPage; opType = byte2; break;
 	case 0xF6: sta = "inc"; type = zeroPageX; break;
 	case 0xEE: sta = "inc"; type = absolute; break;
 	case 0xFE: sta = "inc"; type = absoluteX; break;
@@ -591,8 +596,8 @@ void DumpInstruction() {
 	case 0x20: sta = "jsr"; type = absolute; opType = byte3; break;
 	case 0x22: sta = "jsl"; type = longValue; opType = byte3; break;
 
-	case 0x4C: sta = "jmp"; type = absolute; break;
-	case 0x6C: sta = "jmp"; type = indirect; break;
+	case 0x4C: sta = "jmp"; type = absolute; opType = byte3; break;
+	case 0x6C: sta = "jmp"; type = indirectLong; break;
 
 	case 0x6B: sta = "rtl";  break;
 
@@ -613,7 +618,6 @@ void DumpInstruction() {
 				operand |= (ins_in[2] << 8);
 				operand |= (ins_dbr[1] << 16);
 			}
-			//console.AddLog("%d %x", ins_index, operand);
 
 			int item = 0;
 			while (gs_vectors[item].addr != 0xffff)
@@ -629,15 +633,14 @@ void DumpInstruction() {
 			}
 		}
 
-		bool doLabel = true;
-		if (type == formatted) { doLabel = false; }
+		bool doLabel = opType == byte2 || (opType == byte3 && ins_index == 3);
+		if (type == formatted) {
+			doLabel = false;
+		}
 		if (opType == byte2) {
 			unsigned short d = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D;
-			if (d == 0) { 
-				doLabel = false;
-			}
+			if (d != 0) {				doLabel = false;			}
 		}
-		if (opType == byte3 && ins_index < 3) { doLabel = false; }
 
 		if (doLabel) {
 
@@ -695,6 +698,7 @@ void DumpInstruction() {
 	case zeroPageX: arg1 = fmt::format(" ${0:02x},x", ins_in[1]); break;
 	case zeroPageY: arg1 = fmt::format(" ${0:02x},y", ins_in[1]); break;
 	case indirect: arg1 = fmt::format(" (${0:02x})", ins_in[1]); break;
+	case indirectLong: arg1 = fmt::format(" (${0:02x}{1:02x})", ins_in[2], ins_in[1]); break;
 	case indirectX: arg1 = fmt::format(" (${0:02x}),x", ins_in[1]); break;
 	case indirectY: arg1 = fmt::format(" (${0:02x}),y", ins_in[1]); break;
 	case stack: arg1 = fmt::format(" ${0:x},s", ins_in[1]); break;
