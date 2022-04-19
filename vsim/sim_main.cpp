@@ -705,8 +705,6 @@ void DumpInstruction() {
 	case longValue: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x}", ins_in[3], ins_in[2], ins_in[1]); break;
 	case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", ins_in[3], ins_in[2], ins_in[1]); break;
 	case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", ins_in[3], ins_in[2], ins_in[1]); break;
-		//case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", maHigh1, ins_in[2], ins_in[1]); break;
-		//case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", maHigh1, ins_in[2], ins_in[1]); break;
 	case accumulator: arg1 = "a"; break;
 	case relative: arg1 = fmt::format(" {0:04x} ({1})", relativeAddress, signedIn1Formatted);		break;
 	case relativeLong: arg1 = fmt::format(" {0:06x} ({1})", relativeAddress, signedIn1Formatted);		break;
@@ -721,11 +719,6 @@ void DumpInstruction() {
 		run_enable = 0;
 	}
 	cpu_instruction_count++;
-	//if (sta == "???") {
-	//	console.AddLog(log.c_str());
-	//	run_enable = 0;
-	//}
-
 }
 
 
@@ -769,16 +762,12 @@ int verilate() {
 			}
 			top->eval();
 
-
 			// Log 6502 instructions
 			cpu_clock = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__CLK;
 			bool cpu_reset = top->reset;
 			if (cpu_clock != cpu_clock_last && cpu_reset == 0) {
-
-
 				unsigned char en = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__EN;
 				if (en) {
-
 					unsigned char vpa = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA;
 					unsigned char vda = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VDA;
 					unsigned char vpb = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB;
@@ -788,12 +777,12 @@ int verilate() {
 
 					console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
-
 					if (vpa && nextstate == 1) {
 						//console.AddLog(fmt::format("LOG? ins_index ={0:x} ins_pc[0]={1:06x} ", ins_index, ins_pc[0]).c_str());
-						if (ins_index > 0 && ins_pc[0] > 0) {
+						if (ins_index > 0) {
 							DumpInstruction();
 						}
+
 						// Clear instruction cache
 						ins_index = 0;
 						for (int i = 0; i < ins_size; i++) {
@@ -806,17 +795,13 @@ int verilate() {
 						log.append(fmt::format("A={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A));
 						log.append(fmt::format("X={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__X));
 						log.append(fmt::format("Y={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__Y));
-
 						log.append(fmt::format("M={0:x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__MF));
 						log.append(fmt::format("E={0:x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__EF));
 						log.append(fmt::format("D={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D));
-						//ImGui::Text("D       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D);
-						//ImGui::Text("SP      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP);
-						//ImGui::Text("DBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR);
-						//ImGui::Text("PBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR);
-						//ImGui::Text("PC      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
 						if (0x011B == top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC)
-							log.append(fmt::format("D={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP));
+						{
+							log.append(fmt::format("SP={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP));
+						}
 
 						console.AddLog(log.c_str());
 					}
@@ -828,16 +813,12 @@ int verilate() {
 							ins_ma[ins_index] = addr;
 							ins_dbr[ins_index] = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR;
 							//console.AddLog(fmt::format("! PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} I={6:x}", ins_pc[ins_index], ins_in[ins_index], ins_ma[ins_index], vpa, vpb, vda, ins_index).c_str());
-
 							ins_index++;
 							if (ins_index > ins_size - 1) { ins_index = 0; }
-
 						}
 					}
 				}
-
 			}
-
 			if (clk_sys.clk) { bus.AfterEval(); blockdevice.AfterEval(); }
 		}
 
@@ -855,10 +836,6 @@ int verilate() {
 		}
 
 		if (clk_sys.IsRising()) {
-
-
-
-
 			main_time++;
 		}
 		return 1;
