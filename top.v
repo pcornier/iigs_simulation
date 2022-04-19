@@ -17,7 +17,6 @@ wire [7:0] bank;
 wire [15:0] addr;
 wire [7:0] dout;
 wire we;
-
 reg [2:0] clk_div;
 always @(posedge clk_sys)
   clk_div <= clk_div + 3'd1;
@@ -38,7 +37,8 @@ iigs core(
   .din(din),
   .we(we),
   .TEXTCOLOR(TEXTCOLOR),
-  .BORDERCOLOR(BORDERCOLOR)
+  .BORDERCOLOR(BORDERCOLOR),
+  .SLTROMSEL(SLTROMSEL)
 
 );
 
@@ -50,6 +50,7 @@ parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
 
 wire [7:0] TEXTCOLOR;
 wire [3:0] BORDERCOLOR;
+wire [7:0] SLTROMSEL;
 
 wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
@@ -58,13 +59,20 @@ wire rom1_ce = bank == 8'hfe;
 wire rom2_ce = (bank == 8'h0 && addr >= 16'hc100) || bank == 8'hff;
 wire fastram_ce = bank < RAMSIZE; // bank[7] == 0;
 wire slowram_ce = bank == 8'he0 || bank == 8'he1;
+wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
+wire is_internal =   ~SLTROMSEL[addr[10:8]];
+wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
 
 wire [7:0] din =
   rom1_ce ? rom1_dout :
   rom2_ce ? rom2_dout :
   fastram_ce ? fastram_dout :
   slowram_ce ? slowram_dout :
+  slot_ce ? slot_dout :
+  slot_internalrom_ce ?  rom2_dout :
   8'hff;
+
+wire slot_dout = 'h00;
 
 rom #(.memfile("rom1.mem")) rom1(
   .clock(clk_sys),

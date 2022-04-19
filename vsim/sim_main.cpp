@@ -34,7 +34,7 @@ using namespace std;
 // Simulation control
 // ------------------
 int initialReset = 48;
-bool run_enable = 1;
+bool run_enable = 0;
 bool adam_mode= 1;
 int batchSize = 150000;
 //int batchSize = 100;

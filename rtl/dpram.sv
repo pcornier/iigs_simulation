@@ -39,9 +39,15 @@ reg [width_a-1:0] ram [(2**widthad_a)-1:0];
 always @(posedge clock_a)
   if (ce_a) begin
     if (wren_a)
+    begin
+//	    $display("readinga %x from %x",ram[address_a],address_a);
       q_a<= ram[address_a];
+      end
     else
+    begin
+//	    $display("writinga %x to %x",data_a,address_a);
       ram[address_a] <= data_a;
+      end
   end
 
 

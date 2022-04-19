@@ -13,6 +13,7 @@ module iigs(
   output reg [7:0] shadow,
   output reg [7:0] TEXTCOLOR,
   output reg [3:0] BORDERCOLOR,
+  output reg [7:0] SLTROMSEL,
   output we
 );
 
@@ -48,7 +49,7 @@ reg [7:0] SETINTCxROM;
 reg [7:0] CYAREG;
 reg [7:0] SOUNDCTL;
 reg [7:0] SOUNDDATA;
-reg [7:0] SLTROMSEL;
+//reg [7:0] SLTROMSEL;
 reg [7:0] SOUNDADRL;
 reg [7:0] SOUNDADRH;
 //reg [7:0] TEXTCOLOR;
@@ -60,8 +61,9 @@ wire slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
 wire [3:0] slotid = addr[11:8];
 
 // remap c700 to c500 if slot access and $C02D[7]
-assign addr_bus =
-  slot_area && cpu_addr[15:8] == 8'b11000111 ? { cpu_addr[23:10], ~SLTROMSEL[7], cpu_addr[8:0] } : cpu_addr;
+//assign addr_bus =
+ // slot_area && cpu_addr[15:8] == 8'b11000111 ? { cpu_addr[23:10], ~SLTROMSEL[7], cpu_addr[8:0] } : cpu_addr;
+assign addr_bus = cpu_addr;
 
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
 wire IO = ~shadow[6] && addr[15:8] == 8'b11000000 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
@@ -99,7 +101,7 @@ always @(posedge clk_sys) begin
         12'h007: SETINTCxROM <= cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
         12'h029: WVIDEO <= cpu_dout;
-        12'h02d: SLTROMSEL <= cpu_dout;
+	12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;
         12'h033, 12'h034: begin
           prtc_rw <= 1'b0;
@@ -172,7 +174,7 @@ P65C816 cpu(
   .D_OUT(cpu_dout),
   .A_OUT(cpu_addr),
   .WE(cpu_we),
-  .RDY_OUT(),
+  .RDY_OUT(ready_out),
   .VPA(cpu_vpa),
   .VDA(cpu_vda),
   .MLB(cpu_mlb),
@@ -184,10 +186,11 @@ always @(posedge clk_sys)
 begin
 	if (fast_clk)
 	begin
-		$display("cpu_addr %x cpu_din %x cpu_dout %x cpu_we %x ",cpu_addr,cpu_din,cpu_dout,cpu_we);
+		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x ",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we);
 	end
 end
 */
+
 `ifdef VERILATOR
 reg [19:0] dbg_pc_counter;
 always @(posedge cpu_vpa or posedge cpu_vda or posedge reset)
