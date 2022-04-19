@@ -578,6 +578,7 @@ void DumpInstruction() {
 	case 0x46: sta = "lsr"; type = zeroPage; break;
 
 	case 0x54: sta = "mvn"; type = srcdst; break;
+	case 0x44: sta = "mvp"; type = srcdst; break;
 
 	case 0xE6: sta = "inc"; type = zeroPage; break;
 	case 0xF6: sta = "inc"; type = zeroPageX; break;
