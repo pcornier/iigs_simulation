@@ -67,6 +67,8 @@
 #endif
 // clang-format on
 
+#include <sim_console.h>
+
 // Max characters in static char string for VL_VALUE_STRING
 constexpr unsigned VL_VALUE_STRING_MAX_WIDTH = 8192;
 
@@ -1448,6 +1450,11 @@ std::string VL_SFORMATF_NX(const char* formatp, ...) VL_MT_SAFE {
     return t_output;
 }
 
+static DebugConsole console;
+void Verilated::setDebug(DebugConsole in) {
+	console = in;
+}
+
 void VL_WRITEF(const char* formatp, ...) VL_MT_SAFE {
     static VL_THREAD_LOCAL std::string t_output;  // static only for speed
     t_output = "";
@@ -1456,7 +1463,8 @@ void VL_WRITEF(const char* formatp, ...) VL_MT_SAFE {
     _vl_vsformat(t_output, formatp, ap);
     va_end(ap);
 
-    VL_PRINTF_MT("%s", t_output.c_str());
+	console.AddLog(t_output.c_str());
+    //VL_PRINTF_MT("%s", t_output.c_str());
 }
 
 void VL_FWRITEF(IData fpi, const char* formatp, ...) VL_MT_SAFE {
@@ -2135,37 +2143,37 @@ void VL_WRITEMEM_N(bool hex,  // Hex format, else binary
 // Helper function for conversion of timescale strings
 // Converts (1|10|100)(s|ms|us|ns|ps|fs) to power of then
 int VL_TIME_STR_CONVERT(const char* strp) VL_PURE {
-    int scale = 0;
+    int vga_scale = 0;
     if (!strp) return 0;
     if (*strp++ != '1') return 0;
     while (*strp == '0') {
-        scale++;
+        vga_scale++;
         strp++;
     }
     switch (*strp++) {
     case 's': break;
-    case 'm': scale -= 3; break;
-    case 'u': scale -= 6; break;
-    case 'n': scale -= 9; break;
-    case 'p': scale -= 12; break;
-    case 'f': scale -= 15; break;
+    case 'm': vga_scale -= 3; break;
+    case 'u': vga_scale -= 6; break;
+    case 'n': vga_scale -= 9; break;
+    case 'p': vga_scale -= 12; break;
+    case 'f': vga_scale -= 15; break;
     default: return 0;
     }
-    if ((scale < 0) && (*strp++ != 's')) return 0;
+    if ((vga_scale < 0) && (*strp++ != 's')) return 0;
     if (*strp) return 0;
-    return scale;
+    return vga_scale;
 }
-static const char* vl_time_str(int scale) VL_PURE {
+static const char* vl_time_str(int vga_scale) VL_PURE {
     static const char* const names[]
         = {"100s",  "10s",  "1s",  "100ms", "10ms", "1ms", "100us", "10us", "1us",
            "100ns", "10ns", "1ns", "100ps", "10ps", "1ps", "100fs", "10fs", "1fs"};
-    if (VL_UNLIKELY(scale > 2 || scale < -15)) scale = 0;
-    return names[2 - scale];
+    if (VL_UNLIKELY(vga_scale > 2 || vga_scale < -15)) vga_scale = 0;
+    return names[2 - vga_scale];
 }
-double vl_time_multiplier(int scale) VL_PURE {
+double vl_time_multiplier(int vga_scale) VL_PURE {
     // Return timescale multipler -18 to +18
     // For speed, this does not check for illegal values
-    if (scale < 0) {
+    if (vga_scale < 0) {
         static const double neg10[] = {1.0,
                                        0.1,
                                        0.01,
@@ -2185,7 +2193,7 @@ double vl_time_multiplier(int scale) VL_PURE {
                                        0.0000000000000001,
                                        0.00000000000000001,
                                        0.000000000000000001};
-        return neg10[-scale];
+        return neg10[-vga_scale];
     } else {
         static const double pow10[] = {1.0,
                                        10.0,
@@ -2206,7 +2214,7 @@ double vl_time_multiplier(int scale) VL_PURE {
                                        10000000000000000.0,
                                        100000000000000000.0,
                                        1000000000000000000.0};
-        return pow10[scale];
+        return pow10[vga_scale];
     }
 }
 vluint64_t vl_time_pow10(int n) {
@@ -2236,7 +2244,7 @@ vluint64_t vl_time_pow10(int n) {
 
 void VL_PRINTTIMESCALE(const char* namep, const char* timeunitp,
                        const VerilatedContext* contextp) VL_MT_SAFE {
-    VL_PRINTF_MT("Time scale of %s is %s / %s\n", namep, timeunitp,
+    VL_PRINTF_MT("Time vga_scale of %s is %s / %s\n", namep, timeunitp,
                  contextp->timeprecisionString());
 }
 void VL_TIMEFORMAT_IINI(int units, int precision, const std::string& suffix, int width,

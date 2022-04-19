@@ -155,7 +155,7 @@ bool writeLog(const char* line)
 
 		std::string c_line = std::string(line);
 		std::string c = "%6d  CPU > " + c_line;
-		printf("%s\n",line);
+		printf("%s\n", line);
 
 		if (log_index < log_mame.size()) {
 			std::string m_line = log_mame.at(log_index);
@@ -401,6 +401,7 @@ void DumpInstruction() {
 	case 0x0B: sta = "phd"; break;
 	case 0x2B: sta = "pld"; break;
 	case 0xAB: sta = "plb"; break;
+	case 0x7A: sta = "ply"; break;
 	case 0x8B: sta = "phb"; break;
 	case 0x4B: sta = "phk"; break;
 	case 0x28: sta = "plp"; break;
@@ -439,7 +440,8 @@ void DumpInstruction() {
 	case 0x05: sta = "ora"; type = zeroPage; break;
 	case 0x15: sta = "ora"; type = zeroPageX; break;
 	case 0x1F: sta = "ora"; type = longX; break;
-	case 0x0D: sta = "ora"; type = absolute; opType = byte2; break;
+	case 0x0D: sta = "ora"; type = absolute; opType = byte3; break;
+	case 0x0F: sta = "ora"; type = longValue; opType = byte3; break;
 	case 0x1D: sta = "ora"; type = absoluteX; break;
 	case 0x19: sta = "ora"; type = absoluteY; break;
 	case 0x01: sta = "ora"; type = indirectX; break;
@@ -494,14 +496,14 @@ void DumpInstruction() {
 	case 0xBE: sta = "ldx"; type = absoluteY; break;
 
 	case 0xA0: sta = "ldy"; type = immediate; break;
-	case 0xA4: sta = "ldy"; type = zeroPage; break;
+	case 0xA4: sta = "ldy"; type = zeroPage; opType = byte2; break;
 	case 0xB4: sta = "ldy"; type = zeroPageX; break;
 	case 0xAC: sta = "ldy"; type = absolute; break;
 	case 0xBC: sta = "ldy"; type = absoluteX; break;
 
 	case 0xA9: sta = "lda"; type = immediate; break;
 	case 0xA3: sta = "lda"; type = stack; break;
-	case 0xA5: sta = "lda"; type = zeroPage; break;
+	case 0xA5: sta = "lda"; type = zeroPage; opType = byte2;  break;
 	case 0xA7: sta = "lda"; type = direct24; break;
 	case 0xAF: sta = "lda"; type = longValue; break;
 	case 0xB7: sta = "lda"; type = direct24Y; break;
@@ -518,13 +520,14 @@ void DumpInstruction() {
 	case 0x1C: sta = "trb"; type = absolute; break;
 
 	case 0x8D: sta = "sta"; type = absolute; opType = byte3; break;
-	case 0x85: sta = "sta"; type = zeroPage; break;
+	case 0x85: sta = "sta"; type = zeroPage; opType = byte2; break;
 	case 0x87: sta = "sta"; type = direct24; break;
 	case 0x95: sta = "sta"; type = zeroPageX; break;
 	case 0x9F: sta = "sta"; type = longX; break;
 	case 0x9D: sta = "sta"; type = absoluteX; break;
 	case 0x99: sta = "sta"; type = absoluteY; break;
 	case 0x81: sta = "sta"; type = indirectX; break;
+	case 0x83: sta = "sta"; type = stack; break;
 	case 0x91: sta = "sta"; type = indirectY; break;
 	case 0x8F: sta = "sta"; type = longValue; opType = byte3; break;
 
@@ -532,7 +535,7 @@ void DumpInstruction() {
 	case 0x86: sta = "stx"; type = zeroPage; break;
 	case 0x96: sta = "stx"; type = zeroPageY; break;
 	case 0x8E: sta = "stx"; type = absolute; break;
-	case 0x84: sta = "sty"; type = zeroPage; break;
+	case 0x84: sta = "sty"; type = zeroPage; opType = byte2; break;
 	case 0x94: sta = "sty"; type = zeroPageX; break;
 	case 0x8C: sta = "sty"; type = absolute; break;
 	case 0x64: sta = "stz"; type = zeroPage;  break;
@@ -560,18 +563,18 @@ void DumpInstruction() {
 	case 0xEB: sta = "xba"; break;
 
 	case 0x24: sta = "bit"; type = zeroPage; break;
-	case 0x2C: sta = "bit"; type = absolute; break;
+	case 0x2C: sta = "bit"; type = absolute; opType = byte3; break;
 
 	case 0x30: sta = "bmi"; type = relativeLong; break;
 	case 0x90: sta = "bcc"; type = relative; break;
 	case 0xB0: sta = "bcs"; type = relative; break;
 	case 0xD0: sta = "bne"; type = relative; break;
-	case 0xF0: sta = "beq"; type = relative; break;
+	case 0xF0: sta = "beq"; type = relativeLong; break;
 	case 0x50: sta = "bvc"; type = relative; break;
 	case 0x10: sta = "bpl"; type = relative; break;
 
 	case 0x2a: sta = "rol"; type = accumulator; break;
-	case 0x2e: sta = "rol"; type = absolute ; break;
+	case 0x2e: sta = "rol"; type = absolute; break;
 	case 0x6a: sta = "ror"; type = accumulator; break;
 
 	case 0x4A: sta = "lsr"; type = accumulator; break;
@@ -626,7 +629,17 @@ void DumpInstruction() {
 			}
 		}
 
-		if (type != formatted && (opType == byte2 || (opType == byte3 && ins_index == 3))) {
+		bool doLabel = true;
+		if (type == formatted) { doLabel = false; }
+		if (opType == byte2) {
+			unsigned short d = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D;
+			if (d == 0) { 
+				doLabel = false;
+			}
+		}
+		if (opType == byte3 && ins_index < 3) { doLabel = false; }
+
+		if (doLabel) {
 
 			unsigned short operand = ins_in[1];
 			if (ins_index > 2) {
@@ -638,7 +651,8 @@ void DumpInstruction() {
 			{
 				if (a2_stuff[item].addr == operand)
 				{
-					ins_str[1] = a2_stuff[item].name;
+					ins_str[1] = opType == byte2 ? "<" : "";
+					ins_str[1].append(a2_stuff[item].name);
 					type = formatted;
 					break;
 				}
@@ -768,7 +782,7 @@ int verilate() {
 					unsigned long addr = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
 					unsigned char nextstate = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__NextState;
 
-					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
+					console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
 
 					if (vpa && nextstate == 1) {
@@ -797,9 +811,9 @@ int verilate() {
 						//ImGui::Text("DBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR);
 						//ImGui::Text("PBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR);
 						//ImGui::Text("PC      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
-						if (0x011B==top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC)
-						   log.append(fmt::format("D={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP));
-							
+						if (0x011B == top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC)
+							log.append(fmt::format("D={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP));
+
 						console.AddLog(log.c_str());
 					}
 
@@ -884,7 +898,7 @@ int main(int argc, char** argv, char** env) {
 		log_mame.push_back(line);
 	}
 	//a2_name_count = size(a2_stuff);
-	a2_name_count = sizeof(a2_stuff)/sizeof(a2_stuff[0]);
+	a2_name_count = sizeof(a2_stuff) / sizeof(a2_stuff[0]);
 
 	// Attach bus
 	bus.ioctl_addr = &top->ioctl_addr;

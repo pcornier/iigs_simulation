@@ -75,10 +75,10 @@
     <ClCompile Include="sim\vinc\verilated_save.cpp" />
     <ClCompile Include="sim\vinc\verilated_vcd_c.cpp" />
     <ClCompile Include="obj_dir\Vemu.cpp" />
-    <ClCompile Include="obj_dir\Vemu__1.cpp" />
+    <ClCompile Include="obj_dir\Vemu___024unit.cpp" />
     <ClCompile Include="obj_dir\Vemu__Syms.cpp" />
     <ClCompile Include="obj_dir\Vemu__Slow.cpp" />
-    <ClCompile Include="obj_dir\Vemu__1__Slow.cpp" />
+    <ClCompile Include="obj_dir\Vemu___024unit__Slow.cpp" />
     <ClCompile Include="sim\sim_clock.cpp" />
     <ClCompile Include="sim\sim_bus.cpp" />
     <ClCompile Include="sim\sim_console.cpp" />
