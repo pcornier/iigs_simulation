@@ -748,7 +748,6 @@ int verilate() {
 		// Set system clock in core
 		top->clk_sys = clk_sys.clk;
 		top->adam = adam_mode;
-		g_c031_disk35=top->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
 		g_vbl_count=video.count_frame;
 
 		// Simulate both edges of system clock
@@ -862,6 +861,7 @@ int verilate() {
                         if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe && top->emu__DOT__top__DOT__core__DOT__iwm__DOT__cen)
                         {
 				double dcycs = main_time;
+				g_c031_disk35=top->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
 				if (!top->emu__DOT__top__DOT__core__DOT__iwm__DOT__rw) {
 					//printf("about to write_iwm: ADDR:    0x%06X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT);
 				          write_iwm(top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT, top->emu__DOT__top__DOT__core__DOT__iwm__DOT__din, dcycs);
@@ -869,7 +869,7 @@ int verilate() {
 				else{
 					printf("read IWM: %x \n",top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr);
 			     		if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr==0xec) {
-						iwm_read_c0ec(dcycs);
+						top->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=iwm_read_c0ec(dcycs);
 			     		}
 			     		else{
 						top->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=read_iwm(top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr|0xe0,dcycs);

@@ -78,6 +78,8 @@ reg MONOCHROME;
 reg LCRAM;
 reg LCRAM2;
 reg ROMBANK;
+reg TEXTG;
+reg MIXG;
 
 
 wire slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
@@ -164,9 +166,14 @@ always @(posedge clk_sys) begin
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
 	//12'h047: begin C046VAL &= 'he7; end// some kind of interrupt thing -- clear interrupts here
-        12'h054: PAGE2<=1'b0;
-        12'h055: PAGE2<=1'b1;
-        12'h056: LOWRES <= cpu_dout;
+	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
+	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
+	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
+	12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
+	12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
+	12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
+	12'h056: begin $display("**LOWRES%x",0);LOWRES<=1'b0; end
+	12'h057: begin $display("**LOWRES%x",1);LOWRES<=1'b1; end
         // $C068: bit0 stays high during boot sequence, why?
         // if bit0=1 it means that internal ROM at SCx00 is selected
         // does it mean slot cards are not accessible?
@@ -219,9 +226,14 @@ always @(posedge clk_sys) begin
         12'h03f: io_dout <= SOUNDADRH;
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-        12'h054: PAGE2<=1'b0;
-        12'h055: PAGE2<=1'b1;
-        12'h056: io_dout <= LOWRES;
+	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
+	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
+	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
+	12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
+	12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
+	12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
+	12'h056: begin $display("**LOWRES%x",0);LOWRES<=1'b0; end
+	12'h057: begin $display("**LOWRES%x",1);LOWRES<=1'b1; end
         12'h058: io_dout <= 'h0; // some kind of soft switch?
         12'h05a: io_dout <= 'h0; // some kind of soft switch?
         12'h05d: io_dout <= 'h0; // some kind of soft switch?
@@ -240,7 +252,7 @@ always @(posedge clk_sys) begin
           iwm_addr <= addr[7:0];
           iwm_strobe <= 1'b1;
           iwm_rw <= 1'b1;
-		$display("ex IO_RD %x ",addr[11:0]);
+	//	$display("ex IO_RD %x ",addr[11:0]);
          end
 	default:
 		$display("IO_RD %x ",addr[11:0]);
