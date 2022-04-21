@@ -63,6 +63,7 @@ reg [7:0] LOWRES;
 reg [7:0] SPKR;
 reg [7:0] RD80VID;
 reg [7:0] DISK35;
+reg [7:0] C02BVAL;
 
 wire slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
 wire [3:0] slotid = addr[11:8];
@@ -113,6 +114,7 @@ always @(posedge clk_sys) begin
         12'h007: SETINTCxROM <= cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
         12'h029: WVIDEO <= cpu_dout;
+        12'h02b: C02BVAL <= cpu_dout; // from gsplus
 	12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;
         12'h031: DISK35<= cpu_dout & 'hc0;
@@ -129,6 +131,7 @@ always @(posedge clk_sys) begin
         12'h03d: SOUNDDATA <= cpu_dout;
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
+	//12'h047: begin C046VAL &= 'he7; end// some kind of interrupt thing -- clear interrupts here
         12'h054: $display("TEXTPAGE1 54");
         12'h055: $display("TEXTPAGE2 55");
         12'h056: LOWRES <= cpu_dout;
@@ -163,6 +166,9 @@ always @(posedge clk_sys) begin
         12'h015: io_dout <= RDCxROM;
         12'h01f: io_dout <= RD80VID;
         12'h029: io_dout <= WVIDEO;
+        12'h02a: io_dout <= 'h0; // from gsplus
+        12'h02b: io_dout <= C02BVAL; // from gsplus
+        12'h02c: io_dout <= 'h0; // from gsplus
         12'h02d: io_dout <= SLTROMSEL;
         12'h030: io_dout <= SPKR;
         12'h031: io_dout <= DISK35;
@@ -173,11 +179,19 @@ always @(posedge clk_sys) begin
         end
         12'h035: io_dout <= shadow;
         12'h036: io_dout <= CYAREG;
+        12'h036: io_dout <= 'h0; // from gsplus 
+        12'h037: io_dout <= 'h0; // from gsplus 
         12'h03c: io_dout <= SOUNDCTL;
         12'h03d: io_dout <= SOUNDDATA;
         12'h03e: io_dout <= SOUNDADRL;
         12'h03f: io_dout <= SOUNDADRH;
+        //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
+	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
         12'h056: io_dout <= LOWRES;
+        12'h058: io_dout <= 'h0; // some kind of soft switch?
+        12'h05a: io_dout <= 'h0; // some kind of soft switch?
+        12'h05d: io_dout <= 'h0; // some kind of soft switch?
+        12'h05f: io_dout <= 'h0; // some kind of soft switch?
         12'h068: io_dout <= STATEREG;
         12'h071, 12'h072, 12'h073, 12'h074,
         12'h075, 12'h076, 12'h077, 12'h078,

@@ -2381,8 +2381,8 @@ void iwm_load_disk()
 {
 //	insert_disk slot 5 drive 0 name TD2.2mg ejected 0 force_size 0 partition_name (null) part_num -1
 
-    //insert_disk(5, 0, "TD2.2mg", 0, 0, NULL, -1);
-    insert_disk(6, 0, "A2eDiagnostics_v2.1.dsk", 0, 0, NULL, -1);
+    insert_disk(5, 0, "TD2.2mg", 0, 0, NULL, -1);
+    //insert_disk(6, 0, "A2eDiagnostics_v2.1.dsk", 0, 0, NULL, -1);
 }
 // BBBB
 int g_highest_smartport_unit = -1;
