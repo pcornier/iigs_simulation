@@ -41,6 +41,11 @@ wire [7:0] adb_dout;
 reg [7:0] adb_addr;
 reg adb_rw, adb_strobe;
 
+reg [7:0] iwm_din;
+wire [7:0] iwm_dout;
+reg [7:0] iwm_addr;
+reg iwm_rw, iwm_strobe;
+
 // some fake registers for now
 reg [7:0] WVIDEO;
 reg [7:0] RDCxROM;
@@ -57,6 +62,7 @@ reg [7:0] SOUNDADRH;
 reg [7:0] LOWRES;
 reg [7:0] SPKR;
 reg [7:0] RD80VID;
+reg [7:0] DISK35;
 
 wire slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
 wire [3:0] slotid = addr[11:8];
@@ -89,6 +95,11 @@ always @(posedge clk_sys) begin
     io_dout <= prtc_dout;
   end
 
+  iwm_strobe <= 1'b0;
+  if (iwm_strobe & cpu_we) begin
+    io_dout <= iwm_dout;
+  end
+
   if (IO) begin
     if (~cpu_we)
       // write
@@ -104,6 +115,7 @@ always @(posedge clk_sys) begin
         12'h029: WVIDEO <= cpu_dout;
 	12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;
+        12'h031: DISK35<= cpu_dout & 'hc0;
         12'h033, 12'h034: begin
           prtc_rw <= 1'b0;
           prtc_strobe <= 1'b1;
@@ -124,7 +136,16 @@ always @(posedge clk_sys) begin
         // if bit0=1 it means that internal ROM at SCx00 is selected
         // does it mean slot cards are not accessible?
         12'h068: STATEREG <= { cpu_dout[7:1], 1'b1 };
-  12'h0ee: begin DISKREG <= cpu_dout;end
+  12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
+  12'h0e4, 12'h0e5, 12'h0e6, 12'h0e7,
+  12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
+  12'h0ec, 12'h0ed, 12'h0ee, 12'h0ef:
+   begin 
+          iwm_addr <= addr[7:0];
+          iwm_strobe <= 1'b1;
+          iwm_din <= cpu_dout;
+          iwm_rw <= 1'b0;
+   end
 	default:
 		$display("IO_WR %x %x",addr[11:0],cpu_dout);
       endcase
@@ -144,6 +165,7 @@ always @(posedge clk_sys) begin
         12'h029: io_dout <= WVIDEO;
         12'h02d: io_dout <= SLTROMSEL;
         12'h030: io_dout <= SPKR;
+        12'h031: io_dout <= DISK35;
         12'h033, 12'h034: begin
           prtc_addr <= ~addr[0];
           prtc_rw <= 1'b1;
@@ -162,7 +184,16 @@ always @(posedge clk_sys) begin
         12'h079, 12'h07a, 12'h07b, 12'h07c,
         12'h07d, 12'h07e, 12'h07f:
           io_dout <= din;
-  12'h0ee: begin $display("EE"); io_dout <= DISKREG;end
+  12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
+  12'h0e4, 12'h0e5, 12'h0e6, 12'h0e7,
+  12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
+  12'h0ec, 12'h0ed, 12'h0ee, 12'h0ef:
+         begin 
+          iwm_addr <= addr[7:0];
+          iwm_strobe <= 1'b1;
+          iwm_rw <= 1'b1;
+		$display("ex IO_RD %x ",addr[11:0]);
+         end
 	default:
 		$display("IO_RD %x ",addr[11:0]);
       endcase
@@ -230,6 +261,19 @@ prtc prtc(
   .rw(prtc_rw),
   .strobe(prtc_strobe)
 );
+
+iwm iwm(
+  .clk(clk_sys),
+  .cen(fast_clk),
+  .reset(reset),
+  .addr(iwm_addr),
+  .din(iwm_din),
+  .dout(iwm_dout),
+  .rw(iwm_rw),
+  .strobe(iwm_strobe),
+  .DISK35(DISK35)
+);
+
 
 endmodule
 

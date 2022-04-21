@@ -105,7 +105,11 @@ SimClock clk_sys(1);
 int soft_reset = 0;
 vluint64_t soft_reset_time = 0;
 
-
+//
+// IWM emulation
+#include "defc.h"
+int g_c031_disk35;
+word32 g_vbl_count;
 
 // Audio
 // -----
@@ -744,6 +748,8 @@ int verilate() {
 		// Set system clock in core
 		top->clk_sys = clk_sys.clk;
 		top->adam = adam_mode;
+		g_c031_disk35=top->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
+		g_vbl_count=video.count_frame;
 
 		// Simulate both edges of system clock
 		if (clk_sys.clk != clk_sys.old) {
@@ -840,6 +846,36 @@ int verilate() {
 		}
 
 		if (clk_sys.IsRising()) {
+
+
+
+			// IWM EMULATION HERE
+			//         CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__addr;
+    //    CData/*0:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__rw;
+     //   CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__din;
+      //  CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__dout;
+       // CData/*0:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__irq;
+     //   CData/*0:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe;
+     //   CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
+
+			/* if we are writing -- check it ? */
+                        if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe && top->emu__DOT__top__DOT__core__DOT__iwm__DOT__cen)
+                        {
+				double dcycs = main_time;
+				if (!top->emu__DOT__top__DOT__core__DOT__iwm__DOT__rw) {
+					//printf("about to write_iwm: ADDR:    0x%06X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT);
+				          write_iwm(top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT, top->emu__DOT__top__DOT__core__DOT__iwm__DOT__din, dcycs);
+				}
+				else{
+					printf("read IWM: %x \n",top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr);
+			     		if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr==0xec) {
+						iwm_read_c0ec(dcycs);
+			     		}
+			     		else{
+						top->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=read_iwm(top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr|0xe0,dcycs);
+			     		}
+                                }
+                        }
 
 
 
@@ -955,9 +991,13 @@ int main(int argc, char** argv, char** env) {
 	// Setup video output
 	if (video.Initialise(windowTitle) == 1) { return 1; }
 
+	iwm_load_disk();
 	//bus.QueueDownload("floppy.nib",1,0);
 //blockdevice.MountDisk("floppy.nib",0);
 //blockdevice.MountDisk("hd.hdv",1);
+
+       iwm_init();
+       iwm_reset();
 
 #ifdef WIN32
 	MSG msg;
