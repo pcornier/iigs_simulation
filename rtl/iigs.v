@@ -65,6 +65,21 @@ reg [7:0] RD80VID;
 reg [7:0] DISK35;
 reg [7:0] C02BVAL;
 
+reg EIGHTYSTORE;
+reg RAMRD;
+reg RAMWRT;
+reg INTCXROM;
+reg ALTZP;
+reg SLOTC3ROM;
+reg EIGHTYCOL;
+reg ALTCHARSET;
+reg PAGE2;
+reg MONOCHROME;
+reg LCRAM;
+reg LCRAM2;
+reg ROMBANK;
+
+
 wire slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
 wire [3:0] slotid = addr[11:8];
 
@@ -105,14 +120,31 @@ always @(posedge clk_sys) begin
     if (~cpu_we)
       // write
       case (addr[11:0])
+        12'h000: EIGHTYSTORE<= 1'b0 ;
+        12'h001: EIGHTYSTORE<= 1'b1 ;
+        12'h002: RAMRD<= 1'b0 ;
+        12'h003: RAMRD<= 1'b1 ;
+        12'h004: RAMWRT<= 1'b0 ;
+        12'h005: RAMWRT<= 1'b1 ;
+        12'h006: INTCXROM<= 1'b0;
+        12'h007: INTCXROM <= 1'b1;
+        12'h008: ALTZP<= 1'b0;
+        12'h009: ALTZP<= 1'b1;
+        12'h00A: SLOTC3ROM<= 1'b0;
+        12'h00B: SLOTC3ROM<= 1'b1;
+        12'h00C: EIGHTYCOL<= 1'b0;
+        12'h00D: EIGHTYCOL<= 1'b1;
+        12'h00E: ALTCHARSET<= 1'b0;
+        12'h00F: ALTCHARSET<= 1'b1;
         12'h010, 12'h026, 12'h027, 12'h070: begin
           adb_addr <= addr[7:0];
           adb_strobe <= 1'b1;
           adb_din <= cpu_dout;
           adb_rw <= 1'b0;
         end
-        12'h007: SETINTCxROM <= cpu_dout;
+	12'h021: MONOCHROME <=cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
+	//12'h023: VGCINT
         12'h029: WVIDEO <= cpu_dout;
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
 	12'h02d: SLTROMSEL <= cpu_dout;
@@ -132,13 +164,13 @@ always @(posedge clk_sys) begin
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
 	//12'h047: begin C046VAL &= 'he7; end// some kind of interrupt thing -- clear interrupts here
-        12'h054: $display("TEXTPAGE1 54");
-        12'h055: $display("TEXTPAGE2 55");
+        12'h054: PAGE2<=1'b0;
+        12'h055: PAGE2<=1'b1;
         12'h056: LOWRES <= cpu_dout;
         // $C068: bit0 stays high during boot sequence, why?
         // if bit0=1 it means that internal ROM at SCx00 is selected
         // does it mean slot cards are not accessible?
-        12'h068: STATEREG <= { cpu_dout[7:1], 1'b1 };
+        12'h068: {ALTZP,PAGE2,RAMRD,RAMWRT,LCRAM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],~cpu_dout[3],cpu_dout[2:0]};
   12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
   12'h0e4, 12'h0e5, 12'h0e6, 12'h0e7,
   12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
@@ -187,12 +219,14 @@ always @(posedge clk_sys) begin
         12'h03f: io_dout <= SOUNDADRH;
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
+        12'h054: PAGE2<=1'b0;
+        12'h055: PAGE2<=1'b1;
         12'h056: io_dout <= LOWRES;
         12'h058: io_dout <= 'h0; // some kind of soft switch?
         12'h05a: io_dout <= 'h0; // some kind of soft switch?
         12'h05d: io_dout <= 'h0; // some kind of soft switch?
         12'h05f: io_dout <= 'h0; // some kind of soft switch?
-        12'h068: io_dout <= STATEREG;
+        12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,LCRAM,LCRAM2,ROMBANK,INTCXROM};
         12'h071, 12'h072, 12'h073, 12'h074,
         12'h075, 12'h076, 12'h077, 12'h078,
         12'h079, 12'h07a, 12'h07b, 12'h07c,
