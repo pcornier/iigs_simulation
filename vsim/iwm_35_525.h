@@ -200,7 +200,7 @@ IWM_READ_ROUT (Disk *dsk, int fast_disk_emul, double dcycs)
 		halt_printf("I just set nib_pos: %d!\n", pos);
 	}
 
-#if 0
+#if 1
 	iwm_printf("Disk read, returning: %02x\n", ret);
 #endif
 

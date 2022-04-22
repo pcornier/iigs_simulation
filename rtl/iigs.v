@@ -4,6 +4,7 @@ module iigs(
 
   input clk_sys,
   input fast_clk, // 2.5
+  input fast_clk_delayed, // 2.5
   input slow_clk, // 1
 
   output [7:0] bank,
@@ -91,7 +92,8 @@ wire [3:0] slotid = addr[11:8];
 assign addr_bus = cpu_addr;
 
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
-wire IO = ~shadow[6] && addr[15:8] == 8'b11000000 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
+//wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
+wire     IO = ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
 
 // driver for io_dout and fake registers
 always @(posedge clk_sys) begin
@@ -114,8 +116,8 @@ always @(posedge clk_sys) begin
   end
 
   iwm_strobe <= 1'b0;
-  if (iwm_strobe & cpu_we) begin
-$display("read_iwm %x ret: %x GC036: %x",addr[11:0],iwm_dout,CYAREG);
+  if (iwm_strobe & cpu_we /*& fast_clk*/) begin
+$display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
     io_dout <= iwm_dout;
   end
 
@@ -253,7 +255,7 @@ $display("read_iwm %x ret: %x GC036: %x",addr[11:0],iwm_dout,CYAREG);
           iwm_addr <= addr[7:0];
           iwm_strobe <= 1'b1;
           iwm_rw <= 1'b1;
-	//	$display("ex IO_RD %x ",addr[11:0]);
+		$display("ex IO_RD %x ",addr[11:0]);
          end
 	default:
 		$display("IO_RD %x ",addr[11:0]);
@@ -261,7 +263,7 @@ $display("read_iwm %x ret: %x GC036: %x",addr[11:0],iwm_dout,CYAREG);
   end
 end
 
-wire [7:0] cpu_din = IO ? io_dout : din;
+wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
 
 P65C816 cpu(
   .CLK(clk_sys),
@@ -325,7 +327,7 @@ prtc prtc(
 
 iwm iwm(
   .clk(clk_sys),
-  .cen(fast_clk),
+  .cen(fast_clk_delayed),
   .reset(reset),
   .addr(iwm_addr),
   .din(iwm_din),

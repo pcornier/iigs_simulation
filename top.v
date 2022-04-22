@@ -22,13 +22,14 @@ always @(posedge clk_sys)
   clk_div <= clk_div + 3'd1;
 
 wire fast_clk = clk_div == 0;
-
+wire fast_clk_delayed = clk_div ==1;
 
 iigs core(
 
   .reset(reset),
   .clk_sys(clk_sys),
-  .fast_clk(fast_clk),
+  .fast_clk(fast_clk_delayed),
+  .fast_clk_delayed(fast_clk),
   .slow_clk(),
 
   .bank(bank),
@@ -61,15 +62,16 @@ wire fastram_ce = bank < RAMSIZE; // bank[7] == 0;
 wire slowram_ce = bank == 8'he0 || bank == 8'he1;
 wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
-wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
+//wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
+wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && is_internal;
 
 wire [7:0] din =
   rom1_ce ? rom1_dout :
   rom2_ce ? rom2_dout :
   fastram_ce ? fastram_dout :
+  slot_internalrom_ce ?  rom2_dout :
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
-  slot_internalrom_ce ?  rom2_dout :
   8'h80;
 
 wire slot_dout = 'h80;
