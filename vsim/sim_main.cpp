@@ -717,7 +717,8 @@ void DumpInstruction() {
 
 }
 
-
+static int last_cpu_addr=-1;
+static int already_saw_this = 0;
 int verilate() {
 
 	if (!Verilated::gotFinish()) {
@@ -858,7 +859,9 @@ int verilate() {
      //   CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
 
 			/* if we are writing -- check it ? */
-                        if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe && top->emu__DOT__top__DOT__core__DOT__iwm__DOT__cen)
+if (last_cpu_addr!=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT) already_saw_this=0;
+
+                        if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe && top->emu__DOT__top__DOT__core__DOT__iwm__DOT__cen )
                         {
 				double dcycs = main_time;
 				g_c031_disk35=top->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
@@ -867,15 +870,21 @@ int verilate() {
 				          write_iwm(top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT, top->emu__DOT__top__DOT__core__DOT__iwm__DOT__din, dcycs);
 				}
 				else{
-					printf("read IWM: %x \n",top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr);
+					if (already_saw_this==0){
+					already_saw_this = 1;
+					printf("AAAA read IWM: %x \n",top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr);
 			     		if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr==0xec) {
 						top->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=iwm_read_c0ec(dcycs);
 			     		}
 			     		else{
 						top->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=read_iwm(top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr|0xe0,dcycs);
 			     		}
+					}
                                 }
                         }
+			else{
+			}
+last_cpu_addr=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
 
 
 
