@@ -115,6 +115,7 @@ always @(posedge clk_sys) begin
 
   iwm_strobe <= 1'b0;
   if (iwm_strobe & cpu_we) begin
+$display("read_iwm %x ret: %x GC036: %x",addr[11:0],iwm_dout,CYAREG);
     io_dout <= iwm_dout;
   end
 
@@ -161,6 +162,7 @@ always @(posedge clk_sys) begin
 		  BORDERCOLOR=cpu_dout[3:0];
         end
         12'h035: shadow <= cpu_dout;
+	12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
         12'h03c: SOUNDCTL <= cpu_dout;
         12'h03d: SOUNDDATA <= cpu_dout;
         12'h03e: SOUNDADRL <= cpu_dout;
@@ -217,8 +219,7 @@ always @(posedge clk_sys) begin
           prtc_strobe <= 1'b1;
         end
         12'h035: io_dout <= shadow;
-        12'h036: io_dout <= CYAREG;
-        12'h036: io_dout <= 'h0; // from gsplus 
+	12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
         12'h037: io_dout <= 'h0; // from gsplus 
         12'h03c: io_dout <= SOUNDCTL;
         12'h03d: io_dout <= SOUNDDATA;
