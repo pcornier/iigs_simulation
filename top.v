@@ -65,6 +65,17 @@ wire is_internal =   ~SLTROMSEL[addr[10:8]];
 //wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
 wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && is_internal;
 
+always @(posedge clk_sys)
+begin
+        if (fast_clk)
+        begin
+                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x",
+			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL);
+        end
+end
+
+
+
 wire [7:0] din =
   rom1_ce ? rom1_dout :
   rom2_ce ? rom2_dout :
@@ -87,7 +98,7 @@ rom #(.memfile("rom2.mem")) rom2(
   .clock(clk_sys),
   .address(addr),
   .q(rom2_dout),
-  .ce(rom2_ce)
+  .ce(rom2_ce|slot_internalrom_ce)
 );
 
 // 8M 2.5MHz fast ram
