@@ -223,13 +223,14 @@ module hdd(
                 // RD/WR
                 else if (DEVICE_SELECT == 1'b0 & select_d == 1'b1)
                 begin
+			$display("DEVICE_SELECT==0 select_d==1");
                     if (increment_sec_addr == 1'b1)
                     begin
                         sec_addr <= sec_addr + 1;
                         increment_sec_addr <= 1'b0;
                     end
                 end
-                else if (IO_SELECT == 1'b1)		// Firmware ROM read
+                if (IO_SELECT == 1'b1)		// Firmware ROM read
                 begin
 			$display("HDD IO_SELECT A %x rom_dout %x",A,rom_dout);
                     if (RD == 1'b1)

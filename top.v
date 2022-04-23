@@ -91,7 +91,8 @@ reg [7:0] device_select;
 reg [7:0] io_select;
 
 
-always @(posedge clk_sys)
+//always @(posedge clk_sys)
+always @(*)
 begin
    device_select<=8'h0;   
    io_select<=8'h0;   
@@ -109,7 +110,7 @@ begin
   end
    if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal && ~CXROM)
    begin
-	   $display("io_select addr[10:8] %x din %x",addr[10:8],din);
+	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
 	  io_select[addr[10:8]]<=1'b1;
   end
 end
