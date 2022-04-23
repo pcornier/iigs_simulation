@@ -77,7 +77,7 @@ wire rom2_ce = (bank == 8'h0 && addr >= 16'hc100) || bank == 8'hff;
 wire fastram_ce = bank < RAMSIZE; // bank[7] == 0;
 wire slowram_ce = bank == 8'he0 || bank == 8'he1;
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
-wire slot_ce =  bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
+wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
 //wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
 wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && is_internal;
