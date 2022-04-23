@@ -3,6 +3,7 @@ module top(
   input reset,
   input clk_sys,
   input clk_vid,
+  input cpu_wait,
   input ce_pix,
   output [7:0] R,
   output [7:0] G,
@@ -41,6 +42,7 @@ iigs core(
 
   .reset(reset),
   .clk_sys(clk_sys),
+  .cpu_wait(cpu_wait),
   .fast_clk(fast_clk_delayed),
   .fast_clk_delayed(fast_clk),
   .slow_clk(),

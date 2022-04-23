@@ -77,13 +77,13 @@ module emu (
 	input [7:0]		ioctl_index,
 	output reg		ioctl_wait=1'b0,
 
-	output [31:0] 		sd_lba[2],
+	output [31:0] 		sd_lba[3],
 	output [9:0] 		sd_rd,
 	output [9:0] 		sd_wr,
 	input [9:0] 		sd_ack,
 	input [8:0] 		sd_buff_addr,
 	input [7:0] 		sd_buff_dout,
-	output [7:0] 		sd_buff_din[2],
+	output [7:0] 		sd_buff_din[3],
 	input 			sd_buff_wr,
 	input [9:0] 		img_mounted,
 	input 			img_readonly,
@@ -108,6 +108,7 @@ top top (
 	.clk_sys(clk_sys),
 	.clk_vid(clk_sys),
 	.ce_pix(ce_pix),
+	.cpu_wait(cpu_wait_hdd),
 	.R(VGA_R),
 	.G(VGA_G),
 	.B(VGA_B),
@@ -155,6 +156,9 @@ assign VGA_VB=vblank;
 wire [15:0] hdd_sector;
 
 assign sd_lba[1] = {16'b0,hdd_sector};
+assign sd_rd = { 7'b0, 1'b0,sd_rd_hd,1'b0};
+assign sd_wr = { 7'b0, 1'b0,sd_wr_hd,1'b0};
+
 reg  hdd_mounted = 0;
 wire hdd_read;
 wire hdd_write;

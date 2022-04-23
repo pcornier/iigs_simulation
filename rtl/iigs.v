@@ -6,6 +6,7 @@ module iigs(
   input fast_clk, // 2.5
   input fast_clk_delayed, // 2.5
   input slow_clk, // 1
+  input cpu_wait, 
 
   output [7:0] bank,
   output [15:0] addr,
@@ -309,7 +310,7 @@ P65C816 cpu(
   .CLK(clk_sys),
   .RST_N(~reset),
   .CE(fast_clk),
-  .RDY_IN(1'b1),
+  .RDY_IN(~cpu_wait),
   .NMI_N(1'b1),
   .IRQ_N(1'b1),
   .ABORT_N(1'b1),

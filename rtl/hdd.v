@@ -137,7 +137,7 @@ module hdd(
                                         PRODOS_COMMAND_READ :
                                             if (hdd_mounted == 1'b1 & reg_unit == 8'h70)
                                             begin
-	$display("HDD PRODOS COMMAND READ");
+	$display("HDD PRODOS COMMAND READ %x",~select_d);
 						if (~select_d)begin
                                                 hdd_read <= 1'b1;
 					end
