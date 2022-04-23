@@ -231,7 +231,7 @@ module hdd(
                 end
                 else if (IO_SELECT == 1'b1)		// Firmware ROM read
                 begin
-			$display("HDD IO_SELECT");
+			$display("HDD IO_SELECT A %x rom_dout %x",A,rom_dout);
                     if (RD == 1'b1)
                         D_OUT <= rom_dout;
                 end
