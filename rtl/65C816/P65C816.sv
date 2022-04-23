@@ -93,11 +93,12 @@ module P65C816
   assign IsBranchCycle1 = (IR[4:0] == 5'b10000 & STATE == 4'b0001) ? 1'b1 :
                           1'b0;
 
-
+/*
 always @(posedge CLK ) begin
 	if (CE)
 	$display("RDY_OUT: %x MF: %x ADDR: %x A: %x X %x Y %x D %x SP %x T %x PC %x PBR %x DBR %x D_OUT %x D_IN %x WE %x MCODE.outbus %x ",RDY_OUT,MF,A_OUT,A,X,Y,D,SP,T,PC,PBR,DBR,D_OUT,D_IN,WE,MC.OUT_BUS);
 end
+*/
 
    always_comb begin
       case (IR[7:5])

@@ -1003,7 +1003,7 @@ int main(int argc, char** argv, char** env) {
 	iwm_load_disk();
 	//bus.QueueDownload("floppy.nib",1,0);
 //blockdevice.MountDisk("floppy.nib",0);
-//blockdevice.MountDisk("hd.hdv",1);
+blockdevice.MountDisk("hd.hdv",1);
 
        iwm_init();
        iwm_reset();

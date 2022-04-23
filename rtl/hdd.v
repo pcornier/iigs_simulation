@@ -116,7 +116,7 @@ module hdd(
                 select_d <= DEVICE_SELECT;
                 if (DEVICE_SELECT == 1'b1)
                 begin
-	//if (D_IN!=0) $display("inside loop, D_IN %x A[3:0] %x RD %x ",D_IN,A[3:0],RD);
+	$display("inside loop, D_IN %x A[3:0] %x RD %x ",D_IN,A[3:0],RD);
                     if (RD == 1'b1)
                         case (A[3:0])
                             4'h0 :
@@ -137,7 +137,7 @@ module hdd(
                                         PRODOS_COMMAND_READ :
                                             if (hdd_mounted == 1'b1 & reg_unit == 8'h70)
                                             begin
-	//$display("HDD PRODOS COMMAND READ");
+	$display("HDD PRODOS COMMAND READ");
 						if (~select_d)begin
                                                 hdd_read <= 1'b1;
 					end
@@ -159,7 +159,7 @@ module hdd(
                                                 D_OUT <= PRODOS_STATUS_PROTECT;
                                             else
                                             begin
-	//$display("HDD PRODOS COMMAND WRITE");
+	$display("HDD PRODOS COMMAND WRITE");
                                                 D_OUT <= 8'h00;
                                                 reg_status <= 8'h00;
                                                 hdd_write <= 1'b1;
@@ -231,6 +231,7 @@ module hdd(
                 end
                 else if (IO_SELECT == 1'b1)		// Firmware ROM read
                 begin
+			$display("HDD IO_SELECT");
                     if (RD == 1'b1)
                         D_OUT <= rom_dout;
                 end

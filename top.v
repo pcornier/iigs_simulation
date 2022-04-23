@@ -10,7 +10,19 @@ module top(
   output HBlank,
   output VBlank,
   output HS,
-  output VS
+  output VS,
+
+    // HDD control
+    output [15:0] HDD_SECTOR,
+    output        HDD_READ,
+    output        HDD_WRITE,
+    input         HDD_MOUNTED,
+    input         HDD_PROTECT,
+    input [8:0]   HDD_RAM_ADDR,
+    input [7:0]   HDD_RAM_DI,
+    output [7:0]  HDD_RAM_DO,
+    input         HDD_RAM_WE
+
 );
 
 wire [7:0] bank;
@@ -64,11 +76,28 @@ wire rom1_ce = bank == 8'hfe;
 wire rom2_ce = (bank == 8'h0 && addr >= 16'hc100) || bank == 8'hff;
 wire fastram_ce = bank < RAMSIZE; // bank[7] == 0;
 wire slowram_ce = bank == 8'he0 || bank == 8'he1;
-wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
+//wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
+wire slot_ce =  bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
 //wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
 wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && is_internal;
 
+// try to setup flags for traditional iie style slots
+reg [7:0] device_select;
+reg [7:0] io_select;
+
+
+always @(posedge clk_sys)
+begin
+   if (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1 && addr >= 'hc090 && addr < 'hc100 && ~is_internal)
+	  device_select[addr[6:4]]=1'b1;
+   if (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1 && addr >= 'hc400 && addr < 'hc800 && ~is_internal)
+	  io_select[addr[10:8]]=1'b1;
+end
+
+
+
+/*
 always @(posedge clk_sys)
 begin
         if (fast_clk)
@@ -77,7 +106,7 @@ begin
 			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL);
         end
 end
-
+*/
 
 
 wire [7:0] din =
@@ -89,7 +118,8 @@ wire [7:0] din =
   slot_ce ? slot_dout :
   8'h80;
 
-wire [7:0] slot_dout = 'h80;
+wire [7:0] slot_dout = HDD_DO;
+wire [7:0] HDD_DO;
 
 rom #(.memfile("rom1.mem")) rom1(
   .clock(clk_sys),
@@ -189,5 +219,26 @@ vdc vdc(
 	.BORDERCOLOR(BORDERCOLOR)
 );
 
+
+    hdd hdd(
+        .CLK_14M(clk_sys),
+        .PHASE_ZERO(fast_clk),
+        .IO_SELECT(io_select[7]),
+        .DEVICE_SELECT(device_select[7]),
+        .RESET(reset),
+        .A(addr),
+        .RD(we),
+        .D_IN(dout),
+        .D_OUT(HDD_DO),
+        .sector(HDD_SECTOR),
+        .hdd_read(HDD_READ),
+        .hdd_write(HDD_WRITE),
+        .hdd_mounted(HDD_MOUNTED),
+        .hdd_protect(HDD_PROTECT),
+        .ram_addr(HDD_RAM_ADDR),
+        .ram_di(HDD_RAM_DI),
+        .ram_do(HDD_RAM_DO),
+        .ram_we(HDD_RAM_WE)
+    );
 
 endmodule

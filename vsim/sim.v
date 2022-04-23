@@ -114,7 +114,18 @@ top top (
 	.HBlank(hblank),
 	.VBlank(vblank),
 	.HS(hsync),
-	.VS(vsync)
+	.VS(vsync),
+	/* hard drive */
+	.HDD_SECTOR(hdd_sector),
+	.HDD_READ(hdd_read),
+	.HDD_WRITE(hdd_write),
+	.HDD_MOUNTED(hdd_mounted),
+	.HDD_PROTECT(hdd_protect),
+	.HDD_RAM_ADDR(sd_buff_addr),
+	.HDD_RAM_DI(sd_buff_dout),
+	.HDD_RAM_DO(sd_buff_din[1]),
+	.HDD_RAM_WE(sd_buff_wr & sd_ack[1])
+
 );
 
 wire ce_pix=1'b1;
@@ -138,6 +149,67 @@ assign VGA_VS=vsync;
 
 assign VGA_HB=hblank;
 assign VGA_VB=vblank;
+
+
+// HARD DRIVE PARTS
+wire [15:0] hdd_sector;
+
+assign sd_lba[1] = {16'b0,hdd_sector};
+reg  hdd_mounted = 0;
+wire hdd_read;
+wire hdd_write;
+reg  hdd_protect;
+reg  cpu_wait_hdd = 0;
+
+reg  sd_rd_hd;
+reg  sd_wr_hd;
+
+always @(posedge clk_sys) begin
+	reg old_ack ;
+	reg hdd_read_pending ;
+	reg hdd_write_pending ;
+	reg state;
+
+	old_ack <= sd_ack[1];
+	hdd_read_pending <= hdd_read_pending | hdd_read;
+	hdd_write_pending <= hdd_write_pending | hdd_write;
+
+	if (img_mounted[1]) begin
+		hdd_mounted <= img_size != 0;
+		hdd_protect <= img_readonly;
+	end
+
+	if(reset) begin
+		state <= 0;
+		cpu_wait_hdd <= 0;
+		hdd_read_pending <= 0;
+		hdd_write_pending <= 0;
+		sd_rd_hd <= 0;
+		sd_wr_hd <= 0;
+	end
+	else if(!state) begin
+		if (hdd_read_pending | hdd_write_pending) begin
+			state <= 1;
+			sd_rd_hd <= hdd_read_pending;
+			sd_wr_hd <= hdd_write_pending;
+			cpu_wait_hdd <= 1;
+		end
+	end
+	else begin
+		if (~old_ack & sd_ack[1]) begin
+			hdd_read_pending <= 0;
+			hdd_write_pending <= 0;
+			sd_rd_hd <= 0;
+			sd_wr_hd <= 0;
+			$display("~old ack %x sd_ack[1] %x",~old_ack,sd_ack[1]);
+		end
+		else if(old_ack & ~sd_ack[1]) begin
+			$display("old ack %x ~sd_ack[1] %x",old_ack,~sd_ack[1]);
+			state <= 0;
+			cpu_wait_hdd <= 0;
+		end
+	end
+end
 
 
 
