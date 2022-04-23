@@ -79,6 +79,7 @@ wire slowram_ce = bank == 8'he0 || bank == 8'he1;
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
+wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
 //wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
 wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && is_internal;
 
@@ -94,6 +95,11 @@ begin
    if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal)
    begin
 	   $display("device_select addr[10:8] %x %x ",addr[10:8],din);
+	  device_select[addr[6:4]]<=1'b1;
+  end
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io)
+   begin
+	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
 	  device_select[addr[6:4]]<=1'b1;
   end
    if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal)
