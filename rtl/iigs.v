@@ -15,7 +15,12 @@ module iigs(
   output reg [7:0] TEXTCOLOR,
   output reg [3:0] BORDERCOLOR,
   output reg [7:0] SLTROMSEL,
-  output we
+  output we,
+
+  input VBlank,
+  input[9:0] H,
+  input[8:0] V
+
 );
 
 wire [23:0] cpu_addr;
@@ -49,7 +54,6 @@ reg iwm_rw, iwm_strobe;
 
 // some fake registers for now
 reg [7:0] WVIDEO;
-reg [7:0] RDCxROM;
 reg [7:0] STATEREG;
 reg [7:0] SETINTCxROM;
 reg [7:0] CYAREG;
@@ -60,9 +64,8 @@ reg [7:0] DISKREG;
 reg [7:0] SOUNDADRL;
 reg [7:0] SOUNDADRH;
 //reg [7:0] TEXTCOLOR;
-reg [7:0] LOWRES;
+reg LOWRES;
 reg [7:0] SPKR;
-reg [7:0] RD80VID;
 reg [7:0] DISK35;
 reg [7:0] C02BVAL;
 
@@ -75,7 +78,7 @@ reg SLOTC3ROM;
 reg EIGHTYCOL;
 reg ALTCHARSET;
 reg PAGE2;
-reg MONOCHROME;
+reg [7:0] MONOCHROME;
 reg LCRAM;
 reg LCRAM2;
 reg ROMBANK;
@@ -154,7 +157,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
 	12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;
-        12'h031: DISK35<= cpu_dout & 'hc0;
+        12'h031: DISK35<= cpu_dout & 8'hc0;
         12'h033, 12'h034: begin
           prtc_rw <= 1'b0;
           prtc_strobe <= 1'b1;
@@ -206,13 +209,38 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
           adb_strobe <= 1'b1;
           adb_rw <= 1'b1;
         end
-        12'h015: io_dout <= RDCxROM;
-        12'h01f: io_dout <= RD80VID;
+	
+        12'h002: RAMRD<= 1'b0 ;
+        12'h003: RAMRD<= 1'b1 ;
+        12'h004: RAMWRT<= 1'b0 ;
+        12'h005: RAMWRT<= 1'b1 ;
+
+	12'h011: if(LCRAM2) io_dout<='h80; else io_dout<='h00;
+	12'h012: if(LCRAM) io_dout<='h80; else io_dout<='h00;
+	12'h013: if(RAMRD) io_dout<='h80; else io_dout<='h00;
+	12'h014: if(RAMWRT) io_dout<='h80; else io_dout<='h00;
+	12'h015: if(INTCXROM) io_dout<='h80; else io_dout<='h00;
+	12'h016: if(ALTZP) io_dout<='h80; else io_dout<='h00;
+	12'h017: if(SLOTC3ROM) io_dout<='h80; else io_dout<='h00;
+	12'h018: if(EIGHTYSTORE) io_dout<='h80; else io_dout<='h00;
+	12'h019: if(VBlank) io_dout<='h00; else io_dout<='h80;
+	12'h01a: if(TEXTG) io_dout<='h80; else io_dout<='h00;
+	12'h01b: if(MIXG) io_dout<='h80; else io_dout<='h00;
+	12'h01c: if(PAGE2) io_dout<='h80; else io_dout<='h00;
+	12'h01d: if(~LOWRES) io_dout<='h80; else io_dout<='h00;
+	12'h01e: if(ALTCHARSET) io_dout<='h80; else io_dout<='h00;
+        12'h01f: if(EIGHTYCOL) io_dout <= 'h80; else io_dout<='h00;
+
+        12'h022: io_dout <= TEXTCOLOR;
+        //12'h023:  /* vgc int */
+
         12'h029: io_dout <= WVIDEO;
         12'h02a: io_dout <= 'h0; // from gsplus
         12'h02b: io_dout <= C02BVAL; // from gsplus
         12'h02c: io_dout <= 'h0; // from gsplus
         12'h02d: io_dout <= SLTROMSEL;
+        //12'h02e:  /* vertcount */
+        //12'h02f:  /* horizcount */
         12'h030: io_dout <= SPKR;
         12'h031: io_dout <= DISK35;
         12'h033, 12'h034: begin

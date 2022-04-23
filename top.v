@@ -37,9 +37,12 @@ iigs core(
   .dout(dout),
   .din(din),
   .we(we),
+  .VBlank(VBlank),
   .TEXTCOLOR(TEXTCOLOR),
   .BORDERCOLOR(BORDERCOLOR),
-  .SLTROMSEL(SLTROMSEL)
+  .SLTROMSEL(SLTROMSEL),
+  .H(H),
+  .V(V)
 
 );
 
@@ -86,7 +89,7 @@ wire [7:0] din =
   slot_ce ? slot_dout :
   8'h80;
 
-wire slot_dout = 'h80;
+wire [7:0] slot_dout = 'h80;
 
 rom #(.memfile("rom1.mem")) rom1(
   .clock(clk_sys),
@@ -153,23 +156,7 @@ slowram slowram(
 
 wire [9:0] H;
 wire [8:0] V;
-/*
-jtframe_vtimer vtimer(
-    .clk(clk_vid),
-    .pxl_cen(ce_pix),
-    .H(H),
-    .vdump(V),
-   .LHBL(hblank_n),
-   .LVBL(vblank_n),
-   .HS(HS),
-   .VS(VS)
-);
-wire hblank_n;
-wire vblank_n;
 
-assign HBlank = ~hblank_n;
-assign VBlank = ~vblank_n;
-*/
 video_timing video_timing(
 .clk_vid(clk_vid),
 .ce_pix(ce_pix),

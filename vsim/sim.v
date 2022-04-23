@@ -129,6 +129,7 @@ end
 */
 
 wire hsync,vsync;
+wire hblank,vblank;
 
 assign CE_PIXEL=ce_pix;
 
