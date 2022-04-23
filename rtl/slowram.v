@@ -8,7 +8,7 @@ module slowram(
   input ce
 );
 
-reg [7:0] ram[(1<<16)-1:0];
+reg [7:0] ram[(1<<17)-1:0];
 
 always @(posedge clk)
   if (ce) begin
