@@ -36,6 +36,7 @@ always @(posedge clk_sys)
 wire fast_clk = clk_div == 0;
 wire fast_clk_delayed = clk_div ==1;
 
+
 iigs core(
 
   .reset(reset),
@@ -53,6 +54,7 @@ iigs core(
   .TEXTCOLOR(TEXTCOLOR),
   .BORDERCOLOR(BORDERCOLOR),
   .SLTROMSEL(SLTROMSEL),
+  .CXROM(CXROM),
   .H(H),
   .V(V)
 
@@ -65,6 +67,7 @@ parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
 parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
 `endif
 
+wire CXROM;
 wire [7:0] TEXTCOLOR;
 wire [3:0] BORDERCOLOR;
 wire [7:0] SLTROMSEL;
@@ -102,7 +105,7 @@ begin
 	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
 	  device_select[addr[6:4]]<=1'b1;
   end
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal)
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal && ~CXROM)
    begin
 	   $display("io_select addr[10:8] %x din %x",addr[10:8],din);
 	  io_select[addr[10:8]]<=1'b1;

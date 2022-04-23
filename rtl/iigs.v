@@ -15,6 +15,7 @@ module iigs(
   output reg [7:0] TEXTCOLOR,
   output reg [3:0] BORDERCOLOR,
   output reg [7:0] SLTROMSEL,
+  output reg  CXROM,
   output we,
 
   input VBlank,
@@ -23,6 +24,7 @@ module iigs(
 
 );
 
+assign CXROM=INTCXROM;
 wire [23:0] cpu_addr;
 wire [7:0] cpu_dout;
 wire [23:0] addr_bus;
@@ -140,12 +142,12 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h003: RAMRD<= 1'b1 ;
         12'h004: RAMWRT<= 1'b0 ;
         12'h005: RAMWRT<= 1'b1 ;
-        12'h006: INTCXROM<= 1'b0;
-        12'h007: INTCXROM <= 1'b1;
+	12'h006: begin $display("**INTCXROM %x",0);INTCXROM<= 1'b0; end
+	12'h007: begin $display("**INTCXROM %x",1);INTCXROM <= 1'b1; end
         12'h008: ALTZP<= 1'b0;
         12'h009: ALTZP<= 1'b1;
-        12'h00A: SLOTC3ROM<= 1'b0;
-        12'h00B: SLOTC3ROM<= 1'b1;
+	12'h00A: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b0; end
+	12'h00B: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b1; end
         12'h00C: EIGHTYCOL<= 1'b0;
         12'h00D: EIGHTYCOL<= 1'b1;
         12'h00E: ALTCHARSET<= 1'b0;
