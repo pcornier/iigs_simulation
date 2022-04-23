@@ -67,7 +67,7 @@ V_SRC = \
 	$(RTL)/prtc.v \
 	$(RTL)/adb.v \
 	$(RTL)/iwm.v \
-	$(RTL)/vdc.v \
+	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \
 	$(RTL)/video_timing.v \
 	$(RTL)/iigs.v

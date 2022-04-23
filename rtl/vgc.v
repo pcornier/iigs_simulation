@@ -1,5 +1,5 @@
 
-module vdc (
+module vgc (
 input clk,
 input clk_vid,
 input ce_pix,
@@ -11,11 +11,32 @@ output reg [7:0] B,
 output [22:0] video_addr,
 input [7:0] video_data,
 input [7:0] TEXTCOLOR,
-input [3:0] BORDERCOLOR
+input [3:0] BORDERCOLOR,
+input LOWRES,
+input PAGE2,
+input TEXTG,
+input MIXG,
+input [7:0] NEWVIDEO
+
 );
 
 
 // TEXTCOLOR -- 7:4 text color 3:0 background
+
+
+// if NEWVIDEO[7] == 1 then we are in SHRG mode
+
+
+/* SHRG */
+
+wire [22:0] video_addr_shrg;
+// one cycle before the end of the left border, pull down the scp
+reg [7:0] scb;
+
+
+
+
+/* APPLE IIe */
 
 
 

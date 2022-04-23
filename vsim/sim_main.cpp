@@ -1101,6 +1101,12 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::Text("VPA:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA);
 		ImGui::Text("VPB:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB);
 		ImGui::Text("IR:      0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__IR);
+		ImGui::Spacing();
+		ImGui::Text("PAGE2:      0x%02X", top->emu__DOT__top__DOT__core__DOT__PAGE2);
+		ImGui::Text("TEXTG:      0x%02X", top->emu__DOT__top__DOT__core__DOT__TEXTG);
+		ImGui::Text("MIXG:      0x%02X", top->emu__DOT__top__DOT__core__DOT__MIXG);
+		ImGui::Text("NEWVIDEO:      0x%02X", top->emu__DOT__top__DOT__core__DOT__NEWVIDEO);
+		ImGui::Spacing();
 		ImGui::End();
 		//ImGui::Spacing();
 

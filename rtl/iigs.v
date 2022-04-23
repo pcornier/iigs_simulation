@@ -17,6 +17,11 @@ module iigs(
   output reg [3:0] BORDERCOLOR,
   output reg [7:0] SLTROMSEL,
   output   CXROM,
+  output reg LOWRES/*verilator public_flat*/,
+  output reg PAGE2/*verilator public_flat*/,
+  output reg TEXTG/*verilator public_flat*/,
+  output reg MIXG/*verilator public_flat*/,
+  output reg [7:0] NEWVIDEO/*verilator public_flat*/,
   output we,
 
   input VBlank,
@@ -56,7 +61,7 @@ reg [7:0] iwm_addr;
 reg iwm_rw, iwm_strobe;
 
 // some fake registers for now
-reg [7:0] WVIDEO;
+//reg [7:0] NEWVIDEO;
 reg [7:0] STATEREG;
 reg [7:0] SETINTCxROM;
 reg [7:0] CYAREG;
@@ -67,7 +72,7 @@ reg [7:0] DISKREG;
 reg [7:0] SOUNDADRL;
 reg [7:0] SOUNDADRH;
 //reg [7:0] TEXTCOLOR;
-reg LOWRES;
+//reg LOWRES;
 reg [7:0] SPKR;
 reg [7:0] DISK35;
 reg [7:0] C02BVAL;
@@ -80,13 +85,13 @@ reg ALTZP;
 reg SLOTC3ROM;
 reg EIGHTYCOL;
 reg ALTCHARSET;
-reg PAGE2;
+//reg PAGE2;
 reg [7:0] MONOCHROME;
 reg LCRAM;
 reg LCRAM2;
 reg ROMBANK;
-reg TEXTG;
-reg MIXG;
+//reg TEXTG;
+//reg MIXG;
 
 
 wire slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
@@ -163,7 +168,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h022: TEXTCOLOR <= cpu_dout;
 	//12'h023: VGCINT
         12'h028: $display("**++UNIMPLEMENTEDROMBANK"); 
-        12'h029: WVIDEO <= cpu_dout;
+	12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
 	12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;
@@ -246,7 +251,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         //12'h023:  /* vgc int */
 
         12'h028: $display("**++UNIMPLEMENTEDROMBANK"); 
-        12'h029: io_dout <= WVIDEO;
+        12'h029: io_dout <= NEWVIDEO;
         12'h02a: io_dout <= 'h0; // from gsplus
         12'h02b: io_dout <= C02BVAL; // from gsplus
         12'h02c: io_dout <= 'h0; // from gsplus
