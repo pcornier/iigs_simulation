@@ -190,6 +190,7 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 localparam CONF_STR = {
 	"IIgs;;",
 	"-;",
+	"S1,HDV;",
 	"R0,Reset;",
 	"V,v",`BUILD_DATE 
 };
@@ -199,7 +200,20 @@ wire  [1:0] buttons;
 wire [31:0] status;
 wire [10:0] ps2_key;
 
-hps_io #(.CONF_STR(CONF_STR)) hps_io
+wire [31:0] sd_lba[2];
+reg   [1:0] sd_rd;
+reg   [1:0] sd_wr;
+wire  [1:0] sd_ack;
+wire  [8:0] sd_buff_addr;
+wire  [7:0] sd_buff_dout;
+wire  [7:0] sd_buff_din[2];
+wire        sd_buff_wr;
+wire  [1:0] img_mounted;
+wire        img_readonly;
+wire [63:0] img_size;
+
+
+hps_io #(.CONF_STR(CONF_STR),.VDNUM(2)) hps_io
 (
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
@@ -208,6 +222,20 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 
 	.forced_scandoubler(forced_scandoubler),
 
+	.sd_lba(sd_lba),
+	.sd_rd(sd_rd),
+	.sd_wr(sd_wr),
+	.sd_ack(sd_ack),
+	.sd_buff_addr(sd_buff_addr),
+	.sd_buff_dout(sd_buff_dout),
+	.sd_buff_din(sd_buff_din),
+	.sd_buff_wr(sd_buff_wr),
+	.img_mounted(img_mounted),
+	.img_readonly(img_readonly),
+	.img_size(img_size),
+	
+	
+	
 	.buttons(buttons),
 	.status(status),
 	.status_menumask({status[5]}),
@@ -234,6 +262,7 @@ top top (
 	.reset(reset),
 	.clk_sys(clk_sys),
 	.clk_vid(clk_vid),
+	.cpu_wait(cpu_wait_hdd),
 	.ce_pix(ce_pix),
 	.R(VGA_R),
 	.G(VGA_G),
@@ -241,8 +270,19 @@ top top (
 	.HBlank(hblank),
 	.VBlank(vblank),
 	.HS(hsync),
-	.VS(vsync)
-);
+	.VS(vsync),
+	/* hard drive */
+	.HDD_SECTOR(sd_lba[1]),
+	.HDD_READ(hdd_read),
+	.HDD_WRITE(hdd_write),
+	.HDD_MOUNTED(hdd_mounted),
+	.HDD_PROTECT(hdd_protect),
+	.HDD_RAM_ADDR(sd_buff_addr),
+	.HDD_RAM_DI(sd_buff_dout),
+	.HDD_RAM_DO(sd_buff_din[1]),
+	.HDD_RAM_WE(sd_buff_wr & sd_ack[1])
+
+	);
 
 reg ce_pix;
 always @(posedge clk_vid) begin
@@ -270,6 +310,66 @@ assign VGA_DE =  ~(vblank | hblank);
 assign CLK_VIDEO=clk_vid;
 
 
+
+// HARD DRIVE PARTS
+wire [15:0] hdd_sector;
+
+
+reg  hdd_mounted = 0;
+wire hdd_read;
+wire hdd_write;
+reg  hdd_protect;
+reg  cpu_wait_hdd = 0;
+
+reg  sd_rd_hd;
+reg  sd_wr_hd;
+
+always @(posedge clk_sys) begin
+	reg old_ack ;
+	reg hdd_read_pending ;
+	reg hdd_write_pending ;
+	reg state;
+
+	old_ack <= sd_ack[1];
+	hdd_read_pending <= hdd_read_pending | hdd_read;
+	hdd_write_pending <= hdd_write_pending | hdd_write;
+
+	if (img_mounted[1]) begin
+		hdd_mounted <= img_size != 0;
+		hdd_protect <= img_readonly;
+	end
+
+	if(reset) begin
+		state <= 0;
+		cpu_wait_hdd <= 0;
+		hdd_read_pending <= 0;
+		hdd_write_pending <= 0;
+		sd_rd[1] <= 0;
+		sd_wr[1] <= 0;
+	end
+	else if(!state) begin
+		if (hdd_read_pending | hdd_write_pending) begin
+			state <= 1;
+			sd_rd[1] <= hdd_read_pending;
+			sd_wr[1] <= hdd_write_pending;
+			cpu_wait_hdd <= 1;
+		end
+	end
+	else begin
+		if (~old_ack & sd_ack[1]) begin
+			hdd_read_pending <= 0;
+			hdd_write_pending <= 0;
+			sd_rd[1] <= 0;
+			sd_wr[1] <= 0;
+			$display("~old ack %x sd_ack[1] %x",~old_ack,sd_ack[1]);
+		end
+		else if(old_ack & ~sd_ack[1]) begin
+			$display("old ack %x ~sd_ack[1] %x",old_ack,~sd_ack[1]);
+			state <= 0;
+			cpu_wait_hdd <= 0;
+		end
+	end
+end
 
 
 endmodule

@@ -9,6 +9,7 @@ set_global_assignment -name VERILOG_FILE rtl/rom.v
 set_global_assignment -name VERILOG_FILE rtl/vdc.v
 set_global_assignment -name VERILOG_FILE rtl/iigs.v
 set_global_assignment -name VERILOG_FILE rtl/iwm.v
+set_global_assignment -name VERILOG_FILE rtl/hdd.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
 set_global_assignment -name VERILOG_FILE top.v
 set_global_assignment -name SYSTEMVERILOG_FILE IIgs.sv

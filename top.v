@@ -98,28 +98,21 @@ always @(*)
 begin
    device_select<=8'h0;   
    io_select<=8'h0;   
-   /*
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal)
-   begin
-	   $display("device_select addr[10:8] %x %x ",addr[10:8],din);
-	  device_select[addr[6:4]]<=1'b1;
-  end
-  */
    if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io)
    begin
-	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
+//	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
 	  device_select[addr[6:4]]<=1'b1;
   end
    if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal && ~CXROM)
    begin
-	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
+//	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
 	  io_select[addr[10:8]]<=1'b1;
   end
 end
 
 
 
-
+/*
 always @(posedge clk_sys)
 begin
         if (fast_clk)
@@ -128,7 +121,7 @@ begin
 			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL);
         end
 end
-
+*/
 
 
 wire [7:0] din =
