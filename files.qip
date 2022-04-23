@@ -6,7 +6,7 @@ set_global_assignment -name VERILOG_FILE rtl/slowram.v
 set_global_assignment -name VERILOG_FILE rtl/video_timing.v
 set_global_assignment -name VERILOG_FILE rtl/prtc.v
 set_global_assignment -name VERILOG_FILE rtl/rom.v
-set_global_assignment -name VERILOG_FILE rtl/vdc.v
+set_global_assignment -name VERILOG_FILE rtl/vgc.v
 set_global_assignment -name VERILOG_FILE rtl/iigs.v
 set_global_assignment -name VERILOG_FILE rtl/iwm.v
 set_global_assignment -name VERILOG_FILE rtl/hdd.v
