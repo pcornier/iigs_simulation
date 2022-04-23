@@ -91,9 +91,9 @@ always @(posedge clk_sys)
 begin
    device_select<=8'h0;   
    io_select<=8'h0;   
-   if (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1 && addr >= 'hc090 && addr < 'hc100 && ~is_internal)
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal)
 	  device_select[addr[6:4]]<=1'b1;
-   if (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1 && addr >= 'hc400 && addr < 'hc800 && ~is_internal)
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal)
 	  io_select[addr[10:8]]<=1'b1;
 end
 
