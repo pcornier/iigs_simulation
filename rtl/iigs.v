@@ -136,22 +136,22 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
     if (~cpu_we)
       // write
       case (addr[11:0])
-        12'h000: EIGHTYSTORE<= 1'b0 ;
-        12'h001: EIGHTYSTORE<= 1'b1 ;
-        12'h002: RAMRD<= 1'b0 ;
-        12'h003: RAMRD<= 1'b1 ;
-        12'h004: RAMWRT<= 1'b0 ;
-        12'h005: RAMWRT<= 1'b1 ;
+	      12'h000: begin $display("**EIGHTYSTORE %x",0); EIGHTYSTORE<= 1'b0 ; end
+	      12'h001: begin $display("**EIGHTYSTORE %x",1); EIGHTYSTORE<= 1'b1 ; end
+	      12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
+	      12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
+	      12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
+	      12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
 	12'h006: begin $display("**INTCXROM %x",0);INTCXROM<= 1'b0; end
 	12'h007: begin $display("**INTCXROM %x",1);INTCXROM <= 1'b1; end
-        12'h008: ALTZP<= 1'b0;
-        12'h009: ALTZP<= 1'b1;
+	12'h008: begin $display("**ALTZP %x",0); ALTZP<= 1'b0; end
+	12'h009: begin $display("**ALTZP %x",1); ALTZP<= 1'b1; end
 	12'h00A: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b0; end
-	12'h00B: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b1; end
-        12'h00C: EIGHTYCOL<= 1'b0;
-        12'h00D: EIGHTYCOL<= 1'b1;
-        12'h00E: ALTCHARSET<= 1'b0;
-        12'h00F: ALTCHARSET<= 1'b1;
+	12'h00B: begin $display("**SLOTC3ROM %x",1);SLOTC3ROM<= 1'b1; end
+	12'h00C: begin $display("**EIGHTYCOL %x",0); EIGHTYCOL<= 1'b0; end
+	12'h00D: begin $display("**EIGHTYCOL %x",1); EIGHTYCOL<= 1'b1; end
+	12'h00E: begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end
+	12'h00F: begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end
         12'h010, 12'h026, 12'h027, 12'h070: begin
           adb_addr <= addr[7:0];
           adb_strobe <= 1'b1;
@@ -218,10 +218,10 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
           adb_rw <= 1'b1;
         end
 	
-        12'h002: RAMRD<= 1'b0 ;
-        12'h003: RAMRD<= 1'b1 ;
-        12'h004: RAMWRT<= 1'b0 ;
-        12'h005: RAMWRT<= 1'b1 ;
+	12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
+	12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
+	12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
+	12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
 
 	12'h011: if(LCRAM2) io_dout<='h80; else io_dout<='h00;
 	12'h012: if(LCRAM) io_dout<='h80; else io_dout<='h00;
