@@ -161,6 +161,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h021: MONOCHROME <=cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
 	//12'h023: VGCINT
+        12'h028: $display("**++UNIMPLEMENTEDROMBANK"); 
         12'h029: WVIDEO <= cpu_dout;
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
 	12'h02d: SLTROMSEL <= cpu_dout;
@@ -180,6 +181,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h03d: SOUNDDATA <= cpu_dout;
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
+        12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
 	//12'h047: begin C046VAL &= 'he7; end// some kind of interrupt thing -- clear interrupts here
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
 	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
@@ -242,6 +244,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h022: io_dout <= TEXTCOLOR;
         //12'h023:  /* vgc int */
 
+        12'h028: $display("**++UNIMPLEMENTEDROMBANK"); 
         12'h029: io_dout <= WVIDEO;
         12'h02a: io_dout <= 'h0; // from gsplus
         12'h02b: io_dout <= C02BVAL; // from gsplus
@@ -263,6 +266,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h03d: io_dout <= SOUNDDATA;
         12'h03e: io_dout <= SOUNDADRL;
         12'h03f: io_dout <= SOUNDADRH;
+        12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
