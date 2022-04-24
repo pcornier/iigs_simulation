@@ -12,7 +12,7 @@ module iigs(
   output [15:0] addr,
   output [7:0] dout,
   input [7:0] din,
-  output reg [7:0] shadow,
+  output reg [7:0] shadow/*verilator public_flat*/,
   output reg [7:0] TEXTCOLOR,
   output reg [3:0] BORDERCOLOR,
   output reg [7:0] SLTROMSEL,

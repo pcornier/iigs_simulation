@@ -26,7 +26,9 @@ module top(
 
 );
 
+
 wire [7:0] bank;
+wire [7:0] shadow;
 wire [15:0] addr;
 wire [7:0] dout;
 wire we;
@@ -49,6 +51,7 @@ iigs core(
 
   .bank(bank),
   .addr(addr),
+  .shadow(shadow),
   .dout(dout),
   .din(din),
   .we(we),
@@ -92,8 +95,10 @@ wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 wire rom1_ce = bank == 8'hfe;
 wire rom2_ce = (bank == 8'h0 && addr >= 16'hc100) || bank == 8'hff;
-wire fastram_ce = bank < RAMSIZE; // bank[7] == 0;
-wire slowram_ce = bank == 8'he0 || bank == 8'he1;
+wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
+//wire slowram_ce = bank == 8'he0 || bank == 8'he1;
+reg slowram_ce;
+
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
@@ -104,6 +109,22 @@ wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || ba
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
 reg [7:0] io_select;
+
+
+always @(*) 
+begin
+// shadow
+//Bit 6: I/O Memory, Bit 5: Alternate Display Mode
+//Bit 4: Auxilary HGR, Bit 3: Super HiRes, Bit 2: HiRes Page 2
+//Bit 1: HiRes Page 1, Bit 0: Text/LoRes
+//
+   // read or write to e0 or e1 -- turn on the slowram
+   if (bank == 8'he0 || bank == 8'he1)
+	slowram_ce = 1;
+   else 
+   	slowram_ce =0;
+//   if (bank == 8'h00 
+end
 
 
 //always @(posedge clk_sys)
