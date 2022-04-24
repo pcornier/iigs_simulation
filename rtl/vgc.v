@@ -42,7 +42,7 @@ reg [1:0] h_counter;
 reg [3:0] last_pixel;
 always @(posedge clk_vid) if(ce_pix)
 begin
-
+$display("video_addr = %x video_addr_shrg %x video_addr_ii %x ",video_addr,video_addr_shrg,video_addr_ii);
 	// load SCB
 	if (H==0) begin
 		video_addr_shrg <= 'h9D00+(V-'d16);
@@ -99,7 +99,7 @@ begin
 			case(h_counter)
 				'b00: 
 				begin
-					if (~video_data[7:4] & scb[5]) begin
+					if (video_data[7:4]==4'b0 && scb[5]) begin
 						shrg_r_pix <= r_shrg[ last_pixel ];
 						shrg_g_pix <= g_shrg[ last_pixel ];
 						shrg_b_pix <= b_shrg[ last_pixel ];
@@ -112,7 +112,7 @@ begin
 				end
 				'b10:
 				begin
-					if (~video_data[3:0] & scb[5]) begin
+					if (video_data[3:0]==4'b0 && scb[5]) begin
 						shrg_r_pix <= r_shrg[ last_pixel ];
 						shrg_g_pix <= g_shrg[ last_pixel ];
 						shrg_b_pix <= b_shrg[ last_pixel ];
@@ -295,16 +295,16 @@ B <= {BORGB[3:0],BORGB[3:0]};
 end
 else
 begin
-R <= NEWVIDEO[7] ?  shrg_r_pix  :   ~a ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
-G <= NEWVIDEO[7] ?  shrg_g_pix  :   ~a ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
-B <= NEWVIDEO[7] ?  shrg_b_pix  :   ~a ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
+R <= NEWVIDEO[7] ?  {shrg_r_pix,shrg_r_pix}  :   ~a ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
+G <= NEWVIDEO[7] ?  {shrg_g_pix,shrg_g_pix}  :   ~a ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
+B <= NEWVIDEO[7] ?  {shrg_b_pix,shrg_b_pix}  :   ~a ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
 
 end
 end
 
 
 //assign a = chrom_data_out[chpos_x[2:0]];
-wire video_addr_ii = chram_y + chram_x +23'h400 ;
+wire [22:0] video_addr_ii = chram_y + chram_x +23'h400 ;
 assign chrom_addr = { 1'b0,video_data[7:0], chpos_y};
 
 

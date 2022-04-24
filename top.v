@@ -203,7 +203,7 @@ dpram #(.widthad_a(16)) fastram
 // TODO: when 00-01 shadows on E0-E1, there's a copy mechanism 0x->Ex and it is
 // supposed to slow down the CPU during memory accesses.
 // Does CPU also slow down when it reads or writes on E0-E1?
-
+/*
 slowram slowram(
   .clk(clk_sys),
   .addr({ bank[0], addr }),
@@ -212,6 +212,26 @@ slowram slowram(
   .wr(we),
   .ce(slowram_ce)
 );
+*/
+dpram #(.widthad_a(17)) slowram
+(
+	.clock_a(clk_sys),
+	.address_a({ bank[0], addr }),
+	.data_a(dout),
+	.q_a(slowram_dout),
+	.wren_a(we),
+	.ce_a(slowram_ce),
+
+/*	.clock_b(clk_vid),
+	.address_b(video_addr),
+	.data_b(0),
+	.q_b(video_data),
+	.wren_b(1'b0)
+
+*/
+	//.ce_b(1'b1)
+);
+
 
 wire [9:0] H;
 wire [8:0] V;
