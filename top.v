@@ -95,7 +95,8 @@ wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 wire rom1_ce = bank == 8'hfe;
 wire rom2_ce = (bank == 8'h0 && addr >= 16'hc100) || bank == 8'hff;
-wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
+//wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
+wire fastram_ce = (bank < RAMSIZE)  & ~rom2_ce & ~rom1_ce ; // bank[7] == 0;
 //wire slowram_ce = bank == 8'he0 || bank == 8'he1;
 reg slowram_ce;
 
@@ -119,9 +120,37 @@ begin
 //Bit 1: HiRes Page 1, Bit 0: Text/LoRes
 //
    // read or write to e0 or e1 -- turn on the slowram
-   if (bank == 8'he0 || bank == 8'he1)
+   if ((bank == 8'he0 || bank == 8'he1 )  )
 	slowram_ce = 1;
-   else 
+   //Bit 6: I/O Memory
+   else  if ((bank == 8'h00 || bank == 8'h01) && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
+	slowram_ce = 1;
+   //Bit 5: Alternate Display Mode
+   else  if (bank == 8'h00 && ~shadow[5] && addr >= 'h0800 && addr <= 'h0bff )
+	slowram_ce = 1;
+   //Bit 5 AUX: Alt Display Mode
+   else  if (bank == 8'h01 && ~shadow[5] && ~shadow[4] && addr >= 'h0800 && addr <= 'h0bff )
+	slowram_ce = 1;
+   //Bit 4: (used in combo)
+   //Bit 3,2: Super HiRes or parts or HiRes Page 2
+   else  if (bank == 8'h00 && (~shadow[2]  || ~shadow[3] ) && addr >= 'h4000 && addr <= 'h5fff )
+	slowram_ce = 1;
+   //Bit 3,2: Super HiRes or parts or HiRes Page 2 and Aux
+   else  if (bank == 8'h01 && ((~shadow[2] && ~shadow[4]) || ~shadow[3] ) && addr >= 'h4000 && addr <= 'h5fff )
+	slowram_ce = 1;
+   //Bit 3,1: Super HiRes or parts or HiRes Page 1 
+   else  if (bank == 8'h00 && (~shadow[1]  || ~shadow[3] ) && addr >= 'h2000 && addr <= 'h3fff )
+	slowram_ce = 1;
+   //Bit 3,1: Super HiRes or parts or HiRes Page 1 and Aux
+   else  if (bank == 8'h01 && ((~shadow[1] && ~shadow[4]) || ~shadow[3] ) && addr >= 'h2000 && addr <= 'h3fff )
+	slowram_ce = 1;
+   //Bit 0: Alternate Display Mode
+   else  if (bank == 8'h00 && ~shadow[0] && addr >= 'h0400 && addr <= 'h07ff )
+	slowram_ce = 1;
+   //Bit 0 AUX: Alt Display Mode
+   else  if (bank == 8'h01 && ~shadow[0] && ~shadow[4] && addr >= 'h0400 && addr <= 'h07ff )
+	slowram_ce = 1;
+   else
    	slowram_ce =0;
 //   if (bank == 8'h00 
 end
@@ -146,16 +175,18 @@ end
 
 
 
-/*
+
 always @(posedge clk_sys)
 begin
         if (fast_clk)
         begin
-                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x",
-			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL);
+                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x is_internal %x CXROM %x",
+			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM);
+		$display("++SHADOW %x",shadow);
+		$display("--SHADOW[6] %x",shadow[6]);
         end
 end
-*/
+
 
 
 wire [7:0] din =
@@ -198,7 +229,7 @@ fastram fastram(
 */
 
 `ifdef VERILATOR
-dpram #(.widthad_a(23)) fastram
+dpram #(.widthad_a(23),.prefix("fast")) fastram
 `else
 dpram #(.widthad_a(16)) fastram
 `endif
@@ -209,13 +240,13 @@ dpram #(.widthad_a(16)) fastram
 	.q_a(fastram_dout),
 	.wren_a(we),
 	.ce_a(fastram_ce),
-
+/*
 	.clock_b(clk_vid),
 	.address_b(video_addr),
 	.data_b(0),
 	.q_b(video_data),
 	.wren_b(1'b0)
-
+*/
 	//.ce_b(1'b1)
 );
 
@@ -234,7 +265,7 @@ slowram slowram(
   .ce(slowram_ce)
 );
 */
-dpram #(.widthad_a(17)) slowram
+dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
 (
 	.clock_a(clk_sys),
 	.address_a({ bank[0], addr }),
@@ -243,13 +274,13 @@ dpram #(.widthad_a(17)) slowram
 	.wren_a(we),
 	.ce_a(slowram_ce),
 
-/*	.clock_b(clk_vid),
+	.clock_b(clk_vid),
 	.address_b(video_addr),
 	.data_b(0),
 	.q_b(video_data),
 	.wren_b(1'b0)
 
-*/
+
 	//.ce_b(1'b1)
 );
 
