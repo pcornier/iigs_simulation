@@ -19,6 +19,7 @@ module iigs(
   output   CXROM,
   output reg RDROM,
   output reg LC_WE,
+  output reg LCRAM2,
   //output reg /*verilator public_flat*/,
   output reg PAGE2/*verilator public_flat*/,
   output reg TEXTG/*verilator public_flat*/,
@@ -95,7 +96,7 @@ reg ALTCHARSET;
 //reg PAGE2;
 reg [7:0] MONOCHROME;
 //reg RDROM;
-reg LCRAM2;
+//reg LCRAM2;
 //reg LC_WE;
 reg ROMBANK;
 
@@ -377,7 +378,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h05a: io_dout <= 'h0; // some kind of soft switch?
         12'h05d: io_dout <= 'h0; // some kind of soft switch?
         12'h05f: io_dout <= 'h0; // some kind of soft switch?
-        12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM};
+        12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,~RDROM,LCRAM2,ROMBANK,INTCXROM};
         12'h071, 12'h072, 12'h073, 12'h074,
         12'h075, 12'h076, 12'h077, 12'h078,
         12'h079, 12'h07a, 12'h07b, 12'h07c,

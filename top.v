@@ -69,6 +69,7 @@ iigs core(
   .CXROM(CXROM),
   .RDROM(RDROM),
   .LC_WE(LC_WE),
+  .LCRAM2(LCRAM2),
 
   .H(H),
   .V(V)
@@ -86,6 +87,7 @@ parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
 wire CXROM;
 wire LC_WE;
 wire RDROM;
+wire LCRAM2;
 wire [7:0] TEXTCOLOR;
 wire [3:0] BORDERCOLOR;
 wire  HIRES_MODE;
@@ -243,7 +245,7 @@ dpram #(.widthad_a(16)) fastram
 `endif
 (
 	.clock_a(clk_sys),
-	.address_a({ bank[6:0], addr }),
+	.address_a({ bank[6:0], raddr }),
 	.data_a(dout),
 	.q_a(fastram_dout),
 	.wren_a(we),
@@ -258,6 +260,7 @@ dpram #(.widthad_a(16)) fastram
 	//.ce_b(1'b1)
 );
 
+wire [15:0] raddr = ((bank == 'h00  || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hd000 && addr <='hdfff && LCRAM2 ) ?  addr - 'h1000  : addr;
 
 // 128k 1MHz slow ram
 // TODO: when 00-01 shadows on E0-E1, there's a copy mechanism 0x->Ex and it is
@@ -276,7 +279,7 @@ slowram slowram(
 dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
 (
 	.clock_a(clk_sys),
-	.address_a({ bank[0], addr }),
+	.address_a({ bank[0], raddr }),
 	.data_a(dout),
 	.q_a(slowram_dout),
 	.wren_a(we),
