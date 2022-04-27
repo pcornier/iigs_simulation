@@ -3,7 +3,9 @@
 module dpram #(
     parameter width_a = 8,
     parameter widthad_a = 10,
-    parameter init_file= ""
+    parameter init_file= "",
+    parameter prefix= "",
+    parameter p= ""
 ) (
     // Port A
     input   wire                clock_a,
@@ -41,11 +43,14 @@ always @(posedge clock_a)
     if (wren_a)
     begin
 //	    $display("readinga %x from %x",ram[address_a],address_a);
+	    $display("LOG_DATA_MACRO2 %x %x (%s)",address_a,ram[address_a],prefix);
       q_a<= ram[address_a];
       end
     else
     begin
-//	    $display("writinga %x to %x",data_a,address_a);
+	    //$display("SETMEMORY %x to %x",data_a,address_a);
+	    //$display("DATA set %s%x = %x (%s)",p,address_a,data_a,prefix);
+	    $display("DATA set%s%x = %x",p,address_a,data_a);
       ram[address_a] <= data_a;
       end
   end

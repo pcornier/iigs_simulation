@@ -116,7 +116,7 @@ module hdd(
                 select_d <= DEVICE_SELECT;
                 if (DEVICE_SELECT == 1'b1)
                 begin
-	$display("inside loop, D_IN %x A[3:0] %x RD %x ",D_IN,A[3:0],RD);
+	//$display("inside loop, D_IN %x A[3:0] %x RD %x ",D_IN,A[3:0],RD);
                     if (RD == 1'b1)
                         case (A[3:0])
                             4'h0 :
@@ -137,7 +137,7 @@ module hdd(
                                         PRODOS_COMMAND_READ :
                                             if (hdd_mounted == 1'b1 & reg_unit == 8'h70)
                                             begin
-	$display("HDD PRODOS COMMAND READ %x",~select_d);
+	//$display("HDD PRODOS COMMAND READ %x",~select_d);
 						if (~select_d)begin
                                                 hdd_read <= 1'b1;
 					end
@@ -159,7 +159,7 @@ module hdd(
                                                 D_OUT <= PRODOS_STATUS_PROTECT;
                                             else
                                             begin
-	$display("HDD PRODOS COMMAND WRITE");
+	//$display("HDD PRODOS COMMAND WRITE");
                                                 D_OUT <= 8'h00;
                                                 reg_status <= 8'h00;
                                                 hdd_write <= 1'b1;
@@ -223,7 +223,7 @@ module hdd(
                 // RD/WR
                 else if (DEVICE_SELECT == 1'b0 & select_d == 1'b1)
                 begin
-			$display("DEVICE_SELECT==0 select_d==1");
+			//$display("DEVICE_SELECT==0 select_d==1");
                     if (increment_sec_addr == 1'b1)
                     begin
                         sec_addr <= sec_addr + 1;
@@ -232,7 +232,7 @@ module hdd(
                 end
                 if (IO_SELECT == 1'b1)		// Firmware ROM read
                 begin
-			$display("HDD IO_SELECT A %x rom_dout %x",A,rom_dout);
+			//$display("HDD IO_SELECT A %x rom_dout %x",A,rom_dout);
                     if (RD == 1'b1)
                         D_OUT <= rom_dout;
                 end

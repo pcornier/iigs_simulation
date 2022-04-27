@@ -12,7 +12,7 @@ output [22:0] video_addr,
 input [7:0] video_data,
 input [7:0] TEXTCOLOR,
 input [3:0] BORDERCOLOR,
-input LOWRES,
+input HIRES_MODE,
 input PAGE2,
 input TEXTG,
 input MIXG,
@@ -42,14 +42,14 @@ reg [1:0] h_counter;
 reg [3:0] last_pixel;
 always @(posedge clk_vid) if(ce_pix)
 begin
-$display("video_addr = %x video_addr_shrg %x video_addr_ii %x ",video_addr,video_addr_shrg,video_addr_ii);
+//$display("video_addr = %x video_addr_shrg %x video_addr_ii %x ",video_addr,video_addr_shrg,video_addr_ii);
 	// load SCB
 	if (H==0) begin
 		video_addr_shrg <= 'h9D00+(V-'d16);
 	end
 	else if (H==1) begin
 		scb <= video_data;
-		$display("SCB = %x",video_data);
+		//$display("SCB = %x",video_data);
 		video_addr_shrg <= 'h9E00 + {video_data[3:0],5'b00000};
 	end else if (H < 32) begin
 		//video_data;

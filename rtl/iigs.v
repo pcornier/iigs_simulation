@@ -17,11 +17,15 @@ module iigs(
   output reg [3:0] BORDERCOLOR,
   output reg [7:0] SLTROMSEL,
   output   CXROM,
-  output reg LOWRES/*verilator public_flat*/,
+  output reg RDROM,
+  output reg LC_WE,
+  //output reg /*verilator public_flat*/,
   output reg PAGE2/*verilator public_flat*/,
   output reg TEXTG/*verilator public_flat*/,
   output reg MIXG/*verilator public_flat*/,
+  output reg HIRES_MODE/*verilator public_flat*/,
   output reg [7:0] NEWVIDEO/*verilator public_flat*/,
+  output IO/*verilator public_flat*/,
   output we,
 
   input VBlank,
@@ -33,7 +37,7 @@ module iigs(
 assign CXROM=INTCXROM;
 wire [23:0] cpu_addr;
 wire [7:0] cpu_dout;
-wire [23:0] addr_bus;
+reg [23:0] addr_bus;
 wire cpu_vpa, cpu_vpb;
 wire cpu_vda, cpu_mlb;
 wire cpu_we;
@@ -41,6 +45,7 @@ reg [7:0] io_dout;
 reg [7:0] slot_dout;
 
 assign { bank, addr } = addr_bus;
+assign { bank_bef, addr_bef } = cpu_addr;
 assign dout = cpu_dout;
 assign we = cpu_we;
 wire valid = cpu_vpa | cpu_vda;
@@ -60,10 +65,12 @@ wire [7:0] iwm_dout;
 reg [7:0] iwm_addr;
 reg iwm_rw, iwm_strobe;
 
+
+reg aux;
+
 // some fake registers for now
 //reg [7:0] NEWVIDEO;
 reg [7:0] STATEREG;
-reg [7:0] SETINTCxROM;
 reg [7:0] CYAREG;
 reg [7:0] SOUNDCTL;
 reg [7:0] SOUNDDATA;
@@ -72,12 +79,12 @@ reg [7:0] DISKREG;
 reg [7:0] SOUNDADRL;
 reg [7:0] SOUNDADRH;
 //reg [7:0] TEXTCOLOR;
-//reg LOWRES;
+//reg ;
 reg [7:0] SPKR;
 reg [7:0] DISK35;
 reg [7:0] C02BVAL;
 
-reg EIGHTYSTORE;
+reg STORE80;
 reg RAMRD;
 reg RAMWRT;
 reg INTCXROM;
@@ -87,9 +94,12 @@ reg EIGHTYCOL;
 reg ALTCHARSET;
 //reg PAGE2;
 reg [7:0] MONOCHROME;
-reg LCRAM;
+//reg RDROM;
 reg LCRAM2;
+//reg LC_WE;
 reg ROMBANK;
+
+
 //reg TEXTG;
 //reg MIXG;
 
@@ -100,7 +110,6 @@ wire [3:0] slotid = addr[11:8];
 // remap c700 to c500 if slot access and $C02D[7]
 //assign addr_bus =
  // slot_area && cpu_addr[15:8] == 8'b11000111 ? { cpu_addr[23:10], ~SLTROMSEL[7], cpu_addr[8:0] } : cpu_addr;
-assign addr_bus = cpu_addr;
 
 wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
 
@@ -110,7 +119,21 @@ wire EXTERNAL_IO =    ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank ==
 
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
-wire     IO = ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
+assign IO = ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
+
+assign { bank_bef, addr_bef } = cpu_addr;
+
+always @(*) begin
+
+	if ((bank_bef == 'h00  || bank_bef == 8'h1 || bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM) 
+		addr_bus = addr_bef- 'h1000;
+	else
+		addr_bus = cpu_addr;
+	/*RDROM <= 1'b1;
+	LCRAM2 <= 1'b1;
+	LC_WE <= 1'b1;
+	*/
+end
 
 // driver for io_dout and fake registers
 always @(posedge clk_sys) begin
@@ -120,6 +143,13 @@ always @(posedge clk_sys) begin
     STATEREG <=  8'b0000_1001;
     shadow <= 8'b0000_1000;
     SOUNDCTL <= 8'd0;
+    NEWVIDEO <= 8'h41;
+    C02BVAL <= 8'h08;
+
+    // FROM GSPLUS
+    INTCXROM<=1'b1;
+    RDROM<=1'b1;
+    LCRAM2<=1'b1;
   end
 
   adb_strobe <= 1'b0;
@@ -142,14 +172,14 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
     if (~cpu_we)
       // write
       case (addr[11:0])
-	      12'h000: begin $display("**EIGHTYSTORE %x",0); EIGHTYSTORE<= 1'b0 ; end
-	      12'h001: begin $display("**EIGHTYSTORE %x",1); EIGHTYSTORE<= 1'b1 ; end
-	      12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
-	      12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
-	      12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
-	      12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
-	12'h006: begin /*$display("**INTCXROM %x",0);*/INTCXROM<= 1'b0; end
-	12'h007: begin /*$display("**INTCXROM %x",1);*/INTCXROM <= 1'b1; end
+	12'h000: begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end
+	12'h001: begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end
+	12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
+	12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
+	12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
+	12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
+	12'h006: begin $display("**INTCXROM %x",0);INTCXROM<= 1'b0; end
+	12'h007: begin $display("**INTCXROM %x",1);INTCXROM <= 1'b1; end
 	12'h008: begin $display("**ALTZP %x",0); ALTZP<= 1'b0; end
 	12'h009: begin $display("**ALTZP %x",1); ALTZP<= 1'b1; end
 	12'h00A: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b0; end
@@ -167,7 +197,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h021: MONOCHROME <=cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
 	//12'h023: VGCINT
-        12'h028: $display("**++UNIMPLEMENTEDROMBANK"); 
+	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",cpu_dout);  end
 	12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
 	12'h02d: SLTROMSEL <= cpu_dout;
@@ -195,12 +225,71 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
 	12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
 	12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
-	12'h056: begin $display("**LOWRES%x",0);LOWRES<=1'b0; end
-	12'h057: begin $display("**LOWRES%x",1);LOWRES<=1'b1; end
+	12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
+	12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
         // $C068: bit0 stays high during boot sequence, why?
         // if bit0=1 it means that internal ROM at SCx00 is selected
         // does it mean slot cards are not accessible?
-        12'h068: {ALTZP,PAGE2,RAMRD,RAMWRT,LCRAM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],~cpu_dout[3],cpu_dout[2:0]};
+	12'h068: begin $display("** R68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],~cpu_dout[3],cpu_dout[2:0]}; end
+
+
+	12'h080,	// Read RAM bank 2 no write
+	12'h084:	// Read bank 2 no write
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b1;
+			LC_WE <= 1'b0;
+		end
+	12'h081,	// Read ROM write RAM bank 2 (RR)
+	12'h085:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b1;
+			LC_WE <= 1'b1;
+		end
+	12'h082,	// Read ROM no write
+	12'h086:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b0;
+		end
+	12'h083,	// Read bank 2 write bank 2(RR)
+	12'h087:
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b1;
+			LC_WE <= 1'b1;
+		end
+	12'h088,
+	12'h08C:
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b0;
+		end
+	12'h089,
+	12'h08D:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b1;
+		end
+	12'h08A,
+	12'h08E:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b0;
+		end
+	12'h08B,
+        12'h08F:
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b1;
+		end
+
   12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
   12'h0e4, 12'h0e5, 12'h0e6, 12'h0e7,
   12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
@@ -212,7 +301,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
           iwm_rw <= 1'b0;
    end
 	default:
-		$display("IO_WR %x %x",addr[11:0],cpu_dout);
+		$display("** IO_WR %x %x",addr[11:0],cpu_dout);
       endcase
     else
       // read
@@ -232,25 +321,26 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
 
 	12'h011: if(LCRAM2) io_dout<='h80; else io_dout<='h00;
-	12'h012: if(LCRAM) io_dout<='h80; else io_dout<='h00;
+	12'h012: if(RDROM) io_dout<='h80; else io_dout<='h00;
 	12'h013: if(RAMRD) io_dout<='h80; else io_dout<='h00;
 	12'h014: if(RAMWRT) io_dout<='h80; else io_dout<='h00;
-	12'h015: if(INTCXROM) io_dout<='h80; else io_dout<='h00;
+12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80; else io_dout<='h00;end
 	12'h016: if(ALTZP) io_dout<='h80; else io_dout<='h00;
 	12'h017: if(SLOTC3ROM) io_dout<='h80; else io_dout<='h00;
-	12'h018: if(EIGHTYSTORE) io_dout<='h80; else io_dout<='h00;
+	12'h018: if(STORE80) io_dout<='h80; else io_dout<='h00;
 	12'h019: if(VBlank) io_dout<='h00; else io_dout<='h80;
 	12'h01a: if(TEXTG) io_dout<='h80; else io_dout<='h00;
 	12'h01b: if(MIXG) io_dout<='h80; else io_dout<='h00;
 	12'h01c: if(PAGE2) io_dout<='h80; else io_dout<='h00;
-	12'h01d: if(~LOWRES) io_dout<='h80; else io_dout<='h00;
+	12'h01d: if(~HIRES_MODE) io_dout<='h80; else io_dout<='h00;
 	12'h01e: if(ALTCHARSET) io_dout<='h80; else io_dout<='h00;
         12'h01f: if(EIGHTYCOL) io_dout <= 'h80; else io_dout<='h00;
 
         12'h022: io_dout <= TEXTCOLOR;
         //12'h023:  /* vgc int */
 
-        12'h028: $display("**++UNIMPLEMENTEDROMBANK"); 
+        //12'h028: $display("**++UNIMPLEMENTEDROMBANK (28)"); 
+	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",~ROMBANK);  end
         12'h029: io_dout <= NEWVIDEO;
         12'h02a: io_dout <= 'h0; // from gsplus
         12'h02b: io_dout <= C02BVAL; // from gsplus
@@ -281,18 +371,97 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
 	12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
 	12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
-	12'h056: begin $display("**LOWRES%x",0);LOWRES<=1'b0; end
-	12'h057: begin $display("**LOWRES%x",1);LOWRES<=1'b1; end
+	12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
+	12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
         12'h058: io_dout <= 'h0; // some kind of soft switch?
         12'h05a: io_dout <= 'h0; // some kind of soft switch?
         12'h05d: io_dout <= 'h0; // some kind of soft switch?
         12'h05f: io_dout <= 'h0; // some kind of soft switch?
-        12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,LCRAM,LCRAM2,ROMBANK,INTCXROM};
+        12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM};
         12'h071, 12'h072, 12'h073, 12'h074,
         12'h075, 12'h076, 12'h077, 12'h078,
         12'h079, 12'h07a, 12'h07b, 12'h07c,
         12'h07d, 12'h07e, 12'h07f:
           io_dout <= din;
+
+/*****************************************************************************
+* Language Card Memory
+*
+*           $C080 ;LC RAM bank2, Read and WR-protect RAM 
+*ROMIN =    $C081 ;LC RAM bank2, Read ROM instead of RAM, 
+*                 ;two or more successive reads WR-enables RAM 
+*           $C082 ;LC RAM bank2, Read ROM instead of RAM, 
+*                 ;WR-protect RAM 
+*LCBANK2 =  $C083 ;LC RAM bank2, Read RAM 
+*                 ;two or more successive reads WR-enables RAM 
+*           $C088 ;LC RAM bank1, Read and WR-protect RAM 
+*           $C089 ;LC RAM bank1, Read ROM instead of RAM, 
+*                 ;two or more successive reads WR-enables RAM 
+*           $C08A ;LC RAM bank1, Read ROM instead of RAM, 
+*                 ;WR-protect RAM 
+*LCBANK1 =  $C08B ;LC RAM bank1, Read RAM 
+*                 ;two or more successive reads WR-enables RAM 
+*           $C084-$C087 are echoes of $C080-$C083 
+*           $C08C-$C08F are echoes of $C088-$C08B 
+*  
+******************************************************************************/  	
+	12'h080,	// Read RAM bank 2 no write
+	12'h084:	// Read bank 2 no write
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b1;
+			LC_WE <= 1'b0;
+		end
+	12'h081,	// Read ROM write RAM bank 2 (RR)
+	12'h085:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b1;
+			LC_WE <= 1'b1;
+		end
+	12'h082,	// Read ROM no write
+	12'h086:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b0;
+		end
+	12'h083,	// Read bank 2 write bank 2(RR)
+	12'h087:
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b1;
+			LC_WE <= 1'b1;
+		end
+	12'h088,
+	12'h08C:
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b0;
+		end
+	12'h089,
+	12'h08D:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b1;
+		end
+	12'h08A,
+	12'h08E:
+		begin
+			RDROM <= 1'b1;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b0;
+		end
+	12'h08B,
+        12'h08F:
+		begin
+			RDROM <= 1'b0;
+			LCRAM2 <= 1'b0;
+			LC_WE <= 1'b1;
+		end
+
   12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
   12'h0e4, 12'h0e5, 12'h0e6, 12'h0e7,
   12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
@@ -304,10 +473,25 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 		$display("ex IO_RD %x ",addr[11:0]);
          end
 	default:
-		$display("IO_RD %x ",addr[11:0]);
+		$display("** IO_RD %x ",addr[11:0]);
       endcase
   end
 end
+
+
+    always @(*)
+    begin: aux_ctrl
+        aux = 1'b0;
+        if ((bank==0 || bank==8'he0) && (addr[15:9] == 7'b0000000 | addr[15:14] == 2'b11))		// Page 00,01,C0-FF
+            aux = ALTZP;
+        else if ((bank==0 || bank==8'he0) &&  addr[15:10] == 6'b000001)		// Page 04-07
+            aux = ((bank==0 || bank==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)))));
+        else if (addr[15:13] == 3'b001)		// Page 20-3F
+            aux =((bank==0 || bank==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)))));
+        else
+            aux = ((bank==0||bank==8'he0) && ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)));
+    end
+
 
 wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
 
@@ -330,15 +514,15 @@ P65C816 cpu(
   .VPB(cpu_vpb)
 );
 
-/*
+
 always @(posedge clk_sys)
 begin
 	if (fast_clk)
 	begin
-		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x ",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we);
+		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE);
 	end
 end
-*/
+
 
 `ifdef VERILATOR
 reg [19:0] dbg_pc_counter;
