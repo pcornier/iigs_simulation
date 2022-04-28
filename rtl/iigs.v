@@ -8,6 +8,9 @@ module iigs(
   input slow_clk, // 1
   input cpu_wait, 
 
+  input scanline_irq,
+  input vbl_irq,
+	
   output [7:0] bank,
   output [15:0] addr,
   output [7:0] dout,
@@ -46,6 +49,9 @@ wire cpu_vda, cpu_mlb;
 wire cpu_we;
 reg [7:0] io_dout;
 reg [7:0] slot_dout;
+
+wire onesecond_irq;
+wire qtrsecond_irq;
 
 assign { bank, addr } = addr_bus;
 assign { bank_bef, addr_bef } = cpu_addr;
@@ -86,6 +92,10 @@ reg [7:0] SOUNDADRH;
 reg [7:0] SPKR;
 reg [7:0] DISK35;
 reg [7:0] C02BVAL;
+
+reg [7:0] VGCINT; //23
+reg [7:0] INTEN; //41 
+reg [7:0] INTFLAG; // 46, 47  AJS TODO
 
 reg STORE80;
 reg RAMRD;
@@ -199,13 +209,23 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         end
 	12'h021: MONOCHROME <=cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
-	//12'h023: VGCINT
+	12'h023: VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; // code can only modify the enable bits
 	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",cpu_dout);  end
 	12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
 	12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;
         12'h031: DISK35<= cpu_dout & 8'hc0;
+	12'h032:
+	begin
+	   if (cpu_dout[6]==1'b0)
+		   VGCINT[6]<=1'b0;
+	   if (cpu_dout[5]==1'b0)
+		   VGCINT[5]<=1'b0;
+	   // clear 7 if both are cleared
+	   if ((VGCINT[5]==0 || cpu_dout[5]==0) && (VGCINT[6]==0 || cpu_dout[6]==0))
+		 VGCINT[7]<=1'b0;
+	end
         12'h033, 12'h034: begin
           prtc_rw <= 1'b0;
           prtc_strobe <= 1'b1;
@@ -220,8 +240,9 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h03d: SOUNDDATA <= cpu_dout;
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
+	12'h041: INTEN <= {INTEN[7:5],cpu_dout[4:0]};
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
-	//12'h047: begin C046VAL &= 'he7; end// some kind of interrupt thing -- clear interrupts here
+	12'h047: begin INTFLAG[4:3]<=2'b00; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
 	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
 	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -327,7 +348,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h012: if(RDROM) io_dout<='h80; else io_dout<='h00;
 	12'h013: if(RAMRD) io_dout<='h80; else io_dout<='h00;
 	12'h014: if(RAMWRT) io_dout<='h80; else io_dout<='h00;
-12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80; else io_dout<='h00;end
+	12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80; else io_dout<='h00;end
 	12'h016: if(ALTZP) io_dout<='h80; else io_dout<='h00;
 	12'h017: if(SLOTC3ROM) io_dout<='h80; else io_dout<='h00;
 	12'h018: if(STORE80) io_dout<='h80; else io_dout<='h00;
@@ -340,7 +361,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h01f: if(EIGHTYCOL) io_dout <= 'h80; else io_dout<='h00;
 
         12'h022: io_dout <= TEXTCOLOR;
-        //12'h023:  /* vgc int */
+        12'h023: io_dout <= VGCINT; /* vgc int */
 
         //12'h028: $display("**++UNIMPLEMENTEDROMBANK (28)"); 
 	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",~ROMBANK);  end
@@ -353,6 +374,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         //12'h02f:  /* horizcount */
         12'h030: io_dout <= SPKR;
         12'h031: io_dout <= DISK35;
+        //12'h032: io_dout <= VGCINT; can you read this??
         12'h033, 12'h034: begin
           prtc_addr <= ~addr[0];
           prtc_rw <= 1'b1;
@@ -365,9 +387,11 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h03d: io_dout <= SOUNDDATA;
         12'h03e: io_dout <= SOUNDADRL;
         12'h03f: io_dout <= SOUNDADRH;
+	12'h041: io_dout <= INTEN;
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
+	12'h047: begin INTFLAG[4:3]<=2'b00; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
 	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
 	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -479,7 +503,42 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 		$display("** IO_RD %x ",addr[11:0]);
       endcase
   end
+
+/* *
+*  IRQ Logic
+*
+*  IIe Interrupts (INTEN/ INTFLAG):
+*  VBL - check interrupts enabled, and  intflag
+*  Quarter second (clock_frame%15?) - interrupts enabled and intflag
+*  VGC IIgs Interrupts: VGCINT
+*  1 second - interrupte enabled , VGC Interrupt 
+*  scanline interrupt sets bit even if it doesn't trigger..
+* */
+// 
+    //VGCINT[]
+//reg [7:0] VGCINT; //23
+//reg [7:0] INTEN; //41 
+//reg [7:0] INTFLAG; // 47  AJS TODO
+   if (scanline_irq) begin
+	   // always set the status bit
+	   VGCINT[5] <= 1'b1;
+	   if (VGCINT[1]) // if it is enabled, set the bit
+		   VGCINT[7]<=1'b1;
+   end
+   if (onesecond_irq & VGCINT[2]) begin
+	VGCINT[6]<=1'b1;
+	VGCINT[7]<=1'b1;
+   end
+
+   if (vbl_irq & INTEN[3]) begin
+	   INTFLAG[3]<=1'b1;
+   end
+   if (qtrsecond_irq& INTEN[4]) begin
+	   INTFLAG[4]<=1'b1;
+   end
+
 end
+wire cpu_irq =  (VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[3]&INTFLAG[3])|(INTEN[4]&INTFLAG[4]);
 
 
     always @(*)
@@ -504,7 +563,7 @@ P65C816 cpu(
   .CE(fast_clk),
   .RDY_IN(~cpu_wait),
   .NMI_N(1'b1),
-  .IRQ_N(1'b1),
+  .IRQ_N(~cpu_irq),
   .ABORT_N(1'b1),
   .D_IN(cpu_din),
   .D_OUT(cpu_dout),
@@ -516,6 +575,7 @@ P65C816 cpu(
   .MLB(cpu_mlb),
   .VPB(cpu_vpb)
 );
+
 
 
 always @(posedge clk_sys)
@@ -554,6 +614,8 @@ prtc prtc(
   .addr(prtc_addr),
   .din(prtc_din),
   .dout(prtc_dout),
+  .onesecond_irq(onesecond_irq),
+  .qtrsecond_irq(qtrsecond_irq),
   .rw(prtc_rw),
   .strobe(prtc_strobe)
 );

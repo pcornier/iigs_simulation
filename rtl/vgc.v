@@ -5,6 +5,8 @@ input clk_vid,
 input ce_pix,
 input[9:0] H,
 input[8:0] V,
+output reg scanline_irq,
+output reg vbl_irq,
 output reg [7:0] R,
 output reg [7:0] G,
 output reg [7:0] B,
@@ -121,6 +123,10 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 	end
 	else if (H=='h38e) begin
 		scb <= video_data;
+		// might need to move the scanline interrupt..
+		if (video_data[6] && NEWVIDEO[7] && V > 'd15 && V < 'd206)
+			scanline_irq<=1;	
+		
 		$display("SCB = %x video_addr %x",video_data,video_addr);
 		//video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
 		base_toggle<=0;
@@ -141,6 +147,7 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 		end
 	end else if (H=='h390) begin
 		pal_counter<=0;
+		scanline_irq<=0;	
 		if (linear_mode)
 		begin
 			video_addr_shrg <= video_addr_shrg + 1'b1;
@@ -166,11 +173,11 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 		begin
 			if (video_addr_shrg[0]) begin
 		                $display("R PALETTE = %x addr %x  color index %x color r %x",video_data,video_addr_shrg,pal_counter,video_data[3:0]);
-				b_shrg[pal_counter]=video_data[3:0];
-				g_shrg[pal_counter]=video_data[7:4];
+				b_shrg[pal_counter]<=video_data[3:0];
+				g_shrg[pal_counter]<=video_data[7:4];
 			end else begin
 		                $display("GB PALETTE = %x addr %x color index %x color b %x g %x",video_data,video_addr_shrg,pal_counter,video_data[3:0],video_data[7:4]);
-				r_shrg[pal_counter]=video_data[3:0];
+				r_shrg[pal_counter]<=video_data[3:0];
 				pal_counter<=pal_counter+1;
 			end
 			video_addr_shrg <= video_addr_shrg + 1'b1;
@@ -179,11 +186,11 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 		else begin
 			if (~base_toggle) begin
 		                $display("R PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
-				r_shrg[video_addr_shrg[4:1]]=video_data[3:0];
+				r_shrg[video_addr_shrg[4:1]]<=video_data[3:0];
 			end else begin
 		                $display("GB PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
-				b_shrg[video_addr_shrg[4:1]]=video_data[3:0];
-				g_shrg[video_addr_shrg[4:1]]=video_data[7:4];
+				b_shrg[video_addr_shrg[4:1]]<=video_data[3:0];
+				g_shrg[video_addr_shrg[4:1]]<=video_data[7:4];
 				pal_counter<=pal_counter+1;
 			end
 			if (base_toggle)
@@ -457,6 +464,14 @@ begin
 	end
 //$display("xpos[3:1] %x xpos %x",xpos[3:1],xpos);
 //$display("chram_x[6:1] %x chram_x %x",chram_x[6:1],chram_x);
+
+// VBL is at 192 + border top
+if (V == 'd16+'d192)
+	vbl_irq<=1;
+else
+	vbl_irq<=0;
+
+
 
 //if (H < 'd32 || H > 'd32+'d560 || V < 'd16 || V > 'd207)
 if (H < 'd32 || H > 'd32+'d640 || V < 'd16 || V > 'd207)

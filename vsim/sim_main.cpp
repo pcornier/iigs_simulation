@@ -1101,6 +1101,7 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::Text("VPA:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA);
 		ImGui::Text("VPB:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB);
 		ImGui::Text("IR:      0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__IR);
+		ImGui::Text("IRQ_n:   0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__IRQ_N);
 		ImGui::Spacing();
 		ImGui::Text("PAGE2:   %s", top->emu__DOT__top__DOT__core__DOT__PAGE2 ? "PAGE2" : "PAGE1");
 		ImGui::Text("TEXTG:   %s", top->emu__DOT__top__DOT__core__DOT__TEXTG ? "TEXT" : "*GRAPHICS");

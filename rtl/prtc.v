@@ -6,6 +6,8 @@ module prtc(
   input addr,
   input [7:0] din,
   output reg [7:0] dout,
+  output reg onesecond_irq,
+  output reg qtrsecond_irq,
   input rw,
   input strobe // must be high for one clock enable(cen) only!
 );
@@ -25,6 +27,29 @@ parameter
   PRAM = 3'd2,
   CLOCK = 3'd3,
   INTERNAL = 3'd4;
+
+
+
+reg [24:0] clock_counter;
+reg [24:0] clock_counter2;
+
+always @(posedge clk)
+begin
+	onesecond_irq<=0;
+	clock_counter<=clock_counter+1;
+	clock_counter2<=clock_counter2+1;
+	if (clock_counter=='d28636363)
+	begin
+		clock_counter<=0;
+		onesecond_irq<=1;
+	end
+	if (clock_counter2=='d7159091)
+	begin
+		clock_counter2<=0;
+		qtrsecond_irq<=1;
+	end
+end
+
 
 reg [2:0] state;
 reg [1:0] checksum_state;

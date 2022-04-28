@@ -39,6 +39,7 @@ always @(posedge clk_sys)
 wire fast_clk = clk_div == 0;
 wire fast_clk_delayed = clk_div ==1;
 
+wire scanline_irq;
 
 iigs core(
 
@@ -47,6 +48,8 @@ iigs core(
   .cpu_wait(cpu_wait),
   .fast_clk(fast_clk_delayed),
   .fast_clk_delayed(fast_clk),
+  .scanline_irq(scanline_irq),
+  .vbl_irq(vbl_irq),
   .slow_clk(),
 
   .bank(bank),
@@ -320,6 +323,8 @@ vgc vgc(
         .clk(clk_sys),
         .clk_vid(clk_vid),
         .ce_pix(ce_pix),
+	.scanline_irq(scanline_irq),
+	.vbl_irq(vbl_irq),
         .H(H),
         .V(V),
         .R(R),
@@ -329,12 +334,11 @@ vgc vgc(
         .video_data(video_data),
 	.TEXTCOLOR(TEXTCOLOR),
 	.BORDERCOLOR(BORDERCOLOR),
-	  .HIRES_MODE(HIRES_MODE),
-  .PAGE2(PAGE2),
-  .TEXTG(TEXTG),
-  .MIXG(MIXG),
-  .NEWVIDEO(NEWVIDEO)
-
+	.HIRES_MODE(HIRES_MODE),
+        .PAGE2(PAGE2),
+        .TEXTG(TEXTG),
+        .MIXG(MIXG),
+        .NEWVIDEO(NEWVIDEO)
 );
 
     hdd hdd(
