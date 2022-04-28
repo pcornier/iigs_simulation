@@ -109,14 +109,14 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 	if (H=='h38c) begin
 		if (linear_mode)
 		begin
-			video_addr_shrg <= 'h19D00+(V-'d16-1);
+			video_addr_shrg <= 'h19D00+(V-'d16+1);
 		end
 		else
 		begin
 		if (V[0])
-			video_addr_shrg <= 'h19D00+((V-'d16-1)>>1);
+			video_addr_shrg <= 'h19D00+((V-'d16+1)>>1);
 		else
-			video_addr_shrg <= 'h15D00+((V-'d16-1)>>1);
+			video_addr_shrg <= 'h15D00+((V-'d16+1)>>1);
 		end
 	end
 	else if (H=='h38e) begin
@@ -219,7 +219,7 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 		end
 	end else if (H < ('d32+640)) begin
 		h_counter<=h_counter+1'b1;
-		if (h_counter==2'd3)  
+		if (h_counter==2'd2)  
 			begin
 				base_toggle<=~base_toggle;
 				if (linear_mode) begin
