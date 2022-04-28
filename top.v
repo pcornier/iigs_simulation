@@ -187,7 +187,7 @@ end
 
 
 
-
+/*
 always @(posedge clk_sys)
 begin
         if (fast_clk)
@@ -196,7 +196,7 @@ begin
 			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow);
         end
 end
-
+*/
 
 
 wire [7:0] din =
@@ -286,7 +286,7 @@ dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
 	.ce_a(slowram_ce),
 
 	.clock_b(clk_vid),
-	.address_b(video_addr),
+	.address_b(video_addr[16:0]),
 	.data_b(0),
 	.q_b(video_data),
 	.wren_b(1'b0)

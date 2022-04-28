@@ -34,6 +34,8 @@ module iigs(
   input[8:0] V
 
 );
+  wire [7:0] bank_bef;
+  wire [15:0] addr_bef;
 
 assign CXROM=INTCXROM;
 wire [23:0] cpu_addr;
