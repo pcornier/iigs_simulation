@@ -105,7 +105,7 @@ wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 wire rom1_ce = bank == 8'hfe;
-wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && RDROM) || (bank==8'h0 && addr>=16'hc100 && addr <= 16'hcfff ) || (bank == 8'h0 && addr >= 16'he000  ) || bank == 8'hff;
+wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && RDROM) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff ) || (bank == 8'h0 && addr >= 16'he000  ) || bank == 8'hff;
 //wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
 //
 
@@ -134,12 +134,13 @@ begin
 //Bit 4: Auxilary HGR, Bit 3: Super HiRes, Bit 2: HiRes Page 2
 //Bit 1: HiRes Page 1, Bit 0: Text/LoRes
 //
+//if (~shadow[6]) $display("UNIMPLEMENTED SHADOW 6");
    // read or write to e0 or e1 -- turn on the slowram
    if ((bank == 8'he0 || bank == 8'he1 ) && ~IO )
 	slowram_ce = 1;
    //Bit 6: I/O Memory
-   //else  if ((bank == 8'h00 || bank == 8'h01) && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
-//	slowram_ce = 1;
+   else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
+	slowram_ce = 1;
    //Bit 5: Alternate Display Mode
    else  if (bank == 8'h00 && ~shadow[5] && addr >= 'h0800 && addr <= 'h0bff && ~IO)
 	slowram_ce = 1;
@@ -190,16 +191,16 @@ end
 
 
 
-/*
+
 always @(posedge clk_sys)
 begin
         if (fast_clk)
         begin
-                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x is_internal %x CXROM %x shadow %x",
-			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow);
+                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x is_internal %x CXROM %x shadow %x IO %x io_select[7] %x device_select[7] %x",
+			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow,IO,io_select[7],device_select[7]);
         end
 end
-*/
+
 
 
 wire [7:0] din =
