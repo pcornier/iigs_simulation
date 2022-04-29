@@ -209,7 +209,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         end
 	12'h021: MONOCHROME <=cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
-	12'h023: VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; // code can only modify the enable bits
+	12'h023: begin $display("VGCINT 23 2 %x 1 %x",cpu_dout[2],cpu_dout[1]);VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
 	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",cpu_dout);  end
 	12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
@@ -218,6 +218,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h031: DISK35<= cpu_dout & 8'hc0;
 	12'h032:
 	begin
+		$display("VGCINT 32: bit6 %x bit5 %x",cpu_dout[6],cpu_dout[5]);
 	   if (cpu_dout[6]==1'b0)
 		   VGCINT[6]<=1'b0;
 	   if (cpu_dout[5]==1'b0)
@@ -240,7 +241,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h03d: SOUNDDATA <= cpu_dout;
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
-	12'h041: INTEN <= {INTEN[7:5],cpu_dout[4:0]};
+	12'h041: begin $display("INTEN: %x %x",INTEN,cpu_dout); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
 	12'h047: begin INTFLAG[4:3]<=2'b00; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
@@ -361,7 +362,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h01f: if(EIGHTYCOL) io_dout <= 'h80; else io_dout<='h00;
 
         12'h022: io_dout <= TEXTCOLOR;
-        12'h023: io_dout <= VGCINT; /* vgc int */
+	12'h023: begin $display("READ VGCINT %x",VGCINT);io_dout <= VGCINT; end /* vgc int */
 
         //12'h028: $display("**++UNIMPLEMENTEDROMBANK (28)"); 
 	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",~ROMBANK);  end
@@ -387,11 +388,11 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h03d: io_dout <= SOUNDDATA;
         12'h03e: io_dout <= SOUNDADRL;
         12'h03f: io_dout <= SOUNDADRH;
-	12'h041: io_dout <= INTEN;
+	12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-	12'h047: begin INTFLAG[4:3]<=2'b00; end // clear the interrupts
+	12'h047: begin $display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
 	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
 	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -523,7 +524,10 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	   // always set the status bit
 	   VGCINT[5] <= 1'b1;
 	   if (VGCINT[1]) // if it is enabled, set the bit
+	   begin
+	   	$display("firing scanline");
 		   VGCINT[7]<=1'b1;
+	   end
    end
    if (onesecond_irq & VGCINT[2]) begin
 	VGCINT[6]<=1'b1;
@@ -577,15 +581,15 @@ P65C816 cpu(
 );
 
 
-
+/*
 always @(posedge clk_sys)
 begin
 	if (fast_clk)
 	begin
-		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE);
+		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq);
 	end
 end
-
+*/
 
 `ifdef VERILATOR
 reg [19:0] dbg_pc_counter;

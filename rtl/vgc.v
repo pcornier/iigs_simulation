@@ -106,7 +106,7 @@ reg [3:0] last_pixel;
 reg [3:0] pal_counter;
 always @(posedge clk_vid) if(ce_pix)
 begin
-$display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H %x V %x NEWVIDEO[6] %x NEWVIDEO[7]",video_data,video_addr,video_addr_shrg,video_addr_ii,H,V,NEWVIDEO[6],NEWVIDEO[7]);
+//$display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H %x V %x NEWVIDEO[6] %x NEWVIDEO[7]",video_data,video_addr,video_addr_shrg,video_addr_ii,H,V,NEWVIDEO[6],NEWVIDEO[7]);
 	// load SCB
 	if (H=='h38c) begin
 		if (linear_mode)
@@ -127,20 +127,20 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 		if (video_data[6] && NEWVIDEO[7] && V > 'd15 && V < 'd206)
 			scanline_irq<=1;	
 		
-		$display("SCB = %x video_addr %x",video_data,video_addr);
+		//$display("SCB = %x video_addr %x",video_data,video_addr);
 		//video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
 		base_toggle<=0;
 		if (linear_mode)
 		begin
 			// linear mode
-			$display("NONWORKING NEWVIDEO 6 MODE - LINEAR data: %x offset: %x", video_data[3:0],{video_data[3:0],5'b0000} );
+			//$display("NONWORKING NEWVIDEO 6 MODE - LINEAR data: %x offset: %x", video_data[3:0],{video_data[3:0],5'b0000} );
 			video_addr_shrg_1 <= 'h19E00 + {video_data[3:0],5'b00000};
 			video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
 			video_addr_shrg_2 <= 'h19Dff + {video_data[3:0],5'b00000};
 		end
 		else
 		begin
-			$display("NONLINEAR NEWVIDEO 6 MODE data: %x newaddroffset: %x",video_data[3:0],{video_data[3:0],4'b0000} );
+			//$display("NONLINEAR NEWVIDEO 6 MODE data: %x newaddroffset: %x",video_data[3:0],{video_data[3:0],4'b0000} );
 			video_addr_shrg_1 <= 'h19F00 + {video_data[3:0],4'b0000};
 			video_addr_shrg <= 'h19F00 + {video_data[3:0],4'b0000};
 			video_addr_shrg_2 <= 'h15F00 + {video_data[3:0],4'b0000};
@@ -167,16 +167,16 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 		end
 	end else if (H < 32) begin
 		//video_data;
-		$display("PALETTE = %x",video_data);
+		//$display("PALETTE = %x",video_data);
 		base_toggle<=~base_toggle;
 		if (linear_mode)
 		begin
 			if (video_addr_shrg[0]) begin
-		                $display("R PALETTE = %x addr %x  color index %x color r %x",video_data,video_addr_shrg,pal_counter,video_data[3:0]);
+		                //$display("R PALETTE = %x addr %x  color index %x color r %x",video_data,video_addr_shrg,pal_counter,video_data[3:0]);
 				b_shrg[pal_counter]<=video_data[3:0];
 				g_shrg[pal_counter]<=video_data[7:4];
 			end else begin
-		                $display("GB PALETTE = %x addr %x color index %x color b %x g %x",video_data,video_addr_shrg,pal_counter,video_data[3:0],video_data[7:4]);
+		                //$display("GB PALETTE = %x addr %x color index %x color b %x g %x",video_data,video_addr_shrg,pal_counter,video_data[3:0],video_data[7:4]);
 				r_shrg[pal_counter]<=video_data[3:0];
 				pal_counter<=pal_counter+1;
 			end
@@ -185,10 +185,10 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 		end
 		else begin
 			if (~base_toggle) begin
-		                $display("R PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
+		                //$display("R PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
 				r_shrg[video_addr_shrg[4:1]]<=video_data[3:0];
 			end else begin
-		                $display("GB PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
+		                //$display("GB PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
 				b_shrg[video_addr_shrg[4:1]]<=video_data[3:0];
 				g_shrg[video_addr_shrg[4:1]]<=video_data[7:4];
 				pal_counter<=pal_counter+1;
@@ -209,14 +209,14 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 			if (linear_mode)
 			begin
 				// linear mode
-				$display("NONWORKING NEWVIDEO 6 MODE - LINEAR");
+				//$display("NONWORKING NEWVIDEO 6 MODE - LINEAR");
 				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
 				video_addr_shrg <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
 				video_addr_shrg_2 <= 'h11fff + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
 			end
 			else
 			begin
-				$display("NONLINEAR NEWVIDEO 6 MODE");
+				//$display("NONLINEAR NEWVIDEO 6 MODE");
 				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
 				video_addr_shrg <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
 				video_addr_shrg_2 <= 'h16000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
@@ -243,7 +243,7 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 					end
 				end
 			end
-		$display("scb[7]= %x h_counter %x video_addr %x video_data %x",scb[7],h_counter,video_addr,video_data);
+		//$display("scb[7]= %x h_counter %x video_addr %x video_data %x",scb[7],h_counter,video_addr,video_data);
 		if (scb[7]) begin
 			case(h_counter)
 				'b00: 
@@ -276,12 +276,12 @@ $display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H
 				'b00: 
 				begin
 					if (video_data[7:4]==4'b0 && scb[5]) begin
-					$display("scb[5] %x use last_pixel %x",scb[5],last_pixel);
+					//$display("scb[5] %x use last_pixel %x",scb[5],last_pixel);
 						shrg_r_pix <= r_shrg[ last_pixel ];
 						shrg_g_pix <= g_shrg[ last_pixel ];
 						shrg_b_pix <= b_shrg[ last_pixel ];
 					end else begin
-					    $display("scb[5] %x  set last_pixel %x",scb[5],video_data[7:4]);
+					    //$display("scb[5] %x  set last_pixel %x",scb[5],video_data[7:4]);
 						last_pixel<=video_data[7:4];
 						shrg_r_pix <= r_shrg[  video_data[7:4]];
 						shrg_g_pix <= g_shrg[  video_data[7:4]];
