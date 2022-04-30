@@ -156,6 +156,7 @@ always @(posedge clk_sys) begin
     STATEREG <=  8'b0000_1001;
     shadow <= 8'b0000_1000;
     SOUNDCTL <= 8'd0;
+    //SOUNDCTL <= 8'h05;
     NEWVIDEO <= 8'h41;
     C02BVAL <= 8'h08;
 
@@ -238,12 +239,12 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h035: shadow <= cpu_dout;
 	12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
         12'h03c: SOUNDCTL <= cpu_dout;
-        12'h03d: SOUNDDATA <= cpu_dout;
+        12'h03d: SOUNDDATA <= 8'hff;//cpu_dout;
         12'h03e: SOUNDADRL <= cpu_dout;
         12'h03f: SOUNDADRH <= cpu_dout;
 	12'h041: begin $display("INTEN: %x %x",INTEN,cpu_dout); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
-	12'h047: begin INTFLAG[4:3]<=2'b00; end // clear the interrupts
+	12'h047: begin $display("CLEAR INT");INTFLAG[4:3]<=2'b00; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
 	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
 	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -384,6 +385,10 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h035: io_dout <= shadow;
 	12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
         12'h037: io_dout <= 'h0; // from gsplus 
+
+	12'h038: begin $display("SCCB READ");io_dout <=0; end// SERIAL B
+	12'h039: begin $display("SCCA READ");io_dout <=0; end// SERIAL A
+
         12'h03c: io_dout <= SOUNDCTL;
         12'h03d: io_dout <= SOUNDDATA;
         12'h03e: io_dout <= SOUNDADRL;
@@ -392,7 +397,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-	12'h047: begin $display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; end // clear the interrupts
+	12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
 	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
 	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -581,15 +586,16 @@ P65C816 cpu(
 );
 
 
-/*
+
 always @(posedge clk_sys)
 begin
 	if (fast_clk)
 	begin
-		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq);
+//		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq);
+		$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
 	end
 end
-*/
+
 
 `ifdef VERILATOR
 reg [19:0] dbg_pc_counter;

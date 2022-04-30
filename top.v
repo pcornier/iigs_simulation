@@ -191,7 +191,7 @@ end
 
 
 
-
+/*
 always @(posedge clk_sys)
 begin
         if (fast_clk)
@@ -200,7 +200,7 @@ begin
 			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow,IO,io_select[7],device_select[7]);
         end
 end
-
+*/
 
 
 wire [7:0] din =
