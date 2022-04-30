@@ -1073,7 +1073,7 @@ blockdevice.MountDisk("hd.hdv",1);
 
 		// Memory debug
 		ImGui::Begin("Fast RAM Editor");
-		mem_edit.DrawContents(&top->emu__DOT__top__DOT__fastram__DOT__ram, 8388608, 0);
+		mem_edit.DrawContents(&top->emu__DOT__fastram__DOT__ram, 8388608, 0);
 		ImGui::End();
 		ImGui::Begin("Slow RAM Editor");
 		mem_edit.DrawContents(&top->emu__DOT__top__DOT__slowram__DOT__ram, 131072, 0);

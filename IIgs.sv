@@ -162,7 +162,7 @@ assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
+//assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;  
 
 assign VGA_SL = 0;
@@ -245,13 +245,14 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(2)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-wire clk_sys,clk_vid;
+wire clk_sys,clk_vid,locked;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_vid),
-	.outclk_1(clk_sys)
+	.outclk_1(clk_sys),
+	.locked(locked)
 );
 
 wire reset = RESET | status[0] | buttons[1];
@@ -264,6 +265,7 @@ top top (
 	.clk_vid(clk_vid),
 	.cpu_wait(cpu_wait_hdd),
 	.ce_pix(ce_pix),
+	.fast_clk(fast_clk),
 	.R(VGA_R),
 	.G(VGA_G),
 	.B(VGA_B),
@@ -280,9 +282,38 @@ top top (
 	.HDD_RAM_ADDR(sd_buff_addr),
 	.HDD_RAM_DI(sd_buff_dout),
 	.HDD_RAM_DO(sd_buff_din[1]),
-	.HDD_RAM_WE(sd_buff_wr & sd_ack[1])
+	.HDD_RAM_WE(sd_buff_wr & sd_ack[1]),
+	.fastram_address(fastram_address),
+	.fastram_datatoram(fastram_datatoram),
+	.fastram_datafromram(fastram_datafromram),
+	.fastram_we(fastram_we),
+	.fastram_ce(fastram_ce)
+);
 
-	);
+wire [22:0] fastram_address;
+wire [7:0] fastram_datatoram;
+wire [7:0] fastram_datafromram;
+wire fastram_we;
+wire fastram_ce;
+wire fast_clk;
+sdram ram
+(
+	.*,
+
+	.init(~locked),
+	.clk(clk_sys),
+	.clkref(fast_clk),
+
+	.waddr(fastram_address),
+	.din(fastram_datatoram),
+	.we(fastram_we&fastram_ce),
+	.we_ack(),
+
+	.raddr(fastram_address),
+	.dout(fastram_datafromram),
+	.rd(fastram_ce),
+	.rd_rdy()
+);
 
 reg ce_pix;
 always @(posedge clk_vid) begin

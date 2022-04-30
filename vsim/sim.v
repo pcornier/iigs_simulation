@@ -125,9 +125,31 @@ top top (
 	.HDD_RAM_ADDR(sd_buff_addr),
 	.HDD_RAM_DI(sd_buff_dout),
 	.HDD_RAM_DO(sd_buff_din[1]),
-	.HDD_RAM_WE(sd_buff_wr & sd_ack[1])
+	.HDD_RAM_WE(sd_buff_wr & sd_ack[1]),
 
+	.fastram_address(fastram_address),
+	.fastram_datatoram(fastram_datatoram),
+	.fastram_datafromram(fastram_datafromram),
+	.fastram_we(fastram_we),
+	.fastram_ce(fastram_ce)
 );
+
+    wire [22:0] fastram_address;
+    wire [7:0] fastram_datatoram;
+    wire [7:0] fastram_datafromram;
+    wire fastram_we;
+    wire fastram_ce;
+
+dpram #(.widthad_a(23),.prefix("fast")) fastram
+(
+        .clock_a(clk_sys),
+        .address_a( fastram_address ),
+        .data_a(fastram_datatoram),
+        .q_a(fastram_datafromram),
+        .wren_a(fastram_we),
+        .ce_a(fastram_ce),
+);
+
 
 wire ce_pix=1'b1;
 /*

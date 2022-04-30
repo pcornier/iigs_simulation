@@ -5,6 +5,7 @@ module top(
   input clk_vid,
   input cpu_wait,
   input ce_pix,
+  output fast_clk,
   output [7:0] R,
   output [7:0] G,
   output [7:0] B,
@@ -13,18 +14,28 @@ module top(
   output HS,
   output VS,
 
-    // HDD control
-    output [15:0] HDD_SECTOR,
-    output        HDD_READ,
-    output        HDD_WRITE,
-    input         HDD_MOUNTED,
-    input         HDD_PROTECT,
-    input [8:0]   HDD_RAM_ADDR,
-    input [7:0]   HDD_RAM_DI,
-    output [7:0]  HDD_RAM_DO,
-    input         HDD_RAM_WE
+  // HDD control
+  output [15:0] HDD_SECTOR,
+  output        HDD_READ,
+  output        HDD_WRITE,
+  input         HDD_MOUNTED,
+  input         HDD_PROTECT,
+  input [8:0]   HDD_RAM_ADDR,
+  input [7:0]   HDD_RAM_DI,
+  output [7:0]  HDD_RAM_DO,
+  input         HDD_RAM_WE,
+
+  // fastram sdram
+  output [22:0] fastram_address,
+  output [7:0] fastram_datatoram,
+  input  [7:0] fastram_datafromram,
+  output       fastram_we,
+  output       fastram_ce
 
 );
+
+
+
 
 
 wire [7:0] bank;
@@ -36,7 +47,7 @@ reg [2:0] clk_div;
 always @(posedge clk_sys)
   clk_div <= clk_div + 3'd1;
 
-wire fast_clk = clk_div == 0;
+assign fast_clk = clk_div == 0;
 wire fast_clk_delayed = clk_div ==1;
 
 wire scanline_irq;
@@ -111,7 +122,7 @@ wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && RDROM) || (b
 
 wire rom_writethrough = ( bank == 8'h0 && addr>=16'hd000 && addr <= 16'hdfff && LC_WE);
 
-wire fastram_ce = (bank < RAMSIZE)  & ( ~rom2_ce | rom_writethrough)  & ~rom1_ce &~IO; // bank[7] == 0;
+assign fastram_ce = (bank < RAMSIZE)  & ( ~rom2_ce | rom_writethrough)  & ~rom1_ce &~IO; // bank[7] == 0;
 //wire slowram_ce = bank == 8'he0 || bank == 8'he1;
 reg slowram_ce;
 
@@ -242,6 +253,14 @@ fastram fastram(
 );
 */
 
+assign     fastram_address = {bank[6:0],raddr};
+assign     fastram_datatoram = dout;
+assign     fastram_dout = fastram_datafromram;
+assign     fastram_we = we;
+//assign     fastram_ce = fastram_ce;
+
+
+`ifdef NOTDEFINED
 `ifdef VERILATOR
 dpram #(.widthad_a(23),.prefix("fast")) fastram
 `else
@@ -254,15 +273,9 @@ dpram #(.widthad_a(16)) fastram
 	.q_a(fastram_dout),
 	.wren_a(we),
 	.ce_a(fastram_ce),
-/*
-	.clock_b(clk_vid),
-	.address_b(video_addr),
-	.data_b(0),
-	.q_b(video_data),
-	.wren_b(1'b0)
-*/
-	//.ce_b(1'b1)
 );
+
+`endif
 
 wire [15:0] raddr = ((bank == 'h00  || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hd000 && addr <='hdfff && LCRAM2 ) ?  addr - 'h1000  : addr;
 
