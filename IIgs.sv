@@ -306,7 +306,7 @@ wire busy;
 always @(posedge clk_sys) begin
 	write<=0;
 	read<=0;
-   if (fast_clk) begin
+   if (fast_clk_delayed) begin
 		if (~fastram_we & fastram_ce & ~busy)
 			write<=1;
 		else if (fastram_we & fastram_ce & ~busy)
@@ -314,7 +314,7 @@ always @(posedge clk_sys) begin
 	end
 	
 end
-
+logic [7:0] ram_data;
 sdram sdram
 (
 	.*,
@@ -328,7 +328,7 @@ sdram sdram
 	.ch0_wr     (write),
 	.ch0_din    (fastram_datatoram),
 	.ch0_rd     (read),
-	.ch0_dout   (fastram_datafromram),
+	.ch0_dout   (ram_data/*fastram_datafromram*/),
 	.ch0_busy   (busy),
 
 	.ch1_addr   (),
@@ -369,7 +369,7 @@ sdram ram
 	.rd_rdy()
 );
 */
-/*
+
 dpram #(.widthad_a(16),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),
@@ -379,7 +379,7 @@ dpram #(.widthad_a(16),.prefix("fast")) fastram
         .wren_a(fastram_we),
         .ce_a(fastram_ce),
 );
-*/
+
 
 reg ce_pix;
 always @(posedge clk_vid) begin

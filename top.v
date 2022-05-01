@@ -38,7 +38,6 @@ module top(
 
 
 
-
 wire [7:0] bank;
 wire [7:0] shadow;
 wire [15:0] addr;
@@ -95,8 +94,8 @@ iigs core(
 //parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
 parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
 `else
-//parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
-parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
+parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
+//parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
 `endif
 
 wire CXROM;

@@ -164,6 +164,30 @@ always @(posedge clk_sys) begin
     INTCXROM<=1'b1;
     RDROM<=1'b1;
     LCRAM2<=1'b1;
+
+DISKREG<=0;
+SLTROMSEL<=0;
+TEXTCOLOR<=0;
+SPKR<=0;
+DISK35<=0;
+VGCINT<=0; //23
+INTEN<=0; //41 
+INTFLAG<=0; // 46, 47  AJS TODO
+
+STORE80<=0;
+RAMRD<=0;
+RAMWRT<=0;
+INTCXROM<=0;
+ALTZP<=0;
+SLOTC3ROM<=0;
+EIGHTYCOL<=0;
+ALTCHARSET<=0;
+PAGE2<=0;
+MONOCHROME<=0;
+RDROM<=0;
+LCRAM2<=0;
+LC_WE<=0;
+ROMBANK<=0;;
   end
 
   adb_strobe <= 1'b0;

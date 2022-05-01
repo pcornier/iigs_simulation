@@ -153,6 +153,10 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
 
 
 wire ce_pix=1'b1;
+
+always @(posedge clk_sys) begin
+	if (reset) $display("TOPRESET");
+end
 /*
 reg ce_pix;
 always @(posedge clk_sys) begin

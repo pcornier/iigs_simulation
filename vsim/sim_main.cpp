@@ -122,6 +122,7 @@ SimAudio audio(clk_sys_freq, false);
 void resetSim() {
 	main_time = 0;
 	top->reset = 1;
+	printf("resetSim!! main_time %d top->reset %d\n",main_time,top->reset);
 	clk_sys.Reset();
 }
 
