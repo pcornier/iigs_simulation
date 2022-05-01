@@ -95,7 +95,7 @@ iigs core(
 parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
 `else
 //parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
-parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
+parameter RAMSIZE = 1; // 16x64k = 1MB, max = 127x64k = 8MB
 `endif
 
 wire CXROM;
@@ -202,7 +202,7 @@ end
 
 
 
-/*
+/*6
 always @(posedge clk_sys)
 begin
         if (fast_clk)
@@ -332,27 +332,27 @@ video_timing video_timing(
 
 wire [22:0] video_addr;
 wire [7:0] video_data;
-
+wire vbl_irq;
 vgc vgc(
-        .clk(clk_sys),
-        .clk_vid(clk_vid),
-        .ce_pix(ce_pix),
+	.clk(clk_sys),
+	.clk_vid(clk_vid),
+	.ce_pix(ce_pix),
 	.scanline_irq(scanline_irq),
 	.vbl_irq(vbl_irq),
-        .H(H),
-        .V(V),
-        .R(R),
-        .G(G),
-        .B(B),
-        .video_addr(video_addr),
-        .video_data(video_data),
+	.H(H),
+	.V(V),
+	.R(R),
+	.G(G),
+	.B(B),
+	.video_addr(video_addr),
+	.video_data(video_data),
 	.TEXTCOLOR(TEXTCOLOR),
 	.BORDERCOLOR(BORDERCOLOR),
 	.HIRES_MODE(HIRES_MODE),
-        .PAGE2(PAGE2),
-        .TEXTG(TEXTG),
-        .MIXG(MIXG),
-        .NEWVIDEO(NEWVIDEO)
+	.PAGE2(PAGE2),
+	.TEXTG(TEXTG),	
+	.MIXG(MIXG),
+	.NEWVIDEO(NEWVIDEO)
 );
 
     hdd hdd(

@@ -140,6 +140,7 @@ top top (
     wire fastram_we;
     wire fastram_ce;
 
+//dpram #(.widthad_a(23),.prefix("fast")) fastram
 dpram #(.widthad_a(23),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),

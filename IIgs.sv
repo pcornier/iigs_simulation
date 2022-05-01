@@ -245,13 +245,14 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(2)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-wire clk_sys,clk_vid,locked;
+wire clk_mem,clk_sys,clk_vid,locked;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_vid),
 	.outclk_1(clk_sys),
+	.outclk_2(clk_mem),
 	.locked(locked)
 );
 
@@ -296,6 +297,43 @@ wire [7:0] fastram_datafromram;
 wire fastram_we;
 wire fastram_ce;
 wire fast_clk;
+
+
+sdram sdram
+(
+	.*,
+
+	// system interface
+	.clk        ( clk_sys /*clk_mem*/        ),
+	.init       ( !locked   ),
+
+	// cpu/chipset interface
+	.ch0_addr   ({2'b0,fastram_address}),
+	.ch0_wr     (~fastram_we&fastram_ce),
+	.ch0_din    (fastram_datatoram),
+	.ch0_rd     (fastram_ce&fastram_we),
+	.ch0_dout   (fastram_datafromram),
+	.ch0_busy   (),
+
+	.ch1_addr   (),
+	.ch1_wr     (),
+	.ch1_din    (),
+	.ch1_rd     (),
+	.ch1_dout   (),
+	.ch1_busy   (),
+
+	// reserved for backup ram save/load
+	.ch2_addr   (  ),
+	.ch2_wr     (  ),
+	.ch2_din    (  ),
+	.ch2_rd     (  ),
+	.ch2_dout   (  ),
+	.ch2_busy   (  )
+);
+
+
+/*
+assign SDRAM_CLK  = clk_sys;
 sdram ram
 (
 	.*,
@@ -306,14 +344,26 @@ sdram ram
 
 	.waddr(fastram_address),
 	.din(fastram_datatoram),
-	.we(fastram_we&fastram_ce),
+	.we(~fastram_we&fastram_ce),
 	.we_ack(),
 
 	.raddr(fastram_address),
 	.dout(fastram_datafromram),
-	.rd(fastram_ce),
+	.rd(fastram_ce&fastram_we),
 	.rd_rdy()
 );
+*/
+/*
+dpram #(.widthad_a(16),.prefix("fast")) fastram
+(
+        .clock_a(clk_sys),
+        .address_a( fastram_address ),
+        .data_a(fastram_datatoram),
+        .q_a(fastram_datafromram),
+        .wren_a(fastram_we),
+        .ce_a(fastram_ce),
+);
+*/
 
 reg ce_pix;
 always @(posedge clk_vid) begin
