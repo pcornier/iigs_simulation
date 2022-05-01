@@ -267,6 +267,7 @@ top top (
 	.cpu_wait(cpu_wait_hdd),
 	.ce_pix(ce_pix),
 	.fast_clk(fast_clk),
+	.fast_clk_delayed(fast_clk_delayed),
 	.R(VGA_R),
 	.G(VGA_G),
 	.B(VGA_B),
@@ -297,23 +298,38 @@ wire [7:0] fastram_datafromram;
 wire fastram_we;
 wire fastram_ce;
 wire fast_clk;
+wire fast_clk_delayed;
 
+reg write;
+reg read;
+wire busy;
+always @(posedge clk_sys) begin
+	write<=0;
+	read<=0;
+   if (fast_clk) begin
+		if (~fastram_we & fastram_ce & ~busy)
+			write<=1;
+		else if (fastram_we & fastram_ce & ~busy)
+			read<=0;
+	end
+	
+end
 
 sdram sdram
 (
 	.*,
 
 	// system interface
-	.clk        ( clk_sys /*clk_mem*/        ),
+	.clk        ( /*clk_sys */clk_vid        ),
 	.init       ( !locked   ),
 
 	// cpu/chipset interface
 	.ch0_addr   ({2'b0,fastram_address}),
-	.ch0_wr     (~fastram_we&fastram_ce),
+	.ch0_wr     (write),
 	.ch0_din    (fastram_datatoram),
-	.ch0_rd     (fastram_ce&fastram_we),
+	.ch0_rd     (read),
 	.ch0_dout   (fastram_datafromram),
-	.ch0_busy   (),
+	.ch0_busy   (busy),
 
 	.ch1_addr   (),
 	.ch1_wr     (),

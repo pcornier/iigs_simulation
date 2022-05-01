@@ -6,6 +6,7 @@ module top(
   input cpu_wait,
   input ce_pix,
   output fast_clk,
+  output fast_clk_delayed,
   output [7:0] R,
   output [7:0] G,
   output [7:0] B,
@@ -48,7 +49,7 @@ always @(posedge clk_sys)
   clk_div <= clk_div + 3'd1;
 
 assign fast_clk = clk_div == 0;
-wire fast_clk_delayed = clk_div ==1;
+assign fast_clk_delayed = clk_div ==1;
 
 wire scanline_irq;
 
@@ -95,7 +96,7 @@ iigs core(
 parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
 `else
 //parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
-parameter RAMSIZE = 1; // 16x64k = 1MB, max = 127x64k = 8MB
+parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
 `endif
 
 wire CXROM;
