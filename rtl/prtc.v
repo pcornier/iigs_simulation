@@ -4,6 +4,7 @@ module prtc(
   input cen,
   input reset,
   input addr,
+  input [32:0] timestamp,
   input [7:0] din,
   output reg [7:0] dout,
   output reg onesecond_irq,
@@ -33,22 +34,6 @@ parameter
 reg [24:0] clock_counter;
 reg [24:0] clock_counter2;
 
-always @(posedge clk)
-begin
-	onesecond_irq<=0;
-	clock_counter<=clock_counter+1;
-	clock_counter2<=clock_counter2+1;
-	if (clock_counter=='d28636363)
-	begin
-		clock_counter<=0;
-		onesecond_irq<=1;
-	end
-	if (clock_counter2=='d7159091)
-	begin
-		clock_counter2<=0;
-		qtrsecond_irq<=1;
-	end
-end
 
 
 reg [2:0] state;
@@ -58,6 +43,31 @@ reg [31:0] checksum;
 reg [7:0] counter;
 reg [7:0] clk_reg1;
 always @(posedge clk) begin
+
+	onesecond_irq<=0;
+
+// hook up unix timestamp
+if (clock_data==0)
+	clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
+
+
+
+	clock_counter<=clock_counter+1;
+	clock_counter2<=clock_counter2+1;
+	if (clock_counter=='d28636363)
+	begin
+		clock_counter<=0;
+		onesecond_irq<=1;
+		clock_data<=clock_data+1;
+
+	end
+	if (clock_counter2=='d7159091)
+	begin
+		clock_counter2<=0;
+		qtrsecond_irq<=1;
+	end
+
+
   case (checksum_state)
     2'd1: begin
       checksum_state <= 2'd2;

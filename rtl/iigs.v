@@ -7,6 +7,7 @@ module iigs(
   input fast_clk_delayed, // 2.5
   input slow_clk, // 1
   input cpu_wait, 
+  input [32:0] timestamp,
 
   input scanline_irq,
   input vbl_irq,
@@ -167,7 +168,7 @@ always @(posedge clk_sys) begin
 
 DISKREG<=0;
 SLTROMSEL<=0;
-TEXTCOLOR<=0;
+TEXTCOLOR<='hf2;
 SPKR<=0;
 DISK35<=0;
 VGCINT<=0; //23
@@ -209,6 +210,8 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
   if (IO) begin
     if (~cpu_we)
       // write
+       begin
+$display("** IO_WR %x %x",addr[11:0],cpu_dout);
       case (addr[11:0])
 	12'h000: begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end
 	12'h001: begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end
@@ -353,8 +356,11 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	default:
 		$display("** IO_WR %x %x",addr[11:0],cpu_dout);
       endcase
+      end
     else
+    begin
       // read
+		$display("** IO_RD %x ",addr[11:0]);
       case (addr[11:0])
         12'h000, 12'h010, 12'h024, 12'h025,
         12'h026, 12'h027, 12'h044, 12'h045,
@@ -532,6 +538,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	default:
 		$display("** IO_RD %x ",addr[11:0]);
       endcase
+      end
   end
 
 /* *
@@ -616,7 +623,8 @@ begin
 	if (fast_clk)
 	begin
 //		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq);
-		$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
+		// to debug interrupts:
+		//$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
 	end
 end
 
@@ -644,6 +652,7 @@ adb adb(
 prtc prtc(
   .clk(clk_sys),
   .cen(fast_clk),
+  .timestamp(timestamp),
   .reset(reset),
   .addr(prtc_addr),
   .din(prtc_din),

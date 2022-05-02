@@ -5,6 +5,8 @@ module top(
   input clk_vid,
   input cpu_wait,
   input ce_pix,
+  input [32:0] timestamp,
+
   output fast_clk,
   output fast_clk_delayed,
   output [7:0] R,
@@ -56,6 +58,7 @@ iigs core(
 
   .reset(reset),
   .clk_sys(clk_sys),
+  .timestamp(timestamp),
   .cpu_wait(cpu_wait),
   .fast_clk(fast_clk_delayed),
   .fast_clk_delayed(fast_clk),
@@ -94,7 +97,7 @@ iigs core(
 //parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
 parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
 `else
-parameter RAMSIZE = 2; // 16x64k = 1MB, max = 127x64k = 8MB
+parameter RAMSIZE = 8; // 16x64k = 1MB, max = 127x64k = 8MB
 //parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
 `endif
 

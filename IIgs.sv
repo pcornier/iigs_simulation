@@ -212,6 +212,8 @@ wire  [1:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;
 
+wire [32:0] TIMESTAMP;
+
 
 hps_io #(.CONF_STR(CONF_STR),.VDNUM(2)) hps_io
 (
@@ -234,6 +236,7 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(2)) hps_io
 	.img_readonly(img_readonly),
 	.img_size(img_size),
 	
+	.TIMESTAMP(TIMESTAMP),
 	
 	
 	.buttons(buttons),
@@ -268,6 +271,7 @@ top top (
 	.ce_pix(ce_pix),
 	.fast_clk(fast_clk),
 	.fast_clk_delayed(fast_clk_delayed),
+	.timestamp(TIMESTAMP),
 	.R(VGA_R),
 	.G(VGA_G),
 	.B(VGA_B),
