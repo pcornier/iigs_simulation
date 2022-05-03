@@ -190,7 +190,9 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 localparam CONF_STR = {
 	"IIgs;;",
 	"-;",
-	"S1,HDV;",
+	//"S0,DSK;",
+	"S0,HDV;",
+	"S1,DSK;",
 	"R0,Reset;",
 	"V,v",`BUILD_DATE 
 };
@@ -271,6 +273,7 @@ top top (
 	.ce_pix(ce_pix),
 	.fast_clk(fast_clk),
 	.fast_clk_delayed(fast_clk_delayed),
+	.fast_clk_delayed_mem(fast_clk_delayed_mem),
 	.timestamp(TIMESTAMP),
 	.R(VGA_R),
 	.G(VGA_G),
@@ -280,15 +283,15 @@ top top (
 	.HS(hsync),
 	.VS(vsync),
 	/* hard drive */
-	.HDD_SECTOR(sd_lba[1]),
+	.HDD_SECTOR(sd_lba[0]),
 	.HDD_READ(hdd_read),
 	.HDD_WRITE(hdd_write),
 	.HDD_MOUNTED(hdd_mounted),
 	.HDD_PROTECT(hdd_protect),
 	.HDD_RAM_ADDR(sd_buff_addr),
 	.HDD_RAM_DI(sd_buff_dout),
-	.HDD_RAM_DO(sd_buff_din[1]),
-	.HDD_RAM_WE(sd_buff_wr & sd_ack[1]),
+	.HDD_RAM_DO(sd_buff_din[0]),
+	.HDD_RAM_WE(sd_buff_wr & sd_ack[0]),
 	.fastram_address(fastram_address),
 	.fastram_datatoram(fastram_datatoram),
 	.fastram_datafromram(fastram_datafromram),
@@ -303,6 +306,7 @@ wire fastram_we;
 wire fastram_ce;
 wire fast_clk;
 wire fast_clk_delayed;
+wire fast_clk_delayed_mem;
 
 reg write;
 reg read;
@@ -310,11 +314,11 @@ wire busy;
 always @(posedge clk_sys) begin
 	write<=0;
 	read<=0;
-   if (fast_clk_delayed) begin
+   if (fast_clk_delayed_mem) begin
 		if (~fastram_we & fastram_ce & ~busy)
 			write<=1;
 		else if (fastram_we & fastram_ce & ~busy)
-			read<=0;
+			read<=1;
 	end
 	
 end
@@ -332,7 +336,7 @@ sdram sdram
 	.ch0_wr     (write),
 	.ch0_din    (fastram_datatoram),
 	.ch0_rd     (read),
-	.ch0_dout   (ram_data/*fastram_datafromram*/),
+	.ch0_dout   (fastram_datafromram),
 	.ch0_busy   (busy),
 
 	.ch1_addr   (),
@@ -379,9 +383,9 @@ dpram #(.widthad_a(16),.prefix("fast")) fastram
         .clock_a(clk_sys),
         .address_a( fastram_address ),
         .data_a(fastram_datatoram),
-        .q_a(fastram_datafromram),
+        .q_a(ram_data/*fastram_datafromram*/),
         .wren_a(fastram_we),
-        .ce_a(fastram_ce),
+        .ce_a(fastram_ce)
 );
 
 
@@ -413,7 +417,6 @@ assign CLK_VIDEO=clk_vid;
 
 
 // HARD DRIVE PARTS
-wire [15:0] hdd_sector;
 
 
 reg  hdd_mounted = 0;
@@ -422,20 +425,18 @@ wire hdd_write;
 reg  hdd_protect;
 reg  cpu_wait_hdd = 0;
 
-reg  sd_rd_hd;
-reg  sd_wr_hd;
 
 always @(posedge clk_sys) begin
-	reg old_ack ;
-	reg hdd_read_pending ;
-	reg hdd_write_pending ;
-	reg state;
+	reg old_ack =0;
+	reg hdd_read_pending =0;
+	reg hdd_write_pending =0;
+	reg state=0;
 
-	old_ack <= sd_ack[1];
+	old_ack <= sd_ack[0];
 	hdd_read_pending <= hdd_read_pending | hdd_read;
 	hdd_write_pending <= hdd_write_pending | hdd_write;
 
-	if (img_mounted[1]) begin
+	if (img_mounted[0]) begin
 		hdd_mounted <= img_size != 0;
 		hdd_protect <= img_readonly;
 	end
@@ -445,27 +446,25 @@ always @(posedge clk_sys) begin
 		cpu_wait_hdd <= 0;
 		hdd_read_pending <= 0;
 		hdd_write_pending <= 0;
-		sd_rd[1] <= 0;
-		sd_wr[1] <= 0;
+		sd_rd[0] <= 0;
+		sd_wr[0] <= 0;
 	end
 	else if(!state) begin
 		if (hdd_read_pending | hdd_write_pending) begin
 			state <= 1;
-			sd_rd[1] <= hdd_read_pending;
-			sd_wr[1] <= hdd_write_pending;
+			sd_rd[0] <= hdd_read_pending;
+			sd_wr[0] <= hdd_write_pending;
 			cpu_wait_hdd <= 1;
 		end
 	end
 	else begin
-		if (~old_ack & sd_ack[1]) begin
+		if (~old_ack & sd_ack[0]) begin
 			hdd_read_pending <= 0;
 			hdd_write_pending <= 0;
-			sd_rd[1] <= 0;
-			sd_wr[1] <= 0;
-			$display("~old ack %x sd_ack[1] %x",~old_ack,sd_ack[1]);
+			sd_rd[0] <= 0;
+			sd_wr[0] <= 0;
 		end
-		else if(old_ack & ~sd_ack[1]) begin
-			$display("old ack %x ~sd_ack[1] %x",old_ack,~sd_ack[1]);
+		else if(old_ack & ~sd_ack[0]) begin
 			state <= 0;
 			cpu_wait_hdd <= 0;
 		end
