@@ -113,6 +113,7 @@ reg [7:0] MONOCHROME;
 //reg LC_WE;
 reg ROMBANK;
 
+reg LC_WE_PRE;
 
 //reg TEXTG;
 //reg MIXG;
@@ -165,6 +166,7 @@ always @(posedge clk_sys) begin
     INTCXROM<=1'b1;
     RDROM<=1'b1;
     LCRAM2<=1'b1;
+LC_WE_PRE<=1'b0;
 
 DISKREG<=0;
 SLTROMSEL<=0;
@@ -292,13 +294,16 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b1;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h081,	// Read ROM write RAM bank 2 (RR)
 	12'h085:
 		begin
+			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b1;
+			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h082,	// Read ROM no write
 	12'h086:
@@ -306,13 +311,16 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b0;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h083,	// Read bank 2 write bank 2(RR)
 	12'h087:
 		begin
+			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b1;
+			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h088,
 	12'h08C:
@@ -320,13 +328,16 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b0;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h089,
 	12'h08D:
 		begin
+			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b1;
+			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h08A,
 	12'h08E:
@@ -334,13 +345,16 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b0;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h08B,
         12'h08F:
 		begin
+			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b1;
+			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 
   12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
@@ -471,58 +485,82 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
 	12'h080,	// Read RAM bank 2 no write
 	12'h084:	// Read bank 2 no write
 		begin
+			$display("READ 80/84: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b1;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h081,	// Read ROM write RAM bank 2 (RR)
 	12'h085:
 		begin
+			$display("READ 81/85: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b1;
+			if (fast_clk_delayed) begin
+				LC_WE <= LC_WE_PRE  ;
+				LC_WE_PRE<=1'b1  ;
+			end
 		end
 	12'h082,	// Read ROM no write
 	12'h086:
 		begin
+			$display("READ 82/86: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b0;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h083,	// Read bank 2 write bank 2(RR)
 	12'h087:
 		begin
+			$display("READ 83/87: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b1;
+			if (fast_clk_delayed) begin
+				LC_WE <= LC_WE_PRE  ;
+				LC_WE_PRE<=1'b1  ;
+			end
 		end
 	12'h088,
 	12'h08C:
 		begin
+			$display("READ 88/8C: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b0;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h089,
 	12'h08D:
 		begin
+			$display("READ 89/8D: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b1;
+			if (fast_clk_delayed) begin
+				LC_WE <= LC_WE_PRE  ;
+				LC_WE_PRE<=1'b1  ;
+			end
 		end
 	12'h08A,
 	12'h08E:
 		begin
+			$display("READ 8A/8E: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b1;
 			LCRAM2 <= 1'b0;
 			LC_WE <= 1'b0;
+			LC_WE_PRE<=1'b0;
 		end
 	12'h08B,
         12'h08F:
 		begin
+			$display("READ 8B/8F: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
 			RDROM <= 1'b0;
 			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b1;
+			if (fast_clk_delayed) begin
+				LC_WE <= LC_WE_PRE  ;
+				LC_WE_PRE<=1'b1  ;
+			end
 		end
 
   12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,

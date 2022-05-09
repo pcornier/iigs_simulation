@@ -314,7 +314,8 @@ STRUCT(Emustate_word32list) {
 #define irq_printf if(DO_VERBOSE && (Verbose & VERBOSE_IRQ)) printf
 #define clk_printf if(DO_VERBOSE && (Verbose & VERBOSE_CLK)) printf
 #define shadow_printf if(DO_VERBOSE && (Verbose & VERBOSE_SHADOW)) printf
-#define iwm_printf if(DO_VERBOSE && (Verbose & VERBOSE_IWM)) printf
+//#define iwm_printf if(DO_VERBOSE && (Verbose & VERBOSE_IWM)) printf
+#define iwm_printf printf
 #define doc_printf if(DO_VERBOSE && (Verbose & VERBOSE_DOC)) printf
 #define adb_printf if(DO_VERBOSE && (Verbose & VERBOSE_ADB)) printf
 #define scc_printf if(DO_VERBOSE && (Verbose & VERBOSE_SCC)) printf

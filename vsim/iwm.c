@@ -771,7 +771,7 @@ int read_iwm(int loc, double dcycs)     {
   int state;
   int drive;
   int val;
-printf("read_iwm loc %x drive35 %x\n",loc,g_c031_disk35);
+printf("read_iwm loc %x drive35 %x q6 %x q7 %x\n",loc,g_c031_disk35,iwm.q6,iwm.q7);
   loc = loc & 0xf;
   on = loc & 1;
 
@@ -907,6 +907,7 @@ printf("write_iwm loc %x val %x drive35 %x\n",loc,val,g_c031_disk35);
         }
       } else {
         /* write mode register */
+	 printf("iwm_write: writing to iwmMode register %x\n",val&0x1f);
         val = val & 0x1f;
         iwm.iwm_mode = val;
         if(val != 0 && val != 0x0f && val != 0x07 &&

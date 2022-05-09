@@ -868,7 +868,7 @@ if (last_cpu_addr!=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT) already_
 				double dcycs = main_time;
 				g_c031_disk35=top->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
 				if (!top->emu__DOT__top__DOT__core__DOT__iwm__DOT__rw) {
-					//printf("about to write_iwm: ADDR:    0x%06X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT);
+					printf("about to write_iwm: ADDR:    0x%06X data %x ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT,top->emu__DOT__top__DOT__core__DOT__iwm__DOT__din);
 				          write_iwm(top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT, top->emu__DOT__top__DOT__core__DOT__iwm__DOT__din, dcycs);
 				}
 				else{

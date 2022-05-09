@@ -95,9 +95,9 @@ module P65C816
 
 
 always @(posedge CLK ) begin
-//	if (CE)
-//	$display("RDY_OUT: %x MF: %x ADDR: %x A: %x X %x Y %x D %x SP %x T %x PC %x PBR %x DBR %x D_OUT %x D_IN %x WE %x MCODE.outbus %x irq p flag: %x ",RDY_OUT,MF,A_OUT,A,X,Y,D,SP,T,PC,PBR,DBR,D_OUT,D_IN,WE,MC.OUT_BUS,~P[2]);
-if (~RST_N) $display("RESET");
+	if (CE)
+	$display("RDY_OUT: %x MF: %x ADDR: %x A: %x X %x Y %x D %x SP %x T %x PC %x PBR %x DBR %x D_OUT %x D_IN %x WE %x MCODE.outbus %x irq p flag: %x ",RDY_OUT,MF,A_OUT,A,X,Y,D,SP,T,PC,PBR,DBR,D_OUT,D_IN,WE,MC.OUT_BUS,~P[2]);
+//if (~RST_N) $display("RESET");
 end
 
    always_comb begin
