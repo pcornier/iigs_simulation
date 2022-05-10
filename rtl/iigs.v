@@ -140,10 +140,25 @@ assign { bank_bef, addr_bef } = cpu_addr;
 
 always @(*) begin
 
-	if ((bank_bef == 'h00  || bank_bef == 8'h1 || bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM) 
-		addr_bus = addr_bef- 'h1000;
+
+	if ((bank_bef == 'h00  /*|| bank_bef == 8'h1*/ || bank_bef == 8'he0/* || bank_bef == 8'he1*/) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM) 
+		if (aux && (bank_bef=='h00 || bank_bef=='he0) )
+		//if (aux)
+		begin
+			//$display("HERE1: %x %x",addr_bef,addr_bef+'h10000);
+			addr_bus = addr_bef- 'h1000 + 'h10000;
+		end
+		else
+			addr_bus = addr_bef- 'h1000;
 	else
-		addr_bus = cpu_addr;
+		if (aux && (bank_bef=='h00 || bank_bef=='he0) )
+		//if (aux)
+		begin
+			//$display("HERE2: %x %x",addr_bef,addr_bef+'h10000);
+			addr_bus = addr_bef + 'h10000;
+		end
+		else
+			addr_bus = cpu_addr;
 	/*RDROM <= 1'b1;
 	LCRAM2 <= 1'b1;
 	LC_WE <= 1'b1;
@@ -164,7 +179,7 @@ always @(posedge clk_sys) begin
 
     // FROM GSPLUS
     INTCXROM<=1'b1;
-    RDROM<=1'b1;
+    RDROM<=1'b0;
     LCRAM2<=1'b1;
 LC_WE_PRE<=1'b0;
 
@@ -213,7 +228,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
     if (~cpu_we)
       // write
        begin
-$display("** IO_WR %x %x",addr[11:0],cpu_dout);
+//$display("** IO_WR %x %x",addr[11:0],cpu_dout);
       case (addr[11:0])
 	12'h000: begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end
 	12'h001: begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end
@@ -285,7 +300,8 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
         // $C068: bit0 stays high during boot sequence, why?
         // if bit0=1 it means that internal ROM at SCx00 is selected
         // does it mean slot cards are not accessible?
-	12'h068: begin $display("** R68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],~cpu_dout[3],cpu_dout[2:0]}; end
+	//12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],~cpu_dout[3],cpu_dout[2:0]}; end
+	12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
 
 
 	12'h080,	// Read RAM bank 2 no write
@@ -374,7 +390,7 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
     else
     begin
       // read
-		$display("** IO_RD %x ",addr[11:0]);
+		//$display("** IO_RD %x ",addr[11:0]);
       case (addr[11:0])
         12'h000, 12'h010, 12'h024, 12'h025,
         12'h026, 12'h027, 12'h044, 12'h045,
@@ -454,7 +470,7 @@ $display("** IO_WR %x %x",addr[11:0],cpu_dout);
         12'h05a: io_dout <= 'h0; // some kind of soft switch?
         12'h05d: io_dout <= 'h0; // some kind of soft switch?
         12'h05f: io_dout <= 'h0; // some kind of soft switch?
-        12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,~RDROM,LCRAM2,ROMBANK,INTCXROM};
+        12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM};
         12'h071, 12'h072, 12'h073, 12'h074,
         12'h075, 12'h076, 12'h077, 12'h078,
         12'h079, 12'h07a, 12'h07b, 12'h07c,
@@ -622,14 +638,14 @@ wire cpu_irq =  (VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[3]&INTFLAG[3]
     always @(*)
     begin: aux_ctrl
         aux = 1'b0;
-        if ((bank==0 || bank==8'he0) && (addr[15:9] == 7'b0000000 | addr[15:14] == 2'b11))		// Page 00,01,C0-FF
+        if ((bank_bef==0 || bank_bef==8'he0) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
             aux = ALTZP;
-        else if ((bank==0 || bank==8'he0) &&  addr[15:10] == 6'b000001)		// Page 04-07
-            aux = ((bank==0 || bank==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)))));
-        else if (addr[15:13] == 3'b001)		// Page 20-3F
-            aux =((bank==0 || bank==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)))));
+        else if ((bank_bef==0 || bank_bef==8'he0) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
+            aux = ((bank_bef==0 || bank_bef==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)))));
+        else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
+            aux =((bank_bef==0 || bank_bef==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)))));
         else
-            aux = ((bank==0||bank==8'he0) && ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)));
+            aux = ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_we)) | (RAMWRT & ~cpu_we)));
     end
 
 
@@ -660,7 +676,7 @@ always @(posedge clk_sys)
 begin
 	if (fast_clk)
 	begin
-//		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq);
+		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq);
 		// to debug interrupts:
 		//$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
 	end

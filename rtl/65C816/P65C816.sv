@@ -100,6 +100,7 @@ always @(posedge CLK ) begin
 //if (~RST_N) $display("RESET");
 end
 
+
    always_comb begin
       case (IR[7:5])
          3'b000 :

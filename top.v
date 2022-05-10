@@ -121,7 +121,7 @@ wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 wire rom1_ce = bank == 8'hfe;
-wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && RDROM) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff ) || (bank == 8'h0 && addr >= 16'he000  ) || bank == 8'hff;
+wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && RDROM) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff &&  RDROM ) || (bank == 8'h0 && addr >= 16'he000 /*&& RDROM*/ ) || bank == 8'hff;
 //wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
 //
 
@@ -207,16 +207,16 @@ end
 
 
 
-/*6
+
 always @(posedge clk_sys)
 begin
         if (fast_clk)
         begin
-                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x is_internal %x CXROM %x shadow %x IO %x io_select[7] %x device_select[7] %x",
-			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow,IO,io_select[7],device_select[7]);
+                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x is_internal %x CXROM %x shadow %x IO %x io_select[7] %x device_select[7] %x raddr %x",
+			bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow,IO,io_select[7],device_select[7],raddr);
         end
 end
-*/
+
 
 
 wire [7:0] din =
@@ -282,7 +282,9 @@ dpram #(.widthad_a(16)) fastram
 
 `endif
 
-wire [15:0] raddr = ((bank == 'h00  || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hd000 && addr <='hdfff && LCRAM2 ) ?  addr - 'h1000  : addr;
+//wire [15:0] raddr = ((bank == 'h00  || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hd000 && addr <='hdfff && LCRAM2 ) ?  addr - 'h1000  : addr;
+//wire [15:0] raddr = ((bank == 'h00  || bank == 8'he0 ) && addr >= 'hd000 && addr <='hdfff && LCRAM2 ) ?  addr - 'h1000  : addr;
+wire [15:0] raddr = addr;
 
 // 128k 1MHz slow ram
 // TODO: when 00-01 shadows on E0-E1, there's a copy mechanism 0x->Ex and it is
