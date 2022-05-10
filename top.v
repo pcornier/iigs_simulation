@@ -121,7 +121,7 @@ wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 wire rom1_ce = bank == 8'hfe;
-wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && RDROM) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff &&  RDROM ) || (bank == 8'h0 && addr >= 16'he000 /*&& RDROM*/ ) || bank == 8'hff;
+wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && RDROM) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff &&  RDROM ) || (bank == 8'h0 && addr >= 16'he000 && RDROM ) || bank == 8'hff;
 //wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
 //
 
@@ -155,7 +155,8 @@ begin
    if ((bank == 8'he0 || bank == 8'he1 ) && ~IO )
 	slowram_ce = 1;
    //Bit 6: I/O Memory
-   else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
+   //else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
+   else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && shadow[6] && addr >= 'hc000 && addr <= 'hffff )
 	slowram_ce = 1;
    //Bit 5: Alternate Display Mode
    else  if (bank == 8'h00 && ~shadow[5] && addr >= 'h0800 && addr <= 'h0bff && ~IO)
