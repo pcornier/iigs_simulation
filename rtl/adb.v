@@ -201,7 +201,7 @@ always @(posedge clk) begin
                   data <= { data[23:0], ram[{ din, cmd_data[15:8] }] };
                   pending_data <= 3'd1;
                 end
-                8'h11: ; // send keycode data[7:0]
+                8'h11: $display("send keycode data"); // send keycode data[7:0]
                 8'h12: ; // cmd 12
                 8'h13: ; // cmd 13
                 8'hb0, 8'hb1, 8'hb2, 8'hb3,

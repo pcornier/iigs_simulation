@@ -35,7 +35,9 @@ module iigs(
 
   input VBlank,
   input[9:0] H,
-  input[8:0] V
+  input[8:0] V,
+
+  input [10:0] ps2_key
 
 );
   wire [7:0] bank_bef;
@@ -208,6 +210,7 @@ LC_WE<=0;
 ROMBANK<=0;;
   end
 
+  key_reads<=0;
   adb_strobe <= 1'b0;
   if (adb_strobe & cpu_we) begin
     io_dout <= adb_dout;
@@ -247,11 +250,18 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h00E: begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end
 	12'h00F: begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end
         12'h010, 12'h026, 12'h027, 12'h070: begin
+		if (addr[11:0]==12'h010)
+			key_reads<=1;
           adb_addr <= addr[7:0];
           adb_strobe <= 1'b1;
           adb_din <= cpu_dout;
           adb_rw <= 1'b0;
         end
+	12'h011,12'h12,12'h13,12'h14,12'h15,12'h16,12'h17,12'h18,12'h19,12'h1a,12'h1b,12'h1c,
+	12'h01d,12'h1e,12'h1f:
+	begin
+			//key_reads<=1;
+	end
 	12'h021: MONOCHROME <=cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
 	12'h023: begin $display("VGCINT 23 2 %x 1 %x",cpu_dout[2],cpu_dout[1]);VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
@@ -399,6 +409,10 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
           adb_addr <= addr[7:0];
           adb_strobe <= 1'b1;
           adb_rw <= 1'b1;
+	  if (addr[11:0] == 12'h010) begin  key_reads<=1; io_dout <= key_keys; end
+	 if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x key_pressed %x",key_anykeydown,key_pressed);  if (key_pressed) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
+	 //if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x",key_anykeydown);  if (key_anykeydown) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
+	 if (addr[11:0] == 12'h025) begin  $display("keymodereg");end
         end
 	
 	12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
@@ -406,24 +420,28 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
 	12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
 
-	12'h011: if(LCRAM2) io_dout<='h80; else io_dout<='h00;
-	12'h012: if(RDROM) io_dout<='h80; else io_dout<='h00;
-	12'h013: if(RAMRD) io_dout<='h80; else io_dout<='h00;
-	12'h014: if(RAMWRT) io_dout<='h80; else io_dout<='h00;
-	12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80; else io_dout<='h00;end
-	12'h016: if(ALTZP) io_dout<='h80; else io_dout<='h00;
-	12'h017: if(SLOTC3ROM) io_dout<='h80; else io_dout<='h00;
-	12'h018: if(STORE80) io_dout<='h80; else io_dout<='h00;
-	12'h019: if(VBlank) io_dout<='h00; else io_dout<='h80;
-	12'h01a: if(TEXTG) io_dout<='h80; else io_dout<='h00;
-	12'h01b: if(MIXG) io_dout<='h80; else io_dout<='h00;
-	12'h01c: if(PAGE2) io_dout<='h80; else io_dout<='h00;
-	12'h01d: if(~HIRES_MODE) io_dout<='h80; else io_dout<='h00;
-	12'h01e: if(ALTCHARSET) io_dout<='h80; else io_dout<='h00;
-        12'h01f: if(EIGHTYCOL) io_dout <= 'h80; else io_dout<='h00;
+	//12'h010: begin io_dout<=key_keys; key_reads<=1; end
+	//12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
+
+	12'h011: if(LCRAM2) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h012: if(RDROM) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h013: if(RAMRD) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h014: if(RAMWRT) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80 | key_keys; else io_dout<='h00;end
+	12'h016: if(ALTZP) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h017: if(SLOTC3ROM) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h018: if(STORE80) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h019: if(VBlank) io_dout<='h00 | key_keys; else io_dout<='h80;
+	12'h01a: if(TEXTG) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h01b: if(MIXG) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h01c: if(PAGE2) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h01d: if(~HIRES_MODE) io_dout<='h80 | key_keys; else io_dout<='h00;
+	12'h01e: if(ALTCHARSET) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h01f: if(EIGHTYCOL) io_dout <= 'h80 | key_keys; else io_dout<='h00;
 
         12'h022: io_dout <= TEXTCOLOR;
 	12'h023: begin $display("READ VGCINT %x",VGCINT);io_dout <= VGCINT; end /* vgc int */
+
 
         //12'h028: $display("**++UNIMPLEMENTEDROMBANK (28)"); 
 	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",~ROMBANK);  end
@@ -676,7 +694,7 @@ always @(posedge clk_sys)
 begin
 	if (fast_clk)
 	begin
-		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq);
+		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown);
 		// to debug interrupts:
 		//$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
 	end
@@ -729,6 +747,19 @@ iwm iwm(
   .DISK35(DISK35)
 );
 
+wire [6:0] key_keys=key_keys_pressed[6:0];
+wire [7:0] key_keys_pressed;
+wire key_pressed = key_keys_pressed[7];
+wire key_anykeydown;
+reg key_reads;
+keyboard keyboard(
+    .CLK_14M(clk_sys),
+    .PS2_Key(ps2_key),
+    .reads(key_reads),  // read strobe
+    .reset(reset),
+    .akd(key_anykeydown),
+    .K(key_keys_pressed)
+);
 
 endmodule
 

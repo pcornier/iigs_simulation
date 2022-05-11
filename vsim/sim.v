@@ -131,7 +131,9 @@ top top (
 	.fastram_datatoram(fastram_datatoram),
 	.fastram_datafromram(fastram_datafromram),
 	.fastram_we(fastram_we),
-	.fastram_ce(fastram_ce)
+	.fastram_ce(fastram_ce),
+
+	.ps2_key(ps2_key)
 );
 
     wire [22:0] fastram_address;

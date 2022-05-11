@@ -34,7 +34,9 @@ module top(
   output [7:0] fastram_datatoram,
   input  [7:0] fastram_datafromram,
   output       fastram_we,
-  output       fastram_ce
+  output       fastram_ce,
+
+  input [10:0] ps2_key
 
 );
 
@@ -91,7 +93,9 @@ iigs core(
   .LCRAM2(LCRAM2),
 
   .H(H),
-  .V(V)
+  .V(V),
+
+  .ps2_key(ps2_key)
 
 );
 
