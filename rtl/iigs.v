@@ -55,6 +55,7 @@ reg [7:0] slot_dout;
 
 wire onesecond_irq;
 wire qtrsecond_irq;
+wire snd_irq;
 
 assign { bank, addr } = addr_bus;
 assign { bank_bef, addr_bef } = cpu_addr;
@@ -77,6 +78,10 @@ wire [7:0] iwm_dout;
 reg [7:0] iwm_addr;
 reg iwm_rw, iwm_strobe;
 
+reg [7:0] snd_din;
+wire [7:0] snd_dout;
+reg [1:0] snd_addr;
+reg snd_rw, snd_strobe;
 
 reg aux;
 
@@ -227,6 +232,11 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
     io_dout <= iwm_dout;
   end
 
+  snd_strobe <= 1'b0;
+  if (snd_strobe & cpu_we) begin
+     io_dout <= snd_dout;
+  end
+
   if (IO) begin
     if (~cpu_we)
       // write
@@ -292,10 +302,12 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         end
         12'h035: shadow <= cpu_dout;
 	12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
-        12'h03c: SOUNDCTL <= cpu_dout;
-        12'h03d: SOUNDDATA <= 8'hff;//cpu_dout;
-        12'h03e: SOUNDADRL <= cpu_dout;
-        12'h03f: SOUNDADRH <= cpu_dout;
+        12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
+	   snd_rw <= 1'b1;
+	   snd_strobe <= 1'b1;
+	   snd_addr <= addr[1:0];
+	   snd_din <= cpu_dout;
+	end
 	12'h041: begin $display("INTEN: %x %x",INTEN,cpu_dout); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
 	12'h047: begin $display("CLEAR INT");INTFLAG[4:3]<=2'b00; end // clear the interrupts
@@ -467,10 +479,11 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h038: begin $display("SCCB READ");io_dout <=0; end// SERIAL B
 	12'h039: begin $display("SCCA READ");io_dout <=0; end// SERIAL A
 
-        12'h03c: io_dout <= SOUNDCTL;
-        12'h03d: io_dout <= SOUNDDATA;
-        12'h03e: io_dout <= SOUNDADRL;
-        12'h03f: io_dout <= SOUNDADRH;
+        12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
+	   snd_addr <= addr[1:0];
+	   snd_rw <= 1'b0;
+	   snd_strobe <= 1'b1;
+	end
 	12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
@@ -650,7 +663,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
    end
 
 end
-wire cpu_irq =  (VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[3]&INTFLAG[3])|(INTEN[4]&INTFLAG[4]);
+wire cpu_irq =  (VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[3]&INTFLAG[3])|(INTEN[4]&INTFLAG[4])|snd_irq;
 
 
     always @(*)
@@ -746,6 +759,16 @@ iwm iwm(
   .strobe(iwm_strobe),
   .DISK35(DISK35)
 );
+
+sound snd(
+	  .clk(clk_sys),
+	  .select(snd_strobe),
+	  .wr(snd_rw),
+	  .host_addr(snd_addr),
+	  .host_data_in(snd_din),
+	  .host_data_out(snd_dout),
+	  .irq(snd_irq)
+	  );
 
 wire [6:0] key_keys=key_keys_pressed[6:0];
 wire [7:0] key_keys_pressed;
