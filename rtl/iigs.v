@@ -141,22 +141,28 @@ wire EXTERNAL_IO =    ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank ==
 
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
-assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
+//assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
+assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  (~shadow[6] & addr[15:8] == 8'hC0)  & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
 
 assign { bank_bef, addr_bef } = cpu_addr;
 
 always @(*) begin
 
-
-	if ((bank_bef == 'h00  /*|| bank_bef == 8'h1*/ || bank_bef == 8'he0/* || bank_bef == 8'he1*/) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM) 
-		if (aux && (bank_bef=='h00 || bank_bef=='he0) )
-		//if (aux)
+	if ((bank_bef == 'he0  || bank_bef == 8'he1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM  ) 
+	begin
+		if (aux && bank_bef==8'he0)
+			addr_bus = addr_bef- 'h1000 + 'h10000;
+		else
+			addr_bus = {bank_bef,16'h0} + addr_bef- 'h1000;
+	end
+	else if ((bank_bef == 'h00  || bank_bef == 8'h1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM && ~shadow[6]  ) 
+		if (aux && bank_bef=='h00) 
 		begin
 			//$display("HERE1: %x %x",addr_bef,addr_bef+'h10000);
 			addr_bus = addr_bef- 'h1000 + 'h10000;
 		end
 		else
-			addr_bus = addr_bef- 'h1000;
+			addr_bus = {bank_bef,16'h0} +addr_bef- 'h1000;
 	else
 		if (aux && (bank_bef=='h00 || bank_bef=='he0) )
 		//if (aux)
