@@ -734,7 +734,7 @@ void DumpInstruction() {
 	case direct24Y: arg1 = fmt::format(" [${0:02x}],y", ins_in[1]); break;
 	case zeroPageX: arg1 = fmt::format(" ${0:02x},x", ins_in[1]); break;
 	case zeroPageY: arg1 = fmt::format(" ${0:02x},y", ins_in[1]); break;
-	case indirect: arg1 = fmt::format(" (${0:02x})", ins_in[1]); break;
+	case indirect: arg1 = fmt::format(" (${0:04x})", ins_in[1]); break;
 	case indirectX: arg1 = fmt::format(" (${0:02x}),x", ins_in[1]); break;
 	case indirectY: arg1 = fmt::format(" (${0:02x}),y", ins_in[1]); break;
 	case stack: arg1 = fmt::format(" ${0:x},s", ins_in[1]); break;
@@ -744,7 +744,7 @@ void DumpInstruction() {
 		//case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", maHigh1, ins_in[2], ins_in[1]); break;
 		//case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", maHigh1, ins_in[2], ins_in[1]); break;
 	case accumulator: arg1 = "a"; break;
-	case relative: arg1 = fmt::format(" {0:04x} ({1})", relativeAddress, signedIn1Formatted);		break;
+	case relative: arg1 = fmt::format(" {0:06x} ({1})", relativeAddress, signedIn1Formatted);		break;
 	case relativeLong: arg1 = fmt::format(" {0:06x} ({1})", relativeAddress, signedIn1Formatted);		break;
 	default: arg1 = "UNSUPPORTED TYPE!";
 	}
