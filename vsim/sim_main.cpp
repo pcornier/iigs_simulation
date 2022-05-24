@@ -1079,7 +1079,12 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::Begin("Slow RAM Editor");
 		mem_edit.DrawContents(&top->emu__DOT__top__DOT__slowram__DOT__ram, 131072, 0);
 		ImGui::End();
-
+		ImGui::Begin("ROM 1 Editor");
+		mem_edit.DrawContents(&top->emu__DOT__top__DOT__rom1__DOT__d, 65536, 0);
+		ImGui::End();
+		ImGui::Begin("ROM 2 Editor");
+		mem_edit.DrawContents(&top->emu__DOT__top__DOT__rom2__DOT__d, 65536, 0);
+		ImGui::End();
 
 		ImGui::Begin("CPU Registers");
 		ImGui::Checkbox("Break", &pc_break_enabled); ImGui::SameLine();
