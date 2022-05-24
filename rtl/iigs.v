@@ -494,6 +494,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 	12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
         12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
+	12'h046: io_dout <= INTFLAG;
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
 	12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
