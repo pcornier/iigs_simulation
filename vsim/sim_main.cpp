@@ -160,6 +160,7 @@ bool writeLog(const char* line)
 
 		std::string c_line = std::string(line);
 		std::string c = "%6d  CPU > " + c_line;
+		//printf("%s (%x)\n",line,ins_in[0]); // this has the instruction number
 		printf("%s\n",line);
 
 		if (log_index < log_mame.size()) {
@@ -429,10 +430,15 @@ void DumpInstruction() {
 	case 0xF8: sta = "sed"; break;
 
 	case 0x48: sta = "pha"; break;
+	case 0xDA: sta = "phx"; break;
 	case 0x5A: sta = "phy"; break;
 	case 0x68: sta = "pla"; break;
+	case 0xFA: sta = "plx"; break;
+	case 0x7A: sta = "ply"; break;
+
 	case 0xF4: sta = "pea"; type = absolute; break;
 	case 0x62: sta = "per"; type = relativeLong; break;
+	case 0xD4: sta = "pei"; type = zeroPage; break;
 
 	case 0x0A: sta = "asl"; type = accumulator; break;
 	case 0x06: sta = "asl"; type = zeroPage; break;
@@ -440,48 +446,68 @@ void DumpInstruction() {
 	case 0x0E: sta = "asl"; type = absolute; break;
 	case 0x1E: sta = "asl"; type = absoluteX; break;
 
-	case 0x09: sta = "ora"; type = immediate; break;
-	case 0x05: sta = "ora"; type = zeroPage; break;
-	case 0x15: sta = "ora"; type = zeroPageX; break;
-	case 0x1F: sta = "ora"; type = longX; break;
-	case 0x0D: sta = "ora"; type = absolute; opType = byte2; break;
-	case 0x1D: sta = "ora"; type = absoluteX; break;
-	case 0x19: sta = "ora"; type = absoluteY; break;
 	case 0x01: sta = "ora"; type = indirectX; break;
+	case 0x03: sta = "ora"; type = stack; break;
+	case 0x05: sta = "ora"; type = zeroPage; break;
+	case 0x07: sta = "ora"; type = direct24; break;
+	case 0x09: sta = "ora"; type = immediate; break;
+	case 0x0D: sta = "ora"; type = absolute; opType = byte2; break;
+	case 0x0F: sta = "ora"; type = longValue; opType = byte3; break;
 	case 0x11: sta = "ora"; type = indirectY; break;
+	case 0x15: sta = "ora"; type = zeroPageX; break;
+	case 0x17: sta = "ora"; type = direct24Y; break;
+	case 0x19: sta = "ora"; type = absoluteY; break;
+	case 0x1D: sta = "ora"; type = absoluteX; break;
+	case 0x1F: sta = "ora"; type = longX; break;
 
+	case 0x43: sta = "eor"; type = stack; break;
+	case 0x47: sta = "eor"; type = direct24; break;
 	case 0x49: sta = "eor"; type = immediate; break;
 	case 0x4d: sta = "eor"; type = absolute; break;
 	case 0x45: sta = "eor"; type = zeroPage; break;
 	case 0x55: sta = "eor"; type = zeroPageX; break;
+	case 0x57: sta = "eor"; type = direct24Y; break;
 	case 0x5d: sta = "eor"; type = absoluteX; break;
 	case 0x59: sta = "eor"; type = absoluteY; break;
 	case 0x41: sta = "eor"; type = indirectX; break;
 	case 0x51: sta = "eor"; type = indirectY; break;
 
-	case 0x29: sta = "and"; type = immediate; break;
+	case 0x23: sta = "and"; type = stack; break;
 	case 0x25: sta = "and"; type = zeroPage; break;
-	case 0x35: sta = "and"; type = zeroPageX; break;
+	case 0x27: sta = "and"; type = direct24; break;
+	case 0x29: sta = "and"; type = immediate; break;
 	case 0x2D: sta = "and"; type = absolute; break;
-	case 0x3D: sta = "and"; type = absoluteX; break;
+	case 0x35: sta = "and"; type = zeroPageX; break;
+	case 0x37: sta = "and"; type = direct24Y; break;
 	case 0x39: sta = "and"; type = absoluteY; break;
+	case 0x3D: sta = "and"; type = absoluteX; break;
 
 
-	case 0xE9: sta = "sbc"; type = immediate; break;
-	case 0xE5: sta = "sbc"; type = zeroPage; break;
-	case 0xF5: sta = "sbc"; type = zeroPageX; break;
-	case 0xED: sta = "sbc"; type = absolute; break;
-	case 0xFD: sta = "sbc"; type = absoluteX; break;
-	case 0xF9: sta = "sbc"; type = absoluteY; break;
 	case 0xE1: sta = "sbc"; type = indirectX; break;
+	case 0xE3: sta = "sbc"; type = stack; break;
+	case 0xE5: sta = "sbc"; type = zeroPage; break;
+	case 0xE7: sta = "sbc"; type = direct24; break;
+	case 0xE9: sta = "sbc"; type = immediate; break;
+	case 0xED: sta = "sbc"; type = absolute; break;
 	case 0xF1: sta = "sbc"; type = indirectY; break;
+	case 0xF5: sta = "sbc"; type = zeroPageX; break;
+	case 0xF7: sta = "sbc"; type = direct24Y; break;
+	case 0xF9: sta = "sbc"; type = absoluteY; break;
+	case 0xFD: sta = "sbc"; type = absoluteX; break;
 
+	case 0xC3: sta = "cmp"; type = stack; break;
+	case 0xC5: sta = "cmp"; type = zeroPage; break;
+	case 0xC7: sta = "cmp"; type = direct24; break;
 	case 0xC9: sta = "cmp"; type = immediate; break;
 	case 0xCD: sta = "cmp"; type = absolute; break;
-	case 0xC5: sta = "cmp"; type = zeroPageX; break;
-
+	case 0xCF: sta = "cmp"; type = longValue; opType=byte3; break;
+	case 0xD1: sta = "cmp"; type = indirectY; break;
+	case 0xD5: sta = "cmp"; type = zeroPageX; break;
+	case 0xD7: sta = "cmp"; type = direct24Y; break;
 	case 0xD9: sta = "cmp"; type = absoluteY; break;
 	case 0xDD: sta = "cmp"; type = absoluteX; break;
+	case 0xDF: sta = "cmp"; type = longX; break;
+
 
 	case 0xE0: sta = "cpx"; type = immediate; break;
 	case 0xE4: sta = "cpx"; type = zeroPage; break;
@@ -505,34 +531,36 @@ void DumpInstruction() {
 	case 0xAC: sta = "ldy"; type = absolute; break;
 	case 0xBC: sta = "ldy"; type = absoluteX; break;
 
-	case 0xA9: sta = "lda"; type = immediate; break;
+	case 0xA1: sta = "lda"; type = indirectX; break;
 	case 0xA3: sta = "lda"; type = stack; break;
 	case 0xA5: sta = "lda"; type = zeroPage; break;
 	case 0xA7: sta = "lda"; type = direct24; break;
-	case 0xAF: sta = "lda"; type = longValue; break;
-	case 0xB7: sta = "lda"; type = direct24Y; break;
-	case 0xB5: sta = "lda"; type = zeroPageX; break;
+	case 0xA9: sta = "lda"; type = immediate; break;
 	case 0xAD: sta = "lda"; type = absolute; opType = byte3; break;
+	case 0xAF: sta = "lda"; type = longValue; opType=byte3; break;
+	case 0xB1: sta = "lda"; type = indirectY; break;
+	case 0xB2: sta = "lda"; type = indirect; break;
+	case 0xB5: sta = "lda"; type = zeroPageX; break;
+	case 0xB7: sta = "lda"; type = direct24Y; break;
+	case 0xB9: sta = "lda"; type = absoluteY; break;
 	case 0xBD: sta = "lda"; type = absoluteX; break;
 	case 0xBF: sta = "lda"; type = longX; break;
-	case 0xB9: sta = "lda"; type = absoluteY; break;
-	case 0xA1: sta = "lda"; type = indirectX; break;
-	case 0xB1: sta = "lda"; type = indirectY; break;
 
-	case 0xDF: sta = "cmp"; type = longX; break;
 
 	case 0x1C: sta = "trb"; type = absolute; break;
 
-	case 0x8D: sta = "sta"; type = absolute; opType = byte3; break;
+	case 0x81: sta = "sta"; type = indirectX; break;
+	case 0x83: sta = "sta"; type = stack; break;
 	case 0x85: sta = "sta"; type = zeroPage; break;
 	case 0x87: sta = "sta"; type = direct24; break;
-	case 0x95: sta = "sta"; type = zeroPageX; break;
-	case 0x9F: sta = "sta"; type = longX; break;
-	case 0x9D: sta = "sta"; type = absoluteX; break;
-	case 0x99: sta = "sta"; type = absoluteY; break;
-	case 0x81: sta = "sta"; type = indirectX; break;
-	case 0x91: sta = "sta"; type = indirectY; break;
+	case 0x8D: sta = "sta"; type = absolute; opType = byte3; break;
 	case 0x8F: sta = "sta"; type = longValue; opType = byte3; break;
+	case 0x91: sta = "sta"; type = indirectY; break;
+	case 0x95: sta = "sta"; type = zeroPageX; break;
+	case 0x97: sta = "sta"; type = direct24Y; break;
+	case 0x99: sta = "sta"; type = absoluteY; break;
+	case 0x9D: sta = "sta"; type = absoluteX; break;
+	case 0x9F: sta = "sta"; type = longX; break;
 
 
 	case 0x86: sta = "stx"; type = zeroPage; break;
@@ -543,13 +571,17 @@ void DumpInstruction() {
 	case 0x8C: sta = "sty"; type = absolute; break;
 	case 0x64: sta = "stz"; type = zeroPage;  break;
 	case 0x9C: sta = "stz"; type = absolute;  opType = byte3; break;
+	case 0x9E: sta = "stz"; type = absoluteX; break;
 
-	case 0x69: sta = "adc"; type = immediate; break;
+	case 0x63: sta = "adc"; type = stack; break;
 	case 0x65: sta = "adc"; type = zeroPage; break;
-	case 0x75: sta = "adc"; type = zeroPageX; break;
+	case 0x67: sta = "adc"; type = direct24; break;
+	case 0x69: sta = "adc"; type = immediate; break;
 	case 0x6D: sta = "adc"; type = absolute; break;
-	case 0x7D: sta = "adc"; type = absoluteX; break;
+	case 0x75: sta = "adc"; type = zeroPageX; break;
+	case 0x77: sta = "adc"; type = direct24Y; break;
 	case 0x79: sta = "adc"; type = absoluteY; break;
+	case 0x7D: sta = "adc"; type = absoluteX; break;
 
 	case 0x3b: sta = "tsc"; break;
 	case 0x7b: sta = "tdc"; break;
@@ -567,6 +599,8 @@ void DumpInstruction() {
 
 	case 0x24: sta = "bit"; type = zeroPage; break;
 	case 0x2C: sta = "bit"; type = absolute; break;
+	case 0x3C: sta = "bit"; type = absoluteX; break;
+	case 0x89: sta = "bit"; type = immediate; break;
 
 	case 0x30: sta = "bmi"; type = relativeLong; break;
 	case 0x90: sta = "bcc"; type = relative; break;
@@ -576,13 +610,20 @@ void DumpInstruction() {
 	case 0x50: sta = "bvc"; type = relative; break;
 	case 0x10: sta = "bpl"; type = relative; break;
 
+	case 0x26: sta = "rol"; type = zeroPage; break;
 	case 0x2a: sta = "rol"; type = accumulator; break;
 	case 0x2e: sta = "rol"; type = absolute ; break;
+	case 0x3e: sta = "rol"; type = absoluteX; break;
+
+	case 0x66: sta = "ror"; type = zeroPage; break;
 	case 0x6a: sta = "ror"; type = accumulator; break;
 	case 0x6e: sta = "ror"; type = absolute ; break;
+	case 0x7e: sta = "ror"; type = absoluteX; break;
 
-	case 0x4A: sta = "lsr"; type = accumulator; break;
 	case 0x46: sta = "lsr"; type = zeroPage; break;
+	case 0x4A: sta = "lsr"; type = accumulator; break;
+	case 0x4e: sta = "lsr"; type = absolute ; break;
+	case 0x5e: sta = "lsr"; type = absoluteX; break;
 
 	case 0x54: sta = "mvn"; type = srcdst; break;
 	case 0x44: sta = "mvp"; type = srcdst; break;
@@ -593,16 +634,20 @@ void DumpInstruction() {
 	case 0xFE: sta = "inc"; type = absoluteX; break;
 
 	case 0x20: sta = "jsr"; type = absolute; opType = byte3; break;
+	case 0xFC: sta = "jsr"; type = absoluteX; break;
+
 	case 0x22: sta = "jsl"; type = longValue; opType = byte3; break;
 
 	case 0x4C: sta = "jmp"; type = absolute; break;
+	case 0x5C: sta = "jmp"; type = longValue; opType=byte3; break;
 	case 0x6C: sta = "jmp"; type = indirect; break;
+	case 0x7C: sta = "jmp"; type = absoluteX; break;
 
 	case 0x6B: sta = "rtl";  break;
 
 	case 0xEA: sta = "nop";  break;
 
-	default: sta = "???"; f = "\t\tPC={0:X} arg1={1:X} arg2={2:X} IN0={3:X} IN1={4:X} IN2={5:X} IN3={6:X} IN4={7:X} MA0={8:X} MA1={9:X} MA2={10:X} MA3={11:X} MA4={12:X}";
+	default: sta = "???";  f = "\t\tPC={0:X} arg1={1:X} arg2={2:X} IN0={3:X} IN1={4:X} IN2={5:X} IN3={6:X} IN4={7:X} MA0={8:X} MA1={9:X} MA2={10:X} MA3={11:X} MA4={12:X}";
 	}
 
 	// replace out named values?
