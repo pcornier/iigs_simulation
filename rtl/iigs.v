@@ -309,6 +309,8 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         end
         12'h035: shadow <= cpu_dout;
 	12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
+        //12'h038: ; // SCC B
+        //12'h039: ; // SCC A
         12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
 	   snd_rw <= 1'b1;
 	   snd_strobe <= 1'b1;
@@ -469,11 +471,12 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         12'h02b: io_dout <= C02BVAL; // from gsplus
         12'h02c: io_dout <= 'h0; // from gsplus
         12'h02d: io_dout <= SLTROMSEL;
-        //12'h02e:  /* vertcount */
-        //12'h02f:  /* horizcount */
+        12'h02e: io_dout <= V[8:1]; /* vertcount */
+        12'h02f: io_dout <= {V[0], H[9:2]}; /* horizcount */
         12'h030: io_dout <= SPKR;
         12'h031: io_dout <= DISK35;
         //12'h032: io_dout <= VGCINT; can you read this??
+        12'h032: io_dout <= 0;// can you read this??
         12'h033, 12'h034: begin
           prtc_addr <= ~addr[0];
           prtc_rw <= 1'b1;
@@ -496,7 +499,7 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
 	12'h046: io_dout <= INTFLAG;
 	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-	12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; end // clear the interrupts
+	12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; INTFLAG[0]<=1'b0; end // clear the interrupts
 	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
 	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
 	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -647,8 +650,9 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 // 
     //VGCINT[]
 //reg [7:0] VGCINT; //23
-//reg [7:0] INTEN; //41 
-//reg [7:0] INTFLAG; // 47  AJS TODO
+//reg [7:0] INTEN; //41    [0][0][0][1/4 sec][VBL][switch][move][mouse]
+//reg [7:0] INTFLAG; // 46 (47 clear)  AJS [mouse now][mouse last][an3][1/4sec][vbl][switch][move][system irq]
+   VGCINT[4]<=1'b0; // EXT INT ALWAYS 0 in IIGS
    if (scanline_irq) begin
 	   // always set the status bit
 	   VGCINT[5] <= 1'b1;
@@ -669,6 +673,23 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
    if (qtrsecond_irq& INTEN[4]) begin
 	   INTFLAG[4]<=1'b1;
    end
+
+   // 0 means IRQ in process 
+   //             VBL           QTRSEC       SECOND      SCAN      DOC (SOUND)   -- needs ADB, SCC, SLOT
+   INTFLAG[0] <= INTFLAG[3] | INTFLAG[4] | VGCINT[6] | VGCINT[7] | snd_irq;
+   /*
+	enum irq_sources
+	{
+		IRQS_DOC        = 0, // sound
+		IRQS_SCAN       = 1,
+		IRQS_ADB        = 2,
+		IRQS_VBL        = 3,
+		IRQS_SECOND     = 4,
+		IRQS_QTRSEC     = 5,
+		IRQS_SLOT       = 6,
+		IRQS_SCC        = 7
+	};
+*/
 
 end
 wire cpu_irq =  (VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[3]&INTFLAG[3])|(INTEN[4]&INTFLAG[4])|snd_irq;

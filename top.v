@@ -128,7 +128,7 @@ wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 wire rom1_ce = bank == 8'hfe;
-wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && (RDROM|~VPB)) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff &&  (RDROM|~VPB) ) || (bank == 8'h0 && addr >= 16'he000 && (RDROM|~VPB) ) || bank == 8'hff || (bank==8'h0 && addr >= 16'hc071 && addr<=16'hc07f);
+wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && (RDROM|~VPB)) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff &&  (RDROM|~VPB) ) || (bank == 8'h0 && addr >= 16'he000 && (RDROM|~VPB) ) || bank == 8'hff || (bank==8'h0 && addr >= 16'hc070 && addr<=16'hc07f);
 //wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
 //
 
