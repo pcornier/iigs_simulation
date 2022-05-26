@@ -5,17 +5,31 @@
 // Demonstrate creating a simple console window, with scrolling, filtering, completion and history.
 // For the console example, here we are using a more C++ like approach of declaring a class to hold the data and the functions.
 
+struct RevFilter : ImGuiTextFilter
+{
+	unsigned int ChangeCount = 0;
+
+	void Clear() { InputBuf[0] = 0; Build(); ChangeCount++; }
+
+	void Draw(const char* label, float width) {
+		if (ImGuiTextFilter::Draw(label, width))
+			ChangeCount++;
+	}
+};
+
 char                  InputBuf[256];
 ImVector<const char*> Commands;
 ImVector<char*>       History;
 int                   HistoryPos;    // -1: new line, 0..History.Size-1 browsing history.
-ImGuiTextFilter       Filter;
+RevFilter             Filter;
+unsigned int          OldFilterCount;
 bool                  AutoScroll;
 bool                  ScrollToBottom;
 
-
 ImVector<char*>       Items;
+ImVector<char*>       FilteredItems;
 static char* Strdup(const char* str) { size_t len = strlen(str) + 1; void* buf = malloc(len); IM_ASSERT(buf); return (char*)memcpy(buf, (const void*)str, len); }
+
 
 //void DebugConsole::AddLog(const char* fmt, ...) IM_FMTARGS(2)
 void DebugConsole::AddLog(const char* fmt, ...) 
@@ -28,6 +42,8 @@ void DebugConsole::AddLog(const char* fmt, ...)
 	buf[IM_ARRAYSIZE(buf) - 1] = 0;
 	va_end(args);
 	Items.push_back(Strdup(buf));
+	if (Filter.IsActive() && Filter.PassFilter(buf))
+		FilteredItems.push_back(Strdup(buf));
 }
 
 DebugConsole::DebugConsole()
@@ -60,12 +76,36 @@ void DebugConsole::ClearLogTop(int n)
   for (int i=0;i<n;i++)
    Items.erase(Items.begin());
 
+  if (Filter.IsActive())
+  {
+    ClearFiltered();
+    CopyFiltered();
+  }
 }
+
+void DebugConsole::ClearFiltered()
+{
+	for (int i = 0; i < FilteredItems.Size; i++)
+		free(FilteredItems[i]);
+	FilteredItems.clear();
+}
+
+void DebugConsole::CopyFiltered()
+{
+	if (!Filter.IsActive())
+		return;
+
+	for (int i = 0; i < Items.Size; i++)
+		if (Filter.IsActive() && Filter.PassFilter(Items[i]))
+			FilteredItems.push_back(Strdup(Items[i]));
+}
+
 void DebugConsole::ClearLog()
 {
 	for (int i = 0; i < Items.Size; i++)
 		free(Items[i]);
 	Items.clear();
+	ClearFiltered();
 }
 
 void DebugConsole::Draw(const char* title, bool* p_open, ImVec2 size)
@@ -132,26 +172,36 @@ void DebugConsole::Draw(const char* title, bool* p_open, ImVec2 size)
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1)); // Tighten spacing
 	if (copy_to_clipboard)
 		ImGui::LogToClipboard();
-	for (int i = 0; i < Items.Size; i++)
-	{
-		const char* item = Items[i];
-		if (!Filter.PassFilter(item))
-			continue;
 
-		// Normally you would store more information in your item (e.g. make Items[] an array of structure, store color/type etc.)
-		bool pop_color = false;
-		if (strstr(item, "[error]")) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f)); pop_color = true; }
-		else if (strncmp(item, "# ", 2) == 0) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.6f, 1.0f)); pop_color = true; }
-		ImGui::TextUnformatted(item);
-		if (pop_color)
-			ImGui::PopStyleColor();
-	}
+	// for (int i = 0; i < Items.Size; i++)
+	ImVector<char*>& DispItems = Filter.IsActive() ? FilteredItems : Items;
+	ImGuiListClipper clipper(DispItems.Size);
+	while (clipper.Step())
+		for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+		{
+			const char* item = DispItems[i];
+
+			// Normally you would store more information in your item (e.g. make Items[] an array of structure, store color/type etc.)
+			bool pop_color = false;
+			if (strstr(item, "[error]")) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f)); pop_color = true; }
+			else if (strncmp(item, "# ", 2) == 0) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.6f, 1.0f)); pop_color = true; }
+			ImGui::TextUnformatted(item);
+			if (pop_color)
+				ImGui::PopStyleColor();
+		}
 	if (copy_to_clipboard)
 		ImGui::LogFinish();
 
 	if (ScrollToBottom || (AutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()))
 		ImGui::SetScrollHereY(1.0f);
 	ScrollToBottom = false;
+
+	if (OldFilterCount != Filter.ChangeCount)
+	{
+		ClearFiltered();
+		CopyFiltered();
+		OldFilterCount = Filter.ChangeCount;
+	}
 
 	ImGui::PopStyleVar();
 	ImGui::EndChild();
