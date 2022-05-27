@@ -208,7 +208,7 @@ enum instruction_type {
 	longValue,
 	longX,
 	longY,
-	stack,
+	stackmode,
 	srcdst
 };
 
@@ -328,7 +328,7 @@ static const struct dasm_data32 gs_vectors[] =
 	{ 0xE10060, "Cursor update" }, { 0xE10064, "IncBusy" }, { 0xE10068, "DecBusy" }, { 0xE1006C, "Bell vector" }, { 0xE10070, "Break vector" }, { 0xE10074, "Trace vector" },
 	{ 0xE10078, "Step vector" }, { 0xE1007C, "[install ROMdisk]" }, { 0xE10080, "ToWriteBram" }, { 0xE10084, "ToReadBram" }, { 0xE10088, "ToWriteTime" },
 	{ 0xE1008C, "ToReadTime" }, { 0xE10090, "ToCtrlPanel" }, { 0xE10094, "ToBramSetup" }, { 0xE10098, "ToPrintMsg8" }, { 0xE1009C, "ToPrintMsg16" }, { 0xE100A0, "Native Ctrl-Y" },
-	{ 0xE100A4, "ToAltDispCDA" }, { 0xE100A8, "ProDOS 16 [inline parms]" }, { 0xE100AC, "OS vector" }, { 0xE100B0, "GS/OS(@parms,call) [stack parms]" },
+	{ 0xE100A4, "ToAltDispCDA" }, { 0xE100A8, "ProDOS 16 [inline parms]" }, { 0xE100AC, "OS vector" }, { 0xE100B0, "GS/OS(@parms,call) [stackmode parms]" },
 	{ 0xE100B4, "OS_P8_Switch" }, { 0xE100B8, "OS_Public_Flags" }, { 0xE100BC, "OS_KIND (byte: 0=P8,1=P16)" }, { 0xE100BD, "OS_BOOT (byte)" }, { 0xE100BE, "OS_BUSY (bit 15=busy)" },
 	{ 0xE100C0, "MsgPtr" }, { 0xe10135, "CURSOR" }, { 0xe10136, "NXTCUR" },
 	{ 0xE10180, "ToBusyStrip" }, { 0xE10184, "ToStrip" }, { 0xe10198, "MDISPATCH" }, { 0xe1019c, "MAINSIDEPATCH" },
@@ -447,7 +447,7 @@ void DumpInstruction() {
 	case 0x1E: sta = "asl"; type = absoluteX; break;
 
 	case 0x01: sta = "ora"; type = indirectX; break;
-	case 0x03: sta = "ora"; type = stack; break;
+	case 0x03: sta = "ora"; type = stackmode; break;
 	case 0x05: sta = "ora"; type = zeroPage; break;
 	case 0x07: sta = "ora"; type = direct24; break;
 	case 0x09: sta = "ora"; type = immediate; break;
@@ -460,7 +460,7 @@ void DumpInstruction() {
 	case 0x1D: sta = "ora"; type = absoluteX; break;
 	case 0x1F: sta = "ora"; type = longX; break;
 
-	case 0x43: sta = "eor"; type = stack; break;
+	case 0x43: sta = "eor"; type = stackmode; break;
 	case 0x47: sta = "eor"; type = direct24; break;
 	case 0x49: sta = "eor"; type = immediate; break;
 	case 0x4d: sta = "eor"; type = absolute; break;
@@ -472,7 +472,7 @@ void DumpInstruction() {
 	case 0x41: sta = "eor"; type = indirectX; break;
 	case 0x51: sta = "eor"; type = indirectY; break;
 
-	case 0x23: sta = "and"; type = stack; break;
+	case 0x23: sta = "and"; type = stackmode; break;
 	case 0x25: sta = "and"; type = zeroPage; break;
 	case 0x27: sta = "and"; type = direct24; break;
 	case 0x29: sta = "and"; type = immediate; break;
@@ -484,7 +484,7 @@ void DumpInstruction() {
 
 
 	case 0xE1: sta = "sbc"; type = indirectX; break;
-	case 0xE3: sta = "sbc"; type = stack; break;
+	case 0xE3: sta = "sbc"; type = stackmode; break;
 	case 0xE5: sta = "sbc"; type = zeroPage; break;
 	case 0xE7: sta = "sbc"; type = direct24; break;
 	case 0xE9: sta = "sbc"; type = immediate; break;
@@ -495,7 +495,7 @@ void DumpInstruction() {
 	case 0xF9: sta = "sbc"; type = absoluteY; break;
 	case 0xFD: sta = "sbc"; type = absoluteX; break;
 
-	case 0xC3: sta = "cmp"; type = stack; break;
+	case 0xC3: sta = "cmp"; type = stackmode; break;
 	case 0xC5: sta = "cmp"; type = zeroPage; break;
 	case 0xC7: sta = "cmp"; type = direct24; break;
 	case 0xC9: sta = "cmp"; type = immediate; break;
@@ -532,7 +532,7 @@ void DumpInstruction() {
 	case 0xBC: sta = "ldy"; type = absoluteX; break;
 
 	case 0xA1: sta = "lda"; type = indirectX; break;
-	case 0xA3: sta = "lda"; type = stack; break;
+	case 0xA3: sta = "lda"; type = stackmode; break;
 	case 0xA5: sta = "lda"; type = zeroPage; break;
 	case 0xA7: sta = "lda"; type = direct24; break;
 	case 0xA9: sta = "lda"; type = immediate; break;
@@ -550,7 +550,7 @@ void DumpInstruction() {
 	case 0x1C: sta = "trb"; type = absolute; break;
 
 	case 0x81: sta = "sta"; type = indirectX; break;
-	case 0x83: sta = "sta"; type = stack; break;
+	case 0x83: sta = "sta"; type = stackmode; break;
 	case 0x85: sta = "sta"; type = zeroPage; break;
 	case 0x87: sta = "sta"; type = direct24; break;
 	case 0x8D: sta = "sta"; type = absolute; opType = byte3; break;
@@ -573,7 +573,7 @@ void DumpInstruction() {
 	case 0x9C: sta = "stz"; type = absolute;  opType = byte3; break;
 	case 0x9E: sta = "stz"; type = absoluteX; break;
 
-	case 0x63: sta = "adc"; type = stack; break;
+	case 0x63: sta = "adc"; type = stackmode; break;
 	case 0x65: sta = "adc"; type = zeroPage; break;
 	case 0x67: sta = "adc"; type = direct24; break;
 	case 0x69: sta = "adc"; type = immediate; break;
@@ -737,7 +737,7 @@ void DumpInstruction() {
 	case indirect: arg1 = fmt::format(" (${0:04x})", ins_in[1]); break;
 	case indirectX: arg1 = fmt::format(" (${0:02x}),x", ins_in[1]); break;
 	case indirectY: arg1 = fmt::format(" (${0:02x}),y", ins_in[1]); break;
-	case stack: arg1 = fmt::format(" ${0:x},s", ins_in[1]); break;
+	case stackmode: arg1 = fmt::format(" ${0:x},s", ins_in[1]); break;
 	case longValue: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x}", ins_in[3], ins_in[2], ins_in[1]); break;
 	case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", ins_in[3], ins_in[2], ins_in[1]); break;
 	case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", ins_in[3], ins_in[2], ins_in[1]); break;
