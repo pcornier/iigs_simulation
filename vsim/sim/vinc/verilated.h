@@ -45,6 +45,9 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+#include <sim_console.h>
+
 // <iostream> avoided to reduce compile time
 // <map> avoided and instead in verilated_heavy.h to reduce compile time
 // <string> avoided and instead in verilated_heavy.h to reduce compile time
@@ -173,6 +176,8 @@ public:
 /// Lock guard for mutex (ala std::unique_lock), wrapped to allow -fthread_safety checks
 class VL_SCOPED_CAPABILITY VerilatedLockGuard final {
     VL_UNCOPYABLE(VerilatedLockGuard);
+
+
 
 private:
     VerilatedMutex& m_mutexr;
@@ -671,6 +676,7 @@ class Verilated final {
 
 public:
     // METHODS - User called
+    static void setDebug(DebugConsole in);
 
     /// Enable debug of internal verilated code
     static void debug(int level) VL_MT_SAFE;

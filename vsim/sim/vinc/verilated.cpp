@@ -1448,6 +1448,11 @@ std::string VL_SFORMATF_NX(const char* formatp, ...) VL_MT_SAFE {
     return t_output;
 }
 
+static DebugConsole console;
+void Verilated::setDebug(DebugConsole in) {
+    console = in;
+}
+
 void VL_WRITEF(const char* formatp, ...) VL_MT_SAFE {
     static VL_THREAD_LOCAL std::string t_output;  // static only for speed
     t_output = "";
