@@ -12,7 +12,6 @@
 #include "glog.h"
 #include "imagewriter.h"
 
-#include <dirent.h>
 
 #ifdef HAVE_RAWNET
 #include "rawnet/rawnet.h"
@@ -24,9 +23,12 @@ typedef unsigned int mode_t;
 
 #define strcasecmp stricmp
 #define strncasecmp strnicmp
+#include "dirent.h"
+
+#else
+#include <dirent.h>
 
 #endif
-
 
 #define KEY_DOWN_ARROW 0x0a
 #define KEY_UP_ARROW 0x0b
