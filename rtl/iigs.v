@@ -1,4 +1,3 @@
-
 module iigs(
   input reset,
 
@@ -6,12 +5,12 @@ module iigs(
   input fast_clk, // 2.5
   input fast_clk_delayed, // 2.5
   input slow_clk, // 1
-  input cpu_wait, 
+  input cpu_wait,
   input [32:0] timestamp,
 
   input scanline_irq,
   input vbl_irq,
-	
+
   output [7:0] bank,
   output [15:0] addr,
   output [7:0] dout,
@@ -103,7 +102,7 @@ reg [7:0] DISK35;
 reg [7:0] C02BVAL;
 
 reg [7:0] VGCINT; //23
-reg [7:0] INTEN; //41 
+reg [7:0] INTEN; //41
 reg [7:0] INTFLAG; // 46, 47  AJS TODO
 
 reg STORE80;
@@ -149,34 +148,34 @@ assign { bank_bef, addr_bef } = cpu_addr;
 
 always @(*) begin
 
-	if ((bank_bef == 'he0  || bank_bef == 8'he1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM  ) 
-	begin
-		if (aux && bank_bef==8'he0)
-			addr_bus = addr_bef- 'h1000 + 'h10000;
-		else
-			addr_bus = {bank_bef,16'h0} + addr_bef- 'h1000;
-	end
-	else if ((bank_bef == 'h00  || bank_bef == 8'h1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM && ~shadow[6]  ) 
-		if (aux && bank_bef=='h00) 
-		begin
-			//$display("HERE1: %x %x",addr_bef,addr_bef+'h10000);
-			addr_bus = addr_bef- 'h1000 + 'h10000;
-		end
-		else
-			addr_bus = {bank_bef,16'h0} +addr_bef- 'h1000;
-	else
-		if (aux && (bank_bef=='h00 || bank_bef=='he0) )
-		//if (aux)
-		begin
-			//$display("HERE2: %x %x",addr_bef,addr_bef+'h10000);
-			addr_bus = addr_bef + 'h10000;
-		end
-		else
-			addr_bus = cpu_addr;
-	/*RDROM <= 1'b1;
-	LCRAM2 <= 1'b1;
-	LC_WE <= 1'b1;
-	*/
+        if ((bank_bef == 'he0  || bank_bef == 8'he1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM  )
+        begin
+                if (aux && bank_bef==8'he0)
+                        addr_bus = addr_bef- 'h1000 + 'h10000;
+                else
+                        addr_bus = {bank_bef,16'h0} + addr_bef- 'h1000;
+        end
+        else if ((bank_bef == 'h00  || bank_bef == 8'h1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM && ~shadow[6]  )
+                if (aux && bank_bef=='h00)
+                begin
+                        //$display("HERE1: %x %x",addr_bef,addr_bef+'h10000);
+                        addr_bus = addr_bef- 'h1000 + 'h10000;
+                end
+                else
+                        addr_bus = {bank_bef,16'h0} +addr_bef- 'h1000;
+        else
+                if (aux && (bank_bef=='h00 || bank_bef=='he0) )
+                //if (aux)
+                begin
+                        //$display("HERE2: %x %x",addr_bef,addr_bef+'h10000);
+                        addr_bus = addr_bef + 'h10000;
+                end
+                else
+                        addr_bus = cpu_addr;
+        /*RDROM <= 1'b1;
+        LCRAM2 <= 1'b1;
+        LC_WE <= 1'b1;
+        */
 end
 
 // driver for io_dout and fake registers
@@ -203,7 +202,7 @@ TEXTCOLOR<='hf2;
 SPKR<=0;
 DISK35<=0;
 VGCINT<=0; //23
-INTEN<=0; //41 
+INTEN<=0; //41
 INTFLAG<=0; // 46, 47  AJS TODO
 
 STORE80<=0;
@@ -250,178 +249,178 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
        begin
 //$display("** IO_WR %x %x",addr[11:0],cpu_dout);
       case (addr[11:0])
-	12'h000: begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end
-	12'h001: begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end
-	12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
-	12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
-	12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
-	12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
-	12'h006: begin $display("**INTCXROM %x",0);INTCXROM<= 1'b0; end
-	12'h007: begin $display("**INTCXROM %x",1);INTCXROM <= 1'b1; end
-	12'h008: begin $display("**ALTZP %x",0); ALTZP<= 1'b0; end
-	12'h009: begin $display("**ALTZP %x",1); ALTZP<= 1'b1; end
-	12'h00A: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b0; end
-	12'h00B: begin $display("**SLOTC3ROM %x",1);SLOTC3ROM<= 1'b1; end
-	12'h00C: begin $display("**EIGHTYCOL %x",0); EIGHTYCOL<= 1'b0; end
-	12'h00D: begin $display("**EIGHTYCOL %x",1); EIGHTYCOL<= 1'b1; end
-	12'h00E: begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end
-	12'h00F: begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end
+        12'h000: begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end
+        12'h001: begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end
+        12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
+        12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
+        12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
+        12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
+        12'h006: begin $display("**INTCXROM %x",0);INTCXROM<= 1'b0; end
+        12'h007: begin $display("**INTCXROM %x",1);INTCXROM <= 1'b1; end
+        12'h008: begin $display("**ALTZP %x",0); ALTZP<= 1'b0; end
+        12'h009: begin $display("**ALTZP %x",1); ALTZP<= 1'b1; end
+        12'h00A: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b0; end
+        12'h00B: begin $display("**SLOTC3ROM %x",1);SLOTC3ROM<= 1'b1; end
+        12'h00C: begin $display("**EIGHTYCOL %x",0); EIGHTYCOL<= 1'b0; end
+        12'h00D: begin $display("**EIGHTYCOL %x",1); EIGHTYCOL<= 1'b1; end
+        12'h00E: begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end
+        12'h00F: begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end
         12'h010, 12'h026, 12'h027, 12'h070: begin
-		if (addr[11:0]==12'h010)
-			key_reads<=1;
+                if (addr[11:0]==12'h010)
+                        key_reads<=1;
           adb_addr <= addr[7:0];
           adb_strobe <= 1'b1;
           adb_din <= cpu_dout;
           adb_rw <= 1'b0;
         end
-	12'h011,12'h12,12'h13,12'h14,12'h15,12'h16,12'h17,12'h18,12'h19,12'h1a,12'h1b,12'h1c,
-	12'h01d,12'h1e,12'h1f:
-	begin
-			//key_reads<=1;
-	end
-	12'h021: MONOCHROME <=cpu_dout;
+        12'h011,12'h12,12'h13,12'h14,12'h15,12'h16,12'h17,12'h18,12'h19,12'h1a,12'h1b,12'h1c,
+        12'h01d,12'h1e,12'h1f:
+        begin
+                        //key_reads<=1;
+        end
+        12'h021: MONOCHROME <=cpu_dout;
         12'h022: TEXTCOLOR <= cpu_dout;
-	12'h023: begin $display("VGCINT 23 2 %x 1 %x",cpu_dout[2],cpu_dout[1]);VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
-	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",cpu_dout);  end
-	12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
+        12'h023: begin $display("VGCINT 23 2 %x 1 %x",cpu_dout[2],cpu_dout[1]);VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
+        12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",cpu_dout);  end
+        12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
         12'h02b: C02BVAL <= cpu_dout; // from gsplus
-	12'h02d: SLTROMSEL <= cpu_dout;
+        12'h02d: SLTROMSEL <= cpu_dout;
         12'h030: SPKR <= cpu_dout;
         12'h031: DISK35<= cpu_dout & 8'hc0;
-	12'h032:
-	begin
-		$display("VGCINT 32: bit6 %x bit5 %x",cpu_dout[6],cpu_dout[5]);
-	   if (cpu_dout[6]==1'b0)
-		   VGCINT[6]<=1'b0;
-	   if (cpu_dout[5]==1'b0)
-		   VGCINT[5]<=1'b0;
-	   // clear 7 if both are cleared
-	   if ((VGCINT[5]==0 || cpu_dout[5]==0) && (VGCINT[6]==0 || cpu_dout[6]==0))
-		 VGCINT[7]<=1'b0;
-	end
+        12'h032:
+        begin
+                $display("VGCINT 32: bit6 %x bit5 %x",cpu_dout[6],cpu_dout[5]);
+           if (cpu_dout[6]==1'b0)
+                   VGCINT[6]<=1'b0;
+           if (cpu_dout[5]==1'b0)
+                   VGCINT[5]<=1'b0;
+           // clear 7 if both are cleared
+           if ((VGCINT[5]==0 || cpu_dout[5]==0) && (VGCINT[6]==0 || cpu_dout[6]==0))
+                 VGCINT[7]<=1'b0;
+        end
         12'h033, 12'h034: begin
           prtc_rw <= 1'b0;
           prtc_strobe <= 1'b1;
           prtc_addr <= ~addr[0];
           prtc_din <= cpu_dout;
-	  if (~addr[0])
-		  BORDERCOLOR=cpu_dout[3:0];
+          if (~addr[0])
+                  BORDERCOLOR=cpu_dout[3:0];
         end
         12'h035: shadow <= cpu_dout;
-	12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
+        12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
         //12'h038: ; // SCC B
         //12'h039: ; // SCC A
         12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
-	   snd_rw <= 1'b1;
-	   snd_strobe <= 1'b1;
-	   snd_addr <= addr[1:0];
-	   snd_din <= cpu_dout;
-	end
-	12'h041: begin $display("INTEN: %x %x",INTEN,cpu_dout); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
-        12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
-	12'h047: begin $display("CLEAR INT");INTFLAG[4:3]<=2'b00; end // clear the interrupts
-	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
-	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
-	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
-	12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
-	12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
-	12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
-	12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
-	12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
+           snd_rw <= 1'b1;
+           snd_strobe <= 1'b1;
+           snd_addr <= addr[1:0];
+           snd_din <= cpu_dout;
+        end
+        12'h041: begin $display("INTEN: %x %x",INTEN,cpu_dout); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
+        12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
+        12'h047: begin $display("CLEAR INT");INTFLAG[4:3]<=2'b00; end // clear the interrupts
+        12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
+        12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
+        12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
+        12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
+        12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
+        12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
+        12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
+        12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
         // $C068: bit0 stays high during boot sequence, why?
         // if bit0=1 it means that internal ROM at SCx00 is selected
         // does it mean slot cards are not accessible?
-	12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
-	//12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
+        12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
+        //12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
 
 
-	12'h080,	// Read RAM bank 2 no write
-	12'h084:	// Read bank 2 no write
-		begin
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h081,	// Read ROM write RAM bank 2 (RR)
-	12'h085:
-		begin
-			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h082,	// Read ROM no write
-	12'h086:
-		begin
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h083,	// Read bank 2 write bank 2(RR)
-	12'h087:
-		begin
-			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h088,
-	12'h08C:
-		begin
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h089,
-	12'h08D:
-		begin
-			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h08A,
-	12'h08E:
-		begin
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h08B,
+        12'h080,	// Read RAM bank 2 no write
+        12'h084:	// Read bank 2 no write
+                begin
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b1;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h081,	// Read ROM write RAM bank 2 (RR)
+        12'h085:
+                begin
+                        $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b1;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h082,	// Read ROM no write
+        12'h086:
+                begin
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h083,	// Read bank 2 write bank 2(RR)
+        12'h087:
+                begin
+                        $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b1;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h088,
+        12'h08C:
+                begin
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h089,
+        12'h08D:
+                begin
+                        $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h08A,
+        12'h08E:
+                begin
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h08B,
         12'h08F:
-		begin
-			$display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
+                begin
+                        $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
 
   12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
   12'h0e4, 12'h0e5, 12'h0e6, 12'h0e7,
   12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
   12'h0ec, 12'h0ed, 12'h0ee, 12'h0ef:
-   begin 
+   begin
           iwm_addr <= addr[7:0];
           iwm_strobe <= 1'b1;
           iwm_din <= cpu_dout;
           iwm_rw <= 1'b0;
    end
-	default:
-		$display("** IO_WR %x %x",addr[11:0],cpu_dout);
+        default:
+                $display("** IO_WR %x %x",addr[11:0],cpu_dout);
       endcase
       end
     else
     begin
       // read
-		//$display("** IO_RD %x ",addr[11:0]);
+      //$display("** IO_RD %x, RDROM %x ",addr[11:0], RDROM);
       case (addr[11:0])
         12'h000, 12'h010, 12'h024, 12'h025,
         12'h026, 12'h027, 12'h044, 12'h045,
@@ -430,42 +429,42 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
           adb_addr <= addr[7:0];
           adb_strobe <= 1'b1;
           adb_rw <= 1'b1;
-	  if (addr[11:0] == 12'h010) begin  key_reads<=1; io_dout <= key_keys; end
-	 if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x key_pressed %x",key_anykeydown,key_pressed);  if (key_pressed) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
-	 //if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x",key_anykeydown);  if (key_anykeydown) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
-	 if (addr[11:0] == 12'h025) begin  $display("keymodereg");end
+          if (addr[11:0] == 12'h010) begin  key_reads<=1; io_dout <= key_keys; end
+         if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x key_pressed %x",key_anykeydown,key_pressed);  if (key_pressed) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
+         //if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x",key_anykeydown);  if (key_anykeydown) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
+         if (addr[11:0] == 12'h025) begin  $display("keymodereg");end
         end
-	
-	12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
-	12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
-	12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
-	12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
 
-	//12'h010: begin io_dout<=key_keys; key_reads<=1; end
-	//12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
+        12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
+        12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
+        12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
+        12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
 
-	12'h011: if(LCRAM2) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h012: if(RDROM) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h013: if(RAMRD) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h014: if(RAMWRT) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80 | key_keys; else io_dout<='h00;end
-	12'h016: if(ALTZP) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h017: if(SLOTC3ROM) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h018: if(STORE80) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h019: if(VBlank) io_dout<='h00 | key_keys; else io_dout<='h80;
-	12'h01a: if(TEXTG) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h01b: if(MIXG) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h01c: if(PAGE2) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h01d: if(~HIRES_MODE) io_dout<='h80 | key_keys; else io_dout<='h00;
-	12'h01e: if(ALTCHARSET) io_dout<='h80 | key_keys; else io_dout<='h00;
+        //12'h010: begin io_dout<=key_keys; key_reads<=1; end
+        //12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
+
+        12'h011: if(LCRAM2) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h012: if(~RDROM) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h013: if(RAMRD) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h014: if(RAMWRT) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80 | key_keys; else io_dout<='h00;end
+        12'h016: if(ALTZP) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h017: if(SLOTC3ROM) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h018: if(STORE80) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h019: if(VBlank) io_dout<='h00 | key_keys; else io_dout<='h80;
+        12'h01a: if(TEXTG) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h01b: if(MIXG) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h01c: if(PAGE2) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h01d: if(~HIRES_MODE) io_dout<='h80 | key_keys; else io_dout<='h00;
+        12'h01e: if(ALTCHARSET) io_dout<='h80 | key_keys; else io_dout<='h00;
         12'h01f: if(EIGHTYCOL) io_dout <= 'h80 | key_keys; else io_dout<='h00;
 
         12'h022: io_dout <= TEXTCOLOR;
-	12'h023: begin $display("READ VGCINT %x",VGCINT);io_dout <= VGCINT; end /* vgc int */
+        12'h023: begin $display("READ VGCINT %x",VGCINT);io_dout <= VGCINT; end /* vgc int */
 
 
-        //12'h028: $display("**++UNIMPLEMENTEDROMBANK (28)"); 
-	12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",~ROMBANK);  end
+        //12'h028: $display("**++UNIMPLEMENTEDROMBANK (28)");
+        12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",~ROMBANK);  end
         12'h029: io_dout <= NEWVIDEO;
         12'h02a: io_dout <= 'h0; // from gsplus
         12'h02b: io_dout <= C02BVAL; // from gsplus
@@ -483,31 +482,31 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
           prtc_strobe <= 1'b1;
         end
         12'h035: io_dout <= shadow;
-	12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
-        12'h037: io_dout <= 'h0; // from gsplus 
+        12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
+        12'h037: io_dout <= 'h0; // from gsplus
 
-	12'h038: begin $display("SCCB READ");io_dout <=0; end// SERIAL B
-	12'h039: begin $display("SCCA READ");io_dout <=0; end// SERIAL A
+        12'h038: begin $display("SCCB READ");io_dout <=0; end// SERIAL B
+        12'h039: begin $display("SCCA READ");io_dout <=0; end// SERIAL A
 
         12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
-	   snd_addr <= addr[1:0];
-	   snd_rw <= 1'b0;
-	   snd_strobe <= 1'b1;
-	end
-	12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
-        12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT"); 
+           snd_addr <= addr[1:0];
+           snd_rw <= 1'b0;
+           snd_strobe <= 1'b1;
+        end
+        12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
+        12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
         //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
-	12'h046: io_dout <= INTFLAG;
-	//12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-	12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; INTFLAG[0]<=1'b0; end // clear the interrupts
-	12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
-	12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
-	12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
-	12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
-	12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
-	12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
-	12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
-	12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
+        12'h046: io_dout <= INTFLAG;
+        //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
+        12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; INTFLAG[0]<=1'b0; end // clear the interrupts
+        12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
+        12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
+        12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
+        12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
+        12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
+        12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
+        12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
+        12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
         12'h058: io_dout <= 'h0; // some kind of soft switch?
         12'h05a: io_dout <= 'h0; // some kind of soft switch?
         12'h05d: io_dout <= 'h0; // some kind of soft switch?
@@ -522,117 +521,117 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 /*****************************************************************************
 * Language Card Memory
 *
-*           $C080 ;LC RAM bank2, Read and WR-protect RAM 
-*ROMIN =    $C081 ;LC RAM bank2, Read ROM instead of RAM, 
-*                 ;two or more successive reads WR-enables RAM 
-*           $C082 ;LC RAM bank2, Read ROM instead of RAM, 
-*                 ;WR-protect RAM 
-*LCBANK2 =  $C083 ;LC RAM bank2, Read RAM 
-*                 ;two or more successive reads WR-enables RAM 
-*           $C088 ;LC RAM bank1, Read and WR-protect RAM 
-*           $C089 ;LC RAM bank1, Read ROM instead of RAM, 
-*                 ;two or more successive reads WR-enables RAM 
-*           $C08A ;LC RAM bank1, Read ROM instead of RAM, 
-*                 ;WR-protect RAM 
-*LCBANK1 =  $C08B ;LC RAM bank1, Read RAM 
-*                 ;two or more successive reads WR-enables RAM 
-*           $C084-$C087 are echoes of $C080-$C083 
-*           $C08C-$C08F are echoes of $C088-$C08B 
-*  
-******************************************************************************/  	
-	12'h080,	// Read RAM bank 2 no write
-	12'h084:	// Read bank 2 no write
-		begin
-			$display("READ 80/84: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b1;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h081,	// Read ROM write RAM bank 2 (RR)
-	12'h085:
-		begin
-			$display("READ 81/85: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b1;
-			if (fast_clk_delayed) begin
-				LC_WE <= LC_WE_PRE  ;
-				LC_WE_PRE<=1'b1  ;
-			end
-		end
-	12'h082,	// Read ROM no write
-	12'h086:
-		begin
-			$display("READ 82/86: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h083,	// Read bank 2 write bank 2(RR)
-	12'h087:
-		begin
-			$display("READ 83/87: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b1;
-			if (fast_clk_delayed) begin
-				LC_WE <= LC_WE_PRE  ;
-				LC_WE_PRE<=1'b1  ;
-			end
-		end
-	12'h088,
-	12'h08C:
-		begin
-			$display("READ 88/8C: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h089,
-	12'h08D:
-		begin
-			$display("READ 89/8D: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b0;
-			if (fast_clk_delayed) begin
-				LC_WE <= LC_WE_PRE  ;
-				LC_WE_PRE<=1'b1  ;
-			end
-		end
-	12'h08A,
-	12'h08E:
-		begin
-			$display("READ 8A/8E: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b1;
-			LCRAM2 <= 1'b0;
-			LC_WE <= 1'b0;
-			LC_WE_PRE<=1'b0;
-		end
-	12'h08B,
+*           $C080 ;LC RAM bank2, Read and WR-protect RAM
+*ROMIN =    $C081 ;LC RAM bank2, Read ROM instead of RAM,
+*                 ;two or more successive reads WR-enables RAM
+*           $C082 ;LC RAM bank2, Read ROM instead of RAM,
+*                 ;WR-protect RAM
+*LCBANK2 =  $C083 ;LC RAM bank2, Read RAM
+*                 ;two or more successive reads WR-enables RAM
+*           $C088 ;LC RAM bank1, Read and WR-protect RAM
+*           $C089 ;LC RAM bank1, Read ROM instead of RAM,
+*                 ;two or more successive reads WR-enables RAM
+*           $C08A ;LC RAM bank1, Read ROM instead of RAM,
+*                 ;WR-protect RAM
+*LCBANK1 =  $C08B ;LC RAM bank1, Read RAM
+*                 ;two or more successive reads WR-enables RAM
+*           $C084-$C087 are echoes of $C080-$C083
+*           $C08C-$C08F are echoes of $C088-$C08B
+*
+******************************************************************************/
+        12'h080,	// Read RAM bank 2 no write
+        12'h084:	// Read bank 2 no write
+                begin
+                        $display("READ 80/84: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b1;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h081,	// Read ROM write RAM bank 2 (RR)
+        12'h085:
+                begin
+                        $display("READ 81/85: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b1;
+                        if (fast_clk_delayed) begin
+                                LC_WE <= LC_WE_PRE  ;
+                                LC_WE_PRE<=1'b1  ;
+                        end
+                end
+        12'h082,	// Read ROM no write
+        12'h086:
+                begin
+                        $display("READ 82/86: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h083,	// Read bank 2 write bank 2(RR)
+        12'h087:
+                begin
+                        $display("READ 83/87: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b1;
+                        if (fast_clk_delayed) begin
+                                LC_WE <= LC_WE_PRE  ;
+                                LC_WE_PRE<=1'b1  ;
+                        end
+                end
+        12'h088,
+        12'h08C:
+                begin
+                        $display("READ 88/8C: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h089,
+        12'h08D:
+                begin
+                        $display("READ 89/8D: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b0;
+                        if (fast_clk_delayed) begin
+                                LC_WE <= LC_WE_PRE  ;
+                                LC_WE_PRE<=1'b1  ;
+                        end
+                end
+        12'h08A,
+        12'h08E:
+                begin
+                        $display("READ 8A/8E: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b1;
+                        LCRAM2 <= 1'b0;
+                        LC_WE <= 1'b0;
+                        LC_WE_PRE<=1'b0;
+                end
+        12'h08B,
         12'h08F:
-		begin
-			$display("READ 8B/8F: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-			RDROM <= 1'b0;
-			LCRAM2 <= 1'b0;
-			if (fast_clk_delayed) begin
-				LC_WE <= LC_WE_PRE  ;
-				LC_WE_PRE<=1'b1  ;
-			end
-		end
+                begin
+                        $display("READ 8B/8F: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                        RDROM <= 1'b0;
+                        LCRAM2 <= 1'b0;
+                        if (fast_clk_delayed) begin
+                                LC_WE <= LC_WE_PRE  ;
+                                LC_WE_PRE<=1'b1  ;
+                        end
+                end
 
   12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
   12'h0e4, 12'h0e5, 12'h0e6, 12'h0e7,
   12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
   12'h0ec, 12'h0ed, 12'h0ee, 12'h0ef:
-         begin 
+         begin
           iwm_addr <= addr[7:0];
           iwm_strobe <= 1'b1;
           iwm_rw <= 1'b1;
-		$display("ex IO_RD %x ",addr[11:0]);
+                $display("ex IO_RD %x ",addr[11:0]);
          end
-	default:
-		$display("** IO_RD %x ",addr[11:0]);
+        default:
+                $display("** IO_RD %x ",addr[11:0]);
       endcase
       end
   end
@@ -644,51 +643,51 @@ $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_d
 *  VBL - check interrupts enabled, and  intflag
 *  Quarter second (clock_frame%15?) - interrupts enabled and intflag
 *  VGC IIgs Interrupts: VGCINT
-*  1 second - interrupte enabled , VGC Interrupt 
+*  1 second - interrupte enabled , VGC Interrupt
 *  scanline interrupt sets bit even if it doesn't trigger..
 * */
-// 
+//
     //VGCINT[]
 //reg [7:0] VGCINT; //23
 //reg [7:0] INTEN; //41    [0][0][0][1/4 sec][VBL][switch][move][mouse]
 //reg [7:0] INTFLAG; // 46 (47 clear)  AJS [mouse now][mouse last][an3][1/4sec][vbl][switch][move][system irq]
    VGCINT[4]<=1'b0; // EXT INT ALWAYS 0 in IIGS
    if (scanline_irq) begin
-	   // always set the status bit
-	   VGCINT[5] <= 1'b1;
-	   if (VGCINT[1]) // if it is enabled, set the bit
-	   begin
-	   	$display("firing scanline");
-		   VGCINT[7]<=1'b1;
-	   end
+           // always set the status bit
+           VGCINT[5] <= 1'b1;
+           if (VGCINT[1]) // if it is enabled, set the bit
+           begin
+                $display("firing scanline");
+                   VGCINT[7]<=1'b1;
+           end
    end
    if (onesecond_irq & VGCINT[2]) begin
-	VGCINT[6]<=1'b1;
-	VGCINT[7]<=1'b1;
+        VGCINT[6]<=1'b1;
+        VGCINT[7]<=1'b1;
    end
 
    if (vbl_irq & INTEN[3]) begin
-	   INTFLAG[3]<=1'b1;
+           INTFLAG[3]<=1'b1;
    end
    if (qtrsecond_irq& INTEN[4]) begin
-	   INTFLAG[4]<=1'b1;
+           INTFLAG[4]<=1'b1;
    end
 
-   // 0 means IRQ in process 
+   // 0 means IRQ in process
    //             VBL           QTRSEC       SECOND      SCAN      DOC (SOUND)   -- needs ADB, SCC, SLOT
    INTFLAG[0] <= INTFLAG[3] | INTFLAG[4] | VGCINT[6] | VGCINT[7] | snd_irq;
    /*
-	enum irq_sources
-	{
-		IRQS_DOC        = 0, // sound
-		IRQS_SCAN       = 1,
-		IRQS_ADB        = 2,
-		IRQS_VBL        = 3,
-		IRQS_SECOND     = 4,
-		IRQS_QTRSEC     = 5,
-		IRQS_SLOT       = 6,
-		IRQS_SCC        = 7
-	};
+        enum irq_sources
+        {
+                IRQS_DOC        = 0, // sound
+                IRQS_SCAN       = 1,
+                IRQS_ADB        = 2,
+                IRQS_VBL        = 3,
+                IRQS_SECOND     = 4,
+                IRQS_QTRSEC     = 5,
+                IRQS_SLOT       = 6,
+                IRQS_SCC        = 7
+        };
 */
 
 end
@@ -734,12 +733,12 @@ P65C816 cpu(
 
 always @(posedge clk_sys)
 begin
-	if (fast_clk)
-	begin
-		$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD);
-		// to debug interrupts:
-		//$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
-	end
+        if (fast_clk)
+        begin
+                $display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,io_dout);
+                // to debug interrupts:
+                //$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
+        end
 end
 
 
@@ -790,14 +789,14 @@ iwm iwm(
 );
 
 sound snd(
-	  .clk(clk_sys),
-	  .select(snd_strobe),
-	  .wr(snd_rw),
-	  .host_addr(snd_addr),
-	  .host_data_in(snd_din),
-	  .host_data_out(snd_dout),
-	  .irq(snd_irq)
-	  );
+          .clk(clk_sys),
+          .select(snd_strobe),
+          .wr(snd_rw),
+          .host_addr(snd_addr),
+          .host_data_in(snd_din),
+          .host_data_out(snd_dout),
+          .irq(snd_irq)
+          );
 
 wire [6:0] key_keys=key_keys_pressed[6:0];
 wire [7:0] key_keys_pressed;
@@ -814,4 +813,3 @@ keyboard keyboard(
 );
 
 endmodule
-
