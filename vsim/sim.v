@@ -165,12 +165,15 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
 );
 
 
-wire ce_pix=1'b1;
 
 always @(posedge clk_sys) begin
         if (reset) $display("TOPRESET");
 end
-/*
+
+`define FASTSIM 1
+`ifdef  FASTSIM
+wire ce_pix=1'b1;
+`else
 reg ce_pix;
 always @(posedge clk_sys) begin
         reg div ;
@@ -178,7 +181,7 @@ always @(posedge clk_sys) begin
         div <= ~div;
         ce_pix <=  &div ;
 end
-*/
+`endif
 
 wire hsync,vsync;
 wire hblank,vblank;
