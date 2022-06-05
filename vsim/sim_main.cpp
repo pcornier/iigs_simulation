@@ -1157,6 +1157,7 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::Text("PAGE2:   %s", top->emu__DOT__top__DOT__core__DOT__PAGE2 ? "PAGE2" : "PAGE1");
 		ImGui::Text("TEXTG:   %s", top->emu__DOT__top__DOT__core__DOT__TEXTG ? "TEXT" : "*GRAPHICS");
 		ImGui::Text("HIRES:   %s", top->emu__DOT__top__DOT__core__DOT__HIRES_MODE ? "HIGH RES": "LOW RES");
+		ImGui::Text("EIGHTY:   %s", top->emu__DOT__top__DOT__core__DOT__EIGHTYCOL? "80COL": "40COL");
 		ImGui::Text("MIXG:      0x%02X", top->emu__DOT__top__DOT__core__DOT__MIXG);
 		ImGui::Text("NEWVIDEO:      0x%02X", top->emu__DOT__top__DOT__core__DOT__NEWVIDEO);
 		ImGui::Text("SHADOW:      0x%02X", top->emu__DOT__top__DOT__core__DOT__shadow);
