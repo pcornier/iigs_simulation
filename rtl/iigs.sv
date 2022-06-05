@@ -29,6 +29,7 @@ module iigs
    output reg       TEXTG/*verilator public_flat*/,
    output reg       MIXG/*verilator public_flat*/,
    output reg       HIRES_MODE/*verilator public_flat*/,
+   output reg       ALTCHARSET/*verilator public_flat*/,
    output reg       EIGHTYCOL/*verilator public_flat*/,
    output reg [7:0] NEWVIDEO/*verilator public_flat*/,
    output           IO/*verilator public_flat*/,
@@ -108,7 +109,7 @@ logic INTCXROM;
 logic ALTZP;
 logic SLOTC3ROM;
 //logic EIGHTYCOL;
-logic ALTCHARSET;
+//logic ALTCHARSET;
 //logic PAGE2;
 logic [7:0] MONOCHROME;
 //logic RDROM;
