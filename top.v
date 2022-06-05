@@ -131,7 +131,8 @@ wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && (RDROM|~VPB)
 //wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
 //
 
-wire rom_writethrough = ( bank == 8'h0 && addr>=16'hd000 && addr <= 16'hdfff && LC_WE);
+//wire rom_writethrough = ( (bank == 8'h0) & (addr>=16'hd000) & (addr <= 16'hdfff) & LC_WE);
+wire rom_writethrough = ( (bank == 8'h0) & (addr>=16'hd000) & (addr <= 16'hffff) & LC_WE);
 
 assign fastram_ce = (bank < RAMSIZE)  & ( ~rom2_ce | rom_writethrough)  & ~rom1_ce &~IO; // bank[7] == 0;
 //wire slowram_ce = bank == 8'he0 || bank == 8'he1;
@@ -377,7 +378,7 @@ vgc vgc(
         .DEVICE_SELECT(device_select[7]),
         .RESET(reset),
         .A(addr),
-        .RD(we),
+        .RD(~we),
         .D_IN(dout),
         .D_OUT(HDD_DO),
         .sector(HDD_SECTOR),
