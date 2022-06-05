@@ -8,9 +8,10 @@ V_INC = +incdir+$(RTL)
 V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD  \
 	-I$(RTL)  \
 	-I$(RTL)/65C816  \
-	-I.. 
+	-I..
 #V_DEFINE += --converge-limit 2000 -Wno-WIDTH -Wno-IMPLICIT -Wno-MODDUP -Wno-UNSIGNED -Wno-CASEINCOMPLETE -Wno-CASEX -Wno-SYMRSVDWORD -Wno-COMBDLY -Wno-INITIALDLY -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-SELRANGE -Wno-CMPCONST -Wno-CASEOVERLAP -Wno-PINMISSING -Wno-MULTIDRIVEN
 #V_DEFINE += --threads 8  # this slows it way down
+V_DEFINE += --trace-fst
 V_DEFINE +=
 
 UNAME_S := $(shell uname -s)
@@ -47,7 +48,7 @@ EXE = ./obj_dir/Vemu
 #V_OPT = -O3 --x-assign fast --x-initial fast --noassert
 V_OPT =  --x-assign fast --x-initial fast --noassert
 #CC_OPT = -O
-CC_OPT = 
+CC_OPT =
 
 V_SRC = \
 	sim.v  \
@@ -71,7 +72,7 @@ V_SRC = \
 	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \
 	$(RTL)/video_timing.v \
-	$(RTL)/iigs.v
+	$(RTL)/iigs.sv
 
 
 

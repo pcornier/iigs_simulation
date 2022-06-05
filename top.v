@@ -221,6 +221,7 @@ begin
         begin
                 $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x is_internal %x CXROM %x shadow %x IO %x io_select[7] %x device_select[7] %x raddr %x",
                         bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow,IO,io_select[7],device_select[7],raddr);
+          $display("we %x Addr %x din %x | HDD_DO %x, rom1_dout %x, rom2_dout %x, fastram_dout %x, slowram_dout %x, slot_dout %x", we, { bank[6:0], raddr }, dout, HDD_DO, rom1_dout, rom2_dout, fastram_dout, slowram_dout, slot_dout);
         end
 end
 
