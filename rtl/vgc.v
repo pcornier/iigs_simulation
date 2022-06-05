@@ -15,6 +15,7 @@ input [7:0] video_data,
 input [7:0] TEXTCOLOR,
 input [3:0] BORDERCOLOR,
 input HIRES_MODE,
+input ALTCHARSET,
 input EIGHTYCOL,
 input PAGE2,
 input TEXTG,
@@ -503,7 +504,7 @@ end
 
 //assign a = chrom_data_out[chpos_x[2:0]];
 wire [22:0] video_addr_ii = chram_y + chram_x +23'h400 + aux ;
-assign chrom_addr = { 1'b0,video_data[7:0], chpos_y};
+assign chrom_addr = { ALTCHARSET,video_data[7:0], chpos_y};
 
 
 always @(posedge clk_vid) if (ce_pix)
