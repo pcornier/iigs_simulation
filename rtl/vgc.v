@@ -15,6 +15,7 @@ input [7:0] video_data,
 input [7:0] TEXTCOLOR,
 input [3:0] BORDERCOLOR,
 input HIRES_MODE,
+input EIGHTYCOL,
 input PAGE2,
 input TEXTG,
 input MIXG,
@@ -439,25 +440,35 @@ wire [12:0] chram_y = BASEADDR;
 
 
 
-wire  a = chrom_data_out[xpos[3:1]];
+wire  a = EIGHTYCOL ? chrom_data_out[xpos[2:0]] : chrom_data_out[xpos[3:1]];
 
 
 //
 // Text Mode chars are 7 bits wide, not 8
 //
 reg [3:0] xpos;
-always @(posedge clk_vid) if(ce_pix)
+reg [16:0] aux;
+always @(posedge clk_vid) 
 begin
+   if (ce_pix)
 	if (H<32)
 	begin
 		xpos<=0;
 		chram_x<=0;
+		aux<=0;
 	end
 	else
 	begin
 
 		xpos<=xpos+1'b1;
-		if (xpos=='d13) begin
+		if (EIGHTYCOL) begin
+		  if (xpos=='d6) begin
+			xpos<=0;
+                        aux[16]<=~aux[16];
+			if (aux[16]==1'b0)
+				chram_x<=chram_x+1'b1;
+                  end
+		end else if (xpos=='d13) begin
 			xpos<=0;
 			chram_x<=chram_x+1'b1;
 		end
@@ -491,7 +502,7 @@ end
 
 
 //assign a = chrom_data_out[chpos_x[2:0]];
-wire [22:0] video_addr_ii = chram_y + chram_x +23'h400 ;
+wire [22:0] video_addr_ii = chram_y + chram_x +23'h400 + aux ;
 assign chrom_addr = { 1'b0,video_data[7:0], chpos_y};
 
 
