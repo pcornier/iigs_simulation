@@ -47,6 +47,10 @@ wire [15:0] addr;
 wire [7:0] dout;
 wire we;
 reg [2:0] clk_div;
+wire slowram_ce;
+  wire rom1_ce;
+  wire rom2_ce;
+
 always @(posedge clk_sys)
   clk_div <= clk_div + 3'd1;
 
@@ -56,57 +60,52 @@ assign fast_clk_delayed_mem = clk_div ==2;
 
 wire scanline_irq;
 
-iigs core(
+  iigs core
+    (
+     .reset(reset),
+     .clk_sys(clk_sys),
+     .timestamp(timestamp),
+     .cpu_wait(cpu_wait),
+     .fast_clk(fast_clk_delayed),
+     .fast_clk_delayed(fast_clk),
+     .scanline_irq(scanline_irq),
+     .vbl_irq(vbl_irq),
+     .slow_clk(),
 
-  .reset(reset),
-  .clk_sys(clk_sys),
-  .timestamp(timestamp),
-  .cpu_wait(cpu_wait),
-  .fast_clk(fast_clk_delayed),
-  .fast_clk_delayed(fast_clk),
-  .scanline_irq(scanline_irq),
-  .vbl_irq(vbl_irq),
-  .slow_clk(),
+     .bank(bank),
+     .addr(addr),
+     .shadow(shadow),
+     .dout(dout),
+     .din(din),
+     .we(we),
+     .slowram_ce(slowram_ce),
+     .fastram_ce(fastram_ce),
+     .rom1_ce(rom1_ce),
+     .rom2_ce(rom2_ce),
+     .VBlank(VBlank),
+     .TEXTCOLOR(TEXTCOLOR),
+     .BORDERCOLOR(BORDERCOLOR),
+     .HIRES_MODE(HIRES_MODE),
+     .ALTCHARSET(ALTCHARSET),
+     .EIGHTYCOL(EIGHTYCOL),
+     .PAGE2(PAGE2),
+     .TEXTG(TEXTG),
+     .MIXG(MIXG),
+     .NEWVIDEO(NEWVIDEO),
+     .IO(IO),
 
-  .bank(bank),
-  .addr(addr),
-  .shadow(shadow),
-  .dout(dout),
-  .din(din),
-  .we(we),
-  .VBlank(VBlank),
-  .TEXTCOLOR(TEXTCOLOR),
-  .BORDERCOLOR(BORDERCOLOR),
-  .HIRES_MODE(HIRES_MODE),
-  .ALTCHARSET(ALTCHARSET),
-  .EIGHTYCOL(EIGHTYCOL),
-  .PAGE2(PAGE2),
-  .TEXTG(TEXTG),
-  .MIXG(MIXG),
-  .NEWVIDEO(NEWVIDEO),
-  .IO(IO),
+     .VPB(VPB),
+     .SLTROMSEL(SLTROMSEL),
+     .CXROM(CXROM),
+     .RDROM(RDROM),
+     .LC_WE(LC_WE),
+     .LCRAM2(LCRAM2),
 
-  .VPB(VPB),
-  .SLTROMSEL(SLTROMSEL),
-  .CXROM(CXROM),
-  .RDROM(RDROM),
-  .LC_WE(LC_WE),
-  .LCRAM2(LCRAM2),
+     .H(H),
+     .V(V),
 
-  .H(H),
-  .V(V),
-
-  .ps2_key(ps2_key)
-
-);
-
-`ifdef VERILATOR
-//parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
-parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
-`else
-parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
-//parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
-`endif
+     .ps2_key(ps2_key)
+     );
 
 
 wire VPB;
@@ -130,17 +129,8 @@ wire [7:0] SLTROMSEL;
 wire [7:0] rom1_dout, rom2_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
-wire rom1_ce = bank == 8'hfe;
-wire rom2_ce = (bank==8'h0 && addr>=16'hd000 && addr <= 16'hdfff && (RDROM|~VPB)) || (bank==8'h0 && addr>=16'hc000 && addr <= 16'hcfff &&  (RDROM|~VPB) ) || (bank == 8'h0 && addr >= 16'he000 && (RDROM|~VPB) ) || bank == 8'hff || (bank==8'h0 && addr >= 16'hc070 && addr<=16'hc07f);
-//wire fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
-//
 
-//wire rom_writethrough = ( (bank == 8'h0) & (addr>=16'hd000) & (addr <= 16'hdfff) & LC_WE);
-wire rom_writethrough = ( (bank == 8'h0) & (addr>=16'hd000) & (addr <= 16'hffff) & LC_WE);
 
-assign fastram_ce = (bank < RAMSIZE)  & ( ~rom2_ce | rom_writethrough)  & ~rom1_ce &~IO; // bank[7] == 0;
-//wire slowram_ce = bank == 8'he0 || bank == 8'he1;
-reg slowram_ce;
 
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal;
@@ -152,52 +142,6 @@ wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || ba
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
 reg [7:0] io_select;
-
-
-always @(*)
-begin
-// shadow
-//Bit 6: I/O Memory, Bit 5: Alternate Display Mode
-//Bit 4: Auxilary HGR, Bit 3: Super HiRes, Bit 2: HiRes Page 2
-//Bit 1: HiRes Page 1, Bit 0: Text/LoRes
-//
-//if (~shadow[6]) $display("UNIMPLEMENTED SHADOW 6");
-   // read or write to e0 or e1 -- turn on the slowram
-   if ((bank == 8'he0 || bank == 8'he1 ) && ~IO )
-        slowram_ce = 1;
-   //Bit 6: I/O Memory
-   //else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
-   else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && shadow[6] && addr >= 'hc000 && addr <= 'hffff )
-        slowram_ce = 1;
-   //Bit 5: Alternate Display Mode
-   else  if (bank == 8'h00 && ~shadow[5] && addr >= 'h0800 && addr <= 'h0bff && ~IO)
-        slowram_ce = 1;
-   //Bit 5 AUX: Alt Display Mode
-   else  if (bank == 8'h01 && ~shadow[5] && ~shadow[4] && addr >= 'h0800 && addr <= 'h0bff && ~IO)
-        slowram_ce = 1;
-   //Bit 4: (used in combo)
-   //Bit 3,2: Super HiRes or parts or HiRes Page 2
-   else  if (bank == 8'h00 && (~shadow[2]  || ~shadow[3] ) && addr >= 'h4000 && addr <= 'h5fff && ~IO)
-        slowram_ce = 1;
-   //Bit 3,2: Super HiRes or parts or HiRes Page 2 and Aux
-   else  if (bank == 8'h01 && ((~shadow[2] && ~shadow[4]) || ~shadow[3] ) && addr >= 'h4000 && addr <= 'h5fff && ~IO)
-        slowram_ce = 1;
-   //Bit 3,1: Super HiRes or parts or HiRes Page 1
-   else  if (bank == 8'h00 && (~shadow[1]  || ~shadow[3] ) && addr >= 'h2000 && addr <= 'h3fff && ~IO)
-        slowram_ce = 1;
-   //Bit 3,1: Super HiRes or parts or HiRes Page 1 and Aux
-   else  if (bank == 8'h01 && ((~shadow[1] && ~shadow[4]) || ~shadow[3] ) && addr >= 'h2000 && addr <= 'h3fff && ~IO)
-        slowram_ce = 1;
-   //Bit 0: Alternate Display Mode
-   else  if (bank == 8'h00 && ~shadow[0] && addr >= 'h0400 && addr <= 'h07ff && ~IO)
-        slowram_ce = 1;
-   //Bit 0 AUX: Alt Display Mode
-   else  if (bank == 8'h01 && ~shadow[0] && ~shadow[4] && addr >= 'h0400 && addr <= 'h07ff && ~IO)
-        slowram_ce = 1;
-   else
-        slowram_ce =0;
-//   if (bank == 8'h00
-end
 
 
 //always @(posedge clk_sys)
@@ -275,7 +219,6 @@ assign     fastram_address = {bank[6:0],raddr};
 assign     fastram_datatoram = dout;
 assign     fastram_dout = fastram_datafromram;
 assign     fastram_we = we;
-//assign     fastram_ce = fastram_ce;
 
 
 `ifdef NOTDEFINED

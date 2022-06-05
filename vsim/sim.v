@@ -147,13 +147,15 @@ top top (
         .ps2_key(ps2_key)
 );
 
+
   always @(posedge clk_sys) begin
     if (fastram_ce) begin
       if (fastram_we) $display("Writing %x: %x\n", fastram_address, fastram_datatoram);
       $display("Reading %x: %x\n", fastram_address, fastram_datafromram);
     end
   end
-//dpram #(.widthad_a(23),.prefix("fast")) fastram
+
+   //dpram #(.widthad_a(23),.prefix("fast")) fastram
 dpram #(.widthad_a(23),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),
