@@ -32,6 +32,8 @@
 #include <iterator>
 #include <string>
 #include <iomanip>
+#include <thread>
+#include <chrono>
 
 enum class RunState {Stopped, Running, SingleClock, MultiClock, StepIn};
 
@@ -1314,6 +1316,7 @@ blockdevice.MountDisk("hd.hdv",1);
 		case RunState::Running: RunBatch(batchSize); break;
 		case RunState::SingleClock: verilate(); break;
 		case RunState::MultiClock: RunBatch(multi_step_amount); break;
+		default: std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 	}
 
