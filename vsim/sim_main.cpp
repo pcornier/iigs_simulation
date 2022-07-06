@@ -32,17 +32,15 @@
 #include <iterator>
 #include <string>
 #include <iomanip>
-using namespace std;
+
+enum class RunState {Stopped, Running, SingleClock, MultiClock, StepIn};
 
 // Simulation control
 // ------------------
 int initialReset = 48;
-bool run_enable = 1;
+RunState run_state = RunState::Running;
 bool adam_mode = 1;
-int batchSize = 10000;
-//int batchSize = 100;
-bool single_step = 0;
-bool multi_step = 0;
+int batchSize = 100000;
 int multi_step_amount = 1024;
 
 // Debug GUI 
@@ -56,7 +54,9 @@ bool showDebugLog = true;
 DebugConsole console;
 MemoryEditor mem_edit;
 char pc_breakpoint[10] = "";
+int pc_breakpoint_addr = 0;
 bool pc_break_enabled;
+bool break_pending = false;
 
 // HPS emulator
 // ------------
@@ -122,6 +122,7 @@ SimAudio audio(clk_sys_freq, false);
 void resetSim() {
 	main_time = 0;
 	top->reset = 1;
+	break_pending = false;
 	printf("resetSim!! main_time %d top->reset %d\n",main_time,top->reset);
 	clk_sys.Reset();
 }
@@ -754,7 +755,7 @@ void DumpInstruction() {
 	log = fmt::format(log, maHigh0, (unsigned short)ins_pc[0], arg1);
 
 	if (!writeLog(log.c_str())) {
-		run_enable = 0;
+		run_state = RunState::Stopped;
 	}
 	cpu_instruction_count++;
 	//if (sta == "???") {
@@ -828,7 +829,11 @@ int verilate() {
 
 
 					if (vpa && nextstate == 1) {
+						const long break_addr = strtol(pc_breakpoint, NULL, 16);
+						break_pending |= pc_break_enabled && break_addr == ins_pc[0];
+						break_pending |= run_state == RunState::StepIn;
 						//console.AddLog(fmt::format("LOG? ins_index ={0:x} ins_pc[0]={1:06x} ", ins_index, ins_pc[0]).c_str());
+													// JSR/JSL
 						if (ins_index > 0 && ins_pc[0] > 0) {
 							DumpInstruction();
 						}
@@ -948,7 +953,17 @@ last_cpu_addr=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
 	return 0;
 }
 
-
+void RunBatch(int steps)
+{
+	for (int step = 0; step < steps; step++) {
+		verilate();
+		if (break_pending) {
+			run_state = RunState::Stopped;
+			break_pending = false;
+			break;
+		}
+	}
+}
 
 unsigned char mouse_clock = 0;
 unsigned char mouse_clock_reduce = 0;
@@ -1092,20 +1107,26 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::SetWindowPos(windowTitle_Control, ImVec2(0, 0), ImGuiCond_Once);
 		ImGui::SetWindowSize(windowTitle_Control, ImVec2(500, 150), ImGuiCond_Once);
 		if (ImGui::Button("Reset simulation")) { resetSim(); } ImGui::SameLine();
-		if (ImGui::Button("Start running")) { run_enable = 1; } ImGui::SameLine();
-		if (ImGui::Button("Stop running")) { run_enable = 0; } ImGui::SameLine();
-		ImGui::Checkbox("RUN", &run_enable);
 		ImGui::Checkbox("STOPONDIFF", &stop_on_log_mismatch);
-		//ImGui::PopItemWidth();
-		ImGui::SliderInt("Run batch size", &batchSize, 1, 250000);
-		if (single_step == 1) { single_step = 0; }
-		if (ImGui::Button("Single Step")) { run_enable = 0; single_step = 1; }
+		if (ImGui::Button("Start running")) { run_state = RunState::Running; } ImGui::SameLine();
+		if (ImGui::Button("Stop running")) { run_state = RunState::Stopped; } ImGui::SameLine();
+		ImGui::PushItemWidth(100);
+		ImGui::InputInt("Run batch size", &batchSize, 1000, 10000);
+		ImGui::PopItemWidth();
+		if (run_state == RunState::SingleClock || run_state == RunState::MultiClock) { run_state = RunState::Stopped;}
+		ImGui::Text("Clock step:"); ImGui::SameLine();
+		if (ImGui::Button("Single")) { run_state = RunState::SingleClock; }
 		ImGui::SameLine();
-		if (multi_step == 1) { multi_step = 0; }
-		if (ImGui::Button("Multi Step")) { run_enable = 0; multi_step = 1; }
+		if (ImGui::Button("Multi")) { run_state = RunState::MultiClock; }
+		ImGui::SameLine();
+		ImGui::PushItemWidth(100);
+		ImGui::InputInt("Multi clock amount", &multi_step_amount, 1, 10);
+		ImGui::PopItemWidth();
+		ImGui::Text("CPU step:"); ImGui::SameLine();
+		if (ImGui::Button("In")) { run_state = RunState::StepIn; }
+		ImGui::SameLine();
+
 		//ImGui::SameLine();
-		ImGui::SliderInt("Multi step amount", &multi_step_amount, 8, 1024);
-		ImGui::SameLine();
 		//		if (ImGui::Button("Load ROM"))
 			//ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".rom", ".");
 
@@ -1219,7 +1240,7 @@ blockdevice.MountDisk("hd.hdv",1);
 		//ImGui::ProgressBar(vol_r + 0.5f, ImVec2(200, 16), 0);
 
 		int ticksPerSec = (24000000 / 60);
-		if (run_enable) {
+		if (run_state == RunState::Running) {
 			audio.CollectDebug((signed short)top->AUDIO_L, (signed short)top->AUDIO_R);
 		}
 		int channelWidth = (windowWidth / 2) - 16;
@@ -1288,25 +1309,11 @@ blockdevice.MountDisk("hd.hdv",1);
 		top->ps2_mouse_ext = mouse_x + (mouse_buttons << 8);
 
 		// Run simulation
-		if (run_enable) {
-			for (int step = 0; step < batchSize; step++) {
-				long addr = strtol(pc_breakpoint, NULL, 16);
-				if (top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC == addr && pc_break_enabled)
-				{
-					run_enable = false;
-					// break!
-				}
-				else {
-
-					verilate();
-				}
-			}
-		}
-		else {
-			if (single_step) { verilate(); }
-			if (multi_step) {
-				for (int step = 0; step < multi_step_amount; step++) { verilate(); }
-			}
+		switch (run_state) {
+		case RunState::StepIn:
+		case RunState::Running: RunBatch(batchSize); break;
+		case RunState::SingleClock: verilate(); break;
+		case RunState::MultiClock: RunBatch(multi_step_amount); break;
 		}
 	}
 
