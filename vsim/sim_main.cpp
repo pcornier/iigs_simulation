@@ -35,7 +35,7 @@
 #include <thread>
 #include <chrono>
 
-enum class RunState {Stopped, Running, SingleClock, MultiClock, StepIn};
+enum class RunState {Stopped, Running, SingleClock, MultiClock, StepIn, NextIRQ};
 
 // Simulation control
 // ------------------
@@ -59,6 +59,7 @@ char pc_breakpoint[10] = "";
 int pc_breakpoint_addr = 0;
 bool pc_break_enabled;
 bool break_pending = false;
+bool old_vpb = false;
 
 // HPS emulator
 // ------------
@@ -125,6 +126,7 @@ void resetSim() {
 	main_time = 0;
 	top->reset = 1;
 	break_pending = false;
+	old_vpb = true;
 	printf("resetSim!! main_time %d top->reset %d\n",main_time,top->reset);
 	clk_sys.Reset();
 }
@@ -829,6 +831,8 @@ int verilate() {
 
 					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
+				        break_pending |= run_state == RunState::NextIRQ && vpb && !old_vpb;
+					old_vpb = vpb;
 
 					if (vpa && nextstate == 1) {
 						const long break_addr = strtol(pc_breakpoint, NULL, 16);
@@ -1124,9 +1128,10 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::PushItemWidth(100);
 		ImGui::InputInt("Multi clock amount", &multi_step_amount, 1, 10);
 		ImGui::PopItemWidth();
-		ImGui::Text("CPU step:"); ImGui::SameLine();
-		if (ImGui::Button("In")) { run_state = RunState::StepIn; }
+		ImGui::Text("CPU:"); ImGui::SameLine();
+		if (ImGui::Button("Step")) { run_state = RunState::StepIn; }
 		ImGui::SameLine();
+		if (ImGui::Button("Next IRQ")) { run_state = RunState::NextIRQ; }
 
 		//ImGui::SameLine();
 		//		if (ImGui::Button("Load ROM"))
@@ -1313,6 +1318,7 @@ blockdevice.MountDisk("hd.hdv",1);
 		// Run simulation
 		switch (run_state) {
 		case RunState::StepIn:
+		case RunState::NextIRQ:
 		case RunState::Running: RunBatch(batchSize); break;
 		case RunState::SingleClock: verilate(); break;
 		case RunState::MultiClock: RunBatch(multi_step_amount); break;
