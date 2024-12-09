@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #ifndef _MSC_VER
 #include "imgui_impl_sdl.h"
 #include "imgui_impl_opengl2.h"
