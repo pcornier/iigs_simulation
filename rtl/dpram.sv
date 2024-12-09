@@ -13,7 +13,7 @@ module dpram #(
     input   wire    [widthad_a-1:0]  address_a,
     input   wire    [width_a-1:0]  data_a,
     output  reg     [width_a-1:0]  q_a,
-     
+
     // Port B
     input   wire                clock_b,
     input   wire                wren_b,
@@ -24,39 +24,20 @@ module dpram #(
     input wire byteena_a,
     input wire byteena_b,
     input wire ce_a,
-    input wire enable_b 
+    input wire enable_b
 );
 
     initial begin
         $display("Loading rom.");
         $display(init_file);
         if (init_file>0)
-        	$readmemh(init_file, ram);
+                $readmemh(init_file, ram);
     end
 
- 
+
 // Shared ramory
 reg [width_a-1:0] ram [(2**widthad_a)-1:0];
 
-always @(posedge clock_a)
-  if (ce_a) begin
-    if (wren_a)
-    begin
-//	    $display("readinga %x from %x",ram[address_a],address_a);
-	    //$display("LOG_DATA_MACRO2 %x %x (%s)",address_a,ram[address_a],prefix);
-      q_a<= ram[address_a];
-      end
-    else
-    begin
-	    //$display("SETMEMORY %x to %x",data_a,address_a);
-	    //$display("DATA set %s%x = %x (%s)",p,address_a,data_a,prefix);
-	    //$display("DATA set%s%x = %x",p,address_a,data_a);
-      ram[address_a] <= data_a;
-      end
-  end
-
-
-`ifdef NO
 // Port A
 always @(posedge clock_a) begin
   if (ce_a) begin
@@ -67,7 +48,6 @@ always @(posedge clock_a) begin
     end
   end
 end
-`endif
 
 // Port B
 always @(posedge clock_b) begin

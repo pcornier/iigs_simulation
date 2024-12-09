@@ -15,6 +15,8 @@ input [7:0] video_data,
 input [7:0] TEXTCOLOR,
 input [3:0] BORDERCOLOR,
 input HIRES_MODE,
+input ALTCHARSET,
+input EIGHTYCOL,
 input PAGE2,
 input TEXTG,
 input MIXG,
@@ -428,42 +430,52 @@ wire [11:0] chram_addr;
 wire [11:0] chrom_addr;
 
 
-// just do 1 video mode for now
-//wire [2:0] chpos_x = 3'd7 - H[2:0];
+//
+// 40 and 80 column video modes
+//
 wire [2:0] chpos_y = V[2:0];
-reg [5:0] chram_x;// = H[8:3];
-
+reg [5:0] chram_x;
 wire [12:0] chram_y = BASEADDR;
 
-//assign a = H > 'd511 ? 1'b0 : V > 'd255 ? 1'b0 : chrom_data_out[chpos_x[2:0]];
 
-
-
-wire  a = chrom_data_out[xpos[3:1]];
+//  in EIGHTCOL mode we need each pixel, in 40 we pixel double
+wire  textpixel = EIGHTYCOL ? chrom_data_out[xpos[2:0]] : chrom_data_out[xpos[3:1]];
 
 
 //
 // Text Mode chars are 7 bits wide, not 8
 //
 reg [3:0] xpos;
-always @(posedge clk_vid) if(ce_pix)
+reg [16:0] aux;
+always @(posedge clk_vid) 
 begin
+   if (ce_pix)
+   begin
 	if (H<32)
 	begin
 		xpos<=0;
 		chram_x<=0;
+		aux<=0;
 	end
 	else
 	begin
 
 		xpos<=xpos+1'b1;
-		if (xpos=='d13) begin
+		if (EIGHTYCOL) begin
+		  if (xpos=='d6) begin
+			xpos<=0;
+                        aux[16]<=~aux[16];
+			if (aux[16]==1'b0)
+				chram_x<=chram_x+1'b1;
+                  end
+		end else if (xpos=='d13) begin
 			xpos<=0;
 			chram_x<=chram_x+1'b1;
 		end
 	end
-//$display("xpos[3:1] %x xpos %x",xpos[3:1],xpos);
-//$display("chram_x[6:1] %x chram_x %x",chram_x[6:1],chram_x);
+     end
+//$display("xpos[2:0] %x xpos[3:1] %x xpos %x",xpos[2:0],xpos[3:1],xpos);
+//$display("chram_x[6:1] %x chram_x %x chrom_data_out %x chrom_addr %x",chram_x[6:1],chram_x,chrom_data_out,chrom_addr);
 
 // VBL is at 192 + border top
 if (V == 'd16+'d192)
@@ -482,17 +494,17 @@ B <= {BORGB[3:0],BORGB[3:0]};
 end
 else
 begin
-R <= NEWVIDEO[7] ?  {shrg_r_pix,shrg_r_pix}  :   ~a ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
-G <= NEWVIDEO[7] ?  {shrg_g_pix,shrg_g_pix}  :   ~a ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
-B <= NEWVIDEO[7] ?  {shrg_b_pix,shrg_b_pix}  :   ~a ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
+R <= NEWVIDEO[7] ?  {shrg_r_pix,shrg_r_pix}  :   ~textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
+G <= NEWVIDEO[7] ?  {shrg_g_pix,shrg_g_pix}  :   ~textpixel ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
+B <= NEWVIDEO[7] ?  {shrg_b_pix,shrg_b_pix}  :   ~textpixel ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
 
 end
 end
 
 
 //assign a = chrom_data_out[chpos_x[2:0]];
-wire [22:0] video_addr_ii = chram_y + chram_x +23'h400 ;
-assign chrom_addr = { 1'b0,video_data[7:0], chpos_y};
+wire [22:0] video_addr_ii = chram_y + chram_x +23'h400 + aux ;
+assign chrom_addr = { ALTCHARSET,video_data[7:0], chpos_y};
 
 
 always @(posedge clk_vid) if (ce_pix)

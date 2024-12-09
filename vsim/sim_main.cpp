@@ -32,17 +32,17 @@
 #include <iterator>
 #include <string>
 #include <iomanip>
-using namespace std;
+#include <thread>
+#include <chrono>
+
+enum class RunState {Stopped, Running, SingleClock, MultiClock, StepIn, NextIRQ};
 
 // Simulation control
 // ------------------
 int initialReset = 48;
-bool run_enable = 1;
+RunState run_state = RunState::Running;
 bool adam_mode = 1;
-int batchSize = 10000;
-//int batchSize = 100;
-bool single_step = 0;
-bool multi_step = 0;
+int batchSize = 100000;
 int multi_step_amount = 1024;
 
 // Debug GUI 
@@ -56,7 +56,10 @@ bool showDebugLog = true;
 DebugConsole console;
 MemoryEditor mem_edit;
 char pc_breakpoint[10] = "";
+int pc_breakpoint_addr = 0;
 bool pc_break_enabled;
+bool break_pending = false;
+bool old_vpb = false;
 
 // HPS emulator
 // ------------
@@ -122,6 +125,8 @@ SimAudio audio(clk_sys_freq, false);
 void resetSim() {
 	main_time = 0;
 	top->reset = 1;
+	break_pending = false;
+	old_vpb = true;
 	printf("resetSim!! main_time %d top->reset %d\n",main_time,top->reset);
 	clk_sys.Reset();
 }
@@ -160,6 +165,7 @@ bool writeLog(const char* line)
 
 		std::string c_line = std::string(line);
 		std::string c = "%6d  CPU > " + c_line;
+		//printf("%s (%x)\n",line,ins_in[0]); // this has the instruction number
 		printf("%s\n",line);
 
 		if (log_index < log_mame.size()) {
@@ -207,7 +213,7 @@ enum instruction_type {
 	longValue,
 	longX,
 	longY,
-	stack,
+	stackmode,
 	srcdst
 };
 
@@ -327,7 +333,7 @@ static const struct dasm_data32 gs_vectors[] =
 	{ 0xE10060, "Cursor update" }, { 0xE10064, "IncBusy" }, { 0xE10068, "DecBusy" }, { 0xE1006C, "Bell vector" }, { 0xE10070, "Break vector" }, { 0xE10074, "Trace vector" },
 	{ 0xE10078, "Step vector" }, { 0xE1007C, "[install ROMdisk]" }, { 0xE10080, "ToWriteBram" }, { 0xE10084, "ToReadBram" }, { 0xE10088, "ToWriteTime" },
 	{ 0xE1008C, "ToReadTime" }, { 0xE10090, "ToCtrlPanel" }, { 0xE10094, "ToBramSetup" }, { 0xE10098, "ToPrintMsg8" }, { 0xE1009C, "ToPrintMsg16" }, { 0xE100A0, "Native Ctrl-Y" },
-	{ 0xE100A4, "ToAltDispCDA" }, { 0xE100A8, "ProDOS 16 [inline parms]" }, { 0xE100AC, "OS vector" }, { 0xE100B0, "GS/OS(@parms,call) [stack parms]" },
+	{ 0xE100A4, "ToAltDispCDA" }, { 0xE100A8, "ProDOS 16 [inline parms]" }, { 0xE100AC, "OS vector" }, { 0xE100B0, "GS/OS(@parms,call) [stackmode parms]" },
 	{ 0xE100B4, "OS_P8_Switch" }, { 0xE100B8, "OS_Public_Flags" }, { 0xE100BC, "OS_KIND (byte: 0=P8,1=P16)" }, { 0xE100BD, "OS_BOOT (byte)" }, { 0xE100BE, "OS_BUSY (bit 15=busy)" },
 	{ 0xE100C0, "MsgPtr" }, { 0xe10135, "CURSOR" }, { 0xe10136, "NXTCUR" },
 	{ 0xE10180, "ToBusyStrip" }, { 0xE10184, "ToStrip" }, { 0xe10198, "MDISPATCH" }, { 0xe1019c, "MAINSIDEPATCH" },
@@ -429,10 +435,15 @@ void DumpInstruction() {
 	case 0xF8: sta = "sed"; break;
 
 	case 0x48: sta = "pha"; break;
+	case 0xDA: sta = "phx"; break;
 	case 0x5A: sta = "phy"; break;
 	case 0x68: sta = "pla"; break;
+	case 0xFA: sta = "plx"; break;
+	case 0x7A: sta = "ply"; break;
+
 	case 0xF4: sta = "pea"; type = absolute; break;
 	case 0x62: sta = "per"; type = relativeLong; break;
+	case 0xD4: sta = "pei"; type = zeroPage; break;
 
 	case 0x0A: sta = "asl"; type = accumulator; break;
 	case 0x06: sta = "asl"; type = zeroPage; break;
@@ -440,48 +451,68 @@ void DumpInstruction() {
 	case 0x0E: sta = "asl"; type = absolute; break;
 	case 0x1E: sta = "asl"; type = absoluteX; break;
 
-	case 0x09: sta = "ora"; type = immediate; break;
-	case 0x05: sta = "ora"; type = zeroPage; break;
-	case 0x15: sta = "ora"; type = zeroPageX; break;
-	case 0x1F: sta = "ora"; type = longX; break;
-	case 0x0D: sta = "ora"; type = absolute; opType = byte2; break;
-	case 0x1D: sta = "ora"; type = absoluteX; break;
-	case 0x19: sta = "ora"; type = absoluteY; break;
 	case 0x01: sta = "ora"; type = indirectX; break;
+	case 0x03: sta = "ora"; type = stackmode; break;
+	case 0x05: sta = "ora"; type = zeroPage; break;
+	case 0x07: sta = "ora"; type = direct24; break;
+	case 0x09: sta = "ora"; type = immediate; break;
+	case 0x0D: sta = "ora"; type = absolute; opType = byte2; break;
+	case 0x0F: sta = "ora"; type = longValue; opType = byte3; break;
 	case 0x11: sta = "ora"; type = indirectY; break;
+	case 0x15: sta = "ora"; type = zeroPageX; break;
+	case 0x17: sta = "ora"; type = direct24Y; break;
+	case 0x19: sta = "ora"; type = absoluteY; break;
+	case 0x1D: sta = "ora"; type = absoluteX; break;
+	case 0x1F: sta = "ora"; type = longX; break;
 
+	case 0x43: sta = "eor"; type = stackmode; break;
+	case 0x47: sta = "eor"; type = direct24; break;
 	case 0x49: sta = "eor"; type = immediate; break;
 	case 0x4d: sta = "eor"; type = absolute; break;
 	case 0x45: sta = "eor"; type = zeroPage; break;
 	case 0x55: sta = "eor"; type = zeroPageX; break;
+	case 0x57: sta = "eor"; type = direct24Y; break;
 	case 0x5d: sta = "eor"; type = absoluteX; break;
 	case 0x59: sta = "eor"; type = absoluteY; break;
 	case 0x41: sta = "eor"; type = indirectX; break;
 	case 0x51: sta = "eor"; type = indirectY; break;
 
-	case 0x29: sta = "and"; type = immediate; break;
+	case 0x23: sta = "and"; type = stackmode; break;
 	case 0x25: sta = "and"; type = zeroPage; break;
-	case 0x35: sta = "and"; type = zeroPageX; break;
+	case 0x27: sta = "and"; type = direct24; break;
+	case 0x29: sta = "and"; type = immediate; break;
 	case 0x2D: sta = "and"; type = absolute; break;
-	case 0x3D: sta = "and"; type = absoluteX; break;
+	case 0x35: sta = "and"; type = zeroPageX; break;
+	case 0x37: sta = "and"; type = direct24Y; break;
 	case 0x39: sta = "and"; type = absoluteY; break;
+	case 0x3D: sta = "and"; type = absoluteX; break;
 
 
-	case 0xE9: sta = "sbc"; type = immediate; break;
-	case 0xE5: sta = "sbc"; type = zeroPage; break;
-	case 0xF5: sta = "sbc"; type = zeroPageX; break;
-	case 0xED: sta = "sbc"; type = absolute; break;
-	case 0xFD: sta = "sbc"; type = absoluteX; break;
-	case 0xF9: sta = "sbc"; type = absoluteY; break;
 	case 0xE1: sta = "sbc"; type = indirectX; break;
+	case 0xE3: sta = "sbc"; type = stackmode; break;
+	case 0xE5: sta = "sbc"; type = zeroPage; break;
+	case 0xE7: sta = "sbc"; type = direct24; break;
+	case 0xE9: sta = "sbc"; type = immediate; break;
+	case 0xED: sta = "sbc"; type = absolute; break;
 	case 0xF1: sta = "sbc"; type = indirectY; break;
+	case 0xF5: sta = "sbc"; type = zeroPageX; break;
+	case 0xF7: sta = "sbc"; type = direct24Y; break;
+	case 0xF9: sta = "sbc"; type = absoluteY; break;
+	case 0xFD: sta = "sbc"; type = absoluteX; break;
 
+	case 0xC3: sta = "cmp"; type = stackmode; break;
+	case 0xC5: sta = "cmp"; type = zeroPage; break;
+	case 0xC7: sta = "cmp"; type = direct24; break;
 	case 0xC9: sta = "cmp"; type = immediate; break;
 	case 0xCD: sta = "cmp"; type = absolute; break;
-	case 0xC5: sta = "cmp"; type = zeroPageX; break;
-
+	case 0xCF: sta = "cmp"; type = longValue; opType=byte3; break;
+	case 0xD1: sta = "cmp"; type = indirectY; break;
+	case 0xD5: sta = "cmp"; type = zeroPageX; break;
+	case 0xD7: sta = "cmp"; type = direct24Y; break;
 	case 0xD9: sta = "cmp"; type = absoluteY; break;
 	case 0xDD: sta = "cmp"; type = absoluteX; break;
+	case 0xDF: sta = "cmp"; type = longX; break;
+
 
 	case 0xE0: sta = "cpx"; type = immediate; break;
 	case 0xE4: sta = "cpx"; type = zeroPage; break;
@@ -505,34 +536,36 @@ void DumpInstruction() {
 	case 0xAC: sta = "ldy"; type = absolute; break;
 	case 0xBC: sta = "ldy"; type = absoluteX; break;
 
-	case 0xA9: sta = "lda"; type = immediate; break;
-	case 0xA3: sta = "lda"; type = stack; break;
+	case 0xA1: sta = "lda"; type = indirectX; break;
+	case 0xA3: sta = "lda"; type = stackmode; break;
 	case 0xA5: sta = "lda"; type = zeroPage; break;
 	case 0xA7: sta = "lda"; type = direct24; break;
-	case 0xAF: sta = "lda"; type = longValue; break;
-	case 0xB7: sta = "lda"; type = direct24Y; break;
-	case 0xB5: sta = "lda"; type = zeroPageX; break;
+	case 0xA9: sta = "lda"; type = immediate; break;
 	case 0xAD: sta = "lda"; type = absolute; opType = byte3; break;
+	case 0xAF: sta = "lda"; type = longValue; opType=byte3; break;
+	case 0xB1: sta = "lda"; type = indirectY; break;
+	case 0xB2: sta = "lda"; type = indirect; break;
+	case 0xB5: sta = "lda"; type = zeroPageX; break;
+	case 0xB7: sta = "lda"; type = direct24Y; break;
+	case 0xB9: sta = "lda"; type = absoluteY; break;
 	case 0xBD: sta = "lda"; type = absoluteX; break;
 	case 0xBF: sta = "lda"; type = longX; break;
-	case 0xB9: sta = "lda"; type = absoluteY; break;
-	case 0xA1: sta = "lda"; type = indirectX; break;
-	case 0xB1: sta = "lda"; type = indirectY; break;
 
-	case 0xDF: sta = "cmp"; type = longX; break;
 
 	case 0x1C: sta = "trb"; type = absolute; break;
 
-	case 0x8D: sta = "sta"; type = absolute; opType = byte3; break;
+	case 0x81: sta = "sta"; type = indirectX; break;
+	case 0x83: sta = "sta"; type = stackmode; break;
 	case 0x85: sta = "sta"; type = zeroPage; break;
 	case 0x87: sta = "sta"; type = direct24; break;
-	case 0x95: sta = "sta"; type = zeroPageX; break;
-	case 0x9F: sta = "sta"; type = longX; break;
-	case 0x9D: sta = "sta"; type = absoluteX; break;
-	case 0x99: sta = "sta"; type = absoluteY; break;
-	case 0x81: sta = "sta"; type = indirectX; break;
-	case 0x91: sta = "sta"; type = indirectY; break;
+	case 0x8D: sta = "sta"; type = absolute; opType = byte3; break;
 	case 0x8F: sta = "sta"; type = longValue; opType = byte3; break;
+	case 0x91: sta = "sta"; type = indirectY; break;
+	case 0x95: sta = "sta"; type = zeroPageX; break;
+	case 0x97: sta = "sta"; type = direct24Y; break;
+	case 0x99: sta = "sta"; type = absoluteY; break;
+	case 0x9D: sta = "sta"; type = absoluteX; break;
+	case 0x9F: sta = "sta"; type = longX; break;
 
 
 	case 0x86: sta = "stx"; type = zeroPage; break;
@@ -543,13 +576,17 @@ void DumpInstruction() {
 	case 0x8C: sta = "sty"; type = absolute; break;
 	case 0x64: sta = "stz"; type = zeroPage;  break;
 	case 0x9C: sta = "stz"; type = absolute;  opType = byte3; break;
+	case 0x9E: sta = "stz"; type = absoluteX; break;
 
-	case 0x69: sta = "adc"; type = immediate; break;
+	case 0x63: sta = "adc"; type = stackmode; break;
 	case 0x65: sta = "adc"; type = zeroPage; break;
-	case 0x75: sta = "adc"; type = zeroPageX; break;
+	case 0x67: sta = "adc"; type = direct24; break;
+	case 0x69: sta = "adc"; type = immediate; break;
 	case 0x6D: sta = "adc"; type = absolute; break;
-	case 0x7D: sta = "adc"; type = absoluteX; break;
+	case 0x75: sta = "adc"; type = zeroPageX; break;
+	case 0x77: sta = "adc"; type = direct24Y; break;
 	case 0x79: sta = "adc"; type = absoluteY; break;
+	case 0x7D: sta = "adc"; type = absoluteX; break;
 
 	case 0x3b: sta = "tsc"; break;
 	case 0x7b: sta = "tdc"; break;
@@ -567,6 +604,8 @@ void DumpInstruction() {
 
 	case 0x24: sta = "bit"; type = zeroPage; break;
 	case 0x2C: sta = "bit"; type = absolute; break;
+	case 0x3C: sta = "bit"; type = absoluteX; break;
+	case 0x89: sta = "bit"; type = immediate; break;
 
 	case 0x30: sta = "bmi"; type = relativeLong; break;
 	case 0x90: sta = "bcc"; type = relative; break;
@@ -576,13 +615,20 @@ void DumpInstruction() {
 	case 0x50: sta = "bvc"; type = relative; break;
 	case 0x10: sta = "bpl"; type = relative; break;
 
+	case 0x26: sta = "rol"; type = zeroPage; break;
 	case 0x2a: sta = "rol"; type = accumulator; break;
 	case 0x2e: sta = "rol"; type = absolute ; break;
+	case 0x3e: sta = "rol"; type = absoluteX; break;
+
+	case 0x66: sta = "ror"; type = zeroPage; break;
 	case 0x6a: sta = "ror"; type = accumulator; break;
 	case 0x6e: sta = "ror"; type = absolute ; break;
+	case 0x7e: sta = "ror"; type = absoluteX; break;
 
-	case 0x4A: sta = "lsr"; type = accumulator; break;
 	case 0x46: sta = "lsr"; type = zeroPage; break;
+	case 0x4A: sta = "lsr"; type = accumulator; break;
+	case 0x4e: sta = "lsr"; type = absolute ; break;
+	case 0x5e: sta = "lsr"; type = absoluteX; break;
 
 	case 0x54: sta = "mvn"; type = srcdst; break;
 	case 0x44: sta = "mvp"; type = srcdst; break;
@@ -593,16 +639,20 @@ void DumpInstruction() {
 	case 0xFE: sta = "inc"; type = absoluteX; break;
 
 	case 0x20: sta = "jsr"; type = absolute; opType = byte3; break;
+	case 0xFC: sta = "jsr"; type = absoluteX; break;
+
 	case 0x22: sta = "jsl"; type = longValue; opType = byte3; break;
 
 	case 0x4C: sta = "jmp"; type = absolute; break;
+	case 0x5C: sta = "jmp"; type = longValue; opType=byte3; break;
 	case 0x6C: sta = "jmp"; type = indirect; break;
+	case 0x7C: sta = "jmp"; type = absoluteX; break;
 
 	case 0x6B: sta = "rtl";  break;
 
 	case 0xEA: sta = "nop";  break;
 
-	default: sta = "???"; f = "\t\tPC={0:X} arg1={1:X} arg2={2:X} IN0={3:X} IN1={4:X} IN2={5:X} IN3={6:X} IN4={7:X} MA0={8:X} MA1={9:X} MA2={10:X} MA3={11:X} MA4={12:X}";
+	default: sta = "???";  f = "\t\tPC={0:X} arg1={1:X} arg2={2:X} IN0={3:X} IN1={4:X} IN2={5:X} IN3={6:X} IN4={7:X} MA0={8:X} MA1={9:X} MA2={10:X} MA3={11:X} MA4={12:X}";
 	}
 
 	// replace out named values?
@@ -689,17 +739,17 @@ void DumpInstruction() {
 	case direct24Y: arg1 = fmt::format(" [${0:02x}],y", ins_in[1]); break;
 	case zeroPageX: arg1 = fmt::format(" ${0:02x},x", ins_in[1]); break;
 	case zeroPageY: arg1 = fmt::format(" ${0:02x},y", ins_in[1]); break;
-	case indirect: arg1 = fmt::format(" (${0:02x})", ins_in[1]); break;
+	case indirect: arg1 = fmt::format(" (${0:04x})", ins_in[1]); break;
 	case indirectX: arg1 = fmt::format(" (${0:02x}),x", ins_in[1]); break;
 	case indirectY: arg1 = fmt::format(" (${0:02x}),y", ins_in[1]); break;
-	case stack: arg1 = fmt::format(" ${0:x},s", ins_in[1]); break;
+	case stackmode: arg1 = fmt::format(" ${0:x},s", ins_in[1]); break;
 	case longValue: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x}", ins_in[3], ins_in[2], ins_in[1]); break;
 	case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", ins_in[3], ins_in[2], ins_in[1]); break;
 	case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", ins_in[3], ins_in[2], ins_in[1]); break;
 		//case longX: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},x", maHigh1, ins_in[2], ins_in[1]); break;
 		//case longY: arg1 = fmt::format(" ${0:02x}{1:02x}{2:02x},y", maHigh1, ins_in[2], ins_in[1]); break;
 	case accumulator: arg1 = "a"; break;
-	case relative: arg1 = fmt::format(" {0:04x} ({1})", relativeAddress, signedIn1Formatted);		break;
+	case relative: arg1 = fmt::format(" {0:06x} ({1})", relativeAddress, signedIn1Formatted);		break;
 	case relativeLong: arg1 = fmt::format(" {0:06x} ({1})", relativeAddress, signedIn1Formatted);		break;
 	default: arg1 = "UNSUPPORTED TYPE!";
 	}
@@ -709,7 +759,7 @@ void DumpInstruction() {
 	log = fmt::format(log, maHigh0, (unsigned short)ins_pc[0], arg1);
 
 	if (!writeLog(log.c_str())) {
-		run_enable = 0;
+		run_state = RunState::Stopped;
 	}
 	cpu_instruction_count++;
 	//if (sta == "???") {
@@ -781,9 +831,15 @@ int verilate() {
 
 					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
+				        break_pending |= run_state == RunState::NextIRQ && vpb && !old_vpb;
+					old_vpb = vpb;
 
 					if (vpa && nextstate == 1) {
+						const long break_addr = strtol(pc_breakpoint, NULL, 16);
+						break_pending |= pc_break_enabled && break_addr == ins_pc[0];
+						break_pending |= run_state == RunState::StepIn;
 						//console.AddLog(fmt::format("LOG? ins_index ={0:x} ins_pc[0]={1:06x} ", ins_index, ins_pc[0]).c_str());
+													// JSR/JSL
 						if (ins_index > 0 && ins_pc[0] > 0) {
 							DumpInstruction();
 						}
@@ -903,7 +959,17 @@ last_cpu_addr=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
 	return 0;
 }
 
-
+void RunBatch(int steps)
+{
+	for (int step = 0; step < steps; step++) {
+		verilate();
+		if (break_pending) {
+			run_state = RunState::Stopped;
+			break_pending = false;
+			break;
+		}
+	}
+}
 
 unsigned char mouse_clock = 0;
 unsigned char mouse_clock_reduce = 0;
@@ -1047,20 +1113,27 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::SetWindowPos(windowTitle_Control, ImVec2(0, 0), ImGuiCond_Once);
 		ImGui::SetWindowSize(windowTitle_Control, ImVec2(500, 150), ImGuiCond_Once);
 		if (ImGui::Button("Reset simulation")) { resetSim(); } ImGui::SameLine();
-		if (ImGui::Button("Start running")) { run_enable = 1; } ImGui::SameLine();
-		if (ImGui::Button("Stop running")) { run_enable = 0; } ImGui::SameLine();
-		ImGui::Checkbox("RUN", &run_enable);
 		ImGui::Checkbox("STOPONDIFF", &stop_on_log_mismatch);
-		//ImGui::PopItemWidth();
-		ImGui::SliderInt("Run batch size", &batchSize, 1, 250000);
-		if (single_step == 1) { single_step = 0; }
-		if (ImGui::Button("Single Step")) { run_enable = 0; single_step = 1; }
+		if (ImGui::Button("Start running")) { run_state = RunState::Running; } ImGui::SameLine();
+		if (ImGui::Button("Stop running")) { run_state = RunState::Stopped; } ImGui::SameLine();
+		ImGui::PushItemWidth(100);
+		ImGui::InputInt("Run batch size", &batchSize, 1000, 10000);
+		ImGui::PopItemWidth();
+		if (run_state == RunState::SingleClock || run_state == RunState::MultiClock) { run_state = RunState::Stopped;}
+		ImGui::Text("Clock step:"); ImGui::SameLine();
+		if (ImGui::Button("Single")) { run_state = RunState::SingleClock; }
 		ImGui::SameLine();
-		if (multi_step == 1) { multi_step = 0; }
-		if (ImGui::Button("Multi Step")) { run_enable = 0; multi_step = 1; }
+		if (ImGui::Button("Multi")) { run_state = RunState::MultiClock; }
+		ImGui::SameLine();
+		ImGui::PushItemWidth(100);
+		ImGui::InputInt("Multi clock amount", &multi_step_amount, 1, 10);
+		ImGui::PopItemWidth();
+		ImGui::Text("CPU:"); ImGui::SameLine();
+		if (ImGui::Button("Step")) { run_state = RunState::StepIn; }
+		ImGui::SameLine();
+		if (ImGui::Button("Next IRQ")) { run_state = RunState::NextIRQ; }
+
 		//ImGui::SameLine();
-		ImGui::SliderInt("Multi step amount", &multi_step_amount, 8, 1024);
-		ImGui::SameLine();
 		//		if (ImGui::Button("Load ROM"))
 			//ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".rom", ".");
 
@@ -1079,7 +1152,12 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::Begin("Slow RAM Editor");
 		mem_edit.DrawContents(&top->emu__DOT__top__DOT__slowram__DOT__ram, 131072, 0);
 		ImGui::End();
-
+		ImGui::Begin("ROM 1 Editor");
+		mem_edit.DrawContents(&top->emu__DOT__top__DOT__rom1__DOT__d, 65536, 0);
+		ImGui::End();
+		ImGui::Begin("ROM 2 Editor");
+		mem_edit.DrawContents(&top->emu__DOT__top__DOT__rom2__DOT__d, 65536, 0);
+		ImGui::End();
 
 		ImGui::Begin("CPU Registers");
 		ImGui::Checkbox("Break", &pc_break_enabled); ImGui::SameLine();
@@ -1107,6 +1185,7 @@ blockdevice.MountDisk("hd.hdv",1);
 		ImGui::Text("PAGE2:   %s", top->emu__DOT__top__DOT__core__DOT__PAGE2 ? "PAGE2" : "PAGE1");
 		ImGui::Text("TEXTG:   %s", top->emu__DOT__top__DOT__core__DOT__TEXTG ? "TEXT" : "*GRAPHICS");
 		ImGui::Text("HIRES:   %s", top->emu__DOT__top__DOT__core__DOT__HIRES_MODE ? "HIGH RES": "LOW RES");
+		ImGui::Text("EIGHTY:   %s", top->emu__DOT__top__DOT__core__DOT__EIGHTYCOL? "80COL": "40COL");
 		ImGui::Text("MIXG:      0x%02X", top->emu__DOT__top__DOT__core__DOT__MIXG);
 		ImGui::Text("NEWVIDEO:      0x%02X", top->emu__DOT__top__DOT__core__DOT__NEWVIDEO);
 		ImGui::Text("SHADOW:      0x%02X", top->emu__DOT__top__DOT__core__DOT__shadow);
@@ -1168,7 +1247,7 @@ blockdevice.MountDisk("hd.hdv",1);
 		//ImGui::ProgressBar(vol_r + 0.5f, ImVec2(200, 16), 0);
 
 		int ticksPerSec = (24000000 / 60);
-		if (run_enable) {
+		if (run_state == RunState::Running) {
 			audio.CollectDebug((signed short)top->AUDIO_L, (signed short)top->AUDIO_R);
 		}
 		int channelWidth = (windowWidth / 2) - 16;
@@ -1237,25 +1316,13 @@ blockdevice.MountDisk("hd.hdv",1);
 		top->ps2_mouse_ext = mouse_x + (mouse_buttons << 8);
 
 		// Run simulation
-		if (run_enable) {
-			for (int step = 0; step < batchSize; step++) {
-				long addr = strtol(pc_breakpoint, NULL, 16);
-				if (top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC == addr && pc_break_enabled)
-				{
-					run_enable = false;
-					// break!
-				}
-				else {
-
-					verilate();
-				}
-			}
-		}
-		else {
-			if (single_step) { verilate(); }
-			if (multi_step) {
-				for (int step = 0; step < multi_step_amount; step++) { verilate(); }
-			}
+		switch (run_state) {
+		case RunState::StepIn:
+		case RunState::NextIRQ:
+		case RunState::Running: RunBatch(batchSize); break;
+		case RunState::SingleClock: verilate(); break;
+		case RunState::MultiClock: RunBatch(multi_step_amount); break;
+		default: std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 	}
 
