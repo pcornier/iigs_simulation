@@ -462,11 +462,13 @@ begin
 
 		xpos<=xpos+1'b1;
 		if (EIGHTYCOL) begin
+		  if (xpos=='d5) begin
+		    aux[16]<=~aux[16];
+		    if (aux[16]==1'b0)
+		      chram_x<=chram_x+1'b1;
+		  end
 		  if (xpos=='d6) begin
 			xpos<=0;
-                        aux[16]<=~aux[16];
-			if (aux[16]==1'b0)
-				chram_x<=chram_x+1'b1;
                   end
 		end else if (xpos=='d13) begin
 			xpos<=0;
