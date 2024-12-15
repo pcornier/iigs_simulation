@@ -50,6 +50,8 @@ reg [2:0] clk_div;
 wire slowram_ce;
   wire rom1_ce;
   wire rom2_ce;
+wire inhibit_cxxx;
+
 
 always @(posedge clk_sys)
   clk_div <= clk_div + 3'd1;
@@ -104,7 +106,9 @@ wire scanline_irq;
      .H(H),
      .V(V),
 
-     .ps2_key(ps2_key)
+     .ps2_key(ps2_key),
+
+     .inhibit_cxxx(inhibit_cxxx)
      );
 
 
@@ -133,11 +137,11 @@ wire [7:0] slowram_dout;
 
 
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
-wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal;
+wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~inhibit_cxxx;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
 wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
 //wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
-wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && is_internal;
+wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && is_internal && ~inhibit_cxxx;
 
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
@@ -149,12 +153,12 @@ always @(*)
 begin
    device_select=8'h0;
    io_select=8'h0;
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io)
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io && ~inhibit_cxxx)
    begin
 //	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
           device_select[addr[6:4]]=1'b1;
   end
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~CXROM)
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~CXROM && ~inhibit_cxxx)
    begin
 //	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
           io_select[addr[10:8]]=1'b1;

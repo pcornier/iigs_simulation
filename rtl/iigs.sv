@@ -43,7 +43,9 @@ module iigs
    input [9:0]        H,
    input [8:0]        V,
 
-   input [10:0]       ps2_key
+   input [10:0]       ps2_key,
+
+   output             inhibit_cxxx
 );
 
 `ifdef VERILATOR
@@ -147,6 +149,8 @@ module iigs
 
   logic               rom_writethrough;
 
+  logic               lcram2_sel;
+
   assign VPB=cpu_vpb;
   assign CXROM=INTCXROM;
   assign { bank, addr } = addr_bus;
@@ -159,31 +163,36 @@ module iigs
 
   assign EXTERNAL_IO =    ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io);
 
+  assign inhibit_cxxx = lcram2_sel | ((bank == 8'h0 | bank == 8'h1) & shadow[6]);
 
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
 //assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
-  assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  (~shadow[6] & addr[15:8] == 8'hC0)  & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
+  assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  (~shadow[6] & cpu_addr[15:8] == 8'hC0)  & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
 
   assign { bank_bef, addr_bef } = cpu_addr;
 
   always_comb begin
-
+    lcram2_sel = 0;
     if ((bank_bef == 'he0  || bank_bef == 8'he1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && RDROM  )
       begin
+        lcram2_sel = 1;
         if (aux && bank_bef==8'he0)
           addr_bus = addr_bef- 'h1000 + 'h10000;
         else
           addr_bus = {bank_bef,16'h0} + addr_bef- 'h1000;
       end
     else if ((bank_bef == 'h00  || bank_bef == 8'h1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 /*&& RDROM*/ && ~shadow[6]  )
-      if (aux && bank_bef=='h00)
-        begin
-          //$display("HERE1: %x %x",addr_bef,addr_bef+'h10000);
-          addr_bus = addr_bef- 'h1000 + 'h10000;
-        end
-      else
-        addr_bus = {bank_bef,16'h0} +addr_bef- 'h1000;
+      begin
+         lcram2_sel = 1;
+	 if (aux && bank_bef=='h00)
+           begin
+             //$display("HERE1: %x %x",addr_bef,addr_bef+'h10000);
+             addr_bus = addr_bef- 'h1000 + 'h10000;
+           end
+         else
+           addr_bus = {bank_bef,16'h0} +addr_bef- 'h1000;
+      end
     else
       if (aux && (bank_bef=='h00 || bank_bef=='he0) )
         //if (aux)
@@ -815,7 +824,7 @@ module iigs
     begin
       if (fast_clk)
         begin
-          $display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_wen %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_wen,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,io_dout);
+          $display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_wen %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_wen,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
           // to debug interrupts:
           //$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
         end
