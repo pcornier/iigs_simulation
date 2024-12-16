@@ -5,7 +5,7 @@
 #pragma comment(lib, "dinput8.lib")
 #pragma comment(lib, "dxguid.lib")
 #endif
-#include "verilated_heavy.h"
+#include "verilated.h"
 #include <queue>
 #include <vector>
 

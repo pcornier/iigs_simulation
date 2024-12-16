@@ -163,7 +163,7 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
         .data_a(fastram_datatoram),
         .q_a(fastram_datafromram),
         .wren_a(fastram_we),
-        .ce_a(fastram_ce),
+        .ce_a(fastram_ce)
 );
 
 

@@ -1,7 +1,7 @@
 #pragma once
 #include <iostream>
 #include <fstream>
-#include "verilated_heavy.h"
+#include "verilated.h"
 #include "sim_console.h"
 
 

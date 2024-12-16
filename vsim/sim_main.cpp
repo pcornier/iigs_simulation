@@ -1,5 +1,6 @@
 #include <verilated.h>
 #include "Vemu.h"
+#include "Vemu__Syms.h"
 
 #include "imgui.h"
 #include "implot.h"
@@ -10,6 +11,15 @@
 #else
 #define WIN32
 #include <dinput.h>
+#endif
+
+
+#define VERILATOR_MAJOR_VERSION (VERILATOR_VERSION_INTEGER / 1000000)
+
+#if VERILATOR_MAJOR_VERSION >= 5
+#define VERTOPINTERN top->rootp
+#else
+#define VERTOPINTERN top
 #endif
 
 #include "sim_console.h"
@@ -814,20 +824,20 @@ int verilate() {
 
 
 			// Log 6502 instructions
-			cpu_clock = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__CLK;
+			cpu_clock = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__CLK;
 			bool cpu_reset = top->reset;
 			if (cpu_clock != cpu_clock_last && cpu_reset == 0) {
 
 
-				unsigned char en = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__EN;
+				unsigned char en = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__EN;
 				if (en) {
 
-					unsigned char vpa = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA;
-					unsigned char vda = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VDA;
-					unsigned char vpb = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB;
-					unsigned char din = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D_IN;
-					unsigned long addr = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
-					unsigned char nextstate = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__NextState;
+					unsigned char vpa = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA;
+					unsigned char vda = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__VDA;
+					unsigned char vpb = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB;
+					unsigned char din = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__D_IN;
+					unsigned long addr = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
+					unsigned char nextstate = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__NextState;
 
 					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
@@ -852,30 +862,30 @@ int verilate() {
 						}
 
 						std::string log = fmt::format("{0:06d} > ", cpu_instruction_count);
-						log.append(fmt::format("A={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A));
-						log.append(fmt::format("X={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__X));
-						log.append(fmt::format("Y={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__Y));
+						log.append(fmt::format("A={0:04x} ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A));
+						log.append(fmt::format("X={0:04x} ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__X));
+						log.append(fmt::format("Y={0:04x} ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__Y));
 
-						log.append(fmt::format("M={0:x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__MF));
-						log.append(fmt::format("E={0:x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__EF));
-						log.append(fmt::format("D={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D));
-						//ImGui::Text("D       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D);
-						//ImGui::Text("SP      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP);
-						//ImGui::Text("DBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR);
-						//ImGui::Text("PBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR);
-						//ImGui::Text("PC      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
-						if (0x011B==top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC)
-						   log.append(fmt::format("D={0:04x} ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP));
+						log.append(fmt::format("M={0:x} ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__MF));
+						log.append(fmt::format("E={0:x} ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__EF));
+						log.append(fmt::format("D={0:04x} ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__D));
+						//ImGui::Text("D       0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__D);
+						//ImGui::Text("SP      0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP);
+						//ImGui::Text("DBR     0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR);
+						//ImGui::Text("PBR     0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR);
+						//ImGui::Text("PC      0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
+						if (0x011B==VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC)
+						   log.append(fmt::format("D={0:04x} ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP));
 							
 						console.AddLog(log.c_str());
 					}
 
 					if ((vpa || vda) && !(vpa == 0 && vda == 1)) {
-						ins_pc[ins_index] = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC;
+						ins_pc[ins_index] = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC;
 						if (ins_pc[ins_index] > 0) {
 							ins_in[ins_index] = din;
 							ins_ma[ins_index] = addr;
-							ins_dbr[ins_index] = top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR;
+							ins_dbr[ins_index] = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR;
 							//console.AddLog(fmt::format("! PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} I={6:x}", ins_pc[ins_index], ins_in[ins_index], ins_ma[ins_index], vpa, vpb, vda, ins_index).c_str());
 
 							ins_index++;
@@ -917,32 +927,32 @@ int verilate() {
      //   CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
 
 			/* if we are writing -- check it ? */
-if (last_cpu_addr!=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT) already_saw_this=0;
+if (last_cpu_addr!=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT) already_saw_this=0;
 
-                        if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe && top->emu__DOT__top__DOT__core__DOT__iwm__DOT__cen )
+                        if (VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe && VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__cen )
                         {
 				double dcycs = main_time;
-				g_c031_disk35=top->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
-				if (!top->emu__DOT__top__DOT__core__DOT__iwm__DOT__rw) {
-					printf("about to write_iwm: ADDR:    0x%06X data %x ", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT,top->emu__DOT__top__DOT__core__DOT__iwm__DOT__din);
-				          write_iwm(top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT, top->emu__DOT__top__DOT__core__DOT__iwm__DOT__din, dcycs);
+				g_c031_disk35=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
+				if (!VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__rw) {
+					printf("about to write_iwm: ADDR:    0x%06X data %x ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT,VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__din);
+				          write_iwm(VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT, VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__din, dcycs);
 				}
 				else{
 					if (already_saw_this==0){
 					already_saw_this = 1;
-					printf("AAAA read IWM: %x \n",top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr);
-			     		if (top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr==0xec) {
-						top->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=iwm_read_c0ec(dcycs);
+					printf("AAAA read IWM: %x \n",VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr);
+			     		if (VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr==0xec) {
+						VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=iwm_read_c0ec(dcycs);
 			     		}
 			     		else{
-						top->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=read_iwm(top->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr|0xe0,dcycs);
+						VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=read_iwm(VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr|0xe0,dcycs);
 			     		}
 					}
                                 }
                         }
 			else{
 			}
-last_cpu_addr=top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
+last_cpu_addr=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
 
 
 
@@ -1147,51 +1157,51 @@ blockdevice.MountDisk("hd.hdv",1);
 
 		// Memory debug
 		ImGui::Begin("Fast RAM Editor");
-		mem_edit.DrawContents(&top->emu__DOT__fastram__DOT__ram, 8388608, 0);
+		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__fastram__DOT__ram, 8388608, 0);
 		ImGui::End();
 		ImGui::Begin("Slow RAM Editor");
-		mem_edit.DrawContents(&top->emu__DOT__top__DOT__slowram__DOT__ram, 131072, 0);
+		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__top__DOT__slowram__DOT__ram, 131072, 0);
 		ImGui::End();
 		ImGui::Begin("ROM 1 Editor");
-		mem_edit.DrawContents(&top->emu__DOT__top__DOT__rom1__DOT__d, 65536, 0);
+		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__top__DOT__rom1__DOT__d, 65536, 0);
 		ImGui::End();
 		ImGui::Begin("ROM 2 Editor");
-		mem_edit.DrawContents(&top->emu__DOT__top__DOT__rom2__DOT__d, 65536, 0);
+		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__top__DOT__rom2__DOT__d, 65536, 0);
 		ImGui::End();
 
 		ImGui::Begin("CPU Registers");
 		ImGui::Checkbox("Break", &pc_break_enabled); ImGui::SameLine();
 		ImGui::InputTextWithHint("Address", "0000", pc_breakpoint, IM_ARRAYSIZE(pc_breakpoint), ImGuiInputTextFlags_CharsHexadecimal);
 		ImGui::Spacing();
-		ImGui::Text("A       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A);
-		ImGui::Text("X       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__X);
-		ImGui::Text("Y       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__Y);
-		ImGui::Text("D       0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D);
-		ImGui::Text("SP      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP);
-		ImGui::Text("DBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR);
-		ImGui::Text("PBR     0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR);
-		ImGui::Text("PC      0x%04X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
+		ImGui::Text("A       0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A);
+		ImGui::Text("X       0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__X);
+		ImGui::Text("Y       0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__Y);
+		ImGui::Text("D       0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__D);
+		ImGui::Text("SP      0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__SP);
+		ImGui::Text("DBR     0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__DBR);
+		ImGui::Text("PBR     0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__PBR);
+		ImGui::Text("PC      0x%04X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__PC);
 		ImGui::Spacing();
-		ImGui::Text("ADDR:    0x%06X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT);
-		ImGui::Text("DIN:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D_IN);
-		ImGui::Text("DOUT:    0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__D_OUT);
-		ImGui::Text("WE:      0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__WE);
-		ImGui::Text("VDA:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VDA);
-		ImGui::Text("VPA:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA);
-		ImGui::Text("VPB:     0x%01X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB);
-		ImGui::Text("IR:      0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__IR);
-		ImGui::Text("IRQ_n:   0x%02X", top->emu__DOT__top__DOT__core__DOT__cpu__DOT__IRQ_N);
+		ImGui::Text("ADDR:    0x%06X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT);
+		ImGui::Text("DIN:     0x%01X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__D_IN);
+		ImGui::Text("DOUT:    0x%01X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__D_OUT);
+		ImGui::Text("WE:      0x%01X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__WE);
+		ImGui::Text("VDA:     0x%01X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__VDA);
+		ImGui::Text("VPA:     0x%01X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPA);
+		ImGui::Text("VPB:     0x%01X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__VPB);
+		ImGui::Text("IR:      0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__IR);
+		ImGui::Text("IRQ_n:   0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__IRQ_N);
 		ImGui::Spacing();
-		ImGui::Text("PAGE2:   %s", top->emu__DOT__top__DOT__core__DOT__PAGE2 ? "PAGE2" : "PAGE1");
-		ImGui::Text("TEXTG:   %s", top->emu__DOT__top__DOT__core__DOT__TEXTG ? "TEXT" : "*GRAPHICS");
-		ImGui::Text("HIRES:   %s", top->emu__DOT__top__DOT__core__DOT__HIRES_MODE ? "HIGH RES": "LOW RES");
-		ImGui::Text("EIGHTY:   %s", top->emu__DOT__top__DOT__core__DOT__EIGHTYCOL? "80COL": "40COL");
-		ImGui::Text("MIXG:      0x%02X", top->emu__DOT__top__DOT__core__DOT__MIXG);
-		ImGui::Text("NEWVIDEO:      0x%02X", top->emu__DOT__top__DOT__core__DOT__NEWVIDEO);
-		ImGui::Text("SHADOW:      0x%02X", top->emu__DOT__top__DOT__core__DOT__shadow);
-		ImGui::Text(top->emu__DOT__top__DOT__core__DOT__shadow&0x08 ? "DON'T SHADOW SHRG" : "SHADOW SHRG");
-		ImGui::Text(top->emu__DOT__top__DOT__core__DOT__NEWVIDEO&0x80 ? " SHRG VIDEO " : " " );
-		ImGui::Text(top->emu__DOT__top__DOT__core__DOT__NEWVIDEO&0x20 ? " IIGS monochrome VIDEO " : " " );
+		ImGui::Text("PAGE2:   %s", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__PAGE2 ? "PAGE2" : "PAGE1");
+		ImGui::Text("TEXTG:   %s", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__TEXTG ? "TEXT" : "*GRAPHICS");
+		ImGui::Text("HIRES:   %s", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__HIRES_MODE ? "HIGH RES": "LOW RES");
+		ImGui::Text("EIGHTY:   %s", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__EIGHTYCOL? "80COL": "40COL");
+		ImGui::Text("MIXG:      0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__MIXG);
+		ImGui::Text("NEWVIDEO:      0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__NEWVIDEO);
+		ImGui::Text("SHADOW:      0x%02X", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__shadow);
+		ImGui::Text(VERTOPINTERN->emu__DOT__top__DOT__core__DOT__shadow&0x08 ? "DON'T SHADOW SHRG" : "SHADOW SHRG");
+		ImGui::Text(VERTOPINTERN->emu__DOT__top__DOT__core__DOT__NEWVIDEO&0x80 ? " SHRG VIDEO " : " " );
+		ImGui::Text(VERTOPINTERN->emu__DOT__top__DOT__core__DOT__NEWVIDEO&0x20 ? " IIGS monochrome VIDEO " : " " );
 		ImGui::Spacing();
 		ImGui::End();
 		//ImGui::Spacing();

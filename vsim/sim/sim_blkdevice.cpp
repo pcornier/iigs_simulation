@@ -4,7 +4,7 @@
 
 #include "sim_blkdevice.h"
 #include "sim_console.h"
-#include "verilated_heavy.h"
+#include "verilated.h"
 
 #ifndef _MSC_VER
 #else
