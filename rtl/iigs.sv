@@ -20,6 +20,8 @@ module iigs
    output logic       fastram_ce,
    output logic       rom1_ce,
    output logic       rom2_ce,
+   output logic       romc_ce,
+   output logic       romd_ce,
    output logic [7:0] shadow/*verilator public_flat*/,
    output logic [7:0] TEXTCOLOR,
    output logic [3:0] BORDERCOLOR,
@@ -260,6 +262,8 @@ module iigs
   assign rom_writethrough = ( (bank_bef == 8'h0) & (addr_bef >= 16'hd000) & (addr_bef <= 16'hffff) & LC_WE);
   assign fastram_ce = (bank_bef < RAMSIZE)  & ( ~rom2_ce | rom_writethrough)  & ~rom1_ce &~IO; // bank[7] == 0;
 
+  assign romc_ce = bank == 8'hfc;
+  assign romd_ce = bank == 8'hfd;
   assign rom1_ce = bank == 8'hfe;
   assign rom2_ce = bank == 8'hff ||
                    (bank == 8'h0 & addr >= 16'hd000 & addr <= 16'hdfff && (RDROM|~VPB)) ||
@@ -819,7 +823,7 @@ module iigs
               );
 
 
-
+/*
   always @(posedge clk_sys)
     begin
       if (fast_clk)
@@ -829,6 +833,7 @@ module iigs
           //$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
         end
     end
+*/
 
 
 `ifdef VERILATOR

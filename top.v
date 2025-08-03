@@ -84,6 +84,8 @@ wire scanline_irq;
      .fastram_ce(fastram_ce),
      .rom1_ce(rom1_ce),
      .rom2_ce(rom2_ce),
+     .romc_ce(romc_ce),
+     .romd_ce(romd_ce),
      .VBlank(VBlank),
      .TEXTCOLOR(TEXTCOLOR),
      .BORDERCOLOR(BORDERCOLOR),
@@ -130,7 +132,7 @@ wire [7:0] NEWVIDEO;
 wire IO;
 wire [7:0] SLTROMSEL;
 
-wire [7:0] rom1_dout, rom2_dout;
+wire [7:0] rom1_dout, rom2_dout, romc_dout, romd_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 
@@ -167,7 +169,7 @@ end
 
 
 
-
+/*
 always @(posedge clk_sys)
 begin
         if (fast_clk)
@@ -177,13 +179,15 @@ begin
           $display("we %x Addr %x din %x | HDD_DO %x, rom1_dout %x, rom2_dout %x, fastram_dout %x, slowram_dout %x, slot_dout %x", we, { bank[6:0], raddr }, dout, HDD_DO, rom1_dout, rom2_dout, fastram_dout, slowram_dout, slot_dout);
         end
 end
-
+*/
 
 
 wire [7:0] din =
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
   rom1_ce ? rom1_dout :
   rom2_ce ? rom2_dout :
+  romc_ce ? romc_dout :
+  romd_ce ? romd_dout :
   slot_internalrom_ce ?  rom2_dout :
   fastram_ce ? fastram_dout :
   slowram_ce ? slowram_dout :
@@ -193,19 +197,55 @@ wire [7:0] din =
 wire [7:0] slot_dout = HDD_DO;
 wire [7:0] HDD_DO;
 
-rom #(.memfile("rom1.mem")) rom1(
+
+`define ROM3 1
+`ifdef ROM3
+
+  
+  
+rom #(.memfile("rom3/romc.mem")) romc(
+  .clock(clk_sys),
+  .address(addr),
+  .q(romc_dout),
+  .ce(romc_ce)
+);
+rom #(.memfile("rom3/romd.mem")) romd(
+  .clock(clk_sys),
+  .address(addr),
+  .q(romd_dout),
+  .ce(romd_ce)  
+);
+rom #(.memfile("rom3/rom1.mem")) rom1(
+  .clock(clk_sys),
+  .address(addr),
+  .q(rom1_dout),
+  .ce(rom1_ce)  
+);
+
+rom #(.memfile("rom3/rom2.mem")) rom2(
+  .clock(clk_sys),
+  .address(addr),
+  .q(rom2_dout),
+  .ce(rom2_ce|slot_internalrom_ce)
+);
+
+
+`else
+
+rom #(.memfile("rom1/rom1.mem")) rom1(
   .clock(clk_sys),
   .address(addr),
   .q(rom1_dout),
   .ce(rom1_ce)
 );
 
-rom #(.memfile("rom2.mem")) rom2(
+rom #(.memfile("rom1/rom2.mem")) rom2(
   .clock(clk_sys),
   .address(addr),
   .q(rom2_dout),
   .ce(rom2_ce|slot_internalrom_ce)
 );
+`endif
 
 // 8M 2.5MHz fast ram
 /*
