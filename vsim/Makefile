@@ -73,6 +73,9 @@ V_SRC = \
 	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \
 	$(RTL)/video_timing.v \
+	$(RTL)/apple2_timing_generator.v \
+        $(RTL)/apple2_vga_controller.v \
+        $(RTL)/apple2_video_generator.v \
 	$(RTL)/iigs.sv
 
 

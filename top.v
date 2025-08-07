@@ -92,6 +92,7 @@ wire scanline_irq;
      .HIRES_MODE(HIRES_MODE),
      .ALTCHARSET(ALTCHARSET),
      .EIGHTYCOL(EIGHTYCOL),
+     .STORE80(STORE80),
      .PAGE2(PAGE2),
      .TEXTG(TEXTG),
      .MIXG(MIXG),
@@ -125,6 +126,7 @@ wire [3:0] BORDERCOLOR;
 wire  HIRES_MODE;
 wire ALTCHARSET;
 wire EIGHTYCOL;
+wire STORE80;
 wire  PAGE2;
 wire  TEXTG;
 wire  MIXG;
@@ -358,6 +360,7 @@ vgc vgc(
         .HIRES_MODE(HIRES_MODE),
         .ALTCHARSET(ALTCHARSET),
         .EIGHTYCOL(EIGHTYCOL),
+        .STORE80(STORE80),
         .PAGE2(PAGE2),
         .TEXTG(TEXTG),
         .MIXG(MIXG),

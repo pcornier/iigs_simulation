@@ -17,6 +17,7 @@ input [3:0] BORDERCOLOR,
 input HIRES_MODE,
 input ALTCHARSET,
 input EIGHTYCOL,
+input STORE80,
 input PAGE2,
 input TEXTG,
 input MIXG,
@@ -30,7 +31,8 @@ input [7:0] NEWVIDEO
 
 // if NEWVIDEO[7] == 1 then we are in SHRG mode
 
-assign video_addr = NEWVIDEO[7] ? video_addr_shrg : video_addr_ii;
+//assign video_addr = NEWVIDEO[7] ? video_addr_shrg : video_addr_ii;
+assign video_addr = NEWVIDEO[7] ? video_addr_shrg : apple2_vidaddr;
 //wire linear_mode = ~NEWVIDEO[6];
 wire linear_mode =1'b1;
 
@@ -496,9 +498,13 @@ B <= {BORGB[3:0],BORGB[3:0]};
 end
 else
 begin
-R <= NEWVIDEO[7] ?  {shrg_r_pix,shrg_r_pix}  :   ~textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
-G <= NEWVIDEO[7] ?  {shrg_g_pix,shrg_g_pix}  :   ~textpixel ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
-B <= NEWVIDEO[7] ?  {shrg_b_pix,shrg_b_pix}  :   ~textpixel ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
+//R <= NEWVIDEO[7] ?  {shrg_r_pix,shrg_r_pix}  :   ~textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
+//G <= NEWVIDEO[7] ?  {shrg_g_pix,shrg_g_pix}  :   ~textpixel ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
+//B <= NEWVIDEO[7] ?  {shrg_b_pix,shrg_b_pix}  :   ~textpixel ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
+
+R <= NEWVIDEO[7] ?  {shrg_r_pix,shrg_r_pix}  :  apple2_r;
+G <= NEWVIDEO[7] ?  {shrg_g_pix,shrg_g_pix}  :  apple2_g;
+B <= NEWVIDEO[7] ?  {shrg_b_pix,shrg_b_pix}  :  apple2_b;
 
 end
 end
@@ -514,5 +520,95 @@ begin
 //	$display("V %x oldV %x chram_y %x base_y %x offset %x video_addr %x video_data %x video_data %x %c %x \n",V[8:3],oldV,chram_y,base_y,offset,video_addr,video_data,video_data[6:0],video_data[6:0],chrom_data_out);
 end
 
+
+// AJS -- load the apple 2 modules here and see if we can generate backwards
+// compatible video
+    wire [7:0] apple2_r;
+    wire [7:0] apple2_g;
+    wire [7:0] apple2_b;
+    wire [15:0] apple2_vidaddr;
+    wire SEGA;
+    wire SEGB;
+    wire SEGC;
+    wire WNDW_N;
+    wire LDPS_N;
+    wire COLOR_LINE;
+    wire GR2;
+    wire apple2_VIDEO;
+
+    wire apple2_VBL;
+    wire apple2_HBL;
+
+    wire apple2_CLK_7M;
+    wire apple2_CAS_N;
+    wire apple2_RAS_N;
+    wire apple2_Q3;
+
+        timing_generator timing(
+
+	.STARTH(H=='d30),
+	.STARTV(V=='d14),
+        .HGS(H[9:3]),
+	.VGS(V[8:0]),
+
+        .CLK_14M(clk_vid),
+        .VID7M(apple2_CLK_7M),
+        .CAS_N(apple2_CAS_N),
+        .RAS_N(apple2_RAS_N),
+        .Q3(apple2_Q3),
+        .AX(AX),
+        .PHI0(PHASE_ZERO),
+        .COLOR_REF(COLOR_REF),
+	// inputs
+        .TEXT_MODE(TEXTG), // maybe?
+        .PAGE2(PAGE2), // CHECK
+        .HIRES_MODE(HIRES_MODE), // check
+        .MIXED_MODE(MIXG), // maybe?
+        .COL80(EIGHTYCOL), // check
+        .STORE80(STORE80),
+        .DHIRES_MODE(HIRES_MODE),  // MAYBE??
+        .VID7(video_data[7]),
+	// addressing
+        .VIDEO_ADDRESS(apple2_vidaddr),
+        .SEGA(SEGA),
+        .SEGB(SEGB),
+        .SEGC(SEGC),
+        .GR1(COLOR_LINE),
+        .GR2(GR2),
+        .VBLANK(apple2_VBL),
+        .HBLANK(apple2_HBL),
+        .WNDW_N(WNDW_N),
+        .LDPS_N(LDPS_N)
+    );
+      video_generator video_display(
+        .CLK_14M(clk_vid),
+        .CLK_7M(apple2_CLK_7M),
+        .GR2(GR2),
+        .SEGA(SEGA),
+        .SEGB(SEGB),
+        .SEGC(SEGC),
+        .ALTCHAR(ALTCHARSET), // check
+        .WNDW_N(WNDW_N),
+        .DL(video_data),
+        .LDPS_N(LDPS_N),
+        .FLASH_CLK(FLASH_CLK),
+        .VIDEO(apple2_VIDEO)
+    );
+    vga_controller tv(
+.BRGB(BRGB),
+        .CLK_14M(clk_vid),
+        .VIDEO(apple2_VIDEO),
+        .COLOR_LINE(COLOR_LINE),
+        .SCREEN_MODE(1'b0),
+        .HBL(apple2_HBL),
+        .VBL(apple2_VBL),
+        .VGA_HS(apple2_hsync),
+        .VGA_VS(apple2_vsync),
+        .VGA_HBL(apple2_hblank),
+        .VGA_VBL(apple2_vblank),
+        .VGA_R(apple2_r),
+        .VGA_G(apple2_g),
+        .VGA_B(apple2_b)
+    );
 
 endmodule

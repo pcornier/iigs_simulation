@@ -37,6 +37,7 @@ module iigs
    output logic       HIRES_MODE/*verilator public_flat*/,
    output logic       ALTCHARSET/*verilator public_flat*/,
    output logic       EIGHTYCOL/*verilator public_flat*/,
+   output logic       STORE80/*verilator public_flat*/,
    output logic [7:0] NEWVIDEO/*verilator public_flat*/,
    output             IO/*verilator public_flat*/,
    output             we,
@@ -118,7 +119,7 @@ module iigs
   logic [7:0]         INTEN; //41
   logic [7:0]         INTFLAG; // 46, 47  AJS TODO
 
-  logic               STORE80;
+  //logic               STORE80;
   logic               RAMRD;
   logic               RAMWRT;
   logic               INTCXROM;
