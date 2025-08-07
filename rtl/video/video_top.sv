@@ -34,7 +34,6 @@ module video_top (
     output reg [7:0] G,
     output reg [7:0] B,
     output [22:0] video_addr,
-    input [7:0] video_data,
     
     // Apple II video mode control
     input text_mode,
@@ -57,12 +56,12 @@ module video_top (
     input shrg_mode,
     
     // Memory interface
-    output [15:0] apple_video_addr,
-    output apple_video_bank,
+    //output [15:0] apple_video_addr,
+    //output apple_video_bank,
     output apple_video_rd,
     input [31:0] apple_video_data,
     
-    output [12:0] vgc_address,
+    //output [12:0] vgc_address,
     output vgc_rd,
     input [31:0] vgc_data,
     

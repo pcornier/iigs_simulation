@@ -172,7 +172,7 @@ always @(posedge clk_sys) begin
         if (reset) $display("TOPRESET");
 end
 
-//`define FASTSIM 0
+`define FASTSIM 1
 `ifdef  FASTSIM
 wire ce_pix=1'b1;
 `else

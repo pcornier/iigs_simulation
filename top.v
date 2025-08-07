@@ -330,14 +330,9 @@ reg save;
 
 always @(posedge clk_vid)
 begin
-        //if (apple_video_rd || vgc_rd)
-        if (apple_video_rd)
-		save<=1;
-	if (save) begin
-		save<=0;
+        if (apple_video_rd || vgc_rd)
 		video_data_latch<=video_data_wide;
-	end
-	   $display("video_addr %x  o(%x) video_data_wide %x (%x) vgc_Rd %x appl_rd %x ",video_addr,video_addr_orig,video_data_wide,video_data_orig ,vgc_rd,apple_video_rd);
+	   //$display("video_addr %x  o(%x) video_data_wide %x (%x) vgc_Rd %x appl_rd %x ",video_addr,video_addr_orig,video_data_wide,video_data_orig ,vgc_rd,apple_video_rd);
 end
 
 
@@ -420,7 +415,6 @@ video_top video_top(
         .G(G),
         .B(B),
         .video_addr(video_addr),
-        .video_data(video_data),
         .text_mode(text_mode),
         .mixed_mode(mixed_mode),
         .page2(page2),
@@ -435,11 +429,8 @@ video_top video_top(
         .monochrome_mode(MONOCHROME[7]),
         .monochrome_dhires_mode(NEWVIDEO[5]),
         .shrg_mode(NEWVIDEO[7]),
-        .apple_video_addr(apple_video_addr),
-        .apple_video_bank(apple_video_bank),
         .apple_video_rd(apple_video_rd),
         .apple_video_data(video_data_latch),
-        .vgc_address(vgc_address),
         .vgc_rd(vgc_rd),
         .vgc_data(video_data_wide),
         .gs_mode(1'b1)
