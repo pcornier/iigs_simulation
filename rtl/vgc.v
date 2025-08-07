@@ -1,5 +1,5 @@
 
-module vgc (
+module vgc_orig (
 input clk,
 input clk_vid,
 input ce_pix,

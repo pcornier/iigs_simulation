@@ -50,6 +50,8 @@ reg [2:0] clk_div;
 wire slowram_ce;
   wire rom1_ce;
   wire rom2_ce;
+  wire romc_ce;
+  wire romd_ce;
 wire inhibit_cxxx;
 
 
@@ -87,6 +89,7 @@ wire scanline_irq;
      .romc_ce(romc_ce),
      .romd_ce(romd_ce),
      .VBlank(VBlank),
+     .STORE80(STORE80),
      .TEXTCOLOR(TEXTCOLOR),
      .BORDERCOLOR(BORDERCOLOR),
      .HIRES_MODE(HIRES_MODE),
@@ -96,6 +99,7 @@ wire scanline_irq;
      .TEXTG(TEXTG),
      .MIXG(MIXG),
      .NEWVIDEO(NEWVIDEO),
+     .MONOCHROME(MONOCHROME),
      .IO(IO),
 
      .VPB(VPB),
@@ -120,6 +124,7 @@ wire CXROM;
 wire LC_WE;
 wire RDROM;
 wire LCRAM2;
+wire STORE80;
 wire [7:0] TEXTCOLOR;
 wire [3:0] BORDERCOLOR;
 wire  HIRES_MODE;
@@ -129,6 +134,7 @@ wire  PAGE2;
 wire  TEXTG;
 wire  MIXG;
 wire [7:0] NEWVIDEO;
+wire [7:0] MONOCHROME;
 wire IO;
 wire [7:0] SLTROMSEL;
 
@@ -300,8 +306,11 @@ slowram slowram(
   .ce(slowram_ce)
 );
 */
-dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
-(
+
+reg [31:0] video_data_latch;
+
+
+dpram_mixed_width slowram (
         .clock_a(clk_sys),
         .address_a({ bank[0], raddr }),
         .data_a(dout),
@@ -310,9 +319,41 @@ dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
         .ce_a(slowram_ce),
 
         .clock_b(clk_vid),
-        .address_b(video_addr[16:0]),
+        .address_b(video_addr[16:2]),
         .data_b(0),
-        .q_b(video_data),
+        .q_b(video_data_wide),
+        .wren_b(1'b0),
+	.ce_b(1'b1)
+);
+
+reg save;
+
+always @(posedge clk_vid)
+begin
+        //if (apple_video_rd || vgc_rd)
+        if (apple_video_rd)
+		save<=1;
+	if (save) begin
+		save<=0;
+		video_data_latch<=video_data_wide;
+	end
+	   $display("video_addr %x  o(%x) video_data_wide %x (%x) vgc_Rd %x appl_rd %x ",video_addr,video_addr_orig,video_data_wide,video_data_orig ,vgc_rd,apple_video_rd);
+end
+
+
+dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowramb
+(
+        .clock_a(clk_sys),
+        .address_a({ bank[0], raddr }),
+        .data_a(dout),
+        .q_a(slowram_dout_orig),
+        .wren_a(we),
+        .ce_a(slowram_ce),
+
+        .clock_b(clk_vid),
+        .address_b(video_addr[16:2]),
+        .data_b(0),
+        .q_b(video_data_orig),
         .wren_b(1'b0)
 
 
@@ -338,21 +379,24 @@ video_timing video_timing(
 
 
 wire [22:0] video_addr;
+wire [22:0] video_addr_orig;
 wire [7:0] video_data;
+wire [31:0] video_data_wide;
 wire vbl_irq;
-vgc vgc(
+
+vgc_orig vgc(
         .clk(clk_sys),
         .clk_vid(clk_vid),
         .ce_pix(ce_pix),
-        .scanline_irq(scanline_irq),
-        .vbl_irq(vbl_irq),
+        .scanline_irq(scanline_irqa),
+        .vbl_irq(vbl_irqa),
         .H(H),
         .V(V),
-        .R(R),
-        .G(G),
-        .B(B),
-        .video_addr(video_addr),
-        .video_data(video_data),
+        .R(Ra),
+        .G(Ga),
+        .B(Ba),
+        .video_addr(video_addr_orig),
+        .video_data(video_data_orig),
         .TEXTCOLOR(TEXTCOLOR),
         .BORDERCOLOR(BORDERCOLOR),
         .HIRES_MODE(HIRES_MODE),
@@ -363,6 +407,45 @@ vgc vgc(
         .MIXG(MIXG),
         .NEWVIDEO(NEWVIDEO)
 );
+wire vgc_rd,apple_video_rd;
+video_top video_top(
+        .clk(clk_sys),
+        .clk_vid(clk_vid),
+        .ce_pix(ce_pix),
+        .H(H),
+        .V(V),
+        .scanline_irq(scanline_irq),
+        .vbl_irq(vbl_irq),
+        .R(R),
+        .G(G),
+        .B(B),
+        .video_addr(video_addr),
+        .video_data(video_data),
+        .text_mode(text_mode),
+        .mixed_mode(mixed_mode),
+        .page2(page2),
+        .hires_mode(hires_mode),
+        .an3(an3),
+        .store80(STORE80),
+        .col80(EIGHTYCOL),
+        .altchar(ALTCHARSET),
+        .text_color(TEXTCOLOR[7:4]),
+        .background_color(TEXTCOLOR[3:0]),
+        .border_color(BORDERCOLOR),
+        .monochrome_mode(MONOCHROME[7]),
+        .monochrome_dhires_mode(NEWVIDEO[5]),
+        .shrg_mode(NEWVIDEO[7]),
+        .apple_video_addr(apple_video_addr),
+        .apple_video_bank(apple_video_bank),
+        .apple_video_rd(apple_video_rd),
+        .apple_video_data(video_data_latch),
+        .vgc_address(vgc_address),
+        .vgc_rd(vgc_rd),
+        .vgc_data(video_data_wide),
+        .gs_mode(1'b1)
+    );
+
+
 
     hdd hdd(
         .CLK_14M(clk_sys),
@@ -384,5 +467,151 @@ vgc vgc(
         .ram_do(HDD_RAM_DO),
         .ram_we(HDD_RAM_WE)
     );
+
+endmodule
+// dpram_mixed_width.v
+// This module wraps four 8-bit dpram modules to provide:
+// - Port A: 8-bit wide, byte-addressable access
+// - Port B: 32-bit wide, word-addressable access
+// Both ports see the same underlying memory.
+
+module dpram_mixed_width #(
+    parameter BYTE_ADDR_WIDTH = 17,    // Total address width for Port A (byte address)
+                                       // e.g., 17 for 128K bytes of memory
+    //////////////////parameter string PREFIX = "slowa", // Parameter passed to underlying dpram modules
+    parameter string P_PARAM = " e"  // Parameter passed to underlying dpram modules
+) (
+    // Port A: 8-bit byte-addressable interface
+    input  wire clock_a,
+    input  wire [BYTE_ADDR_WIDTH-1:0] address_a, // Byte address
+    input  wire [7:0] data_a,
+    output logic [7:0] q_a,
+    input  wire wren_a,
+    input  wire ce_a,
+
+    // Port B: 32-bit word-addressable interface
+    input  wire clock_b,
+    input  wire [BYTE_ADDR_WIDTH-1-2:0] address_b, // Word address (BYTE_ADDR_WIDTH - 2)
+                                                 // e.g., 15 bits for 32K words of memory
+    input  wire [31:0] data_b,
+    output wire [31:0] q_b,
+    input  wire wren_b,
+    input  wire ce_b
+);
+
+    // Calculate the actual address width for the underlying 8-bit dpram modules.
+    // This is the word address, as each dpram stores one byte of a 32-bit word.
+    localparam WORD_ADDR_WIDTH = BYTE_ADDR_WIDTH - 2;
+
+    // Internal wires for Port A of each dpram instance
+    wire [7:0] q_a_ram0, q_a_ram1, q_a_ram2, q_a_ram3;
+    wire wren_a_ram0, wren_a_ram1, wren_a_ram2, wren_a_ram3;
+
+    // Internal wires for Port B of each dpram instance
+    wire [7:0] q_b_ram0, q_b_ram1, q_b_ram2, q_b_ram3;
+
+    // Decode the byte select from Port A's address.
+    // address_a[1:0] determines which of the four 8-bit RAMs (bytes) is accessed.
+    wire [1:0] byte_select_a = address_a[1:0];
+    // The higher bits of address_a form the word address for the underlying RAMs.
+    wire [WORD_ADDR_WIDTH-1:0] word_address_a = address_a[BYTE_ADDR_WIDTH-1:2];
+
+    // Generate individual write enables for Port A of each 8-bit RAM.
+    // Only the selected byte's RAM will be written to by Port A, when wren_a and ce_a are active.
+    assign wren_a_ram0 = wren_a & ce_a & (byte_select_a == 2'b00);
+    assign wren_a_ram1 = wren_a & ce_a & (byte_select_a == 2'b01);
+    assign wren_a_ram2 = wren_a & ce_a & (byte_select_a == 2'b10);
+    assign wren_a_ram3 = wren_a & ce_a & (byte_select_a == 2'b11);
+
+    // Instantiate four 8-bit dpram modules.
+    // Each instance handles one byte (8 bits) of the 32-bit data bus.
+    // Port A of each RAM is used for byte-level access.
+    // Port B of each RAM is used for 32-bit word-level access.
+
+    // RAM 0: Handles byte 0 (Least Significant Byte: data_b[7:0] and q_b[7:0])
+    dpram #(.widthad_a(WORD_ADDR_WIDTH), .prefix("slow0"), .p(" e")) ram0 (
+        .clock_a(clock_a),
+        .address_a(word_address_a), // Word address for Port A
+        .data_a(data_a),            // data_a is always connected, but wren_a_ram0 controls write
+        .q_a(q_a_ram0),
+        .wren_a(wren_a_ram0),       // Specific write enable for this RAM's Port A
+        .ce_a(ce_a),                // ce_a is common for all Port A accesses
+
+        .clock_b(clock_b),
+        .address_b(address_b),      // Word address for Port B
+        .data_b(data_b[7:0]),       // Connect to the least significant 8 bits of 32-bit data_b
+        .q_b(q_b_ram0),
+        .wren_b(wren_b)            // Common write enable for Port B
+        //.ce_b(ce_b)                 // Common chip enable for Port B
+    );
+
+    // RAM 1: Handles byte 1 (data_b[15:8] and q_b[15:8])
+    dpram #(.widthad_a(WORD_ADDR_WIDTH), .prefix("slow1"), .p(" e")) ram1 (
+        .clock_a(clock_a),
+        .address_a(word_address_a),
+        .data_a(data_a),
+        .q_a(q_a_ram1),
+        .wren_a(wren_a_ram1),
+        .ce_a(ce_a),
+
+        .clock_b(clock_b),
+        .address_b(address_b),
+        .data_b(data_b[15:8]),
+        .q_b(q_b_ram1),
+        .wren_b(wren_b)
+        //.ce_b(ce_b)
+    );
+
+    // RAM 2: Handles byte 2 (data_b[23:16] and q_b[23:16])
+    dpram #(.widthad_a(WORD_ADDR_WIDTH), .prefix("slow2"), .p(" e")) ram2 (
+        .clock_a(clock_a),
+        .address_a(word_address_a),
+        .data_a(data_a),
+        .q_a(q_a_ram2),
+        .wren_a(wren_a_ram2),
+        .ce_a(ce_a),
+
+        .clock_b(clock_b),
+        .address_b(address_b),
+        .data_b(data_b[23:16]),
+        .q_b(q_b_ram2),
+        .wren_b(wren_b)
+        //.ce_b(ce_b)
+    );
+
+    // RAM 3: Handles byte 3 (Most Significant Byte: data_b[31:24] and q_b[31:24])
+    dpram #(.widthad_a(WORD_ADDR_WIDTH), .prefix("slow3"), .p(" e")) ram3 (
+        .clock_a(clock_a),
+        .address_a(word_address_a),
+        .data_a(data_a),
+        .q_a(q_a_ram3),
+        .wren_a(wren_a_ram3),
+        .ce_a(ce_a),
+
+        .clock_b(clock_b),
+        .address_b(address_b),
+        .data_b(data_b[31:24]),
+        .q_b(q_b_ram3),
+        .wren_b(wren_b)
+        //.ce_b(ce_b)
+    );
+
+    // Multiplex the 8-bit outputs from Port A of each RAM to form the q_a output.
+    // This selects the correct byte based on address_a[1:0].
+    always @(*) begin
+        case (byte_select_a)
+            2'b00: q_a = q_a_ram0;
+            2'b01: q_a = q_a_ram1;
+            2'b10: q_a = q_a_ram2;
+            2'b11: q_a = q_a_ram3;
+            default: q_a = 8'hXX; // Should not happen with 2-bit select, but good practice
+        endcase
+    end
+
+    // Concatenate the 8-bit outputs from Port B of each RAM to form the 32-bit q_b output.
+    //assign q_b = {q_b_ram3, q_b_ram2, q_b_ram1, q_b_ram0};
+    assign q_b = {q_b_ram3, q_b_ram2, q_b_ram1, q_b_ram0};
+    //assign q_b = {q_b_ram0, q_b_ram1, q_b_ram2, q_b_ram3};
+
 
 endmodule

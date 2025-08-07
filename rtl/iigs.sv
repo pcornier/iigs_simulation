@@ -26,11 +26,13 @@ module iigs
    output logic [7:0] TEXTCOLOR,
    output logic [3:0] BORDERCOLOR,
    output logic [7:0] SLTROMSEL,
+   output logic [7:0] MONOCHROME,
    output             CXROM,
    output logic       RDROM,
    output logic       LC_WE,
    output logic       LCRAM2,
   //output logic /*verilator public_flat*/,
+   output logic       STORE80/*verilator public_flat*/,
    output logic       PAGE2/*verilator public_flat*/,
    output logic       TEXTG/*verilator public_flat*/,
    output logic       MIXG/*verilator public_flat*/,
@@ -118,7 +120,6 @@ module iigs
   logic [7:0]         INTEN; //41
   logic [7:0]         INTFLAG; // 46, 47  AJS TODO
 
-  logic               STORE80;
   logic               RAMRD;
   logic               RAMWRT;
   logic               INTCXROM;
@@ -127,7 +128,7 @@ module iigs
   //logic               EIGHTYCOL;
   //logic               ALTCHARSET;
   //logic PAGE2;
-  logic [7:0]         MONOCHROME;
+  //logic [7:0]         MONOCHROME;
   //logic RDROM;
   //logic LCRAM2;
   //logic LC_WE;

@@ -71,6 +71,9 @@ V_SRC = \
 	$(RTL)/keyboard.v \
 	$(RTL)/iwm.v \
 	$(RTL)/vgc.v \
+	$(RTL)/video/vgc.sv \
+	$(RTL)/video/apple_video.sv \
+	$(RTL)/video/video_top.sv \
 	$(RTL)/hdd.v \
 	$(RTL)/video_timing.v \
 	$(RTL)/iigs.sv
