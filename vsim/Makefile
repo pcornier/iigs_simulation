@@ -63,6 +63,7 @@ V_SRC = \
 	$(RTL)/65C816/bit_adder.v \
 	$(RTL)/65C816/adder4.v \
 	$(RTL)/65C816/mcode.sv \
+	$(RTL)/clock_divider.v \
 	$(RTL)/fastram.v \
 	$(RTL)/slowram.v \
 	$(RTL)/rom.v \

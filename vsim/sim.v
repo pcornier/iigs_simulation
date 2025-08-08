@@ -4,7 +4,7 @@
 
 module emu (
 
-        input clk_sys,
+        input CLK_14M,
         input reset,
         input soft_reset,
         input menu,
@@ -113,10 +113,10 @@ wire UART_DSR;
     wire fastram_ce;
 
 
-
+wire clk_sys=CLK_14M;
 top top (
         .reset(reset),
-        .clk_sys(clk_sys),
+        .CLK_14M(clk_sys),
         .clk_vid(clk_sys),
         .ce_pix(ce_pix),
         .cpu_wait(cpu_wait_hdd),

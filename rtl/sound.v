@@ -1,7 +1,7 @@
 `timescale 1ns/1ns
 
 module sound
-   (input	      clk,
+   (input	      CLK_14M,
     input             select,
     input	      reset,
     input	      wr,
@@ -34,7 +34,7 @@ module sound
    assign glu_data_in = ram_select ? ram_data_out : doc_data_out;
    assign ram_addr = osc_en ? doc_addr_out[15:0] : glu_addr_out;
 
-   always @(posedge clk) begin 
+   always @(posedge CLK_14M) begin 
       out_strobe <= osc_en;
       sound_out <= doc_sound_out;
       osc_en_d <= osc_en;
@@ -44,7 +44,7 @@ module sound
    end
 
 soundglu glu
-     (.clk(clk),  // TODO?: This is currently 28.6 MHz
+     (.clk(CLK_14M),  // TODO?: This is currently 28.6 MHz
       .reset(reset),
       .select(select),
       .wr(wr),

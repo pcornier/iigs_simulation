@@ -177,8 +177,8 @@ int main(int argc, char** argv, char** env) {
 
       top->reset = cycles < 1'000'000;
 
-      top->clk_sys = !top->clk_sys;
-      top->clk_vid = top->clk_sys;
+      top->CLK_14M = !top->CLK_14M;
+      top->clk_vid = top->CLK_14M;
       top->ce_pix = 1;
 
       top->eval();

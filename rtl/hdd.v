@@ -22,7 +22,7 @@
 
 module hdd(
     CLK_14M,
-    PHASE_ZERO,
+    phi0,
     IO_SELECT,
     DEVICE_SELECT,
     RESET,
@@ -41,7 +41,7 @@ module hdd(
     ram_we
 );
     input            CLK_14M;
-    input            PHASE_ZERO;
+    input            phi0;
     input            IO_SELECT;		// e.g., C600 - C6FF ROM
     input            DEVICE_SELECT;		// e.g., C0E0 - C0EF I/O locations
     input            RESET;
@@ -98,7 +98,7 @@ module hdd(
         
         begin
             D_OUT <= 8'hFF;
-	if (PHASE_ZERO  ) begin
+	if (phi0  ) begin
             hdd_read <= 1'b0;
             hdd_write <= 1'b0;
             if (RESET == 1'b1)

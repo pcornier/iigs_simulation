@@ -112,8 +112,8 @@ double sc_time_stamp() {	// Called by $time in Verilog.
 	return main_time;
 }
 
-int clk_sys_freq = 24000000;
-SimClock clk_sys(1);
+int CLK_14M_freq = 24000000;
+SimClock CLK_14M(1);
 
 int soft_reset = 0;
 vluint64_t soft_reset_time = 0;
@@ -128,7 +128,7 @@ word32 g_vbl_count;
 // -----
 //#define DISABLE_AUDIO
 #ifndef DISABLE_AUDIO
-SimAudio audio(clk_sys_freq, false);
+SimAudio audio(CLK_14M_freq, false);
 #endif
 
 // Reset simulation variables and clocks
@@ -138,7 +138,7 @@ void resetSim() {
 	break_pending = false;
 	old_vpb = true;
 	printf("resetSim!! main_time %d top->reset %d\n",main_time,top->reset);
-	clk_sys.Reset();
+	CLK_14M.Reset();
 }
 
 //#define DEBUG
@@ -791,7 +791,7 @@ int verilate() {
 			soft_reset_time = 0;
 			fprintf(stderr, "turning on %x\n", top->soft_reset);
 		}
-		if (clk_sys.IsRising()) {
+		if (CLK_14M.IsRising()) {
 			soft_reset_time++;
 		}
 		if (soft_reset_time == initialReset) {
@@ -806,17 +806,17 @@ int verilate() {
 		if (main_time == initialReset) { top->reset = 0; }
 
 		// Clock dividers
-		clk_sys.Tick();
+		CLK_14M.Tick();
 
 		// Set system clock in core
-		top->clk_sys = clk_sys.clk;
+		top->CLK_14M = CLK_14M.clk;
 		top->adam = adam_mode;
 		g_vbl_count=video.count_frame;
 
 		// Simulate both edges of system clock
-		if (clk_sys.clk != clk_sys.old) {
-			if (clk_sys.IsRising() && *bus.ioctl_download != 1) blockdevice.BeforeEval(main_time);
-			if (clk_sys.clk) {
+		if (CLK_14M.clk != CLK_14M.old) {
+			if (CLK_14M.IsRising() && *bus.ioctl_download != 1) blockdevice.BeforeEval(main_time);
+			if (CLK_14M.clk) {
 				input.BeforeEval();
 				bus.BeforeEval();
 			}
@@ -897,23 +897,23 @@ int verilate() {
 
 			}
 
-			if (clk_sys.clk) { bus.AfterEval(); blockdevice.AfterEval(); }
+			if (CLK_14M.clk) { bus.AfterEval(); blockdevice.AfterEval(); }
 		}
 
 #ifndef DISABLE_AUDIO
-		if (clk_sys.IsRising())
+		if (CLK_14M.IsRising())
 		{
 			audio.Clock(top->AUDIO_L, top->AUDIO_R);
 		}
 #endif
 
 		// Output pixels on rising edge of pixel clock
-		if (clk_sys.IsRising() && top->CE_PIXEL) {
+		if (CLK_14M.IsRising() && top->CE_PIXEL) {
 			uint32_t colour = 0xFF000000 | top->VGA_B << 16 | top->VGA_G << 8 | top->VGA_R;
 			video.Clock(top->VGA_HB, top->VGA_VB, top->VGA_HS, top->VGA_VS, colour);
 		}
 
-		if (clk_sys.IsRising()) {
+		if (CLK_14M.IsRising()) {
 
 
 

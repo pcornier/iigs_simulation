@@ -1,6 +1,6 @@
 
 module prtc(
-  input clk,
+  input CLK_14M,
   input cen,
   input reset,
   input addr,
@@ -310,7 +310,7 @@ reg [1:0] checksum_writes;
 reg [31:0] checksum;
 reg [7:0] counter;
 reg [7:0] clk_reg1;
-always @(posedge clk) begin
+always @(posedge CLK_14M) begin
 
 	onesecond_irq<=0;
 

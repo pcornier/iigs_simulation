@@ -1,6 +1,6 @@
 
 module adb(
-  input clk,
+  input CLK_14M,
   input cen,
   input reset,
   input [7:0] addr,
@@ -58,7 +58,7 @@ reg [7:0] c025;
   // todo: access C010 - reset keydown flag bit 7 in c000
   
 
-always @(posedge clk) begin
+always @(posedge CLK_14M) begin
 
   if (reset | soft_reset) begin
     soft_reset <= 1'b0;

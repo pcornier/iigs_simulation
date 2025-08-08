@@ -2,9 +2,10 @@ module iigs
   (
    input              reset,
 
-   input              clk_sys,
-   input              fast_clk, // 2.5
-   input              fast_clk_delayed, // 2.5
+   input              CLK_14M,
+   input              phi2, // 2.5
+   input              phi0, // 2.5
+   input              q3_en, 
    input              slow_clk, // 1
    input              cpu_wait,
    input [32:0]       timestamp,
@@ -26,6 +27,7 @@ module iigs
    output logic [7:0] TEXTCOLOR,
    output logic [3:0] BORDERCOLOR,
    output logic [7:0] SLTROMSEL,
+   output logic [7:0] CYAREG,
    output             CXROM,
    output logic       RDROM,
    output logic       LC_WE,
@@ -101,7 +103,7 @@ module iigs
   // some fake registers for now
   //logic [7:0] NEWVIDEO;
   logic [7:0]         STATEREG;
-  logic [7:0]         CYAREG;
+  //logic [7:0]         CYAREG;
   logic [7:0]         SOUNDCTL;
   logic [7:0]         SOUNDDATA;
   logic [7:0]         DISKREG;
@@ -272,7 +274,7 @@ module iigs
                    (bank == 8'h0 & addr >= 16'hc070 & addr <= 16'hc07f);
 
   // driver for io_dout and fake registers
-  always_ff @(posedge clk_sys) begin
+  always_ff @(posedge CLK_14M) begin
     if (reset) begin
       // dummy values dumped from emulator
       CYAREG <= 8'h80; // motor speed
@@ -326,7 +328,7 @@ module iigs
     end
 
     iwm_strobe <= 1'b0;
-    if (iwm_strobe & cpu_wen /*& fast_clk*/) begin
+    if (iwm_strobe & cpu_wen /*& phi2*/) begin
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
       io_dout <= iwm_dout;
     end
@@ -647,7 +649,7 @@ module iigs
                   $display("READ 81/85: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
                   RDROM <= 1'b1;
                   LCRAM2 <= 1'b1;
-                  if (fast_clk_delayed) begin
+                  if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
                     LC_WE_PRE<=1'b1  ;
                   end
@@ -667,7 +669,7 @@ module iigs
                   $display("READ 83/87: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
                   RDROM <= 1'b0;
                   LCRAM2 <= 1'b1;
-                  if (fast_clk_delayed) begin
+                  if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
                     LC_WE_PRE<=1'b1  ;
                   end
@@ -687,7 +689,7 @@ module iigs
                   $display("READ 89/8D: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
                   RDROM <= 1'b1;
                   LCRAM2 <= 1'b0;
-                  if (fast_clk_delayed) begin
+                  if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
                     LC_WE_PRE<=1'b1  ;
                   end
@@ -707,7 +709,7 @@ module iigs
                   $display("READ 8B/8F: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
                   RDROM <= 1'b0;
                   LCRAM2 <= 1'b0;
-                  if (fast_clk_delayed) begin
+                  if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
                     LC_WE_PRE<=1'b1  ;
                   end
@@ -804,9 +806,9 @@ module iigs
   wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
 
   P65C816 cpu(
-              .CLK(clk_sys),
+              .CLK(CLK_14M),
               .RST_N(~reset),
-              .CE(fast_clk),
+              .CE(phi2),
               .RDY_IN(~cpu_wait),
               .NMI_N(1'b1),
               .IRQ_N(~cpu_irq),
@@ -824,9 +826,9 @@ module iigs
 
 
 /*
-  always @(posedge clk_sys)
+  always @(posedge CLK_14M)
     begin
-      if (fast_clk)
+      if (phi2)
         begin
           $display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_wen %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_wen,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
           // to debug interrupts:
@@ -846,8 +848,8 @@ module iigs
 `endif
 
   adb adb(
-          .clk(clk_sys),
-          .cen(fast_clk),
+          .CLK_14M(CLK_14M),
+          .cen(phi2),
           .reset(reset),
           .addr(adb_addr),
           .rw(adb_rw),
@@ -857,8 +859,8 @@ module iigs
           );
 
   prtc prtc(
-            .clk(clk_sys),
-            .cen(fast_clk),
+            .CLK_14M(CLK_14M),
+            .cen(phi2),
             .timestamp(timestamp),
             .reset(reset),
             .addr(prtc_addr),
@@ -871,8 +873,8 @@ module iigs
             );
 
   iwm iwm(
-          .clk(clk_sys),
-          .cen(fast_clk_delayed),
+          .CLK_14M(CLK_14M),
+          .cen(q3_en),
           .reset(reset),
           .addr(iwm_addr),
           .din(iwm_din),
@@ -883,7 +885,7 @@ module iigs
           );
 
   sound snd(
-            .clk(clk_sys),
+            .CLK_14M(CLK_14M),
             .select(snd_strobe),
             .wr(snd_rw),
             .host_addr(snd_addr),
@@ -898,7 +900,7 @@ module iigs
   wire       key_anykeydown;
   reg        key_reads;
   keyboard keyboard(
-                    .CLK_14M(clk_sys),
+                    .CLK_14M(CLK_14M),
                     .PS2_Key(ps2_key),
                     .reads(key_reads),  // read strobe
                     .reset(reset),

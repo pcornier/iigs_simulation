@@ -1,5 +1,5 @@
 module iwm(
-  input clk,
+  input CLK_14M,
   input cen/*verilator public_flat*/,
   input reset,
   input [7:0] addr/*verilator public_flat*/,

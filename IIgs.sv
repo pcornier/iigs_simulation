@@ -267,13 +267,13 @@ wire reset = RESET | status[0] | buttons[1];
 
 top top (
 	.reset(reset),
-	.clk_sys(clk_sys),
+	.CLK_14M(clk_sys),
 	.clk_vid(clk_vid),
 	.cpu_wait(cpu_wait_hdd),
 	.ce_pix(ce_pix),
-	.fast_clk(fast_clk),
-	.fast_clk_delayed(fast_clk_delayed),
-	.fast_clk_delayed_mem(fast_clk_delayed_mem),
+	.phi2(fast_clk),
+	.phi0(fast_clk_delayed),
+	.clk_7M(fast_clk_delayed_mem),
 	.timestamp(TIMESTAMP),
 	.R(VGA_R),
 	.G(VGA_G),

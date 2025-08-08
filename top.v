@@ -1,14 +1,14 @@
 module top(
   input reset,
-  input clk_sys,
+  input CLK_14M,
   input clk_vid,
   input cpu_wait,
   input ce_pix,
   input [32:0] timestamp,
 
-  output fast_clk,
-  output fast_clk_delayed,
-  output fast_clk_delayed_mem,
+  output phi2,
+  output phi0,
+  output clk_7M,
   output [7:0] R,
   output [7:0] G,
   output [7:0] B,
@@ -46,30 +46,54 @@ wire [7:0] shadow;
 wire [15:0] addr;
 wire [7:0] dout;
 wire we;
-reg [2:0] clk_div;
 wire slowram_ce;
   wire rom1_ce;
   wire rom2_ce;
 wire inhibit_cxxx;
 
+// Clock enables from the new clock divider
+wire clk_14M_en;
+wire clk_7M_en; 
+wire ph0_en;
+wire ph2_en;
+wire q3_en;
+wire ph0_state;
+wire ph2_state;
 
-always @(posedge clk_sys)
-  clk_div <= clk_div + 3'd1;
+// Clock divider instance
+clock_divider clk_div_inst (
+    .clk_14M(CLK_14M),
+    .cyareg(CYAREG),
+    .bank(bank),
+    .addr(addr),
+    .shadow(shadow),
+    .IO(IO),
+    .reset(reset),
+    .stretch(1'b0),  // TODO: Connect to VGC stretch signal
+    .clk_14M_en(clk_14M_en),
+    .clk_7M_en(clk_7M_en),
+    .ph0_en(ph0_en),
+    .ph2_en(ph2_en),
+    .q3_en(q3_en),
+    .ph0_state(ph0_state)
+);
 
-assign fast_clk = clk_div == 0;
-assign fast_clk_delayed = clk_div ==1;
-assign fast_clk_delayed_mem = clk_div ==2;
+// Map clock enables to Apple IIgs standard names
+assign phi2 = ph2_en;
+assign phi0 = ph0_en;
+assign clk_7M = clk_7M_en;
 
 wire scanline_irq;
 
   iigs core
     (
      .reset(reset),
-     .clk_sys(clk_sys),
+     .CLK_14M(CLK_14M),
      .timestamp(timestamp),
      .cpu_wait(cpu_wait),
-     .fast_clk(fast_clk_delayed),
-     .fast_clk_delayed(fast_clk),
+     .phi2(phi2),
+     .phi0(phi0),
+     .q3_en(q3_en),
      .scanline_irq(scanline_irq),
      .vbl_irq(vbl_irq),
      .slow_clk(),
@@ -97,7 +121,7 @@ wire scanline_irq;
      .MIXG(MIXG),
      .NEWVIDEO(NEWVIDEO),
      .IO(IO),
-
+     .CYAREG(CYAREG),
      .VPB(VPB),
      .SLTROMSEL(SLTROMSEL),
      .CXROM(CXROM),
@@ -120,6 +144,7 @@ wire CXROM;
 wire LC_WE;
 wire RDROM;
 wire LCRAM2;
+wire [7:0] CYAREG;
 wire [7:0] TEXTCOLOR;
 wire [3:0] BORDERCOLOR;
 wire  HIRES_MODE;
@@ -204,26 +229,26 @@ wire [7:0] HDD_DO;
   
   
 rom #(.memfile("rom3/romc.mem")) romc(
-  .clock(clk_sys),
+  .clock(CLK_14M),
   .address(addr),
   .q(romc_dout),
   .ce(romc_ce)
 );
 rom #(.memfile("rom3/romd.mem")) romd(
-  .clock(clk_sys),
+  .clock(CLK_14M),
   .address(addr),
   .q(romd_dout),
   .ce(romd_ce)  
 );
 rom #(.memfile("rom3/rom1.mem")) rom1(
-  .clock(clk_sys),
+  .clock(CLK_14M),
   .address(addr),
   .q(rom1_dout),
   .ce(rom1_ce)  
 );
 
 rom #(.memfile("rom3/rom2.mem")) rom2(
-  .clock(clk_sys),
+  .clock(CLK_14M),
   .address(addr),
   .q(rom2_dout),
   .ce(rom2_ce|slot_internalrom_ce)
@@ -233,14 +258,14 @@ rom #(.memfile("rom3/rom2.mem")) rom2(
 `else
 
 rom #(.memfile("rom1/rom1.mem")) rom1(
-  .clock(clk_sys),
+  .clock(CLK_14M),
   .address(addr),
   .q(rom1_dout),
   .ce(rom1_ce)
 );
 
 rom #(.memfile("rom1/rom2.mem")) rom2(
-  .clock(clk_sys),
+  .clock(CLK_14M),
   .address(addr),
   .q(rom2_dout),
   .ce(rom2_ce|slot_internalrom_ce)
@@ -302,7 +327,7 @@ slowram slowram(
 */
 dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
 (
-        .clock_a(clk_sys),
+        .clock_a(CLK_14M),
         .address_a({ bank[0], raddr }),
         .data_a(dout),
         .q_a(slowram_dout),
@@ -341,7 +366,7 @@ wire [22:0] video_addr;
 wire [7:0] video_data;
 wire vbl_irq;
 vgc vgc(
-        .clk(clk_sys),
+        .CLK_14M(CLK_14M),
         .clk_vid(clk_vid),
         .ce_pix(ce_pix),
         .scanline_irq(scanline_irq),
@@ -365,8 +390,8 @@ vgc vgc(
 );
 
     hdd hdd(
-        .CLK_14M(clk_sys),
-        .PHASE_ZERO(fast_clk),
+        .CLK_14M(CLK_14M),
+        .phi0(phi0),
         .IO_SELECT(io_select[7]),
         .DEVICE_SELECT(device_select[7]),
         .RESET(reset),
