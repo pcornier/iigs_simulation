@@ -18,7 +18,8 @@ module clock_divider (
     
     // Clock states for debugging/interfacing
     output reg         ph0_state,      // Current PH0 level
-    output reg         slow             // Slow mode indicator
+    output reg         slow,             // Slow mode indicator
+    output reg         slowMem             // Slow mode indicator
 );
 
 // Clock divider counters
@@ -64,7 +65,8 @@ reg waitforC0C8;
 reg waitforC0D8;
 reg waitforC0E8;
 reg waitforC0F8;
-
+reg waitforC041;
+	
 always @(posedge clk_14M) begin
     if (reset) begin
         // Reset all counters and states
@@ -84,16 +86,19 @@ always @(posedge clk_14M) begin
         // Reset states
         ph0_state <= 1'b0;
         slow <= 1'b0;
+        slowMem <= 1'b0;
 	waitforC0C8<=1'b0;
 	waitforC0D8<=1'b0;
 	waitforC0E8<=1'b0;
 	waitforC0F8<=1'b0;
+	waitforC041<= 1'b0;
         
         // Reset cycle control
         ph2_cycle_length <= 5'd5;  // Default to fast cycle
         sync_requested <= 1'b0;
         refresh_requested <= 1'b0;
     end else begin
+        slowMem <= 1'b0;
 
 	//
 	// logic to determine if we should be in slow mode
@@ -118,6 +123,10 @@ always @(posedge clk_14M) begin
 			slow <= 1;
 			waitforC0F8 <= 1;
 		end
+		if (IO && addr == 16'hC042) begin
+			slow <= 1;
+			waitforC041<= 1;
+		end
 		
 		// Check for return to fast mode
 		if (waitforC0C8 && IO && addr == 16'hC0C8) begin
@@ -135,6 +144,40 @@ always @(posedge clk_14M) begin
 		if (waitforC0F8 && IO && addr == 16'hC0F8) begin
 			slow <= 0;
 			waitforC0F8 <= 0;
+		end
+		if (waitforC041 && IO && addr == 16'hC041) begin
+			slow <= 0;
+			waitforC041<= 0;
+		end
+
+	   
+    // --- 1. Entire banks $E0 and $E1: always slow ---
+    if ((bank == 8'hE0 || bank == 8'hE1) ||
+
+    // --- 2. I/O space $C000-$CFFF in bank $00 or $01 ---
+    ((bank == 8'h00 || bank == 8'h01) && addr[15:12] == 4'hC) ||
+
+    // --- 3. Bank $00: $E000-$FFFF (ROM/softswitch region) ---
+    (bank == 8'h00 && addr[15:13] == 3'b111) ||
+
+    // --- 4. Slot ROM space: banks $C1-$CF, $C8-$CF
+    //     (Accesses to slot firmware are slow)
+    ((bank >= 8'hC1 && bank <= 8'hCF)) ||
+
+    // --- 5. Peripheral slow mapping (shadowed video memory) ---
+    // Bank $00/$01: $0400-$07FF (text page 1)
+    ((bank == 8'h00 || bank == 8'h01) &&
+        (addr >= 16'h0400 && addr <= 16'h07FF)) ||
+
+    // Bank $00/$01: $0800-$0BFF (text page 2 / hi-res page 1)
+    ((bank == 8'h00 || bank == 8'h01) &&
+        (addr >= 16'h0800 && addr <= 16'h0BFF)) ||
+
+    // Bank $00/$01: $2000-$3FFF (hi-res page 2)
+    ((bank == 8'h00 || bank == 8'h01) &&
+        (addr >= 16'h2000 && addr <= 16'h3FFF)) )
+		begin
+			slowMem<=1;
 		end
 	end
 
@@ -170,7 +213,7 @@ always @(posedge clk_14M) begin
 	// If we are in slow -- we need to change the PH2 clock to be 1.024
 	// Mhz, and sync it up with the PH0 clock
 	//
-	if (slow==1'b1) begin
+	if (slow==1'b1 || slowMem==1'b1) begin
 		if (ph2_counter==4'd4 && ph0_en == 1'b1)
 		begin
 			ph2_en <= 1'b1;

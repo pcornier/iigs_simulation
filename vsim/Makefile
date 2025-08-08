@@ -69,6 +69,9 @@ V_SRC = \
 	$(RTL)/rom.v \
 	$(RTL)/prtc.v \
 	$(RTL)/adb.v \
+	$(RTL)/sound.v \
+	$(RTL)/soundglu.v \
+	$(RTL)/es5503.v \
 	$(RTL)/keyboard.v \
 	$(RTL)/iwm.v \
 	$(RTL)/vgc.v \

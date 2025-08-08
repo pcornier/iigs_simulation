@@ -1,5 +1,5 @@
 module soundglu
-  (input	     clk,  // TODO?: This is currently 28.6 MHz
+  (input	     clk,  // TODO?: This is currently 28.6 MHz SWITCHED TO 14
    input	     reset,
    input	     select,
    input	     wr,
@@ -22,7 +22,7 @@ module soundglu
    reg		    auto_increment;
    reg [3:0]	    volume;
    reg		    select_d;
-   reg [4:0]	    clk_phase;
+   reg [3:0]	    clk_phase; // SWITCH TO 14
    reg [1:0]	    sound_cycle_state;
    reg		    sound_write_pending;
    reg [7:0]	    read_data_reg;

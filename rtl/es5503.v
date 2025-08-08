@@ -132,9 +132,11 @@ module es5503
 	   7: case (reg_addr[1:0])
 		0: begin // OIR
 		   if (irq_sp == 0) begin
-		      data_out <= {2'b11, irq_stack[0], 1'b1};
-		   end else begin
 		      data_out <= {2'b01, irq_stack[irq_sp - 1], 1'b1};
+		      //data_out <= {2'b11, irq_stack[0], 1'b1};
+		   end else begin
+		      data_out <= {2'b11, irq_stack[0], 1'b1};
+		      //data_out <= {2'b01, irq_stack[irq_sp - 1], 1'b1};
 		      irq_pending[irq_stack[irq_sp - 1]] <= 1'b0;
 		      irq_sp <= irq_sp - 1;
 		   end

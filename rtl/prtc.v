@@ -322,14 +322,14 @@ if (clock_data==0)
 
 	clock_counter<=clock_counter+1;
 	clock_counter2<=clock_counter2+1;
-	if (clock_counter=='d28636363)
+	if (clock_counter=='d14318181)
 	begin
 		clock_counter<=0;
 		onesecond_irq<=1;
 		clock_data<=clock_data+1;
 
 	end
-	if (clock_counter2=='d7159091)
+	if (clock_counter2=='d3579545)
 	begin
 		clock_counter2<=0;
 		qtrsecond_irq<=1;
