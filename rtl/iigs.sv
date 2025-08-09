@@ -886,6 +886,8 @@ module iigs
 
   sound snd(
             .CLK_14M(CLK_14M),
+            .ph0_en(phi0),
+            .reset(reset),
             .select(snd_strobe),
             .wr(snd_rw),
             .host_addr(snd_addr),

@@ -1,5 +1,6 @@
 module soundglu
   (input	     clk,  // TODO?: This is currently 28.6 MHz SWITCHED TO 14
+   input	     ph0_en,
    input	     reset,
    input	     select,
    input	     wr,
@@ -29,7 +30,8 @@ module soundglu
 
    always @(posedge clk) begin
       clk_phase <= clk_phase + 1;
-      doc_enable <= clk_phase == 0;
+      //doc_enable <= clk_phase == 0;
+      doc_enable <= ph0_en;
       doc_wr <= 0;
       ram_wr <= 0;
       select_d <= select;

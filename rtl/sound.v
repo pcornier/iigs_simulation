@@ -2,6 +2,7 @@
 
 module sound
    (input	      CLK_14M,
+    input             ph0_en,
     input             select,
     input	      reset,
     input	      wr,
@@ -61,14 +62,14 @@ soundglu glu
       );
 
 
-   syncram ram(.clk(clk),
+   syncram ram(.clk(CLK_14M),
 	       .we(ram_wr),
 	       .data_in(glu_data_out),
 	       .addr(ram_addr),
 	       .data_out(ram_data_out)
 	       );
 
-   es5503 doc(.clk(clk),
+   es5503 doc(.clk(CLK_14M),
 	      .osc_en(osc_en),
 	      .reset(reset),
 	      .wr(doc_wr),
