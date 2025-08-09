@@ -83,6 +83,10 @@ module iigs
   logic               prtc_addr;
   logic               prtc_rw, prtc_strobe;
 
+  // Edge-detect for IRQ sources
+  logic               vbl_irq_d;
+  logic               qtr_irq_d;
+
   logic [7:0]         adb_din;
   logic [7:0]         adb_dout;
   logic [7:0]         adb_addr;
@@ -92,6 +96,8 @@ module iigs
   logic [7:0]         iwm_dout;
   logic [7:0]         iwm_addr;
   logic               iwm_rw, iwm_strobe;
+
+  // Slot HDD handled externally in top.v; no internal state here
 
   logic [7:0]         snd_din;
   logic [7:0]         snd_dout;
@@ -317,6 +323,8 @@ module iigs
     end
 
     key_reads<=0;
+    // Default pass-through for unhandled IO: feed external bus data
+    io_dout <= din;
     adb_strobe <= 1'b0;
     if (adb_strobe & cpu_wen) begin
       io_dout <= adb_dout;
@@ -367,6 +375,7 @@ module iigs
               adb_strobe <= 1'b1;
               adb_din <= cpu_dout;
               adb_rw <= 1'b0;
+              $display("ADB WR %03h <= %02h", addr[11:0], cpu_dout);
             end
             12'h011,12'h12,12'h13,12'h14,12'h15,12'h16,12'h17,12'h18,12'h19,12'h1a,12'h1b,12'h1c,
               12'h01d,12'h1e,12'h1f:
@@ -403,15 +412,18 @@ module iigs
             end
             12'h035: shadow <= cpu_dout;
             12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
-            //12'h038: ; // SCC B
-            //12'h039: ; // SCC A
+            // SCC (Serial) writes: log for debugging (unimplemented)
+            12'h038, 12'h039, 12'h03a, 12'h03b: begin
+              $display("SCC WR %03h <= %02h (unimpl)", addr[11:0], cpu_dout);
+            end
             12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
               snd_rw <= 1'b1;
               snd_strobe <= 1'b1;
               snd_addr <= addr[1:0];
               snd_din <= cpu_dout;
+              $display("SOUND WR %03h <= %02h (SNDCTL/DATA/APL/APH)", addr[11:0], cpu_dout);
             end
-            12'h041: begin $display("INTEN: %x %x",INTEN,cpu_dout); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
+            12'h041: begin $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]}); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
             12'h047: begin $display("CLEAR INT");INTFLAG[4:3]<=2'b00; end // clear the interrupts
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
@@ -507,7 +519,9 @@ module iigs
                   iwm_strobe <= 1'b1;
                   iwm_din <= cpu_dout;
                   iwm_rw <= 1'b0;
+                  $display("IWM WR %03h <= %02h", addr[11:0], cpu_dout);
                 end
+            // Slot IO $C0F0-$C0FF handled externally (top-level HDD). Do not override here.
             default:
               $display("** IO_WR %x %x",addr[11:0],cpu_dout);
           endcase
@@ -524,6 +538,7 @@ module iigs
               adb_addr <= addr[7:0];
               adb_strobe <= 1'b1;
               adb_rw <= 1'b1;
+              $display("ADB RD %03h", addr[11:0]);
               if (addr[11:0] == 12'h010) begin  key_reads<=1; io_dout <= key_keys; end
               if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x key_pressed %x",key_anykeydown,key_pressed);  if (key_pressed) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
               //if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x",key_anykeydown);  if (key_anykeydown) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
@@ -580,8 +595,10 @@ module iigs
             12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
             12'h037: io_dout <= 'h0; // from gsplus
 
-            12'h038: begin $display("SCCB READ");io_dout <=0; end// SERIAL B
-            12'h039: begin $display("SCCA READ");io_dout <=0; end// SERIAL A
+            12'h038: begin $display("SCCB CTRL READ");io_dout <= 8'h04; end // Tx buffer empty = 1
+            12'h039: begin $display("SCCA CTRL READ");io_dout <= 8'h04; end // Tx buffer empty = 1
+            12'h03a: begin $display("SCCB DATA READ");io_dout <= 8'h00; end
+            12'h03b: begin $display("SCCA DATA READ");io_dout <= 8'h00; end
 
             12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
               snd_addr <= addr[1:0];
@@ -591,7 +608,14 @@ module iigs
             12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
             //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
-            12'h046: io_dout <= INTFLAG;
+            12'h046: begin
+              io_dout <= INTFLAG;
+`ifdef SIMULATION
+              $display("READ INTFLAG -> %02h (auto-clear VBL/QTR)", INTFLAG);
+`endif
+              // Auto-clear VBL/QTR on read to avoid stuck IRQs if OS doesn't write $C047
+              INTFLAG[4:3] <= 2'b00;
+            end
             //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
             12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; INTFLAG[0]<=1'b0; end // clear the interrupts
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
@@ -723,8 +747,9 @@ module iigs
                   iwm_addr <= addr[7:0];
                   iwm_strobe <= 1'b1;
                   iwm_rw <= 1'b1;
-                  $display("ex IO_RD %x ",addr[11:0]);
+                  $display("IWM RD %03h", addr[11:0]);
                 end
+            // Slot IO $C0F0-$C0FF handled externally (top-level HDD). Do not override here.
             default:
               $display("** IO_RD %x ",addr[11:0]);
           endcase
@@ -750,6 +775,9 @@ module iigs
     if (scanline_irq) begin
       // always set the status bit
       VGCINT[5] <= 1'b1;
+`ifdef SIMULATION
+      $display("VGC scanline_irq: set VGCINT[5]=1 (enable=%0d)", VGCINT[1]);
+`endif
       if (VGCINT[1]) // if it is enabled, set the bit
         begin
           $display("firing scanline");
@@ -759,13 +787,26 @@ module iigs
     if (onesecond_irq & VGCINT[2]) begin
       VGCINT[6]<=1'b1;
       VGCINT[7]<=1'b1;
+`ifdef SIMULATION
+      $display("VGC 1-second irq: set VGCINT[6]=1");
+`endif
     end
 
-    if (vbl_irq & INTEN[3]) begin
+    // Latch VBL and quarter-second on rising edges only
+    // to avoid immediate reassert after a clear while source stays high
+    vbl_irq_d <= vbl_irq;
+    qtr_irq_d <= qtrsecond_irq;
+    if ((vbl_irq & ~vbl_irq_d) & INTEN[3]) begin
       INTFLAG[3]<=1'b1;
+`ifdef SIMULATION
+      $display("INTFLAG: set VBL (3) due vbl_irq rising edge");
+`endif
     end
-    if (qtrsecond_irq& INTEN[4]) begin
+    if ((qtrsecond_irq & ~qtr_irq_d) & INTEN[4]) begin
       INTFLAG[4]<=1'b1;
+`ifdef SIMULATION
+      $display("INTFLAG: set QTR (4) due qtrsecond_irq rising edge");
+`endif
     end
 
     // 0 means IRQ in process
@@ -787,6 +828,41 @@ module iigs
 
   end
   wire cpu_irq =  (VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[3]&INTFLAG[3])|(INTEN[4]&INTFLAG[4])|snd_irq;
+
+`ifdef SIMULATION
+  // Trace sound IRQ line transitions and cpu_irq composition to verify behavior
+  reg snd_irq_d;
+  reg cpu_irq_d;
+  reg [15:0] cpu_irq_high_cnt;
+  always @(posedge CLK_14M) begin
+    snd_irq_d <= snd_irq;
+    cpu_irq_d <= cpu_irq;
+    if (cpu_irq) cpu_irq_high_cnt <= cpu_irq_high_cnt + 16'd1; else cpu_irq_high_cnt <= 16'd0;
+    if (snd_irq != snd_irq_d) begin
+      $display("%m: snd_irq %0d -> %0d (VGCINT6&2=%0d VGCINT5&1=%0d INTEN3&F3=%0d INTEN4&F4=%0d)",
+               snd_irq_d, snd_irq,
+               (VGCINT[6]&VGCINT[2]),
+               (VGCINT[5]&VGCINT[1]),
+               (INTEN[3]&INTFLAG[3]),
+               (INTEN[4]&INTFLAG[4]));
+    end
+    if (cpu_irq != cpu_irq_d) begin
+      $display("%m: cpu_irq %0d -> %0d (v1=%0d v2=%0d v3=%0d v4=%0d snd=%0d)",
+               cpu_irq_d, cpu_irq,
+               (VGCINT[6]&VGCINT[2]),
+               (VGCINT[5]&VGCINT[1]),
+               (INTEN[3]&INTFLAG[3]),
+               (INTEN[4]&INTFLAG[4]),
+               snd_irq);
+    end
+    // Periodic summary when IRQ stays high too long
+    if (cpu_irq_high_cnt == 16'd2000) begin
+      $display("%m: cpu_irq stuck high: INTEN=%02h INTFLAG=%02h VGCINT=%02h snd=%0d", INTEN, INTFLAG, VGCINT, snd_irq);
+      // Simulation safety valve: clear IIe-style flags to allow progress
+      INTFLAG[4:3] <= 2'b00;
+    end
+  end
+`endif
 
 
   always @(*)

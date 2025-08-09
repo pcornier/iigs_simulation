@@ -313,6 +313,7 @@ reg [7:0] clk_reg1;
 always @(posedge CLK_14M) begin
 
 	onesecond_irq<=0;
+	qtrsecond_irq<=0;
 
 // hook up unix timestamp
 if (clock_data==0)
