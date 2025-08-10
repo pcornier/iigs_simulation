@@ -30,6 +30,7 @@ public:
 
 	int bytecnt;
         long int disk_size[kVDNUM];
+	long int header_size[kVDNUM];
 	bool reading;
 	bool writing;
 	int ack_delay;
