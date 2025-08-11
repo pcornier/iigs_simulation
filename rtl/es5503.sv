@@ -11,11 +11,11 @@ module es5503
     output reg [7:0]  data_out,
     output reg [16:0] addr_out,
     output reg [15:0] sound_out,
-    output [3:0]      ca,
+    output reg [3:0]      ca,
     output	      irq
     );
 
-   // Global configuration
+	 // Global configuration
    reg [4:0]	     oscs_enabled;
 
    // Global state
@@ -73,11 +73,11 @@ module es5503
       reg [15:0]			  acc_bits;
       reg [15:0]			  ptr_bits;
       begin
-	 assign ptr_mask = 8'hff << tbl_index;
-	 assign acc_mask = (16'hffff >> (8 - tbl_index));
-	 assign acc_shifted = acc >> (9 + res_index - tbl_index); 
-	 assign acc_bits = acc_shifted[15:0] & acc_mask;
-	 assign ptr_bits = ({8'h0, tbl_ptr} & {8'h0, ptr_mask[7:0]}) << 8;
+	  ptr_mask = 8'hff << tbl_index;
+	  acc_mask = (16'hffff >> (8 - tbl_index));
+	  acc_shifted = acc >> (9 + res_index - tbl_index); 
+	  acc_bits = acc_shifted[15:0] & acc_mask;
+	  ptr_bits = ({8'h0, tbl_ptr} & {8'h0, ptr_mask[7:0]}) << 8;
 
 	 mux_addr = acc_bits[15:0] | ptr_bits;
       end
@@ -202,4 +202,5 @@ module es5503
 	 //irq_stack[0] <= 8'hff
       end
    end // always @ (posedge clk)
+
 endmodule // es5503

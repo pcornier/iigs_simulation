@@ -917,41 +917,10 @@ int verilate() {
 
 
 
-			// IWM EMULATION HERE
-			//         CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__addr;
-    //    CData/*0:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__rw;
-     //   CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__din;
-      //  CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__dout;
-       // CData/*0:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__irq;
-     //   CData/*0:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe;
-     //   CData/*7:0*/ emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
 
 			/* if we are writing -- check it ? */
 if (last_cpu_addr!=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT) already_saw_this=0;
 
-                        if (VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe && VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__cen )
-                        {
-				double dcycs = main_time;
-				g_c031_disk35=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
-				if (!VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__rw) {
-					printf("about to write_iwm: ADDR:    0x%06X data %x ", VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT,VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__din);
-				          write_iwm(VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT, VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__din, dcycs);
-				}
-				else{
-					if (already_saw_this==0){
-					already_saw_this = 1;
-					printf("AAAA read IWM: %x \n",VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr);
-			     		if (VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr==0xec) {
-						VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=iwm_read_c0ec(dcycs);
-			     		}
-			     		else{
-						VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__dout=read_iwm(VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__addr|0xe0,dcycs);
-			     		}
-					}
-                                }
-                        }
-			else{
-			}
 last_cpu_addr=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
 
 
@@ -1078,13 +1047,10 @@ int main(int argc, char** argv, char** env) {
 	// Setup video output
 	if (video.Initialise(windowTitle) == 1) { return 1; }
 
-	iwm_load_disk();
 	//bus.QueueDownload("floppy.nib",1,0);
-//blockdevice.MountDisk("floppy.nib",0);
-blockdevice.MountDisk("hd.hdv",1);
+blockdevice.MountDisk("floppy.nib",0);
+//blockdevice.MountDisk("hd.hdv",1);
 
-       iwm_init();
-       iwm_reset();
 
 #ifdef WIN32
 	MSG msg;

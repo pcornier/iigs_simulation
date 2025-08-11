@@ -27,6 +27,22 @@ module top(
   output [7:0]  HDD_RAM_DO,
   input         HDD_RAM_WE,
 
+    // FLOPPY SIGNALS
+  output [5:0]  TRACK1,
+  output [12:0] TRACK1_ADDR,
+  output [7:0]  TRACK1_DI,
+  input [7:0]   TRACK1_DO,
+  output        TRACK1_WE,
+  input         TRACK1_BUSY,
+  output [5:0]  TRACK2,
+  output [12:0] TRACK2_ADDR,
+  output [7:0]  TRACK2_DI,
+  input [7:0]   TRACK2_DO,
+  output        TRACK2_WE,
+  input         TRACK2_BUSY,
+
+  input [3:0]   DISK_READY,
+
   // fastram sdram
   output [22:0] fastram_address,
   output [7:0] fastram_datatoram,
@@ -134,7 +150,26 @@ wire scanline_irq;
 
      .ps2_key(ps2_key),
 
-     .inhibit_cxxx(inhibit_cxxx)
+     .inhibit_cxxx(inhibit_cxxx),
+ 
+           // 5.25" drive track buses
+     .TRACK1(TRACK1),
+     .TRACK1_ADDR(TRACK1_ADDR),
+     .TRACK1_DI(TRACK1_DI),
+     .TRACK1_DO(TRACK1_DO),
+     .TRACK1_WE(TRACK1_WE),
+     .TRACK1_BUSY(TRACK1_BUSY),
+     .TRACK2(TRACK2),
+     .TRACK2_ADDR(TRACK2_ADDR),
+     .TRACK2_DI(TRACK2_DI),
+     .TRACK2_DO(TRACK2_DO),
+     .TRACK2_WE(TRACK2_WE),
+     .TRACK2_BUSY(TRACK2_BUSY)
+     ,
+     // Disk ready lines to IWM (D1..D4)
+     .DISK_READY(DISK_READY)
+
+
      );
 
 
@@ -223,7 +258,7 @@ wire [7:0] slot_dout = HDD_DO;
 wire [7:0] HDD_DO;
 
 
-`define ROM3 1
+//`define ROM3 1
 `ifdef ROM3
 
   

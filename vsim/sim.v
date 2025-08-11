@@ -112,6 +112,21 @@ wire UART_DSR;
     wire fastram_we;
     wire fastram_ce;
 
+    wire TRACK1_RAM_BUSY;
+wire [12:0] TRACK1_RAM_ADDR;
+wire [7:0] TRACK1_RAM_DI;
+wire [7:0] TRACK1_RAM_DO;
+wire TRACK1_RAM_WE;
+wire [5:0] TRACK1;
+
+wire TRACK2_RAM_BUSY;
+wire [12:0] TRACK2_RAM_ADDR;
+wire [7:0] TRACK2_RAM_DI;
+wire [7:0] TRACK2_RAM_DO;
+wire TRACK2_RAM_WE;
+wire [5:0] TRACK2;
+
+
 
 wire clk_sys=CLK_14M;
 top top (
@@ -137,6 +152,24 @@ top top (
         .HDD_RAM_DI(sd_buff_dout),
         .HDD_RAM_DO(sd_buff_din[1]),
         .HDD_RAM_WE(sd_buff_wr & sd_ack[1]),
+
+    //-- track buffer interface for disk 1
+    .TRACK1(TRACK1),
+    .TRACK1_ADDR(TRACK1_RAM_ADDR),
+    .TRACK1_DO(TRACK1_RAM_DO),
+    .TRACK1_DI(TRACK1_RAM_DI),
+    .TRACK1_WE(TRACK1_RAM_WE),
+    .TRACK1_BUSY(TRACK1_RAM_BUSY),
+    //-- track buffer interface for disk 2
+    .TRACK2(TRACK2),
+    .TRACK2_ADDR(TRACK2_RAM_ADDR),
+    .TRACK2_DO(TRACK2_RAM_DO),
+    .TRACK2_DI(TRACK2_RAM_DI),
+    .TRACK2_WE(TRACK2_RAM_WE),
+    .TRACK2_BUSY(TRACK2_RAM_BUSY),
+    // Disk ready to IWM (pad to 4 bits)
+    .DISK_READY({2'b00, DISK_READY}),
+
 
         .fastram_address(fastram_address),
         .fastram_datatoram(fastram_datatoram),
@@ -201,8 +234,8 @@ assign VGA_VB=vblank;
 wire [15:0] hdd_sector;
 
 assign sd_lba[1] = {16'b0,hdd_sector};
-assign sd_rd = { 7'b0, 1'b0,sd_rd_hd,1'b0};
-assign sd_wr = { 7'b0, 1'b0,sd_wr_hd,1'b0};
+assign sd_rd[1] = sd_rd_hd;
+assign sd_wr[1] = sd_wr_hd;
 
 reg  hdd_mounted = 0;
 wire hdd_read;
@@ -261,6 +294,85 @@ always @(posedge clk_sys) begin
 end
 
 
+wire fd_disk_1;
+wire fd_disk_2;
+
+wire [1:0] DISK_READY;
+reg [1:0] DISK_CHANGE;
+reg [1:0]disk_mount;
+
+
+
+always @(posedge clk_sys) begin
+        if (img_mounted[0]) begin
+                disk_mount[0] <= img_size != 0;
+                DISK_CHANGE[0] <= ~DISK_CHANGE[0];
+                //disk_protect <= img_readonly;
+        end
+end
+always @(posedge clk_sys) begin
+        if (img_mounted[2]) begin
+                disk_mount[1] <= img_size != 0;
+                DISK_CHANGE[1] <= ~DISK_CHANGE[1];
+                //disk_protect <= img_readonly;
+        end
+end
+floppy_track floppy_track_1
+(
+   .clk(clk_sys),
+   .reset(reset),
+
+   .ram_addr(TRACK1_RAM_ADDR),
+   .ram_di(TRACK1_RAM_DI),
+   .ram_do(TRACK1_RAM_DO),
+   .ram_we(TRACK1_RAM_WE),
+
+
+   .track (TRACK1),
+   .busy  (TRACK1_RAM_BUSY),
+   .change(DISK_CHANGE[0]),
+   .mount (img_mounted[0]),
+   .ready  (DISK_READY[0]),
+   .active (fd_disk_1),
+
+   .sd_buff_addr (sd_buff_addr),
+   .sd_buff_dout (sd_buff_dout),
+   .sd_buff_din  (sd_buff_din[0]),
+   .sd_buff_wr   (sd_buff_wr),
+
+   .sd_lba       (sd_lba[0] ),
+   .sd_rd        (sd_rd[0]),
+   .sd_wr       ( sd_wr[0]),
+   .sd_ack       (sd_ack[0])
+);
+
+floppy_track floppy_track_2
+(
+   .clk(clk_sys),
+   .reset(reset),
+
+   .ram_addr(TRACK2_RAM_ADDR),
+   .ram_di(TRACK2_RAM_DI),
+   .ram_do(TRACK2_RAM_DO),
+   .ram_we(TRACK2_RAM_WE),
+
+   .track (TRACK2),
+   .busy  (TRACK2_RAM_BUSY),
+   .change(DISK_CHANGE[1]),
+   .mount (disk_mount[1]),
+   .ready  (DISK_READY[1]),
+   .active (fd_disk_2),
+
+   .sd_buff_addr (sd_buff_addr),
+   .sd_buff_dout (sd_buff_dout),
+   .sd_buff_din  (sd_buff_din[2]),
+   .sd_buff_wr   (sd_buff_wr),
+
+   .sd_lba       (sd_lba[2] ),
+   .sd_rd        (sd_rd[2]),
+   .sd_wr       ( sd_wr[2]),
+   .sd_ack       (sd_ack[2])
+);
 
 
 

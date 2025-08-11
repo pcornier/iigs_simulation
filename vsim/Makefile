@@ -74,6 +74,9 @@ V_SRC = \
 	$(RTL)/es5503.v \
 	$(RTL)/keyboard.v \
 	$(RTL)/iwm.v \
+	$(RTL)/iwm_controller.v \
+	$(RTL)/apple_drive.v \
+        $(RTL)/floppy_track.sv \
 	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \
 	$(RTL)/video_timing.v \

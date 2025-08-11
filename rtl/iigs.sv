@@ -49,7 +49,26 @@ module iigs
 
    input [10:0]       ps2_key,
 
-   output             inhibit_cxxx
+   output             inhibit_cxxx,
+
+
+   // --- 5.25" floppy track interfaces (Drive 1/2) ---
+   output [5:0]       TRACK1,
+   output [12:0]      TRACK1_ADDR,
+   output [7:0]       TRACK1_DI,
+   input  [7:0]       TRACK1_DO,
+   output             TRACK1_WE,
+   input              TRACK1_BUSY,
+
+   output [5:0]       TRACK2,
+   output [12:0]      TRACK2_ADDR,
+   output [7:0]       TRACK2_DI,
+   input  [7:0]       TRACK2_DO,
+   output             TRACK2_WE,
+   input              TRACK2_BUSY,
+
+   input [3:0]        DISK_READY
+
 );
 
 `ifdef VERILATOR
@@ -948,6 +967,43 @@ module iigs
             .strobe(prtc_strobe)
             );
 
+
+    iwm_controller iwmc (
+      // Global clocks/resets
+      .CLK_14M(CLK_14M),
+      .Q3(q3_en),
+      .PH0(phi0),
+      .RESET(reset),
+      // Bus interface
+      .IO_SELECT(iwm_strobe),
+      .DEVICE_SELECT(iwm_strobe),
+      //.WR_CYCLE(iwm_rw),
+      //.ACCESS_STROBE(iwm_strobe),
+      .A(iwm_addr),
+      .D_IN(iwm_din),
+      .D_OUT(iwm_dout),
+      // Drive status
+      .DISK_READY(DISK_READY),
+      // 5.25" Drive 1
+      .TRACK1(TRACK1),
+      .TRACK1_ADDR(TRACK1_ADDR),
+      .TRACK1_DI(TRACK1_DI),
+      .TRACK1_DO(TRACK1_DO),
+      .TRACK1_WE(TRACK1_WE),
+      .TRACK1_BUSY(TRACK1_BUSY),
+      // 5.25" Drive 2
+      .TRACK2(TRACK2),
+      .TRACK2_ADDR(TRACK2_ADDR),
+      .TRACK2_DI(TRACK2_DI),
+      .TRACK2_DO(TRACK2_DO),
+      .TRACK2_WE(TRACK2_WE),
+      .TRACK2_BUSY(TRACK2_BUSY),
+      // 3.5" not yet wired
+      .TRACK3(), .TRACK3_ADDR(), .TRACK3_SIDE(), .TRACK3_DI(), .TRACK3_DO(8'h00), .TRACK3_WE(), .TRACK3_BUSY(1'b0),
+      .TRACK4(), .TRACK4_ADDR(), .TRACK4_SIDE(), .TRACK4_DI(), .TRACK4_DO(8'h00), .TRACK4_WE(), .TRACK4_BUSY(1'b0)
+  );
+
+`ifdef IWMSTUB
   iwm iwm(
           .CLK_14M(CLK_14M),
           .cen(q3_en),
@@ -959,6 +1015,7 @@ module iigs
           .strobe(iwm_strobe),
           .DISK35(DISK35)
           );
+`endif
 
   sound snd(
             .CLK_14M(CLK_14M),
