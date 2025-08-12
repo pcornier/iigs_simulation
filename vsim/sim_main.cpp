@@ -120,9 +120,10 @@ vluint64_t soft_reset_time = 0;
 
 //
 // IWM emulation
-#include "defc.h"
+//#include "defc.h"
+#include <cstdint>
 int g_c031_disk35;
-word32 g_vbl_count;
+uint32_t g_vbl_count;
 
 // Audio
 // -----
@@ -917,10 +918,13 @@ int verilate() {
 
 
 
-
-			/* if we are writing -- check it ? */
-if (last_cpu_addr!=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT) already_saw_this=0;
-
+            // IWM emulation now handled in Verilog (rtl/iwm.v using iwmref core).
+            // Preserve a mirror of DISK35 for any UI or status use.
+	    /*
+            if (VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__strobe) {
+                g_c031_disk35 = VERTOPINTERN->emu__DOT__top__DOT__core__DOT__iwm__DOT__DISK35;
+            }
+	    */
 last_cpu_addr=VERTOPINTERN->emu__DOT__top__DOT__core__DOT__cpu__DOT__A_OUT;
 
 
@@ -995,6 +999,7 @@ int main(int argc, char** argv, char** env) {
 	// hookup blk device
 	blockdevice.sd_lba[0] = &top->sd_lba[0];
 	blockdevice.sd_lba[1] = &top->sd_lba[1];
+	blockdevice.sd_lba[2] = &top->sd_lba[2];
 	blockdevice.sd_rd = &top->sd_rd;
 	blockdevice.sd_wr = &top->sd_wr;
 	blockdevice.sd_ack = &top->sd_ack;
@@ -1002,6 +1007,7 @@ int main(int argc, char** argv, char** env) {
 	blockdevice.sd_buff_dout = &top->sd_buff_dout;
 	blockdevice.sd_buff_din[0] = &top->sd_buff_din[0];
 	blockdevice.sd_buff_din[1] = &top->sd_buff_din[1];
+	blockdevice.sd_buff_din[2] = &top->sd_buff_din[2];
 	blockdevice.sd_buff_wr = &top->sd_buff_wr;
 	blockdevice.img_mounted = &top->img_mounted;
 	blockdevice.img_readonly = &top->img_readonly;
@@ -1047,10 +1053,13 @@ int main(int argc, char** argv, char** env) {
 	// Setup video output
 	if (video.Initialise(windowTitle) == 1) { return 1; }
 
-	//bus.QueueDownload("floppy.nib",1,0);
-blockdevice.MountDisk("floppy.nib",0);
-//blockdevice.MountDisk("hd.hdv",1);
+    // Mount a test floppy image into Drive 1 to exercise IWM path in sim
+    blockdevice.MountDisk("floppy.nib", 0);
+    // Optionally, mount an HDD image into slot 7 backend
+   //blockdevice.MountDisk("hd.hdv",1);
 
+       // iwm_init();
+       // iwm_reset();
 
 #ifdef WIN32
 	MSG msg;

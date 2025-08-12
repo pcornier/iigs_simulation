@@ -66,6 +66,18 @@ reg waitforC0D8;
 reg waitforC0E8;
 reg waitforC0F8;
 reg waitforC041;
+
+`ifdef SIMULATION
+// Debug: track previous states and counters (module scope to avoid
+// procedural declarations errors in Verilog-2001 tools)
+reg        prev_slow;
+reg        prev_slowMem;
+reg [31:0] slow_ph2_cnt;
+reg [31:0] fast_ph2_cnt;
+reg [31:0] slow_14m_cycles;
+reg [31:0] fast_14m_cycles;
+reg [3:0]  last_event; // 0:none 1:C0C9 2:C0D9 3:C0E9 4:C0F9 5:C042 6:slowMem
+`endif
 	
 always @(posedge clk_14M) begin
     if (reset) begin
@@ -91,7 +103,16 @@ always @(posedge clk_14M) begin
 	waitforC0D8<=1'b0;
 	waitforC0E8<=1'b0;
 	waitforC0F8<=1'b0;
-	waitforC041<= 1'b0;
+        waitforC041<= 1'b0;
+`ifdef SIMULATION
+        prev_slow <= 1'b0;
+        prev_slowMem <= 1'b0;
+        slow_ph2_cnt <= 32'd0;
+        fast_ph2_cnt <= 32'd0;
+        slow_14m_cycles <= 32'd0;
+        fast_14m_cycles <= 32'd0;
+        last_event <= 4'd0;
+`endif
         
         // Reset cycle control
         ph2_cycle_length <= 5'd5;  // Default to fast cycle
@@ -100,6 +121,7 @@ always @(posedge clk_14M) begin
     end else begin
         slowMem <= 1'b0;
 
+
 	//
 	// logic to determine if we should be in slow mode
 	//
@@ -107,52 +129,87 @@ always @(posedge clk_14M) begin
 		slow <= 1;
 	end else begin
 		// Check for slot-specific slow mode triggers (can be multiple slots enabled)
-		if (cyareg[0] == 1'b1 && IO && addr == 16'hC0C9) begin
-			slow <= 1;
-			waitforC0C8 <= 1;
-		end
-		if (cyareg[1] == 1'b1 && IO && addr == 16'hC0D9) begin
-			slow <= 1;
-			waitforC0D8 <= 1;
-		end
-		if (cyareg[2] == 1'b1 && IO && addr == 16'hC0E9) begin
-			slow <= 1;
-			waitforC0E8 <= 1;
-		end
-		if (cyareg[3] == 1'b1 && IO && addr == 16'hC0F9) begin
-			slow <= 1;
-			waitforC0F8 <= 1;
-		end
-		if (IO && addr == 16'hC042) begin
-			slow <= 1;
-			waitforC041<= 1;
-		end
+        if (cyareg[0] == 1'b1 && IO && addr == 16'hC0C9) begin
+            slow <= 1;
+            waitforC0C8 <= 1;
+`ifdef SIMULATION
+            last_event <= 4'd1;
+            $display("CLKDIV: slow enter due C0C9 (slot4) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
+`endif
+        end
+        if (cyareg[1] == 1'b1 && IO && addr == 16'hC0D9) begin
+            slow <= 1;
+            waitforC0D8 <= 1;
+`ifdef SIMULATION
+            last_event <= 4'd2;
+            $display("CLKDIV: slow enter due C0D9 (slot5) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
+`endif
+        end
+        if (cyareg[2] == 1'b1 && IO && addr == 16'hC0E9) begin
+            slow <= 1;
+            waitforC0E8 <= 1;
+`ifdef SIMULATION
+            last_event <= 4'd3;
+            $display("CLKDIV: slow enter due C0E9 (slot6) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
+`endif
+        end
+        if (cyareg[3] == 1'b1 && IO && addr == 16'hC0F9) begin
+            slow <= 1;
+            waitforC0F8 <= 1;
+`ifdef SIMULATION
+            last_event <= 4'd4;
+            $display("CLKDIV: slow enter due C0F9 (slot7) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
+`endif
+        end
+        if (IO && addr == 16'hC042) begin
+            slow <= 1;
+            waitforC041<= 1;
+`ifdef SIMULATION
+            last_event <= 4'd5;
+            $display("CLKDIV: slow enter due C042 (keyboard) bank=%02h addr=%04h IO=%0d t=%0t", bank, addr, IO, $time);
+`endif
+        end
 		
 		// Check for return to fast mode
-		if (waitforC0C8 && IO && addr == 16'hC0C8) begin
-			slow <= 0;
-			waitforC0C8 <= 0;
-		end
-		if (waitforC0D8 && IO && addr == 16'hC0D8) begin
-			slow <= 0;
-			waitforC0D8 <= 0;
-		end
-		if (waitforC0E8 && IO && addr == 16'hC0E8) begin
-			slow <= 0;
-			waitforC0E8 <= 0;
-		end
-		if (waitforC0F8 && IO && addr == 16'hC0F8) begin
-			slow <= 0;
-			waitforC0F8 <= 0;
-		end
-		if (waitforC041 && IO && addr == 16'hC041) begin
-			slow <= 0;
-			waitforC041<= 0;
-		end
+        if (waitforC0C8 && IO && addr == 16'hC0C8) begin
+            slow <= 0;
+            waitforC0C8 <= 0;
+`ifdef SIMULATION
+            $display("CLKDIV: slow exit via C0C8 (slot4) t=%0t", $time);
+`endif
+        end
+        if (waitforC0D8 && IO && addr == 16'hC0D8) begin
+            slow <= 0;
+            waitforC0D8 <= 0;
+`ifdef SIMULATION
+            $display("CLKDIV: slow exit via C0D8 (slot5) t=%0t", $time);
+`endif
+        end
+        if (waitforC0E8 && IO && addr == 16'hC0E8) begin
+            slow <= 0;
+            waitforC0E8 <= 0;
+`ifdef SIMULATION
+            $display("CLKDIV: slow exit via C0E8 (slot6) t=%0t", $time);
+`endif
+        end
+        if (waitforC0F8 && IO && addr == 16'hC0F8) begin
+            slow <= 0;
+            waitforC0F8 <= 0;
+`ifdef SIMULATION
+            $display("CLKDIV: slow exit via C0F8 (slot7) t=%0t", $time);
+`endif
+        end
+        if (waitforC041 && IO && addr == 16'hC041) begin
+            slow <= 0;
+            waitforC041<= 0;
+`ifdef SIMULATION
+            $display("CLKDIV: slow exit via C041 (keyboard) t=%0t", $time);
+`endif
+        end
 
 	   
     // --- 1. Entire banks $E0 and $E1: always slow ---
-    if ((bank == 8'hE0 || bank == 8'hE1) ||
+        if ((bank == 8'hE0 || bank == 8'hE1) ||
 
     // --- 2. I/O space $C000-$CFFF in bank $00 or $01 ---
     ((bank == 8'h00 || bank == 8'h01) && addr[15:12] == 4'hC) ||
@@ -176,10 +233,16 @@ always @(posedge clk_14M) begin
     // Bank $00/$01: $2000-$3FFF (hi-res page 2)
     ((bank == 8'h00 || bank == 8'h01) &&
         (addr >= 16'h2000 && addr <= 16'h3FFF)) )
-		begin
-			slowMem<=1;
-		end
-	end
+            begin
+                slowMem<=1;
+`ifdef SIMULATION
+                if (!prev_slow && !prev_slowMem) begin
+                    last_event <= 4'd6;
+                    $display("CLKDIV: slowMem active (shadowed/slow region) bank=%02h addr=%04h t=%0t", bank, addr, $time);
+                end
+`endif
+            end
+        end
 
         // 14M is always enabled
         clk_14M_en <= 1'b1;
@@ -239,6 +302,26 @@ always @(posedge clk_14M) begin
         ph2_en <= (ph2_counter == 4'd0);
 end
         
+`ifdef SIMULATION
+        // Accumulate simple stats about PH2 pulses while slow/fast
+        if (ph2_en) begin
+            if (slow || slowMem) slow_ph2_cnt <= slow_ph2_cnt + 1; else fast_ph2_cnt <= fast_ph2_cnt + 1;
+        end
+        if (slow || slowMem) slow_14m_cycles <= slow_14m_cycles + 1; else fast_14m_cycles <= fast_14m_cycles + 1;
+        // Report transitions of slow/slowMem
+        if ((slow != prev_slow) || (slowMem != prev_slowMem)) begin
+            $display("CLKDIV: slow=%0d slowMem=%0d -> slow=%0d slowMem=%0d ph0_cnt=%0d ph2_cnt=%0d t=%0t", prev_slow, prev_slowMem, slow, slowMem, ph0_counter, ph2_counter, $time);
+            if (!slow && !slowMem) begin
+                // exiting slow state: dump mini-stats
+                $display("CLKDIV: slow phase stats: ph2=%0d 14Mcy=%0d; fast so far: ph2=%0d 14Mcy=%0d (last_event=%0d)", slow_ph2_cnt, slow_14m_cycles, fast_ph2_cnt, fast_14m_cycles, last_event);
+                slow_ph2_cnt <= 0;
+                slow_14m_cycles <= 0;
+                last_event <= 0;
+            end
+            prev_slow <= slow;
+            prev_slowMem <= slowMem;
+        end
+`endif
     end
 end
 

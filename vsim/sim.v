@@ -177,7 +177,8 @@ top top (
         .fastram_we(fastram_we),
         .fastram_ce(fastram_ce),
 
-        .ps2_key(ps2_key)
+        .ps2_key(ps2_key),
+        .FLOPPY_WP(1'b1)
 );
 
 /*
@@ -234,14 +235,24 @@ assign VGA_VB=vblank;
 wire [15:0] hdd_sector;
 
 assign sd_lba[1] = {16'b0,hdd_sector};
-assign sd_rd[1] = sd_rd_hd;
-assign sd_wr[1] = sd_wr_hd;
+// NOTE: Don't override the full sd_rd/sd_wr bus here; floppy tracks drive bits 0/2.
+// The legacy HDD mux on bit 2 conflicts with floppy 2 and was forcing bit 0 low.
+// For floppy bring-up, leave the bus driven solely by the emu/floppy_track instances.
+//assign sd_rd = { 7'b0, 1'b0,sd_rd_hd,1'b0};
+//assign sd_wr = { 7'b0, 1'b0,sd_wr_hd,1'b0};
+assign sd_rd[1]=sd_rd_hd;
+assign sd_wr[1]=sd_wr_hd;
 
 reg  hdd_mounted = 0;
 wire hdd_read;
 wire hdd_write;
 reg  hdd_protect;
 reg  cpu_wait_hdd = 0;
+`ifdef SIMULATION
+// Debug counters to measure how long the CPU is stalled by HDD
+reg [31:0] hdd_wait_14m_cycles;
+reg [31:0] hdd_wait_events;
+`endif
 
 reg  sd_rd_hd;
 reg  sd_wr_hd;
@@ -268,6 +279,10 @@ always @(posedge clk_sys) begin
                 hdd_write_pending <= 0;
                 sd_rd_hd <= 0;
                 sd_wr_hd <= 0;
+`ifdef SIMULATION
+                hdd_wait_14m_cycles <= 0;
+                hdd_wait_events <= 0;
+`endif
         end
         else if(!state) begin
                 if (hdd_read_pending | hdd_write_pending) begin
@@ -275,6 +290,10 @@ always @(posedge clk_sys) begin
                         sd_rd_hd <= hdd_read_pending;
                         sd_wr_hd <= hdd_write_pending;
                         cpu_wait_hdd <= 1;
+`ifdef SIMULATION
+                        hdd_wait_events <= hdd_wait_events + 1;
+                        $display("HDD: cpu_wait asserted (read=%0d write=%0d) events=%0d t=%0t", hdd_read_pending, hdd_write_pending, hdd_wait_events+1, $time);
+`endif
                 end
         end
         else begin
@@ -283,14 +302,26 @@ always @(posedge clk_sys) begin
                         hdd_write_pending <= 0;
                         sd_rd_hd <= 0;
                         sd_wr_hd <= 0;
-                        $display("~old ack %x sd_ack[1] %x",~old_ack,sd_ack[1]);
+`ifdef SIMULATION
+                        $display("HDD: DMA ack rising (~old_ack -> ack) at t=%0t", $time);
+`endif
                 end
                 else if(old_ack & ~sd_ack[1]) begin
-                        $display("old ack %x ~sd_ack[1] %x",old_ack,~sd_ack[1]);
+`ifdef SIMULATION
+                        $display("HDD: DMA ack falling (transfer complete) at t=%0t", $time);
+`endif
                         state <= 0;
                         cpu_wait_hdd <= 0;
+`ifdef SIMULATION
+                        $display("HDD: cpu_wait deasserted; stalled cycles=%0d", hdd_wait_14m_cycles);
+                        hdd_wait_14m_cycles <= 0;
+`endif
                 end
         end
+`ifdef SIMULATION
+        // Accumulate 14M cycles while CPU is waiting on HDD
+        if (cpu_wait_hdd) hdd_wait_14m_cycles <= hdd_wait_14m_cycles + 1;
+`endif
 end
 
 
@@ -298,23 +329,31 @@ wire fd_disk_1;
 wire fd_disk_2;
 
 wire [1:0] DISK_READY;
-reg [1:0] DISK_CHANGE;
-reg [1:0]disk_mount;
+reg  [1:0] DISK_CHANGE;
+reg  [1:0] disk_mount;
+reg        img_mounted0_d, img_mounted2_d;
 
 
 
 always @(posedge clk_sys) begin
-        if (img_mounted[0]) begin
-                disk_mount[0] <= img_size != 0;
-                DISK_CHANGE[0] <= ~DISK_CHANGE[0];
-                //disk_protect <= img_readonly;
+        // Latch previous mount flags to detect rising edges
+        img_mounted0_d <= img_mounted[0];
+        img_mounted2_d <= img_mounted[2];
+
+        // Only toggle change on rising edge to avoid continuous bouncing
+        if (~img_mounted0_d & img_mounted[0]) begin
+                disk_mount[0]   <= (img_size != 0);
+                DISK_CHANGE[0]  <= ~DISK_CHANGE[0];
+`ifdef SIMULATION
+                $display("FLOPPY: mount event drive0 (size=%0d)", img_size);
+`endif
         end
-end
-always @(posedge clk_sys) begin
-        if (img_mounted[2]) begin
-                disk_mount[1] <= img_size != 0;
-                DISK_CHANGE[1] <= ~DISK_CHANGE[1];
-                //disk_protect <= img_readonly;
+        if (~img_mounted2_d & img_mounted[2]) begin
+                disk_mount[1]   <= (img_size != 0);
+                DISK_CHANGE[1]  <= ~DISK_CHANGE[1];
+`ifdef SIMULATION
+                $display("FLOPPY: mount event drive1 (size=%0d)", img_size);
+`endif
         end
 end
 floppy_track floppy_track_1

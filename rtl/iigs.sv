@@ -3,8 +3,9 @@ module iigs
    input              reset,
 
    input              CLK_14M,
-   input              phi2, // 2.5
-   input              phi0, // 2.5
+   input              phi2, 
+   input              phi0, 
+   input              clk_7M_en,
    input              q3_en, 
    input              slow_clk, // 1
    input              cpu_wait,
@@ -48,11 +49,12 @@ module iigs
    input [8:0]        V,
 
    input [10:0]       ps2_key,
+   // Floppy write-protect (sim global)
+   input              floppy_wp,
 
    output             inhibit_cxxx,
 
-
-   // --- 5.25" floppy track interfaces (Drive 1/2) ---
+      // --- 5.25" floppy track interfaces (Drive 1/2) ---
    output [5:0]       TRACK1,
    output [12:0]      TRACK1_ADDR,
    output [7:0]       TRACK1_DI,
@@ -355,7 +357,7 @@ module iigs
     end
 
     iwm_strobe <= 1'b0;
-    if (iwm_strobe & cpu_wen /*& phi2*/) begin
+    if (iwm_strobe & cpu_wen & phi2) begin
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
       io_dout <= iwm_dout;
     end
@@ -409,7 +411,12 @@ module iigs
             12'h02b: C02BVAL <= cpu_dout; // from gsplus
             12'h02d: SLTROMSEL <= cpu_dout;
             12'h030: SPKR <= cpu_dout;
-            12'h031: DISK35<= cpu_dout & 8'hc0;
+            12'h031: begin
+              DISK35<= cpu_dout & 8'hc0;
+`ifdef SIMULATION
+              $display("IWM DBG: WR $C031 <= %02h (DISK35 bit6=%0d bit7=%0d)", cpu_dout, (cpu_dout>>6)&1'b1, (cpu_dout>>7)&1'b1);
+`endif
+            end
             12'h032:
               begin
                 $display("VGCINT 32: bit6 %x bit5 %x",cpu_dout[6],cpu_dout[5]);
@@ -540,7 +547,13 @@ module iigs
                   iwm_rw <= 1'b0;
                   $display("IWM WR %03h <= %02h", addr[11:0], cpu_dout);
                 end
-            // Slot IO $C0F0-$C0FF handled externally (top-level HDD). Do not override here.
+            // Slot IO $C0D0-$C0DF (SmartPort) and $C0F0-$C0FF handled externally at top-level. Do not override here.
+            12'h0d0,12'h0d1,12'h0d2,12'h0d3,
+            12'h0d4,12'h0d5,12'h0d6,12'h0d7,
+            12'h0d8,12'h0d9,12'h0da,12'h0db,
+            12'h0dc,12'h0dd,12'h0de,12'h0df: begin
+              // no-op: external SmartPort handles this range
+            end
             default:
               $display("** IO_WR %x %x",addr[11:0],cpu_dout);
           endcase
@@ -766,9 +779,15 @@ module iigs
                   iwm_addr <= addr[7:0];
                   iwm_strobe <= 1'b1;
                   iwm_rw <= 1'b1;
-                  $display("IWM RD %03h", addr[11:0]);
+                  $display("IWM RD %03h -> %02h", addr[11:0], iwm_dout);
                 end
-            // Slot IO $C0F0-$C0FF handled externally (top-level HDD). Do not override here.
+            // Slot IO $C0D0-$C0DF (SmartPort) and $C0F0-$C0FF handled externally at top-level. Do not override here.
+            12'h0d0,12'h0d1,12'h0d2,12'h0d3,
+            12'h0d4,12'h0d5,12'h0d6,12'h0d7,
+            12'h0d8,12'h0d9,12'h0da,12'h0db,
+            12'h0dc,12'h0dd,12'h0de,12'h0df: begin
+              // no-op: external SmartPort handles this range
+            end
             default:
               $display("** IO_RD %x ",addr[11:0]);
           endcase
@@ -967,23 +986,38 @@ module iigs
             .strobe(prtc_strobe)
             );
 
-
-    iwm_controller iwmc (
+	    `ifdef IWMSTUB
+  iwm iwm(
+          .CLK_14M(CLK_14M),
+          .cen(q3_en),
+          .reset(reset),
+          .addr(iwm_addr),
+          .din(iwm_din),
+          .dout(iwm_dout),
+          .rw(iwm_rw),
+          .strobe(iwm_strobe),
+          .DISK35(DISK35)
+          );
+  `else
+        iwm_controller iwmc (
       // Global clocks/resets
       .CLK_14M(CLK_14M),
+      .CLK_7M_EN(clk_7M_en),
       .Q3(q3_en),
       .PH0(phi0),
       .RESET(reset),
       // Bus interface
       .IO_SELECT(iwm_strobe),
       .DEVICE_SELECT(iwm_strobe),
-      //.WR_CYCLE(iwm_rw),
+      .WR_CYCLE(iwm_rw),
       //.ACCESS_STROBE(iwm_strobe),
       .A(iwm_addr),
       .D_IN(iwm_din),
       .D_OUT(iwm_dout),
-      // Drive status
+      // Drive status and control
       .DISK_READY(DISK_READY),
+      .DISK35(DISK35),
+      .WRITE_PROTECT(floppy_wp),
       // 5.25" Drive 1
       .TRACK1(TRACK1),
       .TRACK1_ADDR(TRACK1_ADDR),
@@ -1002,20 +1036,7 @@ module iigs
       .TRACK3(), .TRACK3_ADDR(), .TRACK3_SIDE(), .TRACK3_DI(), .TRACK3_DO(8'h00), .TRACK3_WE(), .TRACK3_BUSY(1'b0),
       .TRACK4(), .TRACK4_ADDR(), .TRACK4_SIDE(), .TRACK4_DI(), .TRACK4_DO(8'h00), .TRACK4_WE(), .TRACK4_BUSY(1'b0)
   );
-
-`ifdef IWMSTUB
-  iwm iwm(
-          .CLK_14M(CLK_14M),
-          .cen(q3_en),
-          .reset(reset),
-          .addr(iwm_addr),
-          .din(iwm_din),
-          .dout(iwm_dout),
-          .rw(iwm_rw),
-          .strobe(iwm_strobe),
-          .DISK35(DISK35)
-          );
-`endif
+  `endif
 
   sound snd(
             .CLK_14M(CLK_14M),

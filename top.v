@@ -27,21 +27,25 @@ module top(
   output [7:0]  HDD_RAM_DO,
   input         HDD_RAM_WE,
 
-    // FLOPPY SIGNALS
-  output [5:0]  TRACK1,
-  output [12:0] TRACK1_ADDR,
-  output [7:0]  TRACK1_DI,
-  input [7:0]   TRACK1_DO,
-  output        TRACK1_WE,
-  input         TRACK1_BUSY,
-  output [5:0]  TRACK2,
-  output [12:0] TRACK2_ADDR,
-  output [7:0]  TRACK2_DI,
-  input [7:0]   TRACK2_DO,
-  output        TRACK2_WE,
-  input         TRACK2_BUSY,
+  // FLOPPY SIGNALS
+    output [5:0]  TRACK1,
+output [12:0] TRACK1_ADDR,
+output [7:0]    TRACK1_DI,
+input [7:0]     TRACK1_DO,
+output  TRACK1_WE,
+input   TRACK1_BUSY,
+output [5:0]    TRACK2,
+output [12:0]   TRACK2_ADDR,
+output [7:0]    TRACK2_DI,
+input [7:0]     TRACK2_DO,
+output  TRACK2_WE,
+input   TRACK2_BUSY,
 
-  input [3:0]   DISK_READY,
+  input [3:0] DISK_READY,
+
+  // Floppy write-protect (sim global)
+   input              floppy_wp,
+
 
   // fastram sdram
   output [22:0] fastram_address,
@@ -51,6 +55,9 @@ module top(
   output       fastram_ce,
 
   input [10:0] ps2_key
+  ,
+  // Floppy write-protect (from sim)
+  input        FLOPPY_WP
 
 );
 
@@ -105,6 +112,7 @@ wire scanline_irq;
     (
      .reset(reset),
      .CLK_14M(CLK_14M),
+     .clk_7M_en(clk_7M_en),
      .timestamp(timestamp),
      .cpu_wait(cpu_wait),
      .phi2(phi2),
@@ -149,10 +157,12 @@ wire scanline_irq;
      .V(V),
 
      .ps2_key(ps2_key),
+     .floppy_wp(FLOPPY_WP),
 
      .inhibit_cxxx(inhibit_cxxx),
- 
-           // 5.25" drive track buses
+
+
+      // 5.25" drive track buses
      .TRACK1(TRACK1),
      .TRACK1_ADDR(TRACK1_ADDR),
      .TRACK1_DI(TRACK1_DI),
@@ -168,7 +178,6 @@ wire scanline_irq;
      ,
      // Disk ready lines to IWM (D1..D4)
      .DISK_READY(DISK_READY)
-
 
      );
 
@@ -219,7 +228,12 @@ begin
    begin
 //	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
           device_select[addr[6:4]]=1'b1;
-  end
+   end
+   // Ensure internal SmartPort (slot 5, $C0D0–$C0DF) is always routed to top-level sp_hdd
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 16'hC0D0 && addr < 16'hC0E0 && ~inhibit_cxxx)
+   begin
+          device_select[5]=1'b1;
+   end
    if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~CXROM && ~inhibit_cxxx)
    begin
 //	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
@@ -243,6 +257,7 @@ end
 
 
 wire [7:0] din =
+  (io_select[5] == 1'b1 | device_select[5] == 1'b1) ? SP_DO :
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
   rom1_ce ? rom1_dout :
   rom2_ce ? rom2_dout :
@@ -254,8 +269,24 @@ wire [7:0] din =
   slot_ce ? slot_dout :
   8'h80;
 
-wire [7:0] slot_dout = HDD_DO;
+wire [7:0] SP_DO;
 wire [7:0] HDD_DO;
+wire [7:0] slot_dout = (io_select[5] || device_select[5]) ? SP_DO : HDD_DO;
+
+// Debug: monitor slot5/slot7 bus transactions
+`ifdef SIMULATION
+always @(posedge CLK_14M) begin
+  if (device_select[5]) begin
+    if (~we) $display("SLOT5 IO RD %04h -> %02h", addr, SP_DO);
+    else     $display("SLOT5 IO WR %04h <= %02h", addr, dout);
+  end
+  if (device_select[7]) begin
+    if (~we) $display("SLOT7 IO RD %04h -> %02h", addr, HDD_DO);
+    else     $display("SLOT7 IO WR %04h <= %02h", addr, dout);
+  end
+  if (io_select[7] && ~we) $display("SLOT7 ROM RD %04h -> %02h", addr, HDD_DO);
+end
+`endif
 
 
 //`define ROM3 1
@@ -424,11 +455,14 @@ vgc vgc(
         .NEWVIDEO(NEWVIDEO)
 );
 
+    // Legacy slot-7 HDD left in place but disabled
     hdd hdd(
         .CLK_14M(CLK_14M),
         .phi0(phi0),
-        .IO_SELECT(io_select[7]),
+	.IO_SELECT(io_select[7]),
         .DEVICE_SELECT(device_select[7]),
+	//.IO_SELECT(1'b0),
+        //.DEVICE_SELECT(1'b0),
         .RESET(reset),
         .A(addr),
         .RD(~we),
@@ -444,5 +478,27 @@ vgc vgc(
         .ram_do(HDD_RAM_DO),
         .ram_we(HDD_RAM_WE)
     );
-
+/*
+    // Native SmartPort HDD on Slot 5 ($C0D0–$C0DF), no ROM
+    sp_hdd sp_hdd(
+        .CLK_14M(CLK_14M),
+        .phi0(phi0),
+        .IO_SELECT(io_select[5]),
+        .DEVICE_SELECT(device_select[5]),
+        .RESET(reset),
+        .A(addr),
+        .RD(~we),
+        .D_IN(dout),
+        .D_OUT(SP_DO),
+        .sector(HDD_SECTOR),
+        .hdd_read(HDD_READ),
+        .hdd_write(HDD_WRITE),
+        .hdd_mounted(HDD_MOUNTED),
+        .hdd_protect(HDD_PROTECT),
+        .ram_addr(HDD_RAM_ADDR),
+        .ram_di(HDD_RAM_DI),
+        .ram_do(HDD_RAM_DO),
+        .ram_we(HDD_RAM_WE)
+    );
+*/
 endmodule

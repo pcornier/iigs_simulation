@@ -67,6 +67,11 @@ always @(posedge clk) begin
 
     if(ready && ram_we) dirty <= 1;
 `ifdef SIMULATION
+    if (sd_buff_wr & sd_ack) begin
+        $display("FLOPPY DMA: write rel_lba=%0d addr=%03h data=%02h", rel_lba, sd_buff_addr, sd_buff_dout);
+    end
+`endif
+`ifdef SIMULATION
     if (change && ~old_change) begin
         $display("FLOPPY: change edge detected (mount=%0d)", mount);
     end
@@ -178,6 +183,23 @@ bram #(8,13) floppy_dpram
         .enable_a(1'b1),
         .enable_b(1'b1)
 );
+
+`ifdef SIMULATION
+reg [12:0] prev_ram_addr;
+reg prev_ram_we;
+always @(posedge clk) begin
+    prev_ram_addr <= ram_addr;
+    prev_ram_we <= ram_we;
+    // Debug track memory reads
+    if (ram_addr != prev_ram_addr && !ram_we) begin
+        $display("FTRACK: READ addr=%04h -> %02h", ram_addr, ram_do);
+    end
+    // Debug track memory writes
+    if (ram_we && !prev_ram_we) begin
+        $display("FTRACK: WRITE addr=%04h <- %02h", ram_addr, ram_di);
+    end
+end
+`endif
 
 
 /*

@@ -17,10 +17,8 @@ module rom
 //-------------------------------------------------------------------------------------------------
 
     initial begin
-        $display("rom Loading rom. %s",memfile);
-        $display(memfile);
-        if (memfile>0)
-                $readmemh(memfile, d);
+        $display("rom Loading rom: %s", memfile);
+        $readmemh(memfile, d);
     end
 
 reg[DW-1:0] d[(2**AW)-1:0];
