@@ -219,7 +219,7 @@ module iigs
 
   assign EXTERNAL_IO =    ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io);
 
-  assign inhibit_cxxx = lcram2_sel | ((bank == 8'h0 | bank == 8'h1) & shadow[6]);
+  assign inhibit_cxxx = lcram2_sel | ((bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1) & shadow[6]);
 
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
@@ -298,7 +298,7 @@ module iigs
       slowram_ce = 1;
     //Bit 6: I/O Memory
     //else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
-    else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && shadow[6] && addr >= 'hc000 && addr <= 'hffff )
+    else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hffff )
       slowram_ce = 1;
     //Bit 5: Alternate Display Mode
     else  if (bank == 8'h00 && ~shadow[5] && addr >= 'h0800 && addr <= 'h0bff && ~IO)
@@ -953,12 +953,12 @@ module iigs
       aux = 1'b0;
       if ((bank_bef==0 || bank_bef==8'he0) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
         aux = ALTZP;
-      else if ((bank_bef==0 || bank_bef==8'he0) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
-        aux = ((bank_bef==0 || bank_bef==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen)))));
+      else if ((bank_bef==0 || bank_bef==1 || bank_bef==8'he0 || bank_bef==8'he1) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen))))));
       else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
-        aux =((bank_bef==0 || bank_bef==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen)))));
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen))))));
       else
-        aux = ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen)));
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen))));
     end
 assign     fastram_address = {bank[6:0],addr};
 assign     fastram_datatoram = dout;
