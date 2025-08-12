@@ -83,23 +83,6 @@ wire q3_en;
 wire ph0_state;
 wire ph2_state;
 
-// Clock divider instance
-clock_divider clk_div_inst (
-    .clk_14M(CLK_14M),
-    .cyareg(CYAREG),
-    .bank(bank),
-    .addr(addr),
-    .shadow(shadow),
-    .IO(IO),
-    .reset(reset),
-    .stretch(1'b0),  // TODO: Connect to VGC stretch signal
-    .clk_14M_en(clk_14M_en),
-    .clk_7M_en(clk_7M_en),
-    .ph0_en(ph0_en),
-    .ph2_en(ph2_en),
-    .q3_en(q3_en),
-    .ph0_state(ph0_state)
-);
 
 // Map clock enables to Apple IIgs standard names
 assign phi2 = ph2_en;
@@ -118,18 +101,22 @@ wire scanline_irq;
      .phi2(phi2),
      .phi0(phi0),
      .q3_en(q3_en),
-     .scanline_irq(scanline_irq),
-     .vbl_irq(vbl_irq),
      .slow_clk(),
 
      .bank(bank),
      .addr(addr),
      .shadow(shadow),
      .dout(dout),
-     .din(din),
      .we(we),
      .slowram_ce(slowram_ce),
+
+     .fastram_address(fastram_address),
+     .fastram_datatoram(fastram_datatoram),
+     .fastram_datafromram(fastram_datafromram),
+     .fastram_we(fastram_we),
      .fastram_ce(fastram_ce),
+
+
      .rom1_ce(rom1_ce),
      .rom2_ce(rom2_ce),
      .romc_ce(romc_ce),
@@ -153,14 +140,21 @@ wire scanline_irq;
      .LC_WE(LC_WE),
      .LCRAM2(LCRAM2),
 
-     .H(H),
-     .V(V),
-
      .ps2_key(ps2_key),
      .floppy_wp(FLOPPY_WP),
 
      .inhibit_cxxx(inhibit_cxxx),
 
+        /* hard drive */
+        .HDD_SECTOR(HDD_SECTOR),
+        .HDD_READ(HDD_READ),
+        .HDD_WRITE(HDD_WRITE),
+        .HDD_MOUNTED(HDD_MOUNTED),
+        .HDD_PROTECT(HDD_PROTECT),
+        .HDD_RAM_ADDR(HDD_RAM_ADDR),
+        .HDD_RAM_DI(HDD_RAM_DI),
+        .HDD_RAM_DO(HDD_RAM_DO),
+        .HDD_RAM_WE(HDD_RAM_WE),
 
       // 5.25" drive track buses
      .TRACK1(TRACK1),
@@ -219,286 +213,5 @@ reg [7:0] device_select;
 reg [7:0] io_select;
 
 
-//always @(posedge clk_sys)
-always @(*)
-begin
-   device_select=8'h0;
-   io_select=8'h0;
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io && ~inhibit_cxxx)
-   begin
-//	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
-          device_select[addr[6:4]]=1'b1;
-   end
-   // Ensure internal SmartPort (slot 5, $C0D0–$C0DF) is always routed to top-level sp_hdd
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 16'hC0D0 && addr < 16'hC0E0 && ~inhibit_cxxx)
-   begin
-          device_select[5]=1'b1;
-   end
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~CXROM && ~inhibit_cxxx)
-   begin
-//	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
-          io_select[addr[10:8]]=1'b1;
-  end
-end
 
-
-
-/*
-always @(posedge clk_sys)
-begin
-        if (fast_clk)
-        begin
-                $display("bank %x addr %x rom1_ce %x rom2_ce %x fastram_ce %x slot_internalrom_ce %x slowram_ce %x slot_ce %x rom2_dout %x din %x SLOTROMSEL %x is_internal %x CXROM %x shadow %x IO %x io_select[7] %x device_select[7] %x raddr %x",
-                        bank,addr,rom1_ce,rom2_ce,fastram_ce,slot_internalrom_ce,slowram_ce,slot_ce,rom2_dout,din,SLTROMSEL,is_internal,CXROM,shadow,IO,io_select[7],device_select[7],raddr);
-          $display("we %x Addr %x din %x | HDD_DO %x, rom1_dout %x, rom2_dout %x, fastram_dout %x, slowram_dout %x, slot_dout %x", we, { bank[6:0], raddr }, dout, HDD_DO, rom1_dout, rom2_dout, fastram_dout, slowram_dout, slot_dout);
-        end
-end
-*/
-
-
-wire [7:0] din =
-  (io_select[5] == 1'b1 | device_select[5] == 1'b1) ? SP_DO :
-  (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
-  rom1_ce ? rom1_dout :
-  rom2_ce ? rom2_dout :
-  romc_ce ? romc_dout :
-  romd_ce ? romd_dout :
-  slot_internalrom_ce ?  rom2_dout :
-  fastram_ce ? fastram_dout :
-  slowram_ce ? slowram_dout :
-  slot_ce ? slot_dout :
-  8'h80;
-
-wire [7:0] SP_DO;
-wire [7:0] HDD_DO;
-wire [7:0] slot_dout = (io_select[5] || device_select[5]) ? SP_DO : HDD_DO;
-
-// Debug: monitor slot5/slot7 bus transactions
-`ifdef SIMULATION
-always @(posedge CLK_14M) begin
-  if (device_select[5]) begin
-    if (~we) $display("SLOT5 IO RD %04h -> %02h", addr, SP_DO);
-    else     $display("SLOT5 IO WR %04h <= %02h", addr, dout);
-  end
-  if (device_select[7]) begin
-    if (~we) $display("SLOT7 IO RD %04h -> %02h", addr, HDD_DO);
-    else     $display("SLOT7 IO WR %04h <= %02h", addr, dout);
-  end
-  if (io_select[7] && ~we) $display("SLOT7 ROM RD %04h -> %02h", addr, HDD_DO);
-end
-`endif
-
-
-//`define ROM3 1
-`ifdef ROM3
-
-  
-  
-rom #(.memfile("rom3/romc.mem")) romc(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(romc_dout),
-  .ce(romc_ce)
-);
-rom #(.memfile("rom3/romd.mem")) romd(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(romd_dout),
-  .ce(romd_ce)  
-);
-rom #(.memfile("rom3/rom1.mem")) rom1(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom1_dout),
-  .ce(rom1_ce)  
-);
-
-rom #(.memfile("rom3/rom2.mem")) rom2(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom2_dout),
-  .ce(rom2_ce|slot_internalrom_ce)
-);
-
-
-`else
-
-rom #(.memfile("rom1/rom1.mem")) rom1(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom1_dout),
-  .ce(rom1_ce)
-);
-
-rom #(.memfile("rom1/rom2.mem")) rom2(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom2_dout),
-  .ce(rom2_ce|slot_internalrom_ce)
-);
-`endif
-
-// 8M 2.5MHz fast ram
-/*
-fastram fastram(
-  .clk(clk_sys),
-  .addr({ bank[6:0], addr }),
-  .din(dout),
-  .dout(fastram_dout),
-  .wr(we),
-  .ce(fastram_ce)
-);
-*/
-
-assign     fastram_address = {bank[6:0],raddr};
-assign     fastram_datatoram = dout;
-assign     fastram_dout = fastram_datafromram;
-assign     fastram_we = we;
-
-
-`ifdef NOTDEFINED
-`ifdef VERILATOR
-dpram #(.widthad_a(23),.prefix("fast")) fastram
-`else
-dpram #(.widthad_a(16)) fastram
-`endif
-(
-        .clock_a(clk_sys),
-        .address_a({ bank[6:0], raddr }),
-        .data_a(dout),
-        .q_a(fastram_dout),
-        .wren_a(we),
-        .ce_a(fastram_ce),
-);
-
-`endif
-
-//wire [15:0] raddr = ((bank == 'h00  || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hd000 && addr <='hdfff && LCRAM2 ) ?  addr - 'h1000  : addr;
-//wire [15:0] raddr = ((bank == 'h00  || bank == 8'he0 ) && addr >= 'hd000 && addr <='hdfff && LCRAM2 ) ?  addr - 'h1000  : addr;
-wire [15:0] raddr = addr;
-
-// 128k 1MHz slow ram
-// TODO: when 00-01 shadows on E0-E1, there's a copy mechanism 0x->Ex and it is
-// supposed to slow down the CPU during memory accesses.
-// Does CPU also slow down when it reads or writes on E0-E1?
-/*
-slowram slowram(
-  .clk(clk_sys),
-  .addr({ bank[0], addr }),
-  .din(dout),
-  .dout(slowram_dout),
-  .wr(we),
-  .ce(slowram_ce)
-);
-*/
-dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
-(
-        .clock_a(CLK_14M),
-        .address_a({ bank[0], raddr }),
-        .data_a(dout),
-        .q_a(slowram_dout),
-        .wren_a(we),
-        .ce_a(slowram_ce),
-
-        .clock_b(clk_vid),
-        .address_b(video_addr[16:0]),
-        .data_b(0),
-        .q_b(video_data),
-        .wren_b(1'b0)
-
-
-        //.ce_b(1'b1)
-);
-
-
-wire [9:0] H;
-wire [8:0] V;
-
-video_timing video_timing(
-.clk_vid(clk_vid),
-.ce_pix(ce_pix),
-.hsync(HS),
-.vsync(VS),
-.hblank(HBlank),
-.vblank(VBlank),
-.hpos(H),
-.vpos(V)
-);
-
-
-
-
-wire [22:0] video_addr;
-wire [7:0] video_data;
-wire vbl_irq;
-vgc vgc(
-        .CLK_14M(CLK_14M),
-        .clk_vid(clk_vid),
-        .ce_pix(ce_pix),
-        .scanline_irq(scanline_irq),
-        .vbl_irq(vbl_irq),
-        .H(H),
-        .V(V),
-        .R(R),
-        .G(G),
-        .B(B),
-        .video_addr(video_addr),
-        .video_data(video_data),
-        .TEXTCOLOR(TEXTCOLOR),
-        .BORDERCOLOR(BORDERCOLOR),
-        .HIRES_MODE(HIRES_MODE),
-        .ALTCHARSET(ALTCHARSET),
-        .EIGHTYCOL(EIGHTYCOL),
-        .PAGE2(PAGE2),
-        .TEXTG(TEXTG),
-        .MIXG(MIXG),
-        .NEWVIDEO(NEWVIDEO)
-);
-
-    // Legacy slot-7 HDD left in place but disabled
-    hdd hdd(
-        .CLK_14M(CLK_14M),
-        .phi0(phi0),
-	.IO_SELECT(io_select[7]),
-        .DEVICE_SELECT(device_select[7]),
-	//.IO_SELECT(1'b0),
-        //.DEVICE_SELECT(1'b0),
-        .RESET(reset),
-        .A(addr),
-        .RD(~we),
-        .D_IN(dout),
-        .D_OUT(HDD_DO),
-        .sector(HDD_SECTOR),
-        .hdd_read(HDD_READ),
-        .hdd_write(HDD_WRITE),
-        .hdd_mounted(HDD_MOUNTED),
-        .hdd_protect(HDD_PROTECT),
-        .ram_addr(HDD_RAM_ADDR),
-        .ram_di(HDD_RAM_DI),
-        .ram_do(HDD_RAM_DO),
-        .ram_we(HDD_RAM_WE)
-    );
-/*
-    // Native SmartPort HDD on Slot 5 ($C0D0–$C0DF), no ROM
-    sp_hdd sp_hdd(
-        .CLK_14M(CLK_14M),
-        .phi0(phi0),
-        .IO_SELECT(io_select[5]),
-        .DEVICE_SELECT(device_select[5]),
-        .RESET(reset),
-        .A(addr),
-        .RD(~we),
-        .D_IN(dout),
-        .D_OUT(SP_DO),
-        .sector(HDD_SECTOR),
-        .hdd_read(HDD_READ),
-        .hdd_write(HDD_WRITE),
-        .hdd_mounted(HDD_MOUNTED),
-        .hdd_protect(HDD_PROTECT),
-        .ram_addr(HDD_RAM_ADDR),
-        .ram_di(HDD_RAM_DI),
-        .ram_do(HDD_RAM_DO),
-        .ram_we(HDD_RAM_WE)
-    );
-*/
 endmodule

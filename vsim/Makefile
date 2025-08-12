@@ -59,7 +59,6 @@ CC_OPT =
 
 V_SRC = \
 	sim.v  \
-	../top.v \
 	$(RTL)/65C816/P65C816_pkg.sv \
 	$(RTL)/65C816/P65C816.sv \
 	$(RTL)/65C816/AddrGen.sv \

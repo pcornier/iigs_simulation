@@ -129,12 +129,14 @@ wire [5:0] TRACK2;
 
 
 wire clk_sys=CLK_14M;
-top top (
+iigs  iigs(
         .reset(reset),
         .CLK_14M(clk_sys),
         .clk_vid(clk_sys),
         .ce_pix(ce_pix),
         .cpu_wait(cpu_wait_hdd),
+        .timestamp({33{1'b0}}),  // Add missing timestamp connection
+        .floppy_wp(1'b1),  // Add missing floppy_wp
         .R(VGA_R),
         .G(VGA_G),
         .B(VGA_B),
@@ -196,8 +198,13 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
         .address_a( fastram_address ),
         .data_a(fastram_datatoram),
         .q_a(fastram_datafromram),
-        .wren_a(fastram_we),
-        .ce_a(fastram_ce)
+        .wren_a(fastram_we & fastram_ce),
+        .ce_a(fastram_ce),
+        .clock_b(clk_sys),
+        .wren_b(1'b0),
+        .address_b({23{1'b0}}),
+        .data_b(8'h00),
+        .q_b()
 );
 
 

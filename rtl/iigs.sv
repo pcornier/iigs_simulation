@@ -3,56 +3,45 @@ module iigs
    input              reset,
 
    input              CLK_14M,
-   input              phi2, 
-   input              phi0, 
-   input              clk_7M_en,
-   input              q3_en, 
-   input              slow_clk, // 1
+   input              clk_vid, 
+   input              ce_pix, 
    input              cpu_wait,
    input [32:0]       timestamp,
 
-   input              scanline_irq,
-   input              vbl_irq,
+     output [7:0] R,
+  output [7:0] G,
+  output [7:0] B,
+  output HBlank,
+  output VBlank,
+  output HS,
+  output VS,
 
-   output [7:0]       bank,
-   output [15:0]      addr,
-   output [7:0]       dout,
-   input [7:0]        din,
-   output logic       slowram_ce,
-   output logic       fastram_ce,
-   output logic       rom1_ce,
-   output logic       rom2_ce,
-   output logic       romc_ce,
-   output logic       romd_ce,
-   output logic [7:0] shadow/*verilator public_flat*/,
-   output logic [7:0] TEXTCOLOR,
-   output logic [3:0] BORDERCOLOR,
-   output logic [7:0] SLTROMSEL,
-   output logic [7:0] CYAREG,
-   output             CXROM,
-   output logic       RDROM,
-   output logic       LC_WE,
-   output logic       LCRAM2,
-  //output logic /*verilator public_flat*/,
-   output logic       PAGE2/*verilator public_flat*/,
-   output logic       TEXTG/*verilator public_flat*/,
-   output logic       MIXG/*verilator public_flat*/,
-   output logic       HIRES_MODE/*verilator public_flat*/,
-   output logic       ALTCHARSET/*verilator public_flat*/,
-   output logic       EIGHTYCOL/*verilator public_flat*/,
-   output logic [7:0] NEWVIDEO/*verilator public_flat*/,
-   output             IO/*verilator public_flat*/,
-   output             we,
-   output             VPB,
-   input              VBlank,
-   input [9:0]        H,
-   input [8:0]        V,
+
+
+     // fastram sdram
+  output [22:0] fastram_address,
+  output [7:0] fastram_datatoram,
+  input  [7:0] fastram_datafromram,
+  output       fastram_we,
+  output       fastram_ce,
+
 
    input [10:0]       ps2_key,
    // Floppy write-protect (sim global)
    input              floppy_wp,
 
-   output             inhibit_cxxx,
+ 
+   // HDD control
+  output [15:0] HDD_SECTOR,
+  output        HDD_READ,
+  output        HDD_WRITE,
+  input         HDD_MOUNTED,
+  input         HDD_PROTECT,
+  input [8:0]   HDD_RAM_ADDR,
+  input [7:0]   HDD_RAM_DI,
+  output [7:0]  HDD_RAM_DO,
+  input         HDD_RAM_WE,
+
 
       // --- 5.25" floppy track interfaces (Drive 1/2) ---
    output [5:0]       TRACK1,
@@ -69,9 +58,38 @@ module iigs
    output             TRACK2_WE,
    input              TRACK2_BUSY,
 
-   input [3:0]        DISK_READY
+   input [3:0]        DISK_READY,
+   input              FLOPPY_WP
+
 
 );
+   logic [7:0]       bank;
+   logic [15:0]      addr;
+   logic [7:0]       dout;
+   logic       slowram_ce;
+   logic       rom1_ce;
+   logic       rom2_ce;
+   logic       romc_ce;
+   logic       romd_ce;
+   logic [7:0] shadow/*verilator public_flat*/;
+   logic [7:0] TEXTCOLOR;
+   logic [3:0] BORDERCOLOR;
+   logic [7:0] SLTROMSEL;
+   logic [7:0] CYAREG;
+   logic CXROM;
+   logic       RDROM;
+   logic       LC_WE;
+   logic       LCRAM2;
+   logic       PAGE2/*verilator public_flat*/;
+   logic       TEXTG/*verilator public_flat*/;
+   logic       MIXG/*verilator public_flat*/;
+   logic       HIRES_MODE/*verilator public_flat*/;
+   logic       ALTCHARSET/*verilator public_flat*/;
+   logic       EIGHTYCOL/*verilator public_flat*/;
+   logic [7:0] NEWVIDEO/*verilator public_flat*/;
+   logic IO/*verilator public_flat*/;
+   logic we;
+   logic VPB;
 
 `ifdef VERILATOR
   //parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
@@ -80,6 +98,9 @@ module iigs
   parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
   //parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
 `endif
+   logic [9:0]        H;
+   logic [8:0]        V;
+
 
   logic [7:0]         bank_bef;
   logic [15:0]        addr_bef;
@@ -164,6 +185,8 @@ module iigs
 
   logic               LC_WE_PRE;
 
+  logic inhibit_cxxx;
+
   //logic TEXTG;
   //logic MIXG;
 
@@ -191,6 +214,8 @@ module iigs
   assign slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
   assign slotid = addr[11:8];
   assign is_internal_io =   ~SLTROMSEL[addr[6:4]];
+
+
 
   assign EXTERNAL_IO =    ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io);
 
@@ -915,9 +940,188 @@ module iigs
       else
         aux = ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen)));
     end
+assign     fastram_address = {bank[6:0],addr};
+assign     fastram_datatoram = dout;
+assign     fastram_dout = fastram_datafromram;
+assign     fastram_we = we;
 
+//`define ROM3 1
+`ifdef ROM3
+
+
+
+rom #(.memfile("rom3/romc.mem")) romc(
+  .clock(CLK_14M),
+  .address(addr),
+  .q(romc_dout),
+  .ce(romc_ce)
+);
+rom #(.memfile("rom3/romd.mem")) romd(
+  .clock(CLK_14M),
+  .address(addr),
+  .q(romd_dout),
+  .ce(romd_ce)
+);
+rom #(.memfile("rom3/rom1.mem")) rom1(
+  .clock(CLK_14M),
+  .address(addr),
+  .q(rom1_dout),
+  .ce(rom1_ce)
+);
+
+rom #(.memfile("rom3/rom2.mem")) rom2(
+  .clock(CLK_14M),
+  .address(addr),
+  .q(rom2_dout),
+  .ce(rom2_ce|slot_internalrom_ce)
+);
+
+
+`else
+
+rom #(.memfile("rom1/rom1.mem")) rom1(
+  .clock(CLK_14M),
+  .address(addr),
+  .q(rom1_dout),
+  .ce(rom1_ce)
+);
+
+rom #(.memfile("rom1/rom2.mem")) rom2(
+  .clock(CLK_14M),
+  .address(addr),
+  .q(rom2_dout),
+  .ce(rom2_ce|slot_internalrom_ce)
+);
+`endif
+
+//wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
+wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~inhibit_cxxx;
+wire is_internal =   ~SLTROMSEL[addr[10:8]];
+wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
+//wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
+wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && is_internal && ~inhibit_cxxx;
+
+// try to setup flags for traditional iie style slots
+reg [7:0] device_select;
+reg [7:0] io_select;
+wire [7:0] rom1_dout, rom2_dout, romc_dout, romd_dout;
+wire [7:0] fastram_dout;
+wire [7:0] slowram_dout;
+
+always @(*)
+begin
+   device_select=8'h0;
+   io_select=8'h0;
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io && ~inhibit_cxxx)
+   begin
+//	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
+          device_select[addr[6:4]]=1'b1;
+  end
+   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~CXROM && ~inhibit_cxxx)
+   begin
+//	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
+          io_select[addr[10:8]]=1'b1;
+  end
+end
+`ifdef NOTDEFINED
+`ifdef VERILATOR
+dpram #(.widthad_a(23),.prefix("fast")) fastram
+`else
+dpram #(.widthad_a(16)) fastram
+`endif
+(
+        .clock_a(clk_sys),
+        .address_a({ bank[6:0], addr }),
+        .data_a(dout),
+        .q_a(fastram_dout),
+        .wren_a(we),
+        .ce_a(fastram_ce),
+);
+`endif
+
+dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
+(
+        .clock_a(CLK_14M),
+        .address_a({ bank[0], addr }),
+        .data_a(dout),
+        .q_a(slowram_dout),
+        .wren_a(we),
+        .ce_a(slowram_ce),
+
+        .clock_b(clk_vid),
+        .address_b(video_addr[16:0]),
+        .data_b(0),
+        .q_b(video_data),
+        .wren_b(1'b0)
+
+
+        //.ce_b(1'b1)
+);
+
+wire [9:0] H;
+wire [8:0] V;
+
+video_timing video_timing(
+.clk_vid(clk_vid),
+.ce_pix(ce_pix),
+.hsync(HS),
+.vsync(VS),
+.hblank(HBlank),
+.vblank(VBlank),
+.hpos(H),
+.vpos(V)
+);
+
+
+
+
+wire [22:0] video_addr;
+wire [7:0] video_data;
+wire vbl_irq;
+wire scanline_irq;
+vgc vgc(
+        .CLK_14M(CLK_14M),
+        .clk_vid(clk_vid),
+        .ce_pix(ce_pix),
+        .scanline_irq(scanline_irq),
+        .vbl_irq(vbl_irq),
+        .H(H),
+        .V(V),
+        .R(R),
+        .G(G),
+        .B(B),
+        .video_addr(video_addr),
+        .video_data(video_data),
+        .TEXTCOLOR(TEXTCOLOR),
+        .BORDERCOLOR(BORDERCOLOR),
+        .HIRES_MODE(HIRES_MODE),
+        .ALTCHARSET(ALTCHARSET),
+        .EIGHTYCOL(EIGHTYCOL),
+        .PAGE2(PAGE2),
+        .TEXTG(TEXTG),
+        .MIXG(MIXG),
+        .NEWVIDEO(NEWVIDEO)
+);
+
+
+
+wire [7:0] din =
+  (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
+  rom1_ce ? rom1_dout :
+  rom2_ce ? rom2_dout :
+  romc_ce ? romc_dout :
+  romd_ce ? romd_dout :
+  slot_internalrom_ce ?  rom2_dout :
+  fastram_ce ? fastram_dout :
+  slowram_ce ? slowram_dout :
+  slot_ce ? slot_dout :
+  8'h80;
+
+wire [7:0] slot_dout = HDD_DO;
+wire [7:0] HDD_DO;
 
   wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
+wire ready_out;
 
   P65C816 cpu(
               .CLK(CLK_14M),
@@ -986,7 +1190,7 @@ module iigs
             .strobe(prtc_strobe)
             );
 
-	    `ifdef IWMSTUB
+`ifdef IWMSTUB
   iwm iwm(
           .CLK_14M(CLK_14M),
           .cen(q3_en),
@@ -1038,6 +1242,52 @@ module iigs
   );
   `endif
 
+    // Legacy slot-7 HDD 
+    hdd hdd(
+        .CLK_14M(CLK_14M),
+        .phi0(phi0),
+        .IO_SELECT(io_select[7]),
+        .DEVICE_SELECT(device_select[7]),
+        //.IO_SELECT(1'b0),
+        //.DEVICE_SELECT(1'b0),
+        .RESET(reset),
+        .A(addr),
+        .RD(~we),
+        .D_IN(dout),
+        .D_OUT(HDD_DO),
+        .sector(HDD_SECTOR),
+        .hdd_read(HDD_READ),
+        .hdd_write(HDD_WRITE),
+        .hdd_mounted(HDD_MOUNTED),
+        .hdd_protect(HDD_PROTECT),
+        .ram_addr(HDD_RAM_ADDR),
+        .ram_di(HDD_RAM_DI),
+        .ram_do(HDD_RAM_DO),
+        .ram_we(HDD_RAM_WE)
+    );
+/*
+    // Native SmartPort HDD on Slot 5 ($C0D0–$C0DF), no ROM
+    sp_hdd sp_hdd(
+        .CLK_14M(CLK_14M),
+        .phi0(phi0),
+        .IO_SELECT(io_select[5]),
+        .DEVICE_SELECT(device_select[5]),
+        .RESET(reset),
+        .A(addr),
+        .RD(~we),
+        .D_IN(dout),
+        .D_OUT(SP_DO),
+        .sector(HDD_SECTOR),
+        .hdd_read(HDD_READ),
+        .hdd_write(HDD_WRITE),
+        .hdd_mounted(HDD_MOUNTED),
+        .hdd_protect(HDD_PROTECT),
+        .ram_addr(HDD_RAM_ADDR),
+        .ram_di(HDD_RAM_DI),
+        .ram_do(HDD_RAM_DO),
+        .ram_we(HDD_RAM_WE)
+    );
+*/
   sound snd(
             .CLK_14M(CLK_14M),
             .ph0_en(phi0),
@@ -1063,5 +1313,30 @@ module iigs
                     .akd(key_anykeydown),
                     .K(key_keys_pressed)
                     );
+// Clock divider instance
+clock_divider clk_div_inst (
+    .clk_14M(CLK_14M),
+    .cyareg(CYAREG),
+    .bank(bank),
+    .addr(addr),
+    .shadow(shadow),
+    .IO(IO),
+    .reset(reset),
+    .stretch(1'b0),  // TODO: Connect to VGC stretch signal
+    .clk_14M_en(),
+    .clk_7M_en(clk_7M_en),
+    .ph0_en(ph0_en),
+    .ph2_en(ph2_en),
+    .q3_en(q3_en),
+    .ph0_state()
+);
+// Map clock enables to Apple IIgs standard names
+wire phi2 = ph2_en;
+wire phi0 = ph0_en;
+wire ph0_en;
+wire ph2_en;
+wire clk_7M_en;
+wire clk_7M = clk_7M_en;
+wire q3_en;
 
 endmodule
