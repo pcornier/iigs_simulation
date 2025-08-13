@@ -464,7 +464,12 @@ module iigs
             12'h021: MONOCHROME <=cpu_dout;
             12'h022: TEXTCOLOR <= cpu_dout;
             12'h023: begin $display("VGCINT 23 2 %x 1 %x",cpu_dout[2],cpu_dout[1]);VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
-            12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",cpu_dout);  end
+            // C028: ROMBANK register does not exist as a separate register on real Apple IIgs hardware.
+            // The Hardware Reference Manual states ROMBANK "must always be 0" and "do not modify this bit".
+            // ROMBANK is only accessible as bit 1 of STATEREG (C068), where it exists but has no functional 
+            // effect (no ROM bank switching occurs). Both KEGS and GSPlus emulators treat C028 as completely
+            // unimplemented. Any software accessing C028 is likely erroneous or written for third-party cards.
+            // 12'h028: [REMOVED - does not exist on real hardware]
             12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
             12'h02b: C02BVAL <= cpu_dout; // from gsplus
             12'h02d: SLTROMSEL <= cpu_dout;
@@ -667,8 +672,9 @@ module iigs
             12'h023: begin $display("READ VGCINT %x",VGCINT);io_dout <= VGCINT; end /* vgc int */
 
 
-            //12'h028: $display("**++UNIMPLEMENTEDROMBANK (28)");
-            12'h028: begin ROMBANK <= ~ROMBANK; $display("**++UNIMPLEMENTEDROMBANK %x",~ROMBANK);  end
+            // C028: ROMBANK register does not exist as a separate register on real Apple IIgs hardware.
+            // See write section above for detailed explanation. Reads to C028 should also be unimplemented.
+            // 12'h028: [REMOVED - does not exist on real hardware]
             12'h029: io_dout <= NEWVIDEO;
             12'h02a: io_dout <= 'h0; // from gsplus
             12'h02b: io_dout <= C02BVAL; // from gsplus
