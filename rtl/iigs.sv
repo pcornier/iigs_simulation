@@ -138,6 +138,7 @@ module iigs
   // Edge-detect for IRQ sources
   logic               vbl_irq_d;
   logic               qtr_irq_d;
+  logic               scc_irq_d;
 
   logic [7:0]         adb_din;
   logic [7:0]         adb_dout;
@@ -155,6 +156,14 @@ module iigs
   logic [7:0]         snd_dout;
   logic [1:0]         snd_addr;
   logic               snd_rw, snd_strobe;
+
+  // SCC (Serial Communications Controller) signals
+  logic [7:0]         scc_din;
+  logic [7:0]         scc_dout;  
+  logic               scc_cs;
+  logic               scc_we;
+  logic [1:0]         scc_rs;
+  logic               scc_irq_n;
 
   logic               aux;
 
@@ -421,6 +430,10 @@ module iigs
       io_dout <= snd_dout;
     end
 
+    // Clear SCC control signals
+    scc_cs <= 1'b0;
+    scc_we <= 1'b0;
+
     if (IO) begin
       if (~cpu_wen)
         // write
@@ -501,9 +514,12 @@ module iigs
             end
             12'h035: shadow <= cpu_dout;
             12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
-            // SCC (Serial) writes: log for debugging (unimplemented)
+            // SCC (Serial Communications Controller) - Zilog 8530 
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
-              $display("SCC WR %03h <= %02h (unimpl)", addr[11:0], cpu_dout);
+              scc_cs <= 1'b1;
+              scc_we <= 1'b1;
+              scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
+              scc_din <= cpu_dout;
             end
             12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
               snd_rw <= 1'b1;
@@ -514,7 +530,11 @@ module iigs
             end
             12'h041: begin $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]}); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
-            12'h047: begin $display("CLEAR INT");INTFLAG[4:3]<=2'b00; end // clear the interrupts
+            12'h047: begin 
+              $display("CLEAR INT: C047 write (CLRVBLINT) - clearing INTFLAG[4:3] vbl_irq=%0d V=%0d", vbl_irq, V);
+              // Apple IIgs behavior: C047 write clears VBL and quarter-second interrupts (bits 4:3)
+              INTFLAG[4:3] <= 2'b00; 
+            end // clear the interrupts
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
             12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -684,8 +704,13 @@ module iigs
             12'h02f: io_dout <= {V[0], H[9:2]}; /* horizcount */
             12'h030: io_dout <= SPKR;
             12'h031: io_dout <= DISK35;
-            //12'h032: io_dout <= VGCINT; can you read this??
-            12'h032: io_dout <= 0;// can you read this??
+            12'h032: begin
+              io_dout <= VGCINT; 
+              VGCINT[6:5] <= 2'b00; // Clear 1-sec and scanline IRQs on read
+`ifdef SIMULATION
+              $display("VGCINT: Read from $C032, clearing one-second and scanline IRQ flags. VGCINT was %02h", VGCINT);
+`endif
+            end
             12'h033, 12'h034: begin
               prtc_addr <= ~addr[0];
               prtc_rw <= 1'b1;
@@ -695,10 +720,12 @@ module iigs
             12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
             12'h037: io_dout <= 'h0; // from gsplus
 
-            12'h038: begin $display("SCCB CTRL READ");io_dout <= 8'h04; end // Tx buffer empty = 1
-            12'h039: begin $display("SCCA CTRL READ");io_dout <= 8'h04; end // Tx buffer empty = 1
-            12'h03a: begin $display("SCCB DATA READ");io_dout <= 8'h00; end
-            12'h03b: begin $display("SCCA DATA READ");io_dout <= 8'h00; end
+            12'h038, 12'h039, 12'h03a, 12'h03b: begin
+              scc_cs <= 1'b1;
+              scc_we <= 1'b0;
+              scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
+              io_dout <= scc_dout;
+            end
 
             12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
               snd_addr <= addr[1:0];
@@ -711,13 +738,21 @@ module iigs
             12'h046: begin
               io_dout <= INTFLAG;
 `ifdef SIMULATION
-              $display("READ INTFLAG -> %02h (auto-clear VBL/QTR)", INTFLAG);
+              $display("READ INTFLAG -> %02h vbl_irq=%0d INTFLAG[3:0]=%04b", 
+                       INTFLAG, vbl_irq, INTFLAG[3:0]);
 `endif
-              // Auto-clear VBL/QTR on read to avoid stuck IRQs if OS doesn't write $C047
-              INTFLAG[4:3] <= 2'b00;
+              // Real Apple IIgs behavior: reading C046 does bit manipulation (bit 7->6, clear 7)
+              // But don't automatically clear interrupts - that should only happen on C047 write
+              INTFLAG[6] <= INTFLAG[7];  // Move bit 7 to bit 6  
+              INTFLAG[7] <= 1'b0;        // Clear bit 7
             end
             //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-            12'h047: begin $display("CLEAR INT");$display("INTFLAG CLEAR INTERRUPTS"); INTFLAG[4:3]<=2'b00; INTFLAG[0]<=1'b0; end // clear the interrupts
+            12'h047: begin 
+              $display("CLEAR INT: C047 write - clearing INTFLAG[4:3] (VBL/QTR) vbl_irq=%0d V=%0d", vbl_irq, V);
+              // Apple IIgs behavior: C047 write clears VBL and quarter-second interrupts (bits 4:3)  
+              // This matches emulator code: g_c046_val &= 0xe7 (clears bits 4,3)
+              INTFLAG[4:3] <= 2'b00;
+            end // clear the interrupts
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
             12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -907,14 +942,24 @@ module iigs
 `endif
     end
 
-    // Latch VBL and quarter-second on rising edges only
+    // Latch VBL, quarter-second, and SCC on rising edges only
     // to avoid immediate reassert after a clear while source stays high
     vbl_irq_d <= vbl_irq;
     qtr_irq_d <= qtrsecond_irq;
+    scc_irq_d <= ~scc_irq_n;  // SCC uses active-low interrupt
+    
+`ifdef SIMULATION
+    // Debug VBL interrupt state transitions
+    if (vbl_irq != vbl_irq_d) begin
+      $display("VBL: vbl_irq %0d -> %0d (V=%0d H=%0d) INTEN[3]=%0d INTFLAG[3]=%0d", 
+               vbl_irq_d, vbl_irq, V, H, INTEN[3], INTFLAG[3]);
+    end
+`endif
+    
     if ((vbl_irq & ~vbl_irq_d) & INTEN[3]) begin
       INTFLAG[3]<=1'b1;
 `ifdef SIMULATION
-      $display("INTFLAG: set VBL (3) due vbl_irq rising edge");
+      $display("INTFLAG: set VBL (3) due vbl_irq rising edge at V=%0d H=%0d", V, H);
 `endif
     end
     if ((qtrsecond_irq & ~qtr_irq_d) & INTEN[4]) begin
@@ -923,10 +968,30 @@ module iigs
       $display("INTFLAG: set QTR (4) due qtrsecond_irq rising edge");
 `endif
     end
+    // SCC interrupts disabled - SCC wrapper handles interrupt masking
+    // if ((~scc_irq_n & ~scc_irq_d) & INTEN[7]) begin
+    //   INTFLAG[7]<=1'b1;
+    // end
 
-    // 0 means IRQ in process
-    //             VBL           QTRSEC       SECOND      SCAN      DOC (SOUND)   -- needs ADB, SCC, SLOT
-    INTFLAG[0] <= INTFLAG[3] | INTFLAG[4] | VGCINT[6] | VGCINT[7] | snd_irq;
+    // INTFLAG[0] represents pending IRQ - set when any interrupt condition is active
+    // This should only be cleared when ALL interrupt sources are resolved
+    // Don't recalculate every cycle to avoid race conditions with interrupt clearing
+    if (INTFLAG[3] | INTFLAG[4] | VGCINT[6] | VGCINT[7] | snd_irq) begin
+      INTFLAG[0] <= 1'b1;
+`ifdef SIMULATION
+      if (!INTFLAG[0]) begin
+        $display("INTFLAG[0]: 0 -> 1 (F3=%0d F4=%0d V6=%0d V7=%0d snd=%0d)", 
+                 INTFLAG[3], INTFLAG[4], VGCINT[6], VGCINT[7], snd_irq);
+      end
+`endif
+    end else begin
+      INTFLAG[0] <= 1'b0;
+`ifdef SIMULATION
+      if (INTFLAG[0]) begin
+        $display("INTFLAG[0]: 1 -> 0 (all interrupt sources clear)");
+      end
+`endif
+    end
     /*
      enum irq_sources
      {
@@ -954,27 +1019,29 @@ module iigs
     cpu_irq_d <= cpu_irq;
     if (cpu_irq) cpu_irq_high_cnt <= cpu_irq_high_cnt + 16'd1; else cpu_irq_high_cnt <= 16'd0;
     if (snd_irq != snd_irq_d) begin
-      $display("%m: snd_irq %0d -> %0d (VGCINT6&2=%0d VGCINT5&1=%0d INTEN3&F3=%0d INTEN4&F4=%0d)",
+      $display("%m: snd_irq %0d -> %0d (VGCINT6&2=%0d VGCINT5&1=%0d INTEN3&F3=%0d INTEN4&F4=%0d INTEN7&F7=%0d)",
                snd_irq_d, snd_irq,
                (VGCINT[6]&VGCINT[2]),
                (VGCINT[5]&VGCINT[1]),
                (INTEN[3]&INTFLAG[3]),
-               (INTEN[4]&INTFLAG[4]));
+               (INTEN[4]&INTFLAG[4]),
+               (INTEN[7]&INTFLAG[7]));
     end
     if (cpu_irq != cpu_irq_d) begin
-      $display("%m: cpu_irq %0d -> %0d (v1=%0d v2=%0d v3=%0d v4=%0d snd=%0d)",
+      $display("%m: cpu_irq %0d -> %0d (v1=%0d v2=%0d v3=%0d v4=%0d scc=%0d snd=%0d)",
                cpu_irq_d, cpu_irq,
                (VGCINT[6]&VGCINT[2]),
                (VGCINT[5]&VGCINT[1]),
                (INTEN[3]&INTFLAG[3]),
                (INTEN[4]&INTFLAG[4]),
+               (INTEN[7]&INTFLAG[7]),
                snd_irq);
     end
-    // Periodic summary when IRQ stays high too long
+    // Periodic summary when IRQ stays high too long  
     if (cpu_irq_high_cnt == 16'd2000) begin
       $display("%m: cpu_irq stuck high: INTEN=%02h INTFLAG=%02h VGCINT=%02h snd=%0d", INTEN, INTFLAG, VGCINT, snd_irq);
-      // Simulation safety valve: clear IIe-style flags to allow progress
-      INTFLAG[4:3] <= 2'b00;
+      // Disabled safety valve to see real interrupt behavior
+      // INTFLAG[7] <= 1'b0; INTFLAG[4:3] <= 2'b00;
     end
   end
 `endif
@@ -1191,17 +1258,16 @@ wire ready_out;
               );
 
 
-/*
   always @(posedge CLK_14M)
     begin
       if (phi2)
         begin
-          $display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_wen %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_wen,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
+          //$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_wen %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_wen,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
           // to debug interrupts:
-          //$display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x ",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[3],VGCINT[2],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3]);
+          if (cpu_irq)
+            $display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x snd_irq %x",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[2],VGCINT[1],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3], snd_irq);
         end
     end
-*/
 
 
 `ifdef VERILATOR
@@ -1346,6 +1412,29 @@ wire ready_out;
             .host_data_in(snd_din),
             .host_data_out(snd_dout),
             .irq(snd_irq)
+            );
+
+  // SCC (Serial Communications Controller) - Zilog 8530
+  scc_iigs_wrapper scc_inst(
+            .clk_14m(CLK_14M),
+            .ph0_en(phi0),
+            .q3_en(q3_en),
+            .reset(reset),
+            .cs(scc_cs),
+            .we(scc_we),
+            .rs(scc_rs),
+            .wdata(scc_din),
+            .rdata(scc_dout),
+            .irq_n(scc_irq_n),
+            // Serial ports - stubbed for now
+            .txd_a(),
+            .txd_b(),
+            .rxd_a(1'b1),
+            .rxd_b(1'b1),
+            .rts_a(),
+            .rts_b(),
+            .cts_a(1'b1),
+            .cts_b(1'b1)
             );
 
   wire [6:0] key_keys=key_keys_pressed[6:0];

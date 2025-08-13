@@ -88,6 +88,10 @@ V_SRC = \
 	$(RTL)/hdd.v \
 	$(RTL)/sp_hdd.v \
 	$(RTL)/video_timing.v \
+	$(RTL)/uart/rxuart.v \
+	$(RTL)/uart/txuart.v \
+	$(RTL)/scc8530.v \
+	$(RTL)/scc_iigs_wrapper.v \
 	$(RTL)/iigs.sv
 
 
