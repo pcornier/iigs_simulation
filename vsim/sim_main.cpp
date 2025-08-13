@@ -1054,9 +1054,9 @@ int main(int argc, char** argv, char** env) {
 	if (video.Initialise(windowTitle) == 1) { return 1; }
 
     // Mount a test floppy image into Drive 1 to exercise IWM path in sim
-    blockdevice.MountDisk("floppy.nib", 0);
+    //blockdevice.MountDisk("floppy.nib", 0);
     // Optionally, mount an HDD image into slot 7 backend
-   //blockdevice.MountDisk("hd.hdv",1);
+   blockdevice.MountDisk("hd.hdv",1);
 
        // iwm_init();
        // iwm_reset();

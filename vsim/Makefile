@@ -78,6 +78,7 @@ V_SRC = \
 	$(RTL)/soundglu.v \
 	$(RTL)/es5503.v \
 	$(RTL)/keyboard.v \
+	$(RTL)/paddle_timer.v \
 	$(RTL)/iwm_core_ref.v \
 	$(RTL)/iwm_controller.v \
 	$(RTL)/apple_drive.v \

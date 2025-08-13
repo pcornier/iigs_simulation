@@ -29,6 +29,16 @@ module iigs
    input [10:0]       ps2_key,
    // Floppy write-protect (sim global)
    input              floppy_wp,
+   
+   // Joystick and paddle inputs
+   input [31:0]       joystick_0,
+   input [31:0]       joystick_1,
+   input [15:0]       joystick_l_analog_0,
+   input [15:0]       joystick_l_analog_1,
+   input [7:0]        paddle_0,
+   input [7:0]        paddle_1,
+   input [7:0]        paddle_2,
+   input [7:0]        paddle_3,
 
  
    // HDD control
@@ -197,7 +207,6 @@ module iigs
   //assign addr_bus =
   // slot_area && cpu_addr[15:8] == 8'b11000111 ? { cpu_addr[23:10], ~SLTROMSEL[7], cpu_addr[8:0] } : cpu_addr;
 
-  logic               is_internal_io;
 
   logic               EXTERNAL_IO;
 
@@ -213,7 +222,6 @@ module iigs
   assign valid = cpu_vpa | cpu_vda;
   assign slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
   assign slotid = addr[11:8];
-  assign is_internal_io =   ~SLTROMSEL[addr[6:4]];
 
 
 
@@ -391,6 +399,7 @@ module iigs
     key_reads<=0;
     // Default pass-through for unhandled IO: feed external bus data
     io_dout <= din;
+    paddle_trigger <= 1'b0;  // Default: no paddle trigger
     adb_strobe <= 1'b0;
     if (adb_strobe & cpu_wen) begin
       io_dout <= adb_dout;
@@ -437,6 +446,10 @@ module iigs
             12'h010, 12'h026, 12'h027, 12'h070: begin
               if (addr[11:0]==12'h010)
                 key_reads<=1;
+              if (addr[11:0]==12'h070) begin
+                paddle_trigger <= 1'b1;  // Trigger paddle timers
+                $display("PADDLE TRIGGER");
+              end
               adb_addr <= addr[7:0];
               adb_strobe <= 1'b1;
               adb_din <= cpu_dout;
@@ -618,6 +631,10 @@ module iigs
               $display("ADB RD %03h", addr[11:0]);
               if (addr[11:0] == 12'h010) begin  key_reads<=1; io_dout <= key_keys; end
               if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x key_pressed %x",key_anykeydown,key_pressed);  if (key_pressed) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
+              if (addr[11:0] == 12'h070) begin  
+                paddle_trigger <= 1'b1;  // Trigger paddle timers on read too
+                $display("PADDLE TRIGGER (READ)");
+              end
               //if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x",key_anykeydown);  if (key_anykeydown) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
               if (addr[11:0] == 12'h025) begin  $display("keymodereg");end
             end
@@ -707,6 +724,15 @@ module iigs
             12'h05a: io_dout <= 'h0; // some kind of soft switch?
             12'h05d: io_dout <= 'h0; // some kind of soft switch?
             12'h05f: io_dout <= 'h0; // some kind of soft switch?
+            
+            // Joystick/Paddle I/O
+            12'h061: io_dout <= {sw0, 7'b0000000};                      // SW0/Open Apple (bit 7: 1=pressed)
+            12'h062: io_dout <= {sw1, 7'b0000000};                      // SW1/Closed Apple (bit 7: 1=pressed)
+            12'h063: io_dout <= {sw2, 7'b0000000};                      // SW2 (bit 7: 1=pressed)
+            12'h064: io_dout <= {~paddle_timer_expired[0], 7'b0000000}; // PADDL0 (bit 7: 1=still timing, 0=done)
+            12'h065: io_dout <= {~paddle_timer_expired[1], 7'b0000000}; // PADDL1 (bit 7: 1=still timing, 0=done)
+            12'h066: io_dout <= {~paddle_timer_expired[2], 7'b0000000}; // PADDL2 (bit 7: 1=still timing, 0=done)
+            12'h067: io_dout <= {~paddle_timer_expired[3], 7'b0000000}; // PADDL3 (bit 7: 1=still timing, 0=done)
             12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM};
             12'h071, 12'h072, 12'h073, 12'h074,
               12'h075, 12'h076, 12'h077, 12'h078,
@@ -1078,9 +1104,6 @@ dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
         //.ce_b(1'b1)
 );
 
-wire [9:0] H;
-wire [8:0] V;
-
 video_timing video_timing(
 .clk_vid(clk_vid),
 .ce_pix(ce_pix),
@@ -1137,7 +1160,6 @@ wire [7:0] din =
   slot_ce ? slot_dout :
   8'h80;
 
-wire [7:0] slot_dout = HDD_DO;
 wire [7:0] HDD_DO;
 
   wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
@@ -1325,14 +1347,71 @@ wire ready_out;
   wire       key_pressed = key_keys_pressed[7];
   wire       key_anykeydown;
   reg        key_reads;
+  wire       open_apple;
+  wire       closed_apple;
   keyboard keyboard(
                     .CLK_14M(CLK_14M),
                     .PS2_Key(ps2_key),
                     .reads(key_reads),  // read strobe
                     .reset(reset),
                     .akd(key_anykeydown),
-                    .K(key_keys_pressed)
+                    .K(key_keys_pressed),
+                    .open_apple(open_apple),
+                    .closed_apple(closed_apple)
                     );
+
+  // === Joystick/Paddle Support ===
+  
+  // Choose paddle input source (can switch between paddle and analog stick)
+  wire [7:0] paddle_input[3:0];
+  `ifdef USE_ANALOG_STICK
+    // Use analog sticks as paddles (convert signed to unsigned)
+    assign paddle_input[0] = {~joystick_l_analog_0[7], joystick_l_analog_0[6:0]};  // X
+    assign paddle_input[1] = {~joystick_l_analog_0[15], joystick_l_analog_0[14:8]}; // Y
+    assign paddle_input[2] = {~joystick_l_analog_1[7], joystick_l_analog_1[6:0]};  
+    assign paddle_input[3] = {~joystick_l_analog_1[15], joystick_l_analog_1[14:8]};
+  `else
+    // Use dedicated paddle inputs (default)
+    assign paddle_input[0] = paddle_0;
+    assign paddle_input[1] = paddle_1;
+    assign paddle_input[2] = paddle_2; 
+    assign paddle_input[3] = paddle_3;
+  `endif
+
+  // Paddle timing simulation
+  wire [3:0] paddle_timer_expired;
+  reg paddle_trigger;
+  reg [23:0] cpu_cycle_counter;
+  
+  // Increment cycle counter
+  always @(posedge CLK_14M) begin
+    if (reset)
+      cpu_cycle_counter <= 24'd0;
+    else if (phi2)
+      cpu_cycle_counter <= cpu_cycle_counter + 24'd1;
+  end
+
+  genvar i;
+  generate
+    for (i = 0; i < 4; i = i + 1) begin : paddle_timers
+      paddle_timer timer_inst (
+        .clk(CLK_14M),
+        .reset(reset),
+        .trigger(paddle_trigger),
+        .paddle_value(paddle_input[i]),
+        .cycle_counter(cpu_cycle_counter),
+        .timer_expired(paddle_timer_expired[i])
+      );
+    end
+  endgenerate
+
+  // Button merging (physical joystick buttons override keyboard Apple keys)
+  // MiSTer joystick bits: [3:0]=directions, [31:4]=action buttons
+  wire sw0 = joystick_0[4] | open_apple;    // Open Apple (Button 0)
+  wire sw1 = joystick_0[5] | closed_apple;  // Closed Apple (Button 1)
+  wire sw2 = joystick_0[6];                 // Button 2  
+  wire sw3 = joystick_0[7];                 // Button 3
+
 // Clock divider instance
 clock_divider clk_div_inst (
     .clk_14M(CLK_14M),

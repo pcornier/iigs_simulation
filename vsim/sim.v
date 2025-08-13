@@ -180,7 +180,17 @@ iigs  iigs(
         .fastram_ce(fastram_ce),
 
         .ps2_key(ps2_key),
-        .FLOPPY_WP(1'b1)
+        .FLOPPY_WP(1'b1),
+        
+        // Joystick and paddle inputs
+        .joystick_0(joystick_0),
+        .joystick_1(joystick_1),
+        .joystick_l_analog_0(joystick_l_analog_0),
+        .joystick_l_analog_1(joystick_l_analog_1),
+        .paddle_0(paddle_0),
+        .paddle_1(paddle_1),
+        .paddle_2(paddle_2),
+        .paddle_3(paddle_3)
 );
 
 /*

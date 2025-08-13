@@ -16,7 +16,9 @@ module keyboard(
     reads,
     reset,
     akd,
-    K
+    K,
+    open_apple,
+    closed_apple
 );
     
     input            CLK_14M;
@@ -25,6 +27,8 @@ module keyboard(
     input            reset;
     output reg       akd;		// Any key down
     output [7:0]     K;		// Latched, decoded keyboard data
+    output reg       open_apple;
+    output reg       closed_apple;
     
     
     wire [10:0]      rom_addr;
@@ -48,7 +52,11 @@ module keyboard(
     parameter [7:0]  RIGHT_SHIFT = 8'h59;
     parameter [7:0]  LEFT_CTRL = 8'h14;
     parameter [7:0]  CAPS_LOCK = 8'h58;
-    
+    parameter [7:0]  WINDOWS = 8'h1F;
+    parameter [7:0]  ALT = 8'h11;
+   
+
+
     parameter [3:0]  states_IDLE = 0,
                      states_HAVE_CODE = 1,
                      states_DECODE = 2,
@@ -109,6 +117,10 @@ module keyboard(
                     shift <= 1'b1;
                 else if (code == LEFT_CTRL)
                     ctrl <= 1'b1;
+                else if (code == WINDOWS)
+                    open_apple <= 1'b1;
+                else if (code == ALT)
+                    closed_apple <= 1'b1;
             end
             else if (state == states_KEY_UP)
             begin
@@ -116,6 +128,10 @@ module keyboard(
                     shift <= 1'b0;
                 else if (code == LEFT_CTRL)
                     ctrl <= 1'b0;
+                else if (code == WINDOWS)
+                    open_apple <= 1'b0;
+                else if (code == ALT)
+                    closed_apple <= 1'b0;
             end
         end
     end
