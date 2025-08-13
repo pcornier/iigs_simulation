@@ -42,8 +42,6 @@ module scc_iigs_wrapper
     input               cts_b           // Clear to send B
 );
 
-reg [7:0] out_reg;
-assign rdata = out_reg;
 
 // Clock divider: 14.32MHz -> ~1.79MHz (divide by 8) 
 // This matches the Apple IIgs PCLK timing used by SCC and DOC systems
@@ -66,38 +64,57 @@ assign scc_clk_en = (clk_div == 3'b000);
 // Address decoding for SCC registers
 // rs[1] = 0: Control registers, rs[1] = 1: Data registers  
 // rs[0] = 0: Port B, rs[0] = 1: Port A
-wire scc_cs = cs;
 
 // Internal SCC interrupt signal (before masking)
 wire scc_internal_irq_n;
 
 //`define FAKESERIAL
 `ifdef FAKESERIAL
+reg [7:0] out_reg;
+assign rdata = out_reg;
 
 always @(posedge clk_14m) begin
-     if (ph0_en)
+     if (ph0_en && cs)
+     begin
+        if (we)
+	begin
+         $display("SCC: WR out_reg: %x scc_out: %x irq: %x wdata %x cs: %x",out_reg,scc_out,scc_internal_irq_n,wdata,cs);
+	end
+	else
+	begin
 	case (rs)
+          
       2'b00: begin $display("SCCB CTRL READ");out_reg <= 8'h04; end // Tx buffer empty = 1
       2'b01: begin $display("SCCA CTRL READ");out_reg <= 8'h04; end // Tx buffer empty = 1
       2'b10: begin $display("SCCB DATA READ");out_reg <= 8'h00; end
       2'b11: begin $display("SCCA DATA READ");out_reg <= 8'h00; end
 endcase
+         $display("SCC: RD out_reg: %x scc_out: %x irq: %x wdata %x cs: %x",out_reg,scc_out,scc_internal_irq_n,wdata,cs);
+      end
+	end
 end
 
 `else
+
+wire scc_out;
+
 // Instantiate existing SCC with adapted clocking
 scc scc_inst (
     .clk(clk_14m),                      // Master clock
-    .cep(ph0_en),                   // Positive edge enable  
-    .cen(ph0_en),                  // Negative edge enable (inverted)
+    .cep( ph0_en),                   // Positive edge enable  
+    .cen( ph0_en),                  // Negative edge enable (inverted)
     .reset_hw(reset),
     
     // Bus interface
-    .cs(scc_cs),
+    .cs(cs),
     .we(we), 
     .rs(rs),                            // [1] = data(1)/ctl(0), [0] = a_side(1)/b_side(0)
     .wdata(wdata),
+`ifdef FAKESERIAL
+    .rdata(scc_out),
+`else
     .rdata(rdata),
+`endif
     ._irq(scc_internal_irq_n),          // Internal SCC interrupt
     
     // Serial connections - stubbed for initial implementation
@@ -124,7 +141,8 @@ assign rts_b = rts_a;
 // The issue is that even though SCC registers work, the interrupt timing
 // still interferes with the sound system. Keep interrupts disabled but
 // ensure the SCC can still process register access properly.
-assign irq_n = scc_internal_irq_n;  // Re-enable SCC interrupts
+assign irq_n = 1'b0;
+//assign irq_n = scc_internal_irq_n;  // Re-enable SCC interrupts
 
 // Add some debug output for initial testing
 `ifdef SIMULATION

@@ -1421,7 +1421,7 @@ wire ready_out;
             .q3_en(q3_en),
             .reset(reset),
             .cs(scc_cs),
-            .we(scc_we),
+            .we(~scc_we),
             .rs(scc_rs),
             .wdata(scc_din),
             .rdata(scc_dout),
@@ -1433,8 +1433,8 @@ wire ready_out;
             .rxd_b(1'b1),
             .rts_a(),
             .rts_b(),
-            .cts_a(1'b1),
-            .cts_b(1'b1)
+            .cts_a(1'b0),
+            .cts_b(1'b0)
             );
 
   wire [6:0] key_keys=key_keys_pressed[6:0];
