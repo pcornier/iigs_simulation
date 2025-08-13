@@ -487,12 +487,12 @@ module scc
 		       rindex == 14          ? rr10_b :
 		       rindex == 15 && rs[0] ? rr15_a :
 		       rindex == 15          ? rr15_b : 8'hff;
-
+/*
 always@(posedge clk) begin
 if (cs)
  $display("SCC rindex == %x rs %x rr0_a %x rr3_a %x ",rindex,rs,rr0_a,rr3_a);
 end
-
+*/
 	/* RR0 */
 	assign rr0_a = { 1'b0, /* Break */
 			 1'b1, /* Tx Underrun/EOM */

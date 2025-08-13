@@ -146,6 +146,7 @@ assign irq_n = 1'b0;
 
 // Add some debug output for initial testing
 `ifdef SIMULATION
+`ifdef FAKESERIAL
 always @(posedge clk_14m) begin
     if (cs && we) begin
         $display("SCC IIgs: WR %s%s <= %02h", 
@@ -160,6 +161,7 @@ always @(posedge clk_14m) begin
                  rdata);
     end
 end
+`endif
 `endif
 
 endmodule
