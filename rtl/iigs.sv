@@ -161,7 +161,7 @@ module iigs
   logic [7:0]         scc_din;
   logic [7:0]         scc_dout;  
   logic               scc_cs;
-  logic               scc_we;
+  logic               scc_we_n;
   logic [1:0]         scc_rs;
   logic               scc_irq_n;
 
@@ -432,7 +432,7 @@ module iigs
 
     // Clear SCC control signals
     scc_cs <= 1'b0;
-    scc_we <= 1'b0;
+    scc_we_n <= 1'b0;
 
     if (IO) begin
       if (~cpu_we_n)
@@ -517,7 +517,7 @@ module iigs
             // SCC (Serial Communications Controller) - Zilog 8530 
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
               scc_cs <= 1'b1;
-              scc_we <= 1'b1;
+              scc_we_n <= 1'b1;
               scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
               scc_din <= cpu_dout;
             end
@@ -722,7 +722,7 @@ module iigs
 
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
               scc_cs <= 1'b1;
-              scc_we <= 1'b0;
+              scc_we_n <= 1'b0;
               scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
               io_dout <= scc_dout;
             end
@@ -1421,7 +1421,7 @@ wire ready_out;
             .q3_en(q3_en),
             .reset(reset),
             .cs(scc_cs),
-            .we(~scc_we),
+            .we(~scc_we_n),
             .rs(scc_rs),
             .wdata(scc_din),
             .rdata(scc_dout),

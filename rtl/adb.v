@@ -4,7 +4,7 @@ module adb(
   input cen,
   input reset,
   input [7:0] addr,
-  input rw,
+  input rw,  // 1 for read, 0 for write
   input [7:0] din,
   output reg [7:0] dout,
   output irq,
