@@ -78,7 +78,7 @@ always @(posedge clk_14m) begin
      begin
         if (we)
 	begin
-         $display("SCC: WR out_reg: %x scc_out: %x irq: %x wdata %x cs: %x",out_reg,scc_out,scc_internal_irq_n,wdata,cs);
+         $display("SCC: WR out_reg: %x  irq: %x wdata %x cs: %x",out_reg,scc_internal_irq_n,wdata,cs);
 	end
 	else
 	begin
@@ -89,7 +89,7 @@ always @(posedge clk_14m) begin
       2'b10: begin $display("SCCB DATA READ");out_reg <= 8'h00; end
       2'b11: begin $display("SCCA DATA READ");out_reg <= 8'h00; end
 endcase
-         $display("SCC: RD out_reg: %x scc_out: %x irq: %x wdata %x cs: %x",out_reg,scc_out,scc_internal_irq_n,wdata,cs);
+         $display("SCC: RD out_reg: %x  irq: %x wdata %x cs: %x",out_reg,scc_internal_irq_n,wdata,cs);
       end
 	end
 end
