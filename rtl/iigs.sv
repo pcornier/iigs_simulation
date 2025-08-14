@@ -1069,6 +1069,7 @@ assign     fastram_datatoram = dout;
 assign     fastram_dout = fastram_datafromram;
 assign     fastram_we = we;
 
+
 //`define ROM3 1
 `ifdef ROM3
 

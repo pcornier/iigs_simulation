@@ -325,75 +325,7 @@ wire fast_clk;
 wire fast_clk_delayed;
 wire fast_clk_delayed_mem;
 
-reg write;
-reg read;
-wire busy;
-always @(posedge clk_sys) begin
-	write<=0;
-	read<=0;
-   if (fast_clk_delayed_mem) begin
-		if (~fastram_we & fastram_ce & ~busy)
-			write<=1;
-		else if (fastram_we & fastram_ce & ~busy)
-			read<=1;
-	end
-	
-end
 logic [7:0] ram_data;
-sdram sdram
-(
-	.*,
-
-	// system interface
-	.clk        ( /*clk_sys */clk_vid        ),
-	.init       ( !locked   ),
-
-	// cpu/chipset interface
-	.ch0_addr   ({2'b0,fastram_address}),
-	.ch0_wr     (write),
-	.ch0_din    (fastram_datatoram),
-	.ch0_rd     (read),
-	.ch0_dout   (fastram_datafromram),
-	.ch0_busy   (busy),
-
-	.ch1_addr   (),
-	.ch1_wr     (),
-	.ch1_din    (),
-	.ch1_rd     (),
-	.ch1_dout   (),
-	.ch1_busy   (),
-
-	// reserved for backup ram save/load
-	.ch2_addr   (  ),
-	.ch2_wr     (  ),
-	.ch2_din    (  ),
-	.ch2_rd     (  ),
-	.ch2_dout   (  ),
-	.ch2_busy   (  )
-);
-
-
-/*
-assign SDRAM_CLK  = clk_sys;
-sdram ram
-(
-	.*,
-
-	.init(~locked),
-	.clk(clk_sys),
-	.clkref(fast_clk),
-
-	.waddr(fastram_address),
-	.din(fastram_datatoram),
-	.we(~fastram_we&fastram_ce),
-	.we_ack(),
-
-	.raddr(fastram_address),
-	.dout(fastram_datafromram),
-	.rd(fastram_ce&fastram_we),
-	.rd_rdy()
-);
-*/
 
 dpram #(.widthad_a(16),.prefix("fast")) fastram
 (
