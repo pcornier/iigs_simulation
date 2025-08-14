@@ -180,6 +180,8 @@ iigs  iigs(
         .fastram_ce(fastram_ce),
 
         .ps2_key(ps2_key),
+        .ps2_mouse(ps2_mouse),
+
         .FLOPPY_WP(1'b1),
         
         // Joystick and paddle inputs

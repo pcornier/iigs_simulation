@@ -26,9 +26,22 @@ module iigs
   output       fastram_ce,
 
 
-   input [10:0]       ps2_key,
+ // ps2 alternative interface.
+ // [8] - extended, [9] - pressed, [10] - toggles with every press/release
+ input [10:0] ps2_key,
+ // [24] - toggles with every event
+//
+//always @(posedge clk) if (clk_en) mstb <= ps2_mouse[24];
+//wire       mouseStrobe = mstb ^ ps2_mouse[24];
+//wire [8:0] mouseX = {ps2_mouse[4], ps2_mouse[15:8]};
+//wire [8:0] mouseY = {ps2_mouse[5], ps2_mouse[23:16]};
+//wire       button = ps2_mouse[0];
+
+ input [24:0] ps2_mouse,
+        
+
    // Floppy write-protect (sim global)
-   input              floppy_wp,
+ input              floppy_wp,
    
    // Joystick and paddle inputs
    input [31:0]       joystick_0,

@@ -42,3 +42,8 @@ public:
 	void Clock(bool hblank, bool vblank, bool hsync, bool vsync, uint32_t colour);
 	int Initialise(const char* windowTitle);
 };
+
+// External access to screen buffer for screenshots
+extern uint32_t* output_ptr;
+extern int output_width;
+extern int output_height;

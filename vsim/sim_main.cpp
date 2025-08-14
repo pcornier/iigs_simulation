@@ -44,6 +44,16 @@
 #include <iomanip>
 #include <thread>
 #include <chrono>
+#include <vector>
+#include <cstring>
+#include <algorithm>
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "sim/stb_image_write.h"
+
+#ifndef WIN32
+#include <SDL_opengl.h>
+#endif
 
 enum class RunState {Stopped, Running, SingleClock, MultiClock, StepIn, NextIRQ};
 
@@ -962,7 +972,80 @@ unsigned char mouse_y = 0;
 
 char spinner_toggle = 0;
 
+// Screenshot functionality
+// ------------------------
+std::vector<int> screenshot_frames;
+bool screenshot_mode = false;
+
+void save_screenshot(int frame_number) {
+	if (!output_ptr) {
+		printf("Error: output_ptr is null, cannot save screenshot\n");
+		return;
+	}
+	
+	char filename[256];
+	snprintf(filename, sizeof(filename), "screenshot_frame_%04d.png", frame_number);
+	
+	// Read directly from the IIgs video output buffer that video.Clock() writes to
+	// The colour format is: 0xFF000000 | B << 16 | G << 8 | R (ABGR)
+	// IIgs screen is 700x240, use the actual video dimensions not the texture buffer size
+	
+	int iigs_width = video.output_width;   // 700 (actual IIgs width)
+	int iigs_height = video.output_height; // 240 (actual IIgs height)
+	
+	
+	
+	uint8_t* rgb_data = (uint8_t*)malloc(iigs_width * iigs_height * 3);
+	if (!rgb_data) {
+		printf("Error: Could not allocate memory for screenshot\n");
+		return;
+	}
+	
+	for (int y = 0; y < iigs_height; y++) {
+		for (int x = 0; x < iigs_width; x++) {
+			uint32_t pixel = output_ptr[y * iigs_width + x];    // Use iigs_width as stride too!
+			int dst_index = (y * iigs_width + x) * 3;           // And iigs_width for destination
+			
+			// Format: 0xFF000000 | B << 16 | G << 8 | R (ABGR)
+			uint8_t a = (pixel >> 24) & 0xFF;  // Alpha in bits 31-24
+			uint8_t b = (pixel >> 16) & 0xFF;  // Blue in bits 23-16  
+			uint8_t g = (pixel >> 8) & 0xFF;   // Green in bits 15-8  
+			uint8_t r = (pixel >> 0) & 0xFF;   // Red in bits 7-0
+			
+			rgb_data[dst_index + 0] = r;
+			rgb_data[dst_index + 1] = g;
+			rgb_data[dst_index + 2] = b;
+		}
+	}
+	
+	// Save as PNG using stb_image_write
+	int result = stbi_write_png(filename, iigs_width, iigs_height, 3, rgb_data, iigs_width * 3);
+	
+	free(rgb_data);
+	
+	if (result) {
+		printf("Screenshot saved: %s\n", filename);
+	} else {
+		printf("Error: Failed to save screenshot %s\n", filename);
+	}
+}
+
 int main(int argc, char** argv, char** env) {
+
+	// Parse screenshot arguments
+	for (int i = 1; i < argc - 1; i++) {
+		if (strcmp(argv[i], "-screenshot") == 0) {
+			screenshot_mode = true;
+			std::string frames_str = argv[i + 1];
+			std::stringstream ss(frames_str);
+			std::string frame_num;
+			while (std::getline(ss, frame_num, ',')) {
+				screenshot_frames.push_back(std::stoi(frame_num));
+			}
+			printf("Screenshot mode enabled for frames: %s\n", frames_str.c_str());
+			break;
+		}
+	}
 
 	// Create core and initialise
 	top = new Vemu();
@@ -1196,9 +1279,26 @@ int main(int argc, char** argv, char** env) {
 		ImGui::Checkbox("Flip V", &video.output_vflip);
 		ImGui::Text("main_time: %ld frame_count: %d sim FPS: %f", main_time, video.count_frame, video.stats_fps);
 		//ImGui::Text("pixel: %06d line: %03d", video.count_pixel, video.count_line);
+		
+		// Log frame number to stdout for user reference
+		static int last_logged_frame = -1;
+		if (video.count_frame != last_logged_frame) {
+			printf("Frame: %d\n", video.count_frame);
+			last_logged_frame = video.count_frame;
+		}
 
 		// Draw VGA output
 		ImGui::Image(video.texture_id, ImVec2(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y));
+		
+		// Check if this frame should be screenshotted (after texture is displayed)
+		if (screenshot_mode) {
+			auto it = std::find(screenshot_frames.begin(), screenshot_frames.end(), video.count_frame);
+			if (it != screenshot_frames.end()) {
+				save_screenshot(video.count_frame);
+				screenshot_frames.erase(it);  // Remove frame from list after capturing
+			}
+		}
+		
 		ImGui::End();
 
 		if (ImGuiFileDialog::Instance()->Display("ChooseFileDlgKey"))
