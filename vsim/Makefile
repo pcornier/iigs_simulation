@@ -5,6 +5,12 @@ TOP = --top-module emu
 RTL = ../rtl
 V_INC = +incdir+$(RTL)
 
+# ROM selection switch:
+#   make ROM=rom1     -> builds with rom1
+#   make ROM=rom3     -> builds with rom3 (default)
+#   make             -> defaults to rom3
+ROM ?= rom3
+
 V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD -Wno-fatal \
 	-I$(RTL)  \
 	-I$(RTL)/65C816  \
@@ -17,6 +23,10 @@ V_DEFINE += --trace-fst
 #   make SOUND=doc    -> builds full ES5503 path (default)
 ifeq ($(SOUND),stub)
 V_DEFINE += +define+SOUND_STUB
+endif
+# ROM selection
+ifeq ($(ROM),rom3)
+V_DEFINE += +define+ROM3
 endif
 V_DEFINE +=
 
