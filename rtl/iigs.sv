@@ -120,7 +120,7 @@ module iigs
   logic [23:0]        addr_bus;
   logic               cpu_vpa, cpu_vpb;
   logic               cpu_vda, cpu_mlb;
-  logic               cpu_wen;
+  logic               cpu_we_n;
   logic [7:0]         io_dout;
   logic [7:0]         slot_dout;
 
@@ -227,7 +227,7 @@ module iigs
   assign CXROM=INTCXROM;
   assign { bank, addr } = addr_bus;
   assign dout = cpu_dout;
-  assign we = ~cpu_wen;
+  assign we = ~cpu_we_n;
   assign valid = cpu_vpa | cpu_vda;
   assign slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
   assign slotid = addr[11:8];
@@ -410,23 +410,23 @@ module iigs
     io_dout <= din;
     paddle_trigger <= 1'b0;  // Default: no paddle trigger
     adb_strobe <= 1'b0;
-    if (adb_strobe & cpu_wen) begin
+    if (adb_strobe & cpu_we_n) begin
       io_dout <= adb_dout;
     end
 
     prtc_strobe <= 1'b0;
-    if (prtc_strobe & cpu_wen) begin
+    if (prtc_strobe & cpu_we_n) begin
       io_dout <= prtc_dout;
     end
 
     iwm_strobe <= 1'b0;
-    if (iwm_strobe & cpu_wen & phi2) begin
+    if (iwm_strobe & cpu_we_n & phi2) begin
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
       io_dout <= iwm_dout;
     end
 
     snd_strobe <= 1'b0;
-    if (snd_strobe & cpu_wen) begin
+    if (snd_strobe & cpu_we_n) begin
       io_dout <= snd_dout;
     end
 
@@ -435,7 +435,7 @@ module iigs
     scc_we <= 1'b0;
 
     if (IO) begin
-      if (~cpu_wen)
+      if (~cpu_we_n)
         // write
         begin
           //$display("** IO_WR %x %x",addr[11:0],cpu_dout);
@@ -1053,11 +1053,11 @@ module iigs
       if ((bank_bef==0 || bank_bef==8'he0) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
         aux = ALTZP;
       else if ((bank_bef==0 || bank_bef==1 || bank_bef==8'he0 || bank_bef==8'he1) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
-        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen))))));
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
       else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
-        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen))))));
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
       else
-        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_wen)) | (RAMWRT & ~cpu_wen))));
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
     end
 assign     fastram_address = {bank[6:0],addr};
 assign     fastram_datatoram = dout;
@@ -1249,7 +1249,7 @@ wire ready_out;
               .D_IN(cpu_din),
               .D_OUT(cpu_dout),
               .A_OUT(cpu_addr),
-              .WE(cpu_wen), // This signal is active low at this point
+              .WE(cpu_we_n), // This signal is active low at this point
               .RDY_OUT(ready_out),
               .VPA(cpu_vpa),
               .VDA(cpu_vda),
@@ -1262,7 +1262,7 @@ wire ready_out;
     begin
       if (phi2)
         begin
-          //$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_wen %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_wen,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
+          //$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we_n %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we_n,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
           // to debug interrupts:
           if (cpu_irq)
             $display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x snd_irq %x",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[2],VGCINT[1],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3], snd_irq);
