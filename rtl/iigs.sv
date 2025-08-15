@@ -1296,6 +1296,7 @@ wire ready_out;
       dbg_pc_counter <= dbg_pc_counter + 20'd1;
 `endif
 
+  wire adb_capslock;
   adb adb(
           .CLK_14M(CLK_14M),
           .cen(phi2),
@@ -1304,7 +1305,9 @@ wire ready_out;
           .rw(adb_rw),
           .din(adb_din),
           .dout(adb_dout),
+          .irq(/* unused - ADB IRQ handled via registers */),
           .strobe(adb_strobe),
+          .capslock(adb_capslock),
           .ps2_key(ps2_key),
           .ps2_mouse(ps2_mouse)
           );

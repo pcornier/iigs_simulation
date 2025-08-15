@@ -10,6 +10,9 @@ module adb(
   output irq,
   input strobe,
   
+  // Special outputs
+  output reg capslock,
+  
   // PS/2 inputs
   input [10:0] ps2_key,   // [10]=toggle, [9]=pressed, [8]=extended, [7:0]=code
   input [24:0] ps2_mouse  // [24]=toggle, others=mouse data
@@ -97,6 +100,171 @@ reg [3:0] mouse_fifo_count;              // Number of mouse events in FIFO
 // PS/2 input detection
 reg ps2_key_toggle_prev, ps2_mouse_toggle_prev;
 
+// PS/2 to Apple IIgs keyboard translation function
+function [7:0] ps2_to_apple_key;
+  input [8:0] ps2_scancode;  // ps2_key[8:0] - includes extended bit
+  begin
+    case(ps2_scancode) // PS/2 Scan Code Set 2 to Apple IIgs translation
+      9'h000: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h001: ps2_to_apple_key = 8'h65;  // F9
+      9'h002: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h003: ps2_to_apple_key = 8'h60;  // F5
+      9'h004: ps2_to_apple_key = 8'h63;  // F3
+      9'h005: ps2_to_apple_key = 8'h7A;  // F1
+      9'h006: ps2_to_apple_key = 8'h78;  // F2
+      9'h007: ps2_to_apple_key = 8'h7F;  // F12 (unmapped)
+      9'h008: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h009: ps2_to_apple_key = 8'h6D;  // F10
+      9'h00a: ps2_to_apple_key = 8'h64;  // F8
+      9'h00b: ps2_to_apple_key = 8'h61;  // F6
+      9'h00c: ps2_to_apple_key = 8'h76;  // F4
+      9'h00d: ps2_to_apple_key = 8'h30;  // TAB
+      9'h00e: ps2_to_apple_key = 8'h32;  // ~ (`)
+      9'h00f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h010: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h011: ps2_to_apple_key = 8'h37;  // LEFT ALT (command)
+      9'h012: ps2_to_apple_key = 8'h38;  // LEFT SHIFT
+      9'h013: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h014: ps2_to_apple_key = 8'h36;  // CTRL
+      9'h015: ps2_to_apple_key = 8'h0C;  // Q
+      9'h016: ps2_to_apple_key = 8'h12;  // 1
+      9'h017: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h018: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h019: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h01a: ps2_to_apple_key = 8'h06;  // Z
+      9'h01b: ps2_to_apple_key = 8'h01;  // S
+      9'h01c: ps2_to_apple_key = 8'h00;  // A
+      9'h01d: ps2_to_apple_key = 8'h0D;  // W
+      9'h01e: ps2_to_apple_key = 8'h13;  // 2
+      9'h01f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h020: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h021: ps2_to_apple_key = 8'h08;  // C
+      9'h022: ps2_to_apple_key = 8'h07;  // X
+      9'h023: ps2_to_apple_key = 8'h02;  // D
+      9'h024: ps2_to_apple_key = 8'h0E;  // E
+      9'h025: ps2_to_apple_key = 8'h15;  // 4
+      9'h026: ps2_to_apple_key = 8'h14;  // 3
+      9'h027: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h028: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h029: ps2_to_apple_key = 8'h31;  // SPACE
+      9'h02a: ps2_to_apple_key = 8'h09;  // V
+      9'h02b: ps2_to_apple_key = 8'h03;  // F
+      9'h02c: ps2_to_apple_key = 8'h11;  // T
+      9'h02d: ps2_to_apple_key = 8'h0F;  // R
+      9'h02e: ps2_to_apple_key = 8'h17;  // 5
+      9'h02f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h030: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h031: ps2_to_apple_key = 8'h2D;  // N
+      9'h032: ps2_to_apple_key = 8'h0B;  // B
+      9'h033: ps2_to_apple_key = 8'h04;  // H
+      9'h034: ps2_to_apple_key = 8'h05;  // G
+      9'h035: ps2_to_apple_key = 8'h10;  // Y
+      9'h036: ps2_to_apple_key = 8'h16;  // 6
+      9'h037: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h038: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h039: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h03a: ps2_to_apple_key = 8'h2E;  // M
+      9'h03b: ps2_to_apple_key = 8'h26;  // J
+      9'h03c: ps2_to_apple_key = 8'h20;  // U
+      9'h03d: ps2_to_apple_key = 8'h1A;  // 7
+      9'h03e: ps2_to_apple_key = 8'h1C;  // 8
+      9'h03f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h040: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h041: ps2_to_apple_key = 8'h2B;  // < (,)
+      9'h042: ps2_to_apple_key = 8'h28;  // K
+      9'h043: ps2_to_apple_key = 8'h22;  // I
+      9'h044: ps2_to_apple_key = 8'h1F;  // O
+      9'h045: ps2_to_apple_key = 8'h1D;  // 0
+      9'h046: ps2_to_apple_key = 8'h19;  // 9
+      9'h047: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h048: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h049: ps2_to_apple_key = 8'h2F;  // > (.)
+      9'h04a: ps2_to_apple_key = 8'h2C;  // FORWARD SLASH
+      9'h04b: ps2_to_apple_key = 8'h25;  // L
+      9'h04c: ps2_to_apple_key = 8'h29;  // ;
+      9'h04d: ps2_to_apple_key = 8'h23;  // P
+      9'h04e: ps2_to_apple_key = 8'h1B;  // - (minus)
+      9'h04f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h050: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h051: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h052: ps2_to_apple_key = 8'h27;  // ' (")
+      9'h053: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h054: ps2_to_apple_key = 8'h21;  // [
+      9'h055: ps2_to_apple_key = 8'h18;  // = 
+      9'h056: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h057: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h058: ps2_to_apple_key = 8'h39;  // CAPSLOCK
+      9'h059: ps2_to_apple_key = 8'h7B;  // RIGHT SHIFT
+      9'h05a: ps2_to_apple_key = 8'h24;  // ENTER
+      9'h05b: ps2_to_apple_key = 8'h1E;  // ]
+      9'h05c: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h05d: ps2_to_apple_key = 8'h2A;  // BACKSLASH
+      9'h05e: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h05f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h060: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h061: ps2_to_apple_key = 8'h7F;  // International left shift (German <> key)
+      9'h062: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h063: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h064: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h065: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h066: ps2_to_apple_key = 8'h33;  // BACKSPACE
+      9'h067: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h068: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h069: ps2_to_apple_key = 8'h53;  // KP 1
+      9'h06a: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h06b: ps2_to_apple_key = 8'h56;  // KP 4
+      9'h06c: ps2_to_apple_key = 8'h59;  // KP 7
+      9'h06d: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h06e: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h06f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h070: ps2_to_apple_key = 8'h52;  // KP 0
+      9'h071: ps2_to_apple_key = 8'h41;  // KP .
+      9'h072: ps2_to_apple_key = 8'h54;  // KP 2
+      9'h073: ps2_to_apple_key = 8'h57;  // KP 5
+      9'h074: ps2_to_apple_key = 8'h58;  // KP 6
+      9'h075: ps2_to_apple_key = 8'h5B;  // KP 8
+      9'h076: ps2_to_apple_key = 8'h35;  // ESCAPE
+      9'h077: ps2_to_apple_key = 8'h47;  // NUMLOCK (Mac keypad clear)
+      9'h078: ps2_to_apple_key = 8'h67;  // F11
+      9'h079: ps2_to_apple_key = 8'h45;  // KP +
+      9'h07a: ps2_to_apple_key = 8'h55;  // KP 3
+      9'h07b: ps2_to_apple_key = 8'h4E;  // KP -
+      9'h07c: ps2_to_apple_key = 8'h43;  // KP *
+      9'h07d: ps2_to_apple_key = 8'h5C;  // KP 9
+      9'h07e: ps2_to_apple_key = 8'h7F;  // SCROLL LOCK
+      9'h07f: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h080: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h081: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h082: ps2_to_apple_key = 8'h7F;  // Invalid
+      9'h083: ps2_to_apple_key = 8'h62;  // F7
+      9'h084: ps2_to_apple_key = 8'h7F;  // Invalid
+      // Extended keys (ps2_key[8] = 1) - these require special handling
+      9'h111: ps2_to_apple_key = 8'h37;  // RIGHT ALT (command)
+      9'h11f: ps2_to_apple_key = 8'h3A;  // WINDOWS/APPLICATION KEY (option)
+      9'h14a: ps2_to_apple_key = 8'h4B;  // KP /
+      9'h15a: ps2_to_apple_key = 8'h4C;  // KP ENTER
+      9'h169: ps2_to_apple_key = 8'h77;  // END
+      9'h16b: ps2_to_apple_key = 8'h3B;  // ARROW LEFT
+      9'h16c: ps2_to_apple_key = 8'h73;  // HOME
+      9'h170: ps2_to_apple_key = 8'h72;  // INSERT (HELP)
+      9'h171: ps2_to_apple_key = 8'h75;  // DELETE
+      9'h172: ps2_to_apple_key = 8'h3D;  // ARROW DOWN
+      9'h174: ps2_to_apple_key = 8'h3C;  // ARROW RIGHT
+      9'h175: ps2_to_apple_key = 8'h3E;  // ARROW UP
+      9'h17a: ps2_to_apple_key = 8'h79;  // PGDN
+      9'h17c: ps2_to_apple_key = 8'h69;  // PRTSCR (F13)
+      9'h17d: ps2_to_apple_key = 8'h74;  // PGUP
+      9'h17e: ps2_to_apple_key = 8'h71;  // CTRL+BREAK (F15)
+      default: ps2_to_apple_key = 8'h7F;  // Unmapped keys
+    endcase
+  end
+endfunction
+
+// PS/2 Extended keys that are NOT handled in the above translation:
+// Most PS/2 codes 0x085-0x110, 0x112-0x11E, 0x120-0x168, 0x16A, 0x16D-0x16F
+// 0x173, 0x176-0x179, 0x17B, 0x17F and above
+// These can be added later as needed for specific functionality
+
 // Device command decoding (done inline in case statements)
 
 always @(posedge CLK_14M) begin
@@ -115,6 +283,7 @@ always @(posedge CLK_14M) begin
     valid_kbd <= 1'b0;
     mouse_coord <= 1'b0;
     adb_interrupt_pending <= 1'b0;
+    capslock <= 1'b0;
     
     // Initialize ADB controller memory/config
     adb_mode <= 8'h00;
@@ -182,41 +351,57 @@ always @(posedge CLK_14M) begin
     
     // Handle PS/2 keyboard input changes
     if (ps2_key[10] != ps2_key_toggle_prev) begin
-      if (ps2_key[9]) begin  // Key pressed (not released)
-        // Add to keyboard FIFO if there's space
-        if (kbd_fifo_count < MAX_KBD_BUF) begin
-          kbd_fifo[kbd_fifo_head] <= ps2_key[7:0];  // Store PS/2 scancode
-          kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
-          kbd_fifo_count <= kbd_fifo_count + 1;
-          
-          // If no current key, load immediately
-          if (kbd_fifo_count == 0) begin
-            kbd_current_key <= ps2_key[7:0] | 8'h80;  // Set strobe bit
-            kbd_strobe <= 1'b1;
-            // Generate SRQ for keyboard input if enabled
-            if (device_registers[2][3] & 8'h02) begin  // Check SRQ enable bit
-              adb_interrupt_pending <= 1'b1;
+      // Translate PS/2 scancode to Apple IIgs keyboard code
+      reg [7:0] apple_key;
+      apple_key = ps2_to_apple_key(ps2_key[8:0]);
+      
+      // Handle Caps Lock toggle (PS/2 scancode 0x58)
+      if (ps2_key[8:0] == 9'h058 && ps2_key[9]) begin  // Caps Lock pressed
+        capslock <= ~capslock;
+      end
+      
+      // Only process valid (non-0x7F) translated keys, and skip caps lock for normal processing
+      if (apple_key != 8'h7F && !(ps2_key[8:0] == 9'h058 && capslock)) begin
+        if (ps2_key[9]) begin  // Key pressed (not released)
+          // Add to keyboard FIFO if there's space
+          if (kbd_fifo_count < MAX_KBD_BUF) begin
+            kbd_fifo[kbd_fifo_head] <= apple_key;  // Store translated Apple keyboard code
+            kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
+            kbd_fifo_count <= kbd_fifo_count + 1;
+            
+            // If no current key, load immediately
+            if (kbd_fifo_count == 0) begin
+              kbd_current_key <= apple_key | 8'h80;  // Set strobe bit
+              kbd_strobe <= 1'b1;
+              // Generate SRQ for keyboard input if enabled
+              if (device_registers[2][3] & 8'h02) begin  // Check SRQ enable bit
+                adb_interrupt_pending <= 1'b1;
+              end
             end
+            
+            valid_kbd <= 1'b1;
+            device_data_pending[2] <= 8'h01;
+            
+            `ifdef SIMULATION
+              $display("ADB: PS/2 Key pressed: scancode=$%02X -> Apple=$%02X, FIFO count=%d", ps2_key[7:0], apple_key, kbd_fifo_count + 1);
+            `endif
           end
-          
-          valid_kbd <= 1'b1;
-          device_data_pending[2] <= 8'h01;
-          
-          `ifdef SIMULATION
-            $display("ADB: PS/2 Key pressed: scancode=$%02X, FIFO count=%d", ps2_key[7:0], kbd_fifo_count + 1);
-          `endif
+        end else begin
+          // Key released - add release code to FIFO
+          if (kbd_fifo_count < MAX_KBD_BUF) begin
+            kbd_fifo[kbd_fifo_head] <= apple_key | 8'h80;  // Set release bit with translated key
+            kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
+            kbd_fifo_count <= kbd_fifo_count + 1;
+            
+            `ifdef SIMULATION
+              $display("ADB: PS/2 Key released: scancode=$%02X -> Apple=$%02X", ps2_key[7:0], apple_key);
+            `endif
+          end
         end
       end else begin
-        // Key released - add release code to FIFO
-        if (kbd_fifo_count < MAX_KBD_BUF) begin
-          kbd_fifo[kbd_fifo_head] <= ps2_key[7:0] | 8'h80;  // Set release bit
-          kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
-          kbd_fifo_count <= kbd_fifo_count + 1;
-          
-          `ifdef SIMULATION
-            $display("ADB: PS/2 Key released: scancode=$%02X", ps2_key[7:0]);
-          `endif
-        end
+        `ifdef SIMULATION
+          $display("ADB: Unmapped PS/2 key: scancode=$%02X (extended=%d)", ps2_key[7:0], ps2_key[8]);
+        `endif
       end
     end
     
