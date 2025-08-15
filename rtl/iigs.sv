@@ -663,7 +663,7 @@ module iigs
           case (addr[11:0])
             12'h000, 12'h010, 12'h024, 12'h025,
             12'h026, 12'h027, 12'h044, 12'h045,
-            12'h061, 12'h062, 12'h064, 12'h065,
+            12'h064, 12'h065,
             12'h066, 12'h067, 12'h070: begin
               adb_addr <= addr[7:0];
               adb_strobe <= 1'b1;
@@ -783,8 +783,18 @@ module iigs
             12'h05f: io_dout <= 'h0; // some kind of soft switch?
             
             // Joystick/Paddle I/O
-            12'h061: io_dout <= {sw0, 7'b0000000};                      // SW0/Open Apple (bit 7: 1=pressed)
-            12'h062: io_dout <= {sw1, 7'b0000000};                      // SW1/Closed Apple (bit 7: 1=pressed)
+            12'h061: begin
+              io_dout <= {sw0, 7'b0000000};                      // SW0/Open Apple (bit 7: 1=pressed)
+`ifdef SIMULATION
+              $display("JOYSTICK: Read button 1 ($C061) = $%02X (sw0=%d, open_apple=%d, joystick_0[4]=%d)", {sw0, 7'b0000000}, sw0, open_apple, joystick_0[4]);
+`endif
+            end
+            12'h062: begin
+              io_dout <= {sw1, 7'b0000000};                      // SW1/Closed Apple (bit 7: 1=pressed)
+`ifdef SIMULATION
+              $display("JOYSTICK: Read button 2 ($C062) = $%02X (sw1=%d, closed_apple=%d, joystick_0[5]=%d)", {sw1, 7'b0000000}, sw1, closed_apple, joystick_0[5]);
+`endif
+            end
             12'h063: io_dout <= {sw2, 7'b0000000};                      // SW2 (bit 7: 1=pressed)
             12'h064: io_dout <= {~paddle_timer_expired[0], 7'b0000000}; // PADDL0 (bit 7: 1=still timing, 0=done)
             12'h065: io_dout <= {~paddle_timer_expired[1], 7'b0000000}; // PADDL1 (bit 7: 1=still timing, 0=done)

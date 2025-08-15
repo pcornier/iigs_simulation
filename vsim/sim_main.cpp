@@ -825,12 +825,12 @@ int verilate() {
 		
 		// Handle self-test mode override timing
 		if (selftest_mode) {
-			if (!selftest_override_started && main_time >= initialReset) {
-				// Start self-test override when reset is released (only once)
+			if (!selftest_override_started && main_time >= 10) {
+				// Start self-test override BEFORE reset is released (keys must be held during reset)
 				selftest_override_active = true;
 				selftest_override_started = true;
 				selftest_start_time = main_time;
-				printf("Self-test mode: Activating Command+Option+Control override\n");
+				printf("Self-test mode: Activating Command+Option+Control override during reset\n");
 			}
 			
 			if (selftest_override_active && (main_time - selftest_start_time) >= SELFTEST_OVERRIDE_DURATION) {

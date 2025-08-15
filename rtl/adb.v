@@ -23,7 +23,7 @@
  * $C025: Modifier key status (bit 7=CMD, bit 6=OPTION, bit 2=CAPS, bit 1=CTRL, bit 0=SHIFT)
  * $C026: ADB command/data register
  * $C027: ADB control register
- * $C060-$C063: Joystick button registers
+ * $C060-$C063: Joystick button registers (handled by iigs.sv main I/O decoder)
  * $C064-$C067: Paddle registers
  *
  * This implementation matches the behavior of:
@@ -1181,21 +1181,8 @@ always @(posedge CLK_14M) begin
       end
     end
 
-    8'h60, 8'h61, 8'h62, 8'h63: begin
-      // $C060-$C063 - Joystick/Button registers
-      // joy num is addr[1:0], but offset by 1 for indexing
-      if (rw) begin
-        case (addr[1:0])
-          2'd0: dout <= 8'h00; // Button 0 (not pressed)
-          2'd1: dout <= {open_apple, 7'b0000000}; // Button 1 = Open Apple (Command key, bit 7)
-          2'd2: dout <= {closed_apple, 7'b0000000}; // Button 2 = Closed Apple (Option key, bit 7)
-          2'd3: dout <= 8'h00; // Button 3 (not pressed)
-        endcase
-        `ifdef SIMULATION
-          $display("ADB: Read joystick button %d = $%02X", addr[1:0], dout);
-        `endif
-      end
-    end
+    // $C060-$C063 - Joystick/Button registers handled by iigs.sv main I/O decoder
+    // Removed from ADB module to eliminate bus conflict
 
     8'h64, 8'h65, 8'h66, 8'h67: begin
       // $C064-$C067 - Paddle registers (analogue joystick)
