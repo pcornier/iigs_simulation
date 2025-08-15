@@ -50,6 +50,9 @@ module adb(
   input [10:0] ps2_key,   // [10]=toggle, [9]=pressed, [8]=extended, [7:0]=code
   input [24:0] ps2_mouse, // [24]=toggle, others=mouse data
   
+  // Self-test mode override
+  input selftest_override, // When high, simulates Command+Option+Control pressed
+  
   // Apple IIe compatibility outputs (replacing old keyboard module)
   output reg open_apple,   // Command key for Apple IIe compatibility 
   output reg closed_apple, // Option key for Apple IIe compatibility
@@ -588,24 +591,27 @@ always @(posedge CLK_14M) begin
       end
       
       // Handle modifier keys (based on software emulator key codes)
-      case (apple_key)
-        8'h38, 8'h7B: begin // Left/Right Shift (0x38, 0x7B)
-          shift_down <= ps2_key[9]; // Set when pressed, clear when released
-          apple_shift <= ps2_key[9]; // Apple IIe compatibility
-        end
-        8'h36: begin // Control (0x36)
-          ctrl_down <= ps2_key[9];
-          apple_ctrl <= ps2_key[9]; // Apple IIe compatibility
-        end
-        8'h37: begin // Command (0x37)
-          cmd_down <= ps2_key[9];
-          open_apple <= ps2_key[9]; // Apple IIe compatibility (Command = Open Apple)
-        end
-        8'h3A: begin // Option (0x3A)
-          option_down <= ps2_key[9];
-          closed_apple <= ps2_key[9]; // Apple IIe compatibility (Option = Closed Apple)
-        end
-      endcase
+      // Don't process modifier keys if selftest override is active
+      if (!selftest_override) begin
+        case (apple_key)
+          8'h38, 8'h7B: begin // Left/Right Shift (0x38, 0x7B)
+            shift_down <= ps2_key[9]; // Set when pressed, clear when released
+            apple_shift <= ps2_key[9]; // Apple IIe compatibility
+          end
+          8'h36: begin // Control (0x36)
+            ctrl_down <= ps2_key[9];
+            apple_ctrl <= ps2_key[9]; // Apple IIe compatibility
+          end
+          8'h37: begin // Command (0x37)
+            cmd_down <= ps2_key[9];
+            open_apple <= ps2_key[9]; // Apple IIe compatibility (Command = Open Apple)
+          end
+          8'h3A: begin // Option (0x3A)
+            option_down <= ps2_key[9];
+            closed_apple <= ps2_key[9]; // Apple IIe compatibility (Option = Closed Apple)
+          end
+        endcase
+      end
       
       // Convert ADB key to Apple IIe ASCII using correct conversion
       iie_char = adb_to_apple_iie_ascii(
@@ -680,6 +686,20 @@ always @(posedge CLK_14M) begin
           $display("ADB: Unmapped PS/2 key: scancode=$%02X (extended=%d)", ps2_key[7:0], ps2_key[8]);
         `endif
       end
+    end
+    
+    // Self-test override: simulate Command+Option+Control pressed
+    // This must be outside PS/2 processing to work continuously
+    if (selftest_override) begin
+      cmd_down <= 1'b1;
+      option_down <= 1'b1;
+      ctrl_down <= 1'b1;
+      open_apple <= 1'b1;   // Command = Open Apple
+      closed_apple <= 1'b1; // Option = Closed Apple  
+      apple_ctrl <= 1'b1;   // Control for Apple IIe compatibility
+      `ifdef SIMULATION
+        $display("ADB: Self-test override active - simulating Command+Option+Control pressed");
+      `endif
     end
     
     // Handle PS/2 mouse input changes

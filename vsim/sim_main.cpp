@@ -81,6 +81,13 @@ bool pc_break_enabled;
 bool break_pending = false;
 bool old_vpb = false;
 
+// Self-test mode support
+bool selftest_mode = false;
+bool selftest_override_active = false;
+bool selftest_override_started = false;
+vluint64_t selftest_start_time = 0;
+const vluint64_t SELFTEST_OVERRIDE_DURATION = 10000000; // 10 seconds in simulation time (much longer)
+
 // HPS emulator
 // ------------
 SimBus bus(console);
@@ -815,6 +822,26 @@ int verilate() {
 		if (main_time < initialReset) { top->reset = 1; }
 		// Deassert reset after startup
 		if (main_time == initialReset) { top->reset = 0; }
+		
+		// Handle self-test mode override timing
+		if (selftest_mode) {
+			if (!selftest_override_started && main_time >= initialReset) {
+				// Start self-test override when reset is released (only once)
+				selftest_override_active = true;
+				selftest_override_started = true;
+				selftest_start_time = main_time;
+				printf("Self-test mode: Activating Command+Option+Control override\n");
+			}
+			
+			if (selftest_override_active && (main_time - selftest_start_time) >= SELFTEST_OVERRIDE_DURATION) {
+				// Release override after long duration
+				selftest_override_active = false;
+				printf("Self-test mode: Releasing key override after %d time units\n", (int)SELFTEST_OVERRIDE_DURATION);
+			}
+		}
+		
+		// Set self-test override signal to hardware
+		top->selftest_override = selftest_override_active ? 1 : 0;
 
 		// Clock dividers
 		CLK_14M.Tick();
@@ -1032,9 +1059,9 @@ void save_screenshot(int frame_number) {
 
 int main(int argc, char** argv, char** env) {
 
-	// Parse screenshot arguments
-	for (int i = 1; i < argc - 1; i++) {
-		if (strcmp(argv[i], "-screenshot") == 0) {
+	// Parse command line arguments
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-screenshot") == 0 && i + 1 < argc) {
 			screenshot_mode = true;
 			std::string frames_str = argv[i + 1];
 			std::stringstream ss(frames_str);
@@ -1043,7 +1070,10 @@ int main(int argc, char** argv, char** env) {
 				screenshot_frames.push_back(std::stoi(frame_num));
 			}
 			printf("Screenshot mode enabled for frames: %s\n", frames_str.c_str());
-			break;
+			i++; // Skip the next argument since it's the frame list
+		} else if (strcmp(argv[i], "--selftest") == 0) {
+			selftest_mode = true;
+			printf("Self-test mode enabled - will simulate Command+Option+Control+Reset\n");
 		}
 	}
 

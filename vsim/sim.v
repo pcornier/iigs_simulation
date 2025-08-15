@@ -53,6 +53,9 @@ module emu (
         input [24:0] ps2_mouse,
         input [15:0] ps2_mouse_ext, // 15:8 - reserved(additional buttons), 7:0 - wheel movements
 
+        // Self-test mode override
+        input selftest_override,
+
         // [31:0] - seconds since 1970-01-01 00:00:00, [32] - toggle with every change
         input [32:0] timestamp,
 
@@ -181,6 +184,7 @@ iigs  iigs(
 
         .ps2_key(ps2_key),
         .ps2_mouse(ps2_mouse),
+        .selftest_override(selftest_override),
 
         .FLOPPY_WP(1'b1),
         

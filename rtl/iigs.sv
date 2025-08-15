@@ -38,7 +38,9 @@ module iigs
 //wire       button = ps2_mouse[0];
 
  input [24:0] ps2_mouse,
-        
+ 
+   // Self-test mode override
+ input              selftest_override,
 
    // Floppy write-protect (sim global)
  input              floppy_wp,
@@ -1312,6 +1314,7 @@ wire ready_out;
           .capslock(adb_capslock),
           .ps2_key(ps2_key),
           .ps2_mouse(ps2_mouse),
+          .selftest_override(selftest_override), // Self-test mode override
           // Apple IIe compatibility outputs (replacing old keyboard module)
           .open_apple(adb_open_apple),     // Command key = Open Apple
           .closed_apple(adb_closed_apple), // Option key = Closed Apple
