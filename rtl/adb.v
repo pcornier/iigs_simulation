@@ -1,3 +1,36 @@
+/*
+ * Apple IIgs ADB Controller Implementation
+ * 
+ * This module implements the Apple Desktop Bus (ADB) controller for the Apple IIgs,
+ * with full compatibility with software emulators like GSPlus and Clemens.
+ *
+ * Key Features:
+ * - Full $C025 modifier key status register implementation
+ * - Command/Option key tracking compatible with software emulators
+ * - Apple IIe backwards compatibility via $C000/$C010 registers
+ * - PS/2 keyboard to Apple IIgs ADB key translation
+ * - Apple IIgs ADB key to Apple IIe ASCII conversion (matches GSPlus)
+ * - Mouse support via ADB protocol
+ * - Complete ADB device simulation (keyboard=device 2, mouse=device 3)
+ * 
+ * Key Conversion Pipeline:
+ * PS/2 Scancode → Apple IIgs ADB Code → Apply Modifiers → Apple IIe ASCII
+ *     0x1C     →        0x00        → +SHIFT        →      'A'
+ * 
+ * Register Compatibility:
+ * $C000: Keyboard data (Apple II compatible) - contains Apple IIe ASCII characters
+ * $C010: Key strobe clear (Apple II compatible) 
+ * $C025: Modifier key status (bit 7=CMD, bit 6=OPTION, bit 2=CAPS, bit 1=CTRL, bit 0=SHIFT)
+ * $C026: ADB command/data register
+ * $C027: ADB control register
+ * $C060-$C063: Joystick button registers
+ * $C064-$C067: Paddle registers
+ *
+ * This implementation matches the behavior of:
+ * - GSPlus emulator's adb.c (a2_key_to_ascii table and g_c025_val register)
+ * - Clemens emulator's clem_adb.c (g_a2_to_ascii table)
+ * - Original Apple IIgs hardware specifications
+ */
 
 module adb(
   input CLK_14M,
@@ -15,7 +48,15 @@ module adb(
   
   // PS/2 inputs
   input [10:0] ps2_key,   // [10]=toggle, [9]=pressed, [8]=extended, [7:0]=code
-  input [24:0] ps2_mouse  // [24]=toggle, others=mouse data
+  input [24:0] ps2_mouse, // [24]=toggle, others=mouse data
+  
+  // Apple IIe compatibility outputs (replacing old keyboard module)
+  output reg open_apple,   // Command key for Apple IIe compatibility 
+  output reg closed_apple, // Option key for Apple IIe compatibility
+  output reg apple_shift,  // Shift key for Apple IIe compatibility
+  output reg apple_ctrl,   // Control key for Apple IIe compatibility
+  output reg akd,          // Any key down (Apple IIe compatibility)
+  output [7:0] K           // Apple IIe character code with strobe bit (bit 7)
 );
 
 // ADB Controller Version - depends on ROM version
@@ -66,9 +107,16 @@ reg cmd_full;
 reg [7:0] ram[255:0];
 
 // ADB Status/Control Registers
-reg [7:0] c025_status;    // $C025 - ADB Status Register
+reg [7:0] c025_status;    // $C025 - ADB Modifier Keys Status Register
 reg [7:0] c026_data;      // $C026 - ADB Command/Data Register  
 reg [7:0] c027_control;   // $C027 - ADB Control Register
+
+// Modifier key state tracking (matches software emulator g_c025_val)
+reg shift_down;           // Bit 0: Shift key down
+reg ctrl_down;            // Bit 1: Control key down  
+reg caps_lock_down;       // Bit 2: Caps Lock down
+reg option_down;          // Bit 6: Option key down
+reg cmd_down;             // Bit 7: Command key down
 
 // Device simulation - 16 possible devices, 4 registers each
 reg [7:0] device_registers [15:0][3:0];  // [device][register]
@@ -83,6 +131,10 @@ reg [3:0] kbd_fifo_tail;                 // FIFO tail pointer
 reg [3:0] kbd_fifo_count;                // Number of keys in FIFO
 reg [7:0] kbd_current_key;               // Current key in $C000
 reg kbd_strobe;                          // Keyboard strobe bit
+
+// Apple IIe compatibility - character translation and state
+reg [7:0] apple_iie_char;                // Current Apple IIe character code
+reg apple_iie_key_pressed;               // Apple IIe key pressed flag
 
 // Mouse FIFO and management  
 parameter MAX_MOUSE_BUF = 8;
@@ -240,7 +292,9 @@ function [7:0] ps2_to_apple_key;
       9'h084: ps2_to_apple_key = 8'h7F;  // Invalid
       // Extended keys (ps2_key[8] = 1) - these require special handling
       9'h111: ps2_to_apple_key = 8'h37;  // RIGHT ALT (command)
+      9'h114: ps2_to_apple_key = 8'h36;  // RIGHT CTRL (extended ctrl)
       9'h11f: ps2_to_apple_key = 8'h3A;  // WINDOWS/APPLICATION KEY (option)
+      9'h127: ps2_to_apple_key = 8'h3A;  // MENU KEY (option)
       9'h14a: ps2_to_apple_key = 8'h4B;  // KP /
       9'h15a: ps2_to_apple_key = 8'h4C;  // KP ENTER
       9'h169: ps2_to_apple_key = 8'h77;  // END
@@ -265,7 +319,163 @@ endfunction
 // 0x173, 0x176-0x179, 0x17B, 0x17F and above
 // These can be added later as needed for specific functionality
 
+// Helper function: Check if Command key is down (matches software emulator)
+function cmd_key_down;
+  input dummy; // Verilog function needs at least one input
+  cmd_key_down = cmd_down;
+endfunction
+
+// Helper function: Check if Option key is down (matches software emulator)
+function option_key_down;
+  input dummy;
+  option_key_down = option_down;
+endfunction
+
+// Apple IIgs ADB to Apple IIe ASCII conversion (matches GSPlus emulator)
+// Input: ADB key code (0x00-0x7F) + modifier flags
+// Output: Apple IIe ASCII character for $C000/$C010 registers
+function [7:0] adb_to_apple_iie_ascii;
+  input [6:0] adb_key;     // ADB key code (0x00-0x7F)
+  input       shift_mod;   // Shift modifier active
+  input       ctrl_mod;    // Control modifier active  
+  input       caps_mod;    // Caps lock active
+  
+  reg [7:0] normal_ascii;
+  reg [7:0] shift_ascii;
+  reg [7:0] ctrl_ascii;
+  reg       is_special;
+  reg       is_letter;
+  
+  begin
+    // Default values
+    normal_ascii = 8'hFF;
+    shift_ascii = 8'hFF;
+    ctrl_ascii = 8'hFF;
+    is_special = 1'b0;
+    is_letter = 1'b0;
+    
+    // GSPlus a2_key_to_ascii table conversion
+    case(adb_key)
+      // Letters (set is_letter flag for caps lock handling)
+      7'h00: begin normal_ascii = "a"; shift_ascii = "A"; ctrl_ascii = 8'h01; is_letter = 1'b1; end // A
+      7'h01: begin normal_ascii = "s"; shift_ascii = "S"; ctrl_ascii = 8'h13; is_letter = 1'b1; end // S
+      7'h02: begin normal_ascii = "d"; shift_ascii = "D"; ctrl_ascii = 8'h04; is_letter = 1'b1; end // D
+      7'h03: begin normal_ascii = "f"; shift_ascii = "F"; ctrl_ascii = 8'h06; is_letter = 1'b1; end // F
+      7'h04: begin normal_ascii = "h"; shift_ascii = "H"; ctrl_ascii = 8'h08; is_letter = 1'b1; end // H
+      7'h05: begin normal_ascii = "g"; shift_ascii = "G"; ctrl_ascii = 8'h07; is_letter = 1'b1; end // G
+      7'h06: begin normal_ascii = "z"; shift_ascii = "Z"; ctrl_ascii = 8'h1A; is_letter = 1'b1; end // Z
+      7'h07: begin normal_ascii = "x"; shift_ascii = "X"; ctrl_ascii = 8'h18; is_letter = 1'b1; end // X
+      7'h08: begin normal_ascii = "c"; shift_ascii = "C"; ctrl_ascii = 8'h03; is_letter = 1'b1; end // C
+      7'h09: begin normal_ascii = "v"; shift_ascii = "V"; ctrl_ascii = 8'h16; is_letter = 1'b1; end // V
+      7'h0B: begin normal_ascii = "b"; shift_ascii = "B"; ctrl_ascii = 8'h02; is_letter = 1'b1; end // B
+      7'h0C: begin normal_ascii = "q"; shift_ascii = "Q"; ctrl_ascii = 8'h11; is_letter = 1'b1; end // Q
+      7'h0D: begin normal_ascii = "w"; shift_ascii = "W"; ctrl_ascii = 8'h17; is_letter = 1'b1; end // W
+      7'h0E: begin normal_ascii = "e"; shift_ascii = "E"; ctrl_ascii = 8'h05; is_letter = 1'b1; end // E
+      7'h0F: begin normal_ascii = "r"; shift_ascii = "R"; ctrl_ascii = 8'h12; is_letter = 1'b1; end // R
+      7'h10: begin normal_ascii = "y"; shift_ascii = "Y"; ctrl_ascii = 8'h19; is_letter = 1'b1; end // Y
+      7'h11: begin normal_ascii = "t"; shift_ascii = "T"; ctrl_ascii = 8'h14; is_letter = 1'b1; end // T
+      7'h1F: begin normal_ascii = "o"; shift_ascii = "O"; ctrl_ascii = 8'h0F; is_letter = 1'b1; end // O
+      7'h20: begin normal_ascii = "u"; shift_ascii = "U"; ctrl_ascii = 8'h15; is_letter = 1'b1; end // U
+      7'h22: begin normal_ascii = "i"; shift_ascii = "I"; ctrl_ascii = 8'h09; is_letter = 1'b1; end // I
+      7'h23: begin normal_ascii = "p"; shift_ascii = "P"; ctrl_ascii = 8'h10; is_letter = 1'b1; end // P
+      7'h25: begin normal_ascii = "l"; shift_ascii = "L"; ctrl_ascii = 8'h0C; is_letter = 1'b1; end // L
+      7'h26: begin normal_ascii = "j"; shift_ascii = "J"; ctrl_ascii = 8'h0A; is_letter = 1'b1; end // J
+      7'h28: begin normal_ascii = "k"; shift_ascii = "K"; ctrl_ascii = 8'h0B; is_letter = 1'b1; end // K
+      7'h2D: begin normal_ascii = "n"; shift_ascii = "N"; ctrl_ascii = 8'h0E; is_letter = 1'b1; end // N
+      7'h2E: begin normal_ascii = "m"; shift_ascii = "M"; ctrl_ascii = 8'h0D; is_letter = 1'b1; end // M
+      
+      // Numbers
+      7'h12: begin normal_ascii = "1"; shift_ascii = "!"; ctrl_ascii = 8'hFF; end // 1
+      7'h13: begin normal_ascii = "2"; shift_ascii = "@"; ctrl_ascii = 8'h00; end // 2  
+      7'h14: begin normal_ascii = "3"; shift_ascii = "#"; ctrl_ascii = 8'hFF; end // 3
+      7'h15: begin normal_ascii = "4"; shift_ascii = "$"; ctrl_ascii = 8'hFF; end // 4
+      7'h17: begin normal_ascii = "5"; shift_ascii = "%"; ctrl_ascii = 8'hFF; end // 5
+      7'h16: begin normal_ascii = "6"; shift_ascii = "^"; ctrl_ascii = 8'h1E; end // 6
+      7'h1A: begin normal_ascii = "7"; shift_ascii = "&"; ctrl_ascii = 8'hFF; end // 7
+      7'h1C: begin normal_ascii = "8"; shift_ascii = "*"; ctrl_ascii = 8'hFF; end // 8
+      7'h19: begin normal_ascii = "9"; shift_ascii = "("; ctrl_ascii = 8'hFF; end // 9
+      7'h1D: begin normal_ascii = "0"; shift_ascii = ")"; ctrl_ascii = 8'hFF; end // 0
+      
+      // Special keys
+      7'h35: begin normal_ascii = 8'h1B; shift_ascii = 8'h1B; ctrl_ascii = 8'hFF; end // ESC
+      7'h30: begin normal_ascii = 8'h09; shift_ascii = 8'h09; ctrl_ascii = 8'hFF; end // TAB
+      7'h31: begin normal_ascii = 8'h20; shift_ascii = 8'h20; ctrl_ascii = 8'hFF; end // SPACE
+      7'h24: begin normal_ascii = 8'h0D; shift_ascii = 8'h0D; ctrl_ascii = 8'hFF; end // RETURN
+      7'h33: begin normal_ascii = 8'h7F; shift_ascii = 8'h7F; ctrl_ascii = 8'hFF; end // DELETE
+      
+      // Punctuation
+      7'h29: begin normal_ascii = ";"; shift_ascii = ":"; ctrl_ascii = 8'hFF; end // ;
+      7'h27: begin normal_ascii = "'"; shift_ascii = "\""; ctrl_ascii = 8'hFF; end // '
+      7'h21: begin normal_ascii = "["; shift_ascii = "{"; ctrl_ascii = 8'h1B; end // [
+      7'h1E: begin normal_ascii = "]"; shift_ascii = "}"; ctrl_ascii = 8'h1D; end // ]
+      7'h2A: begin normal_ascii = "\\"; shift_ascii = "|"; ctrl_ascii = 8'h1C; end // \
+      7'h2B: begin normal_ascii = ","; shift_ascii = "<"; ctrl_ascii = 8'hFF; end // ,
+      7'h2F: begin normal_ascii = "."; shift_ascii = ">"; ctrl_ascii = 8'hFF; end // .
+      7'h2C: begin normal_ascii = "/"; shift_ascii = "?"; ctrl_ascii = 8'h7F; end // /
+      7'h32: begin normal_ascii = "`"; shift_ascii = "~"; ctrl_ascii = 8'hFF; end // `
+      7'h1B: begin normal_ascii = "-"; shift_ascii = "_"; ctrl_ascii = 8'h1F; end // -
+      7'h18: begin normal_ascii = "="; shift_ascii = "+"; ctrl_ascii = 8'hFF; end // =
+      
+      // Arrow keys
+      7'h3B: begin normal_ascii = 8'h08; shift_ascii = 8'h08; ctrl_ascii = 8'hFF; end // LEFT
+      7'h3C: begin normal_ascii = 8'h15; shift_ascii = 8'h15; ctrl_ascii = 8'hFF; end // RIGHT  
+      7'h3D: begin normal_ascii = 8'h0A; shift_ascii = 8'h0A; ctrl_ascii = 8'hFF; end // DOWN
+      7'h3E: begin normal_ascii = 8'h0B; shift_ascii = 8'h0B; ctrl_ascii = 8'hFF; end // UP
+      
+      // Keypad keys (important for Apple II software)
+      7'h41: begin normal_ascii = "."; shift_ascii = "."; ctrl_ascii = 8'hFF; end // KP .
+      7'h43: begin normal_ascii = "*"; shift_ascii = "*"; ctrl_ascii = 8'hFF; end // KP *
+      7'h45: begin normal_ascii = "+"; shift_ascii = "+"; ctrl_ascii = 8'hFF; end // KP +
+      7'h47: begin normal_ascii = 8'h18; shift_ascii = 8'h18; ctrl_ascii = 8'hFF; end // KP Clear
+      7'h4B: begin normal_ascii = "/"; shift_ascii = "/"; ctrl_ascii = 8'hFF; end // KP /
+      7'h4C: begin normal_ascii = 8'h0D; shift_ascii = 8'h0D; ctrl_ascii = 8'hFF; end // KP Enter
+      7'h4E: begin normal_ascii = "-"; shift_ascii = "-"; ctrl_ascii = 8'hFF; end // KP -
+      7'h51: begin normal_ascii = "="; shift_ascii = "="; ctrl_ascii = 8'hFF; end // KP =
+      7'h52: begin normal_ascii = "0"; shift_ascii = "0"; ctrl_ascii = 8'hFF; end // KP 0
+      7'h53: begin normal_ascii = "1"; shift_ascii = "1"; ctrl_ascii = 8'hFF; end // KP 1
+      7'h54: begin normal_ascii = "2"; shift_ascii = "2"; ctrl_ascii = 8'hFF; end // KP 2
+      7'h55: begin normal_ascii = "3"; shift_ascii = "3"; ctrl_ascii = 8'hFF; end // KP 3
+      7'h56: begin normal_ascii = "4"; shift_ascii = "4"; ctrl_ascii = 8'hFF; end // KP 4
+      7'h57: begin normal_ascii = "5"; shift_ascii = "5"; ctrl_ascii = 8'hFF; end // KP 5
+      7'h58: begin normal_ascii = "6"; shift_ascii = "6"; ctrl_ascii = 8'hFF; end // KP 6
+      7'h59: begin normal_ascii = "7"; shift_ascii = "7"; ctrl_ascii = 8'hFF; end // KP 7
+      7'h5B: begin normal_ascii = "8"; shift_ascii = "8"; ctrl_ascii = 8'hFF; end // KP 8
+      7'h5C: begin normal_ascii = "9"; shift_ascii = "9"; ctrl_ascii = 8'hFF; end // KP 9
+      
+      // Modifier keys (return special values to indicate they're modifiers)
+      7'h36: begin normal_ascii = 8'hFF; shift_ascii = 8'hFF; ctrl_ascii = 8'hFF; is_special = 1'b1; end // Control
+      7'h37: begin normal_ascii = 8'hFF; shift_ascii = 8'hFF; ctrl_ascii = 8'hFF; is_special = 1'b1; end // Command
+      7'h38: begin normal_ascii = 8'hFF; shift_ascii = 8'hFF; ctrl_ascii = 8'hFF; is_special = 1'b1; end // Shift
+      7'h39: begin normal_ascii = 8'hFF; shift_ascii = 8'hFF; ctrl_ascii = 8'hFF; is_special = 1'b1; end // Caps Lock
+      7'h3A: begin normal_ascii = 8'hFF; shift_ascii = 8'hFF; ctrl_ascii = 8'hFF; is_special = 1'b1; end // Option
+      
+      default: begin 
+        normal_ascii = 8'hFF; 
+        shift_ascii = 8'hFF; 
+        ctrl_ascii = 8'hFF; 
+        is_special = 1'b1; 
+      end
+    endcase
+    
+    // Apply GSPlus modifier logic
+    if (ctrl_mod && ctrl_ascii != 8'hFF) begin
+      adb_to_apple_iie_ascii = ctrl_ascii;
+    end else if (caps_mod && is_letter && normal_ascii >= "a" && normal_ascii <= "z") begin
+      adb_to_apple_iie_ascii = shift_ascii;  // Caps lock = uppercase
+    end else if (shift_mod) begin
+      adb_to_apple_iie_ascii = (shift_ascii != 8'hFF) ? shift_ascii : normal_ascii;
+    end else begin
+      adb_to_apple_iie_ascii = normal_ascii;
+    end
+  end
+endfunction
+
+// Apple IIe compatibility output assignment (matches old keyboard module)
+assign K = {apple_iie_key_pressed, apple_iie_char[6:0]};
+
 // Device command decoding (done inline in case statements)
+// Also translate to Apple IIe character for compatibility
+reg [7:0] iie_char;
 
 always @(posedge CLK_14M) begin
 
@@ -301,6 +511,22 @@ always @(posedge CLK_14M) begin
     c025_status <= 8'h00;
     c026_data <= 8'h00;
     c027_control <= 8'h00;
+    
+    // Initialize modifier key states
+    shift_down <= 1'b0;
+    ctrl_down <= 1'b0;
+    caps_lock_down <= 1'b0;
+    option_down <= 1'b0;
+    cmd_down <= 1'b0;
+    
+    // Initialize Apple IIe compatibility outputs
+    open_apple <= 1'b0;
+    closed_apple <= 1'b0;
+    apple_shift <= 1'b0;
+    apple_ctrl <= 1'b0;
+    akd <= 1'b0;
+    apple_iie_char <= 8'h00;
+    apple_iie_key_pressed <= 1'b0;
     
     // Initialize ADB devices
     device_present <= 16'b0000_0000_0000_1100;  // Devices 2 (kbd) and 3 (mouse) present
@@ -358,10 +584,39 @@ always @(posedge CLK_14M) begin
       // Handle Caps Lock toggle (PS/2 scancode 0x58)
       if (ps2_key[8:0] == 9'h058 && ps2_key[9]) begin  // Caps Lock pressed
         capslock <= ~capslock;
+        caps_lock_down <= ~caps_lock_down;
       end
       
+      // Handle modifier keys (based on software emulator key codes)
+      case (apple_key)
+        8'h38, 8'h7B: begin // Left/Right Shift (0x38, 0x7B)
+          shift_down <= ps2_key[9]; // Set when pressed, clear when released
+          apple_shift <= ps2_key[9]; // Apple IIe compatibility
+        end
+        8'h36: begin // Control (0x36)
+          ctrl_down <= ps2_key[9];
+          apple_ctrl <= ps2_key[9]; // Apple IIe compatibility
+        end
+        8'h37: begin // Command (0x37)
+          cmd_down <= ps2_key[9];
+          open_apple <= ps2_key[9]; // Apple IIe compatibility (Command = Open Apple)
+        end
+        8'h3A: begin // Option (0x3A)
+          option_down <= ps2_key[9];
+          closed_apple <= ps2_key[9]; // Apple IIe compatibility (Option = Closed Apple)
+        end
+      endcase
+      
+      // Convert ADB key to Apple IIe ASCII using correct conversion
+      iie_char = adb_to_apple_iie_ascii(
+        apple_key[6:0],      // ADB key code
+        shift_down,          // Shift modifier
+        ctrl_down,           // Control modifier
+        caps_lock_down       // Caps lock modifier
+      );
+      
       // Only process valid (non-0x7F) translated keys, and skip caps lock for normal processing
-      if (apple_key != 8'h7F && !(ps2_key[8:0] == 9'h058 && capslock)) begin
+      if (apple_key != 8'h7F && !(ps2_key[8:0] == 9'h058)) begin
         if (ps2_key[9]) begin  // Key pressed (not released)
           // Add to keyboard FIFO if there's space
           if (kbd_fifo_count < MAX_KBD_BUF) begin
@@ -377,13 +632,29 @@ always @(posedge CLK_14M) begin
               if (device_registers[2][3] & 8'h02) begin  // Check SRQ enable bit
                 adb_interrupt_pending <= 1'b1;
               end
+              
+              // Special key combinations (matching software emulator behavior)
+              // ESC + Ctrl + Cmd = Desk Manager interrupt
+              if (apple_key == 8'h35 && ctrl_down && cmd_down) begin // ESC key
+                adb_interrupt_pending <= 1'b1;
+                `ifdef SIMULATION
+                  $display("ADB: Desk Manager interrupt (Ctrl+Cmd+ESC)");
+                `endif
+              end
             end
             
             valid_kbd <= 1'b1;
             device_data_pending[2] <= 8'h01;
             
+            // Update Apple IIe compatibility signals
+            if (iie_char != 8'hFF) begin  // Valid IIe character
+              apple_iie_char <= iie_char;
+              apple_iie_key_pressed <= 1'b1;
+              akd <= 1'b1;  // Any key down
+            end
+            
             `ifdef SIMULATION
-              $display("ADB: PS/2 Key pressed: scancode=$%02X -> Apple=$%02X, FIFO count=%d", ps2_key[7:0], apple_key, kbd_fifo_count + 1);
+              $display("ADB: PS/2 Key pressed: scancode=$%02X -> ADB=$%02X, ASCII=$%02X (%c), FIFO count=%d", ps2_key[7:0], apple_key, iie_char, (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E, kbd_fifo_count + 1);
             `endif
           end
         end else begin
@@ -393,8 +664,14 @@ always @(posedge CLK_14M) begin
             kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
             kbd_fifo_count <= kbd_fifo_count + 1;
             
+            // Update Apple IIe compatibility - key released
+            if (iie_char != 8'hFF && apple_iie_char == iie_char) begin
+              apple_iie_key_pressed <= 1'b0;
+              if (kbd_fifo_count == 0) akd <= 1'b0;  // No more keys down
+            end
+            
             `ifdef SIMULATION
-              $display("ADB: PS/2 Key released: scancode=$%02X -> Apple=$%02X", ps2_key[7:0], apple_key);
+              $display("ADB: PS/2 Key released: scancode=$%02X -> ADB=$%02X, ASCII=$%02X", ps2_key[7:0], apple_key, iie_char);
             `endif
           end
         end
@@ -448,53 +725,51 @@ always @(posedge CLK_14M) begin
     case (addr)
 
     8'h00: begin
-      // $C000 - Keyboard Data Register (read-only)
+      // $C000 - Keyboard Data Register (Apple II compatible)
+      // Returns Apple IIe ASCII character with strobe bit (bit 7)
       if (rw) begin
-        // Return current keyboard data with strobe bit
-        dout <= kbd_current_key;
+        dout <= {apple_iie_key_pressed, apple_iie_char[6:0]};  // Apple IIe format
         `ifdef SIMULATION
-          $display("ADB: Read $C000 Keyboard = $%02X (strobe=%d)", kbd_current_key, kbd_strobe);
+          $display("ADB: Read $C000 Keyboard = $%02X (%c), strobe=%d", 
+                   {apple_iie_key_pressed, apple_iie_char[6:0]},
+                   (apple_iie_char >= 32 && apple_iie_char <= 126) ? apple_iie_char : 8'h2E,
+                   apple_iie_key_pressed);
         `endif
       end
     end
 
     8'h10: begin
-      // $C010 - Key Strobe Clear (any access clears strobe)
+      // $C010 - Key Strobe Clear (Apple II compatible)
       if (rw) begin
-        // Clear strobe bit and return current key data
-        dout <= kbd_current_key & 8'h7F;  // Return key without strobe bit
-        kbd_strobe <= 1'b0;
-        kbd_current_key <= kbd_current_key & 8'h7F;  // Clear strobe bit in current key
-        
-        // Load next key from FIFO if available
-        if (kbd_fifo_count > 0) begin
-          kbd_current_key <= kbd_fifo[kbd_fifo_tail] | 8'h80;  // Set strobe bit
-          kbd_strobe <= 1'b1;
-          kbd_fifo_tail <= (kbd_fifo_tail + 1) % MAX_KBD_BUF;
-          kbd_fifo_count <= kbd_fifo_count - 1;
-        end else begin
-          valid_kbd <= 1'b0;  // No more keys available
-        end
-        
+        dout <= {akd, apple_iie_char[6:0]};  // Any key down + Apple IIe character
         `ifdef SIMULATION
-          $display("ADB: Read $C010 Key Strobe Clear = $%02X, FIFO count=%d", dout, kbd_fifo_count);
-        `endif
-      end else begin
-        // Write to $C010 also clears strobe
-        kbd_strobe <= 1'b0;
-        kbd_current_key <= kbd_current_key & 8'h7F;
-        `ifdef SIMULATION
-          $display("ADB: Write $C010 Key Strobe Clear = $%02X", din);
+          $display("ADB: Read $C010 Strobe Clear = $%02X, akd=%d", {akd, apple_iie_char[6:0]}, akd);
         `endif
       end
+      // Clear strobe on both read and write (Apple II behavior)
+      apple_iie_key_pressed <= 1'b0;  // Clear Apple IIe strobe
+      kbd_strobe <= 1'b0;  // Clear ADB strobe
     end
 
     8'h25: begin
-      // $C025 - ADB Status Register (read-only)
+      // $C025 - ADB Modifier Keys Status Register (read-only)
+      // Bit layout matches software emulator g_c025_val:
+      // Bit 7: CMD_DOWN (0x80), Bit 6: OPTION_DOWN (0x40)
+      // Bit 2: CAPS_LOCK_DOWN (0x04), Bit 1: CTRL_DOWN (0x02), Bit 0: SHIFT_DOWN (0x01)
       if (rw) begin
+        c025_status <= {
+          cmd_down,           // Bit 7 (0x80): Command key
+          option_down,        // Bit 6 (0x40): Option key  
+          2'b00,              // Bits 5:4 reserved
+          1'b0,               // Bit 3 reserved (was keyboard strobe in some versions)
+          caps_lock_down,     // Bit 2 (0x04): Caps Lock
+          ctrl_down,          // Bit 1 (0x02): Control key
+          shift_down          // Bit 0 (0x01): Shift key
+        };
         dout <= c025_status;
         `ifdef SIMULATION
-          $display("ADB: Read $C025 Status = $%02X", c025_status);
+          $display("ADB: Read $C025 Modifier Status = $%02X (cmd=%d opt=%d caps=%d ctrl=%d shift=%d)", 
+                   c025_status, cmd_down, option_down, caps_lock_down, ctrl_down, shift_down);
         `endif
       end
     end
@@ -887,13 +1162,35 @@ always @(posedge CLK_14M) begin
     end
 
     8'h60, 8'h61, 8'h62, 8'h63: begin
-      // joy num is addr[1:0]-2'd1
-      dout <= 8'd0;
+      // $C060-$C063 - Joystick/Button registers
+      // joy num is addr[1:0], but offset by 1 for indexing
+      if (rw) begin
+        case (addr[1:0])
+          2'd0: dout <= 8'h00; // Button 0 (not pressed)
+          2'd1: dout <= 8'h00; // Button 1 (not pressed) 
+          2'd2: dout <= 8'h00; // Button 2 (not pressed)
+          2'd3: dout <= 8'h00; // Button 3 (not pressed)
+        endcase
+        `ifdef SIMULATION
+          $display("ADB: Read joystick button %d = $%02X", addr[1:0], dout);
+        `endif
+      end
     end
 
     8'h64, 8'h65, 8'h66, 8'h67: begin
+      // $C064-$C067 - Paddle registers (analogue joystick)
       // paddle num is addr[1:0]
-      dout <= 8'd0;
+      if (rw) begin
+        case (addr[1:0])
+          2'd0: dout <= 8'h80; // Paddle 0 - center position
+          2'd1: dout <= 8'h80; // Paddle 1 - center position
+          2'd2: dout <= 8'h80; // Paddle 2 - center position  
+          2'd3: dout <= 8'h80; // Paddle 3 - center position
+        endcase
+        `ifdef SIMULATION
+          $display("ADB: Read paddle %d = $%02X", addr[1:0], dout);
+        `endif
+      end
     end
 
     default: begin

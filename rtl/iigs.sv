@@ -418,7 +418,6 @@ module iigs
       ROMBANK<=0;;
     end
 
-    key_reads<=0;
     // Default pass-through for unhandled IO: feed external bus data
     io_dout <= din;
     paddle_trigger <= 1'b0;  // Default: no paddle trigger
@@ -470,8 +469,7 @@ module iigs
             12'h00E: begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end
             12'h00F: begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end
             12'h010, 12'h026, 12'h027, 12'h070: begin
-              if (addr[11:0]==12'h010)
-                key_reads<=1;
+              // Note: $C010 (key strobe clear) now handled directly by ADB module
               if (addr[11:0]==12'h070) begin
                 paddle_trigger <= 1'b1;  // Trigger paddle timers
                 $display("PADDLE TRIGGER");
@@ -1297,6 +1295,10 @@ wire ready_out;
 `endif
 
   wire adb_capslock;
+  wire adb_open_apple, adb_closed_apple, adb_shift, adb_ctrl;
+  wire adb_akd;
+  wire [7:0] adb_K;
+  
   adb adb(
           .CLK_14M(CLK_14M),
           .cen(phi2),
@@ -1309,7 +1311,14 @@ wire ready_out;
           .strobe(adb_strobe),
           .capslock(adb_capslock),
           .ps2_key(ps2_key),
-          .ps2_mouse(ps2_mouse)
+          .ps2_mouse(ps2_mouse),
+          // Apple IIe compatibility outputs (replacing old keyboard module)
+          .open_apple(adb_open_apple),     // Command key = Open Apple
+          .closed_apple(adb_closed_apple), // Option key = Closed Apple
+          .apple_shift(adb_shift),         // Shift key
+          .apple_ctrl(adb_ctrl),           // Control key
+          .akd(adb_akd),                   // Any key down
+          .K(adb_K)                        // Apple IIe character with strobe
           );
 
   prtc prtc(
@@ -1459,23 +1468,16 @@ wire ready_out;
             .cts_b(1'b0)
             );
 
-  wire [6:0] key_keys=key_keys_pressed[6:0];
-  wire [7:0] key_keys_pressed;
-  wire       key_pressed = key_keys_pressed[7];
-  wire       key_anykeydown;
-  reg        key_reads;
-  wire       open_apple;
-  wire       closed_apple;
-  keyboard keyboard(
-                    .CLK_14M(CLK_14M),
-                    .PS2_Key(ps2_key),
-                    .reads(key_reads),  // read strobe
-                    .reset(reset),
-                    .akd(key_anykeydown),
-                    .K(key_keys_pressed),
-                    .open_apple(open_apple),
-                    .closed_apple(closed_apple)
-                    );
+  // Apple IIe compatibility signals now come from ADB module
+  wire [6:0] key_keys = adb_K[6:0];        // Use ADB's Apple IIe character output
+  wire [7:0] key_keys_pressed = adb_K;     // Full character with strobe bit
+  wire       key_pressed = adb_K[7];       // Key pressed flag from ADB
+  wire       key_anykeydown = adb_akd;     // Any key down from ADB
+  wire       open_apple = adb_open_apple;  // Command key from ADB
+  wire       closed_apple = adb_closed_apple; // Option key from ADB
+  
+  // Old keyboard module removed - ADB now handles all keyboard functionality
+  // key_reads variable removed - ADB handles $C010 strobe clearing internally
 
   // === Joystick/Paddle Support ===
   
