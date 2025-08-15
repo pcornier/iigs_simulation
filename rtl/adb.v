@@ -1167,8 +1167,8 @@ always @(posedge CLK_14M) begin
       if (rw) begin
         case (addr[1:0])
           2'd0: dout <= 8'h00; // Button 0 (not pressed)
-          2'd1: dout <= 8'h00; // Button 1 (not pressed) 
-          2'd2: dout <= 8'h00; // Button 2 (not pressed)
+          2'd1: dout <= {open_apple, 7'b0000000}; // Button 1 = Open Apple (Command key, bit 7)
+          2'd2: dout <= {closed_apple, 7'b0000000}; // Button 2 = Closed Apple (Option key, bit 7)
           2'd3: dout <= 8'h00; // Button 3 (not pressed)
         endcase
         `ifdef SIMULATION
