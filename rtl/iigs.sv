@@ -669,14 +669,12 @@ module iigs
               adb_strobe <= 1'b1;
               adb_rw <= 1'b1;
               $display("ADB RD %03h", addr[11:0]);
-              if (addr[11:0] == 12'h010) begin  key_reads<=1; io_dout <= key_keys; end
-              if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x key_pressed %x",key_anykeydown,key_pressed);  if (key_pressed) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
+              // Let ADB module handle all its addresses - remove hardcoded overrides
               if (addr[11:0] == 12'h070) begin  
                 paddle_trigger <= 1'b1;  // Trigger paddle timers on read too
                 $display("PADDLE TRIGGER (READ)");
               end
-              //if (addr[11:0] == 12'h000) begin  $display("anykeydown: %x",key_anykeydown);  if (key_anykeydown) io_dout <= key_keys | 'h80 ; else io_dout<='h00; end
-              if (addr[11:0] == 12'h025) begin  $display("keymodereg");end
+              // All ADB addresses ($C000, $C010, $C025, $C026, $C027, etc.) handled by ADB module
             end
 
             12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
@@ -1306,7 +1304,9 @@ wire ready_out;
           .rw(adb_rw),
           .din(adb_din),
           .dout(adb_dout),
-          .strobe(adb_strobe)
+          .strobe(adb_strobe),
+          .ps2_key(ps2_key),
+          .ps2_mouse(ps2_mouse)
           );
 
   prtc prtc(
