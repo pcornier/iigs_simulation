@@ -357,41 +357,85 @@ reg [3:0] artifact_r[0:127] = '{
 wire [11:0] BORGB = palette_rgb_r[BORDERCOLOR];
 wire [11:0] TRGB = palette_rgb_r[TEXTCOLOR[7:4]];
 wire [11:0] BRGB = palette_rgb_r[TEXTCOLOR[3:0]];
-// Apple II Color artifacting logic (simplified from apple2hack)
-// Check if adjacent pixels have consistent pattern for color display
-wire consistent_tint = (pixel_history[0] == pixel_history[4]) & (pixel_history[5] == pixel_history[1]);
-wire [1:0] pixel_pair = pixel_history[3:2];  // Current pixel pair for color decision
+// Authentic Apple II NTSC Color Artifacting Algorithm  
+// Based on apple2hack reference implementation
+// Uses 6-pixel shift register and color basis vectors
 
-// Color generation based on position and pixel patterns
+// Apple II color basis vectors (RGB values from reference)
+reg [7:0] basis_r[0:3];
+reg [7:0] basis_g[0:3]; 
+reg [7:0] basis_b[0:3];
+
+// Initialize color basis vectors for Apple II NTSC colors
+initial begin
+    basis_r[0] = 8'h88; basis_g[0] = 8'h22; basis_b[0] = 8'h2C; // Color 0
+    basis_r[1] = 8'h38; basis_g[1] = 8'h24; basis_b[1] = 8'hA0; // Color 1  
+    basis_r[2] = 8'h07; basis_g[2] = 8'h67; basis_b[2] = 8'h2C; // Color 2
+    basis_r[3] = 8'h38; basis_g[3] = 8'h52; basis_b[3] = 8'h07; // Color 3
+end
+
+// 6-pixel shift register for authentic Apple II color detection
+reg [5:0] apple2_shift_reg;
+
+// Horizontal counter for color phase (modulo 4)
+wire [1:0] color_phase = H[1:0];
+
+// Authentic Apple II tint consistency check
+wire consistent_tint = (apple2_shift_reg[0] == apple2_shift_reg[4]) & 
+                       (apple2_shift_reg[5] == apple2_shift_reg[1]);
+
+// Apple II color generation logic
+reg [7:0] apple2_r, apple2_g, apple2_b;
 always @(*) begin
-    if (consistent_tint && hires_mode) begin
-        // Display color based on pixel pattern and horizontal position
-        case (pixel_pair)
-            2'b11: hires_artifact_color = 4'hF;  // White
-            2'b01, 2'b10: begin
-                // Color depends on horizontal position (simplified)
-                if (xpos[0]) 
-                    hires_artifact_color = 4'h9;  // Orange
-                else
-                    hires_artifact_color = 4'h6;  // Blue
+    if (hires_mode) begin
+        // Start with black background
+        apple2_r = 8'h00;
+        apple2_g = 8'h00; 
+        apple2_b = 8'h00;
+        
+        if (consistent_tint) begin
+            // Tint is consistent: display color using basis vectors
+            // Add contributions from 4 adjacent pixels
+            if (apple2_shift_reg[3]) begin
+                apple2_r = apple2_r + basis_r[(color_phase + 1) & 2'b11];
+                apple2_g = apple2_g + basis_g[(color_phase + 1) & 2'b11];
+                apple2_b = apple2_b + basis_b[(color_phase + 1) & 2'b11];
             end
-            default: hires_artifact_color = 4'h0;  // Black
-        endcase
-    end else if (hires_mode) begin
-        // Inconsistent tint: display grayscale
-        case (pixel_pair)
-            2'b11: hires_artifact_color = 4'hF;  // White
-            2'b01, 2'b10: hires_artifact_color = 4'h5;  // Gray
-            default: hires_artifact_color = 4'h0;  // Black
-        endcase
+            if (apple2_shift_reg[4]) begin
+                apple2_r = apple2_r + basis_r[(color_phase + 2) & 2'b11];
+                apple2_g = apple2_g + basis_g[(color_phase + 2) & 2'b11];
+                apple2_b = apple2_b + basis_b[(color_phase + 2) & 2'b11];
+            end
+            if (apple2_shift_reg[1]) begin
+                apple2_r = apple2_r + basis_r[(color_phase + 3) & 2'b11];
+                apple2_g = apple2_g + basis_g[(color_phase + 3) & 2'b11];
+                apple2_b = apple2_b + basis_b[(color_phase + 3) & 2'b11];
+            end
+            if (apple2_shift_reg[2]) begin
+                apple2_r = apple2_r + basis_r[color_phase];
+                apple2_g = apple2_g + basis_g[color_phase];
+                apple2_b = apple2_b + basis_b[color_phase];
+            end
+        end else begin
+            // Tint is changing: display only black, gray, or white  
+            case (apple2_shift_reg[3:2])
+                2'b11: begin apple2_r = 8'hFF; apple2_g = 8'hFF; apple2_b = 8'hFF; end // White
+                2'b01, 2'b10: begin apple2_r = 8'h80; apple2_g = 8'h80; apple2_b = 8'h80; end // Gray
+                default: begin apple2_r = 8'h00; apple2_g = 8'h00; apple2_b = 8'h00; end // Black
+            endcase
+        end
     end else begin
-        hires_artifact_color = 4'h0;  // Not used for lores
+        // Not hi-res mode: use existing lores logic
+        apple2_r = 8'h00;
+        apple2_g = 8'h00;
+        apple2_b = 8'h00;
     end
 end
 
 // Graphics RGB calculation - different for lores vs hires
 wire [3:0] final_graphics_color = lores_mode ? graphics_color : hires_artifact_color;
-wire [11:0] graphics_rgb = palette_rgb_r[final_graphics_color];
+wire [11:0] graphics_rgb = lores_mode ? palette_rgb_r[final_graphics_color] : 
+                                       {apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]};
 
 reg [12:0] BASEADDR;
 wire  [ 4:0] vert = V[7:3]-5'h02;
@@ -554,8 +598,7 @@ reg graphics_pixel;              // Current pixel value
 reg buffer_needs_reload;         // Flag to reload buffer when chram_x increments
 
 // Color artifacting for hires mode (simplified version of apple2hack logic)
-reg [5:0] pixel_history;         // Last 6 pixels for color artifacting
-reg [3:0] hires_artifact_color;  // Color from artifacting logic
+reg [3:0] hires_artifact_color;  // Color from artifacting logic (legacy - for lores fallback)
 
 // Current mode detection using existing line_type_w
 wire lores_mode = (line_type_w == LORES40_LINE) | (line_type_w == LORES80_LINE);
@@ -579,7 +622,7 @@ begin
 		graphics_pix_shift <= 8'b0;
 		graphics_color <= 4'b0;
 		buffer_needs_reload <= 1'b1;
-		pixel_history <= 6'b0;
+		apple2_shift_reg <= 6'b0;
 	end
 	else
 	begin
@@ -605,7 +648,8 @@ begin
 				buffer_needs_reload <= 1'b0;
 			end else begin
 				// Shift pixels out: every clock in 80-col, every 2 clocks in 40-col (pixel doubling)
-				if (EIGHTYCOL || xpos[0] == 1'b0) begin
+				// In 40-col mode: shift on odd xpos (1,3,5,7,9,11,13) so each pixel displays twice
+				if (EIGHTYCOL || xpos[0] == 1'b1) begin
 					graphics_pix_shift <= {1'b0, graphics_pix_shift[7:1]};
 					if (H >= 32 && H <= 100 && V == 16) 
 						$display("  PIXEL SHIFT: H=%d xpos=%d shift_before=%b shift_after=%b pixel_out=%b", H, xpos, graphics_pix_shift, {1'b0, graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
@@ -617,8 +661,8 @@ begin
 			end
 			graphics_pixel <= graphics_pix_shift[0];
 			
-			// Update pixel history for color artifacting
-			pixel_history <= {graphics_pixel, pixel_history[5:1]};
+			// Update Apple II 6-pixel shift register for color artifacting
+			apple2_shift_reg <= {graphics_pixel, apple2_shift_reg[5:1]};
 		end
 
 		xpos<=xpos+1'b1;
@@ -709,8 +753,8 @@ begin
                  H, V, TEXTG, EIGHTYCOL, GR, HIRES_MODE, AN3, text80_mode, graphics_mode, line_type_w);
         $display("Graphics debug: lores_mode=%b hires_mode=%b graphics_color=%h final_graphics_color=%h graphics_pixel=%b",
                  lores_mode, hires_mode, graphics_color, final_graphics_color, graphics_pixel);
-        $display("Hires color: consistent_tint=%b pixel_pair=%b hires_artifact_color=%h pixel_history=%b",
-                 consistent_tint, pixel_pair, hires_artifact_color, pixel_history);
+        $display("Apple II color: consistent_tint=%b shift_reg=%b color_phase=%d apple2_rgb=%h%h%h",
+                 consistent_tint, apple2_shift_reg, color_phase, apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]);
         $display("Video data: video_data=%h video_addr=%h chram_x=%d xpos=%d",
                  video_data, video_addr_ii, chram_x, xpos);
         $display("Pixel timing: graphics_pix_shift=%b buffer_needs_reload=%b",
