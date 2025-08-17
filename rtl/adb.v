@@ -693,9 +693,12 @@ always @(posedge CLK_14M) begin
                        (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E, kbd_fifo_count);
             `endif
           end else begin
+            // FIFO is full - drop new character (matches GSplus behavior)
             `ifdef SIMULATION
-              $display("ADB: FIFO FULL! Cannot add key press");
+              $display("ADB: FIFO FULL! Dropping new key press: ADB=$%02X, IIe=$%02X (%c)", 
+                       apple_key, iie_char, (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E);
             `endif
+            // Character is lost - this is correct Apple IIgs behavior
           end
         end else begin
           `ifdef SIMULATION
@@ -790,11 +793,12 @@ always @(posedge CLK_14M) begin
       if (rw) begin
         dout <= {apple_iie_key_pressed, apple_iie_char[6:0]};  // Apple IIe format
         `ifdef SIMULATION
-          $display("*** CPU READ $C000 *** Keyboard = $%02X (%c), strobe=%d", 
+          $display("*** CPU READ $C000 *** Keyboard = $%02X (%c), strobe=%d, FIFO_count=%d", 
                    {apple_iie_key_pressed, apple_iie_char[6:0]},
                    (apple_iie_char >= 32 && apple_iie_char <= 126) ? apple_iie_char : 8'h2E,
-                   apple_iie_key_pressed);
+                   apple_iie_key_pressed, kbd_fifo_count);
         `endif
+        
       end
     end
 
@@ -808,10 +812,34 @@ always @(posedge CLK_14M) begin
       end
       // Clear strobe on both read and write (Apple II behavior)
       `ifdef SIMULATION
-        $display("*** CPU ACCESS $C010 *** Clearing keyboard strobe");
+        $display("*** CPU ACCESS $C010 *** Clearing keyboard strobe and advancing FIFO");
       `endif
       apple_iie_key_pressed <= 1'b0;  // Clear Apple IIe strobe
       kbd_strobe <= 1'b0;  // Clear ADB strobe
+      
+      // Advance FIFO to next character (matches GSplus adb_access_c010 behavior)
+      if (kbd_fifo_count > 0) begin
+        // Remove current character from FIFO
+        kbd_fifo_tail <= (kbd_fifo_tail + 1) % MAX_KBD_BUF;
+        kbd_fifo_count <= kbd_fifo_count - 1;
+        
+        // Load next character if available
+        if (kbd_fifo_count > 1) begin
+          // There are more characters in FIFO
+          apple_iie_char <= adb_to_apple_iie_ascii(kbd_fifo[(kbd_fifo_tail + 1) % MAX_KBD_BUF], 
+                                                           shift_down, ctrl_down, caps_lock_down);
+          apple_iie_key_pressed <= 1'b1;  // Set strobe for next character
+          `ifdef SIMULATION
+            $display("ADB: Advanced to next FIFO character, remaining count=%d", kbd_fifo_count - 1);
+          `endif
+        end else begin
+          // No more characters in FIFO
+          akd <= 1'b0;  // Clear any key down status
+          `ifdef SIMULATION
+            $display("ADB: No more characters in FIFO, clearing akd");
+          `endif
+        end
+      end
     end
 
     8'h25: begin
