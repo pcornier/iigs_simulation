@@ -584,6 +584,15 @@ always @(posedge CLK_14M) begin
       reg [7:0] apple_key;
       apple_key = ps2_to_apple_key(ps2_key[8:0]);
       
+      `ifdef SIMULATION
+        $display("=== ADB: PS/2 KEY CHANGE ===");
+        $display("ADB: PS/2 raw input: code=$%02X, ext=%d, pressed=%d, toggle=%d", 
+                 ps2_key[7:0], ps2_key[8], ps2_key[9], ps2_key[10]);
+        $display("ADB: Translated PS/2 $%02X -> ADB $%02X -> IIe $%02X (%c)", 
+                 ps2_key[7:0], apple_key, iie_char, 
+                 (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E);
+      `endif
+      
       // Handle Caps Lock toggle (PS/2 scancode 0x58)
       if (ps2_key[8:0] == 9'h058 && ps2_key[9]) begin  // Caps Lock pressed
         capslock <= ~capslock;
@@ -624,6 +633,12 @@ always @(posedge CLK_14M) begin
       // Only process valid (non-0x7F) translated keys, and skip caps lock for normal processing
       if (apple_key != 8'h7F && !(ps2_key[8:0] == 9'h058)) begin
         if (ps2_key[9]) begin  // Key pressed (not released)
+          `ifdef SIMULATION
+            $display("=== KEY PRESS EVENT ===");
+            $display("ADB: Processing key PRESS for ADB key $%02X, IIe char $%02X (%c)", 
+                     apple_key, iie_char, (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E);
+          `endif
+          
           // Add to keyboard FIFO if there's space
           if (kbd_fifo_count < MAX_KBD_BUF) begin
             kbd_fifo[kbd_fifo_head] <= apple_key;  // Store translated Apple keyboard code
@@ -634,6 +649,9 @@ always @(posedge CLK_14M) begin
             if (kbd_fifo_count == 0) begin
               kbd_current_key <= apple_key | 8'h80;  // Set strobe bit
               kbd_strobe <= 1'b1;
+              `ifdef SIMULATION
+                $display("ADB: Loaded key directly to current_key = $%02X (with strobe)", apple_key | 8'h80);
+              `endif
               // Generate SRQ for keyboard input if enabled
               if (device_registers[2][3] & 8'h02) begin  // Check SRQ enable bit
                 adb_interrupt_pending <= 1'b1;
@@ -652,34 +670,55 @@ always @(posedge CLK_14M) begin
             valid_kbd <= 1'b1;
             device_data_pending[2] <= 8'h01;
             
-            // Update Apple IIe compatibility signals
-            if (iie_char != 8'hFF) begin  // Valid IIe character
+            // Update Apple IIe compatibility signals  
+            if (iie_char != 8'hFF) begin  // Valid IIe character (not a modifier key)
               apple_iie_char <= iie_char;
               apple_iie_key_pressed <= 1'b1;
               akd <= 1'b1;  // Any key down
+              `ifdef SIMULATION
+                $display("ADB: Updated Apple IIe registers - char=$%02X (%c), strobe=1", 
+                         iie_char, (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E);
+              `endif
+            end else begin
+              // Modifier key or unmapped key - still set akd but no character
+              akd <= 1'b1;  // Any key down
+              `ifdef SIMULATION
+                $display("ADB: Modifier/unmapped key - no Apple IIe character generated");
+              `endif
             end
             
             `ifdef SIMULATION
-              $display("ADB: PS/2 Key pressed: scancode=$%02X -> ADB=$%02X, ASCII=$%02X (%c), FIFO count=%d", ps2_key[7:0], apple_key, iie_char, (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E, kbd_fifo_count + 1);
+              $display("ADB: PRESS PROCESSED - scancode=$%02X -> ADB=$%02X, ASCII=$%02X (%c), FIFO count=%d", 
+                       ps2_key[7:0], apple_key, iie_char, 
+                       (iie_char >= 32 && iie_char <= 126) ? iie_char : 8'h2E, kbd_fifo_count);
+            `endif
+          end else begin
+            `ifdef SIMULATION
+              $display("ADB: FIFO FULL! Cannot add key press");
             `endif
           end
         end else begin
-          // Key released - add release code to FIFO
-          if (kbd_fifo_count < MAX_KBD_BUF) begin
-            kbd_fifo[kbd_fifo_head] <= apple_key | 8'h80;  // Set release bit with translated key
-            kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
-            kbd_fifo_count <= kbd_fifo_count + 1;
-            
-            // Update Apple IIe compatibility - key released
-            if (iie_char != 8'hFF && apple_iie_char == iie_char) begin
-              apple_iie_key_pressed <= 1'b0;
-              if (kbd_fifo_count == 0) akd <= 1'b0;  // No more keys down
-            end
-            
+          `ifdef SIMULATION
+            $display("=== KEY RELEASE EVENT ===");
+            $display("ADB: Processing key RELEASE for ADB key $%02X", apple_key);
+          `endif
+          
+          // Key released - DO NOT add to FIFO for Apple IIe compatibility
+          // Apple II only processes key presses, not releases
+          
+          // Update Apple IIe compatibility - key released
+          if (iie_char != 8'hFF && apple_iie_char == iie_char) begin
+            apple_iie_key_pressed <= 1'b0;
+            if (kbd_fifo_count == 0) akd <= 1'b0;  // No more keys down
             `ifdef SIMULATION
-              $display("ADB: PS/2 Key released: scancode=$%02X -> ADB=$%02X, ASCII=$%02X", ps2_key[7:0], apple_key, iie_char);
+              $display("ADB: Cleared Apple IIe strobe for released key");
             `endif
           end
+          
+          `ifdef SIMULATION
+            $display("ADB: RELEASE PROCESSED - scancode=$%02X -> ADB=$%02X, NOT added to FIFO (Apple IIe compatibility)", 
+                     ps2_key[7:0], apple_key);
+          `endif
         end
       end else begin
         `ifdef SIMULATION
@@ -750,7 +789,7 @@ always @(posedge CLK_14M) begin
       if (rw) begin
         dout <= {apple_iie_key_pressed, apple_iie_char[6:0]};  // Apple IIe format
         `ifdef SIMULATION
-          $display("ADB: Read $C000 Keyboard = $%02X (%c), strobe=%d", 
+          $display("*** CPU READ $C000 *** Keyboard = $%02X (%c), strobe=%d", 
                    {apple_iie_key_pressed, apple_iie_char[6:0]},
                    (apple_iie_char >= 32 && apple_iie_char <= 126) ? apple_iie_char : 8'h2E,
                    apple_iie_key_pressed);
@@ -763,10 +802,13 @@ always @(posedge CLK_14M) begin
       if (rw) begin
         dout <= {akd, apple_iie_char[6:0]};  // Any key down + Apple IIe character
         `ifdef SIMULATION
-          $display("ADB: Read $C010 Strobe Clear = $%02X, akd=%d", {akd, apple_iie_char[6:0]}, akd);
+          $display("*** CPU READ $C010 *** Strobe Clear = $%02X, akd=%d", {akd, apple_iie_char[6:0]}, akd);
         `endif
       end
       // Clear strobe on both read and write (Apple II behavior)
+      `ifdef SIMULATION
+        $display("*** CPU ACCESS $C010 *** Clearing keyboard strobe");
+      `endif
       apple_iie_key_pressed <= 1'b0;  // Clear Apple IIe strobe
       kbd_strobe <= 1'b0;  // Clear ADB strobe
     end
