@@ -1004,6 +1004,27 @@ char spinner_toggle = 0;
 std::vector<int> screenshot_frames;
 bool screenshot_mode = false;
 
+// Stop at frame functionality
+// ---------------------------
+int stop_at_frame = -1;
+bool stop_at_frame_enabled = false;
+
+void show_help() {
+	printf("Apple IIgs Hardware Simulator\n");
+	printf("Usage: ./Vemu [options]\n\n");
+	printf("Options:\n");
+	printf("  -h, --help                    Show this help message\n");
+	printf("  --screenshot <frames>         Take screenshots at specified frame numbers\n");
+	printf("                                (comma-separated list, e.g., 100,200,300)\n");
+	printf("  -screenshot <frames>          Legacy form of --screenshot (deprecated)\n");
+	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
+	printf("  --selftest                    Enable self-test mode\n\n");
+	printf("Examples:\n");
+	printf("  ./Vemu                        Run simulator in windowed mode\n");
+	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
+	printf("  ./Vemu --stop-at-frame 1000   Stop simulation after frame 1000\n");
+}
+
 void save_screenshot(int frame_number) {
 	if (!output_ptr) {
 		printf("Error: output_ptr is null, cannot save screenshot\n");
@@ -1061,7 +1082,10 @@ int main(int argc, char** argv, char** env) {
 
 	// Parse command line arguments
 	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-screenshot") == 0 && i + 1 < argc) {
+		if ((strcmp(argv[i], "-h") == 0) || (strcmp(argv[i], "--help") == 0)) {
+			show_help();
+			return 0;
+		} else if ((strcmp(argv[i], "-screenshot") == 0 || strcmp(argv[i], "--screenshot") == 0) && i + 1 < argc) {
 			screenshot_mode = true;
 			std::string frames_str = argv[i + 1];
 			std::stringstream ss(frames_str);
@@ -1071,6 +1095,11 @@ int main(int argc, char** argv, char** env) {
 			}
 			printf("Screenshot mode enabled for frames: %s\n", frames_str.c_str());
 			i++; // Skip the next argument since it's the frame list
+		} else if (strcmp(argv[i], "--stop-at-frame") == 0 && i + 1 < argc) {
+			stop_at_frame_enabled = true;
+			stop_at_frame = std::stoi(argv[i + 1]);
+			printf("Will stop simulation at frame %d\n", stop_at_frame);
+			i++; // Skip the next argument since it's the frame number
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
 			printf("Self-test mode enabled - will simulate Command+Option+Control+Reset\n");
@@ -1321,12 +1350,24 @@ int main(int argc, char** argv, char** env) {
 		ImGui::Image(video.texture_id, ImVec2(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y));
 		
 		// Check if this frame should be screenshotted (after texture is displayed)
+		bool took_screenshot_this_frame = false;
 		if (screenshot_mode) {
 			auto it = std::find(screenshot_frames.begin(), screenshot_frames.end(), video.count_frame);
 			if (it != screenshot_frames.end()) {
 				save_screenshot(video.count_frame);
 				screenshot_frames.erase(it);  // Remove frame from list after capturing
+				took_screenshot_this_frame = true;
 			}
+		}
+		
+		// Check if we should stop at this frame
+		if (stop_at_frame_enabled && video.count_frame == stop_at_frame) {
+			if (took_screenshot_this_frame) {
+				printf("Reached stop frame %d after taking screenshot, exiting...\n", stop_at_frame);
+			} else {
+				printf("Reached stop frame %d, exiting...\n", stop_at_frame);
+			}
+			exit(0);
 		}
 		
 		ImGui::End();
