@@ -104,12 +104,23 @@ void SimBlockDevice::BeforeEval(int cycles)
 
     // issue a mount if we aren't doing anything, and the img_mounted has no bits set
     if (!reading && !writing && mountQueue[i] && !*img_mounted) {
+            const size_t extrabytes = disk_size[i] % kBLKSZ;
+            if (disk_size[i] >= (kBLKSZ + 64) && extrabytes == 64) {
+                    char hdr[4];
+                    disk[i].seekg(0);
+                    disk[i].read(hdr, 4);
+                    if (!memcmp(hdr, "2IMG", 4)) {
+                            fprintf(stderr, "Detected \"2IMG\" signature; adjusting sizes\n");
+                            header_size[i] = 64;
+                            disk_size[i] -= header_size[i];
+                    }
+            }
 fprintf(stderr,"mounting.. %d\n",i);
            mountQueue[i]=0;
            *img_size = disk_size[i];
 	   *img_readonly=0;
 fprintf(stderr,"img_size .. %ld\n",*img_size);
-           disk[i].seekg(0);
+           disk[i].seekg(header_size[i]);
            bitset(*img_mounted,i);
            ack_delay=1200;
     } else if (ack_delay==1 && bitcheck(*img_mounted,i) ) {
@@ -133,7 +144,7 @@ fprintf(stderr,"mounting flag cleared  %d\n",i);
 	} 
 
         disk[i].clear();
-        disk[i].seekg((lba) * kBLKSZ);
+        disk[i].seekg((lba) * kBLKSZ + header_size[i]);
       //  printf("seek %06X lba: (%x) (%d,%d) drive %d reading %d writing %d ack %x\n", (lba) * kBLKSZ,lba,lba,kBLKSZ,i,reading,writing,*sd_ack);
         bytecnt = 0;
         *sd_buff_addr = 0;
