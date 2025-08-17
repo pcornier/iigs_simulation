@@ -689,21 +689,21 @@ module iigs
             //12'h010: begin io_dout<=key_keys; key_reads<=1; end
             //12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
 
-            12'h011: if(LCRAM2) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h012: if(~RDROM) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h013: if(RAMRD) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h014: if(RAMWRT) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h015: begin $display("read INTCXROM %x ",INTCXROM); if(INTCXROM) io_dout<='h80 | key_keys; else io_dout<='h00;end
-            12'h016: if(ALTZP) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h017: if(SLOTC3ROM) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h018: if(STORE80) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h019: if(VBlank) io_dout<='h00 | key_keys; else io_dout<='h80;
-            12'h01a: if(TEXTG) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h01b: if(MIXG) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h01c: if(PAGE2) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h01d: if(~HIRES_MODE) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h01e: if(ALTCHARSET) io_dout<='h80 | key_keys; else io_dout<='h00;
-            12'h01f: if(EIGHTYCOL) io_dout <= 'h80 | key_keys; else io_dout<='h00;
+            12'h011: io_dout <= {LCRAM2, key_keys};
+            12'h012: io_dout <= {~RDROM, key_keys};
+            12'h013: io_dout <= {RAMRD, key_keys};
+            12'h014: io_dout <= {RAMWRT, key_keys};
+            12'h015: begin io_dout <= {INTCXROM, key_keys}; $display("read INTCXROM %x ", INTCXROM); end
+            12'h016: io_dout <= {ALTZP, key_keys};
+            12'h017: io_dout <= {SLOTC3ROM, key_keys};
+            12'h018: io_dout <= {STORE80, key_keys};
+            12'h019: io_dout <= {~VBlank, key_keys};
+            12'h01a: io_dout <= {TEXTG, key_keys};
+            12'h01b: io_dout <= {MIXG, key_keys};
+            12'h01c: io_dout <= {PAGE2, key_keys};
+            12'h01d: io_dout <= {~HIRES_MODE, key_keys};
+            12'h01e: io_dout <= {ALTCHARSET, key_keys};
+            12'h01f: io_dout <= {EIGHTYCOL, key_keys};
 
             12'h022: io_dout <= TEXTCOLOR;
             12'h023: begin $display("READ VGCINT %x",VGCINT);io_dout <= VGCINT; end /* vgc int */
