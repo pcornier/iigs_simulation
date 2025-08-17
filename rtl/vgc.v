@@ -456,13 +456,12 @@ wire [2:0] char_bit_80 = (xpos[2:0] > 6) ? 3'd6 : xpos[2:0];
 wire [2:0] char_bit_40 = (xpos[3:1] > 6) ? 3'd6 : xpos[3:1];
 wire  textpixel = EIGHTYCOL ? chrom_data_out[char_bit_80] : chrom_data_out[char_bit_40];
 
-    // Regular Hires
+    // Regular Hires - Apple II hi-res: 7 pixels per byte (bits 0-6), bit 7 is color/palette
+    // Return only the 7 pixel bits in correct order: bit 0 first, then 1, 2, 3, 4, 5, 6
+    // Bit 7 (color bit) should NOT be included in pixel stream
     function automatic bit [7:0] expandHires40([7:0] vd);
         reg [7:0] vs;
-        vs = {
-            vd[6],vd[5],vd[4],vd[3],
-            vd[2],vd[1],vd[0],vd[7]  // bit 7 goes to position 0 for color shift
-        };
+        vs = {1'b0, vd[6:0]};  // 7 pixel bits in correct order, pad with 0
         return vs;
     endfunction
 
@@ -597,18 +596,24 @@ begin
 					if (H >= 32 && H <= 100 && V == 16) 
 						$display("  LORES RELOAD: H=%d video_data=%h expanded=%b color=%h", H, video_data, {expandLores40(video_data, window_y_w[2]), 1'b0}, window_y_w[2] ? video_data[7:4] : video_data[3:0]);
 				end else if (hires_mode) begin
-					// Hires: expand bits 
+					// Hires: expand pixel bits (0-6), store color bit (7) separately
 					graphics_pix_shift <= expandHires40(video_data);
-					// For hires, color will be determined by pixel value and artifacting
+					graphics_color <= {3'b0, video_data[7]};  // Store color/palette bit
 					if (H >= 32 && H <= 100 && V == 16) 
-						$display("  HIRES RELOAD: H=%d video_data=%h expanded=%b", H, video_data, expandHires40(video_data));
+						$display("  HIRES RELOAD: H=%d video_data=%h expanded=%b color_bit=%b", H, video_data, expandHires40(video_data), video_data[7]);
 				end
 				buffer_needs_reload <= 1'b0;
 			end else begin
-				// Shift pixels out one per clock
-				graphics_pix_shift <= {1'b0, graphics_pix_shift[7:1]};
-				if (H >= 32 && H <= 100 && V == 16) 
-					$display("  PIXEL SHIFT: H=%d shift_before=%b shift_after=%b pixel_out=%b", H, graphics_pix_shift, {1'b0, graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
+				// Shift pixels out: every clock in 80-col, every 2 clocks in 40-col (pixel doubling)
+				if (EIGHTYCOL || xpos[0] == 1'b0) begin
+					graphics_pix_shift <= {1'b0, graphics_pix_shift[7:1]};
+					if (H >= 32 && H <= 100 && V == 16) 
+						$display("  PIXEL SHIFT: H=%d xpos=%d shift_before=%b shift_after=%b pixel_out=%b", H, xpos, graphics_pix_shift, {1'b0, graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
+				end else begin
+					// Hold pixel for doubling in 40-column mode
+					if (H >= 32 && H <= 100 && V == 16) 
+						$display("  PIXEL HOLD: H=%d xpos=%d shift=%b pixel_out=%b", H, xpos, graphics_pix_shift, graphics_pix_shift[0]);
+				end
 			end
 			graphics_pixel <= graphics_pix_shift[0];
 			
