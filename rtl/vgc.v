@@ -377,8 +377,10 @@ end
 // 6-pixel shift register for authentic Apple II color detection
 reg [5:0] apple2_shift_reg;
 
-// Horizontal counter for color phase (modulo 4)
-wire [1:0] color_phase = H[1:0];
+// Horizontal pixel counter for authentic Apple II color phase (modulo 4)
+// This should increment with each pixel during active video, not global H counter
+reg [10:0] pixel_counter;
+wire [1:0] color_phase = pixel_counter[1:0];
 
 // Authentic Apple II tint consistency check
 wire consistent_tint = (apple2_shift_reg[0] == apple2_shift_reg[4]) & 
@@ -623,6 +625,7 @@ begin
 		graphics_color <= 4'b0;
 		buffer_needs_reload <= 1'b1;
 		apple2_shift_reg <= 6'b0;
+		pixel_counter <= 11'b0;
 	end
 	else
 	begin
@@ -663,6 +666,12 @@ begin
 			
 			// Update Apple II 6-pixel shift register for color artifacting
 			apple2_shift_reg <= {graphics_pixel, apple2_shift_reg[5:1]};
+			
+			// Increment pixel counter for color phase (during active video)
+			if (H >= 32 && H < 592 && V >= 16 && V < 208)
+				pixel_counter <= pixel_counter + 1'b1;
+			else if (H < 32)
+				pixel_counter <= 11'b0; // Reset at start of each line
 		end
 
 		xpos<=xpos+1'b1;
