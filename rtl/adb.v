@@ -779,8 +779,9 @@ always @(posedge CLK_14M) begin
     end
   end
 
-  // Only process when strobe is active and module is enabled
-  if (cen & strobe) begin
+  // Apple IIe registers ($C000, $C010) respond immediately for compatibility
+  // All other ADB registers require proper cen timing
+  if (strobe && ((addr == 8'h00 || addr == 8'h10) || cen)) begin
     case (addr)
 
     8'h00: begin
