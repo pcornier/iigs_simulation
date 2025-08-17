@@ -111,6 +111,7 @@ module iigs
    logic       HIRES_MODE/*verilator public_flat*/;
    logic       ALTCHARSET/*verilator public_flat*/;
    logic       EIGHTYCOL/*verilator public_flat*/;
+   logic       AN3/*verilator public_flat*/;
    logic [7:0] NEWVIDEO/*verilator public_flat*/;
    logic IO/*verilator public_flat*/;
    logic we;
@@ -413,6 +414,7 @@ module iigs
       EIGHTYCOL<=0;
       ALTCHARSET<=0;
       PAGE2<=0;
+      AN3<=0;
       MONOCHROME<=0;
       RDROM<=1;
       LCRAM2<=0;
@@ -558,6 +560,8 @@ module iigs
             12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
             12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
             12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
+            12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
+            12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
             // $C068: bit0 stays high during boot sequence, why?
             // if bit0=1 it means that internal ROM at SCx00 is selected
             // does it mean slot cards are not accessible?
@@ -780,7 +784,8 @@ module iigs
             12'h058: io_dout <= 'h0; // some kind of soft switch?
             12'h05a: io_dout <= 'h0; // some kind of soft switch?
             12'h05d: io_dout <= 'h0; // some kind of soft switch?
-            12'h05f: io_dout <= 'h0; // some kind of soft switch?
+            12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
+            12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
             
             // Joystick/Paddle I/O
             12'h061: begin
@@ -796,7 +801,7 @@ module iigs
 `endif
             end
             12'h063: io_dout <= {sw2, 7'b0000000};                      // SW2 (bit 7: 1=pressed)
-            12'h064: io_dout <= {~paddle_timer_expired[0], 7'b0000000}; // PADDL0 (bit 7: 1=still timing, 0=done)
+            12'h064: io_dout <= {~paddle_timer_expired[0], 1'b0, ~AN3, 5'b00000}; // PADDL0 (bit 7: 1=still timing, 0=done) + AN3 (bit 5: 1=clear, 0=set)
             12'h065: io_dout <= {~paddle_timer_expired[1], 7'b0000000}; // PADDL1 (bit 7: 1=still timing, 0=done)
             12'h066: io_dout <= {~paddle_timer_expired[2], 7'b0000000}; // PADDL2 (bit 7: 1=still timing, 0=done)
             12'h067: io_dout <= {~paddle_timer_expired[3], 7'b0000000}; // PADDL3 (bit 7: 1=still timing, 0=done)
@@ -1222,6 +1227,8 @@ wire [22:0] video_addr;
 wire [7:0] video_data;
 wire vbl_irq;
 wire scanline_irq;
+
+
 vgc vgc(
         .CLK_14M(CLK_14M),
         .clk_vid(clk_vid),
@@ -1239,6 +1246,8 @@ vgc vgc(
         .BORDERCOLOR(BORDERCOLOR),
         .HIRES_MODE(HIRES_MODE),
         .ALTCHARSET(ALTCHARSET),
+	.AN3(AN3),
+	.STORE80(STORE80),
         .EIGHTYCOL(EIGHTYCOL),
         .PAGE2(PAGE2),
         .TEXTG(TEXTG),

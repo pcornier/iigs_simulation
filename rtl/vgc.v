@@ -15,6 +15,8 @@ input [7:0] video_data,
 input [7:0] TEXTCOLOR,
 input [3:0] BORDERCOLOR,
 input HIRES_MODE,
+input AN3,
+input STORE80,
 input ALTCHARSET,
 input EIGHTYCOL,
 input PAGE2,
@@ -319,70 +321,77 @@ end
 
 
 
-reg [11:0] BORGB;
+// Apple IIgs color palette (16 colors)
+reg [11:0] palette_rgb_r[0:15] = '{
+    12'h000, // 0   Black
+    12'hd03, // 1   Deep Red
+    12'h009, // 2   Dark Blue
+    12'hd2d, // 3   Purple
+    12'h072, // 4   Dark Green
+    12'h555, // 5   Dark Gray   
+    12'h22f, // 6   Medium Blue
+    12'h6af, // 7   Light Blue
+    12'h850, // 8   Brown
+    12'hf60, // 9   Orange
+    12'haaa, // 10  Light Gray
+    12'hf98, // 11  Pink
+    12'h1d0, // 12  Light Green
+    12'hff0, // 13  Yellow
+    12'h4f9, // 14  Aquamarine
+    12'hfff  // 15  White
+};
+
+// Apple II color artifact table from MAME, reduced to 4 bits
+reg [3:0] artifact_r[0:127] = '{
+    4'h0,4'h0,4'h0,4'h0,4'h8,4'h0,4'h0,4'h0,4'h1,4'h1,4'h5,4'h1,4'h9,4'h9,4'hd,4'hf,
+    4'h2,4'h2,4'h6,4'h6,4'ha,4'ha,4'he,4'he,4'h3,4'h3,4'h3,4'h3,4'hb,4'hb,4'hf,4'hf,
+    4'h0,4'h0,4'h4,4'h4,4'hc,4'hc,4'hc,4'hc,4'h5,4'h5,4'h5,4'h5,4'h9,4'h9,4'hd,4'hf,
+    4'h0,4'h2,4'h6,4'h6,4'he,4'ha,4'he,4'he,4'h7,4'h7,4'h7,4'h7,4'hf,4'hf,4'hf,4'hf,
+    4'h0,4'h0,4'h0,4'h0,4'h8,4'h8,4'h8,4'h8,4'h1,4'h1,4'h5,4'h1,4'h9,4'h9,4'hd,4'hf,
+    4'h0,4'h2,4'h6,4'h6,4'ha,4'ha,4'ha,4'ha,4'h3,4'h3,4'h3,4'h3,4'hb,4'hb,4'hf,4'hf,
+    4'h0,4'h0,4'h4,4'h4,4'hc,4'hc,4'hc,4'hc,4'h1,4'h1,4'h5,4'h5,4'h9,4'h9,4'hd,4'hd,
+    4'h0,4'h2,4'h6,4'h6,4'he,4'ha,4'he,4'he,4'hf,4'hf,4'hf,4'h7,4'hf,4'hf,4'hf,4'hf
+};
+
+// Color lookup functions using IIgs palette
+wire [11:0] BORGB = palette_rgb_r[BORDERCOLOR];
+wire [11:0] TRGB = palette_rgb_r[TEXTCOLOR[7:4]];
+wire [11:0] BRGB = palette_rgb_r[TEXTCOLOR[3:0]];
+// Apple II Color artifacting logic (simplified from apple2hack)
+// Check if adjacent pixels have consistent pattern for color display
+wire consistent_tint = (pixel_history[0] == pixel_history[4]) & (pixel_history[5] == pixel_history[1]);
+wire [1:0] pixel_pair = pixel_history[3:2];  // Current pixel pair for color decision
+
+// Color generation based on position and pixel patterns
 always @(*) begin
-	case (BORDERCOLOR)
-		4'h0: BORGB = 12'h000;          /* 0x0 black */
-		4'h1: BORGB = 12'hd03;          /* 0x1 deep red */
-		4'h2: BORGB = 12'h009;          /* 0x2 dark blue */
-		4'h3: BORGB = 12'hd0d;          /* 0x3 purple */
-		4'h4: BORGB = 12'h070;          /* 0x4 dark green */
-		4'h5: BORGB = 12'h555;          /* 0x5 dark gray */
-		4'h6: BORGB = 12'h22f;          /* 0x6 medium blue */
-		4'h7: BORGB = 12'h6af;          /* 0x7 light blue */
-		4'h8: BORGB = 12'h852;          /* 0x8 brown */
-		4'h9: BORGB = 12'hf60;          /* 0x9 orange */
-		4'ha: BORGB = 12'haaa;          /* 0xa light gray */
-		4'hb: BORGB = 12'hf98;          /* 0xb pink */
-		4'hc: BORGB = 12'h0d0;          /* 0xc green */
-		4'hd: BORGB = 12'hff0;          /* 0xd yellow */
-		4'he: BORGB = 12'h0f9;          /* 0xe aquamarine */
-		4'hf: BORGB = 12'hfff;          /* 0xf white */
-	endcase
-end
-reg [11:0] TRGB;
-always @(*) begin
-	case (TEXTCOLOR[7:4])
-		4'h0: TRGB = 12'h000;          /* 0x0 black */
-		4'h1: TRGB = 12'hd03;          /* 0x1 deep red */
-		4'h2: TRGB = 12'h009;          /* 0x2 dark blue */
-		4'h3: TRGB = 12'hd0d;          /* 0x3 purple */
-		4'h4: TRGB = 12'h070;          /* 0x4 dark green */
-		4'h5: TRGB = 12'h555;          /* 0x5 dark gray */
-		4'h6: TRGB = 12'h22f;          /* 0x6 medium blue */
-		4'h7: TRGB = 12'h6af;          /* 0x7 light blue */
-		4'h8: TRGB = 12'h852;          /* 0x8 brown */
-		4'h9: TRGB = 12'hf60;          /* 0x9 orange */
-		4'ha: TRGB = 12'haaa;          /* 0xa light gray */
-		4'hb: TRGB = 12'hf98;          /* 0xb pink */
-		4'hc: TRGB = 12'h0d0;          /* 0xc green */
-		4'hd: TRGB = 12'hff0;          /* 0xd yellow */
-		4'he: TRGB = 12'h0f9;          /* 0xe aquamarine */
-		4'hf: TRGB = 12'hfff;          /* 0xf white */
-	endcase
+    if (consistent_tint && hires_mode) begin
+        // Display color based on pixel pattern and horizontal position
+        case (pixel_pair)
+            2'b11: hires_artifact_color = 4'hF;  // White
+            2'b01, 2'b10: begin
+                // Color depends on horizontal position (simplified)
+                if (xpos[0]) 
+                    hires_artifact_color = 4'h9;  // Orange
+                else
+                    hires_artifact_color = 4'h6;  // Blue
+            end
+            default: hires_artifact_color = 4'h0;  // Black
+        endcase
+    end else if (hires_mode) begin
+        // Inconsistent tint: display grayscale
+        case (pixel_pair)
+            2'b11: hires_artifact_color = 4'hF;  // White
+            2'b01, 2'b10: hires_artifact_color = 4'h5;  // Gray
+            default: hires_artifact_color = 4'h0;  // Black
+        endcase
+    end else begin
+        hires_artifact_color = 4'h0;  // Not used for lores
+    end
 end
 
-reg [11:0] BRGB;
-always @(*) begin
-	case (TEXTCOLOR[3:0])
-		4'h0: BRGB = 12'h000;          /* 0x0 black */
-		4'h1: BRGB = 12'hd03;          /* 0x1 deep red */
-		4'h2: BRGB = 12'h009;          /* 0x2 dark blue */
-		4'h3: BRGB = 12'hd0d;          /* 0x3 purple */
-		4'h4: BRGB = 12'h070;          /* 0x4 dark green */
-		4'h5: BRGB = 12'h555;          /* 0x5 dark gray */
-		4'h6: BRGB = 12'h22f;          /* 0x6 medium blue */
-		4'h7: BRGB = 12'h6af;          /* 0x7 light blue */
-		4'h8: BRGB = 12'h852;          /* 0x8 brown */
-		4'h9: BRGB = 12'hf60;          /* 0x9 orange */
-		4'ha: BRGB = 12'haaa;          /* 0xa light gray */
-		4'hb: BRGB = 12'hf98;          /* 0xb pink */
-		4'hc: BRGB = 12'h0d0;          /* 0xc green */
-		4'hd: BRGB = 12'hff0;          /* 0xd yellow */
-		4'he: BRGB = 12'h0f9;          /* 0xe aquamarine */
-		4'hf: BRGB = 12'hfff;          /* 0xf white */
-	endcase
-end
+// Graphics RGB calculation - different for lores vs hires
+wire [3:0] final_graphics_color = lores_mode ? graphics_color : hires_artifact_color;
+wire [11:0] graphics_rgb = palette_rgb_r[final_graphics_color];
 
 reg [12:0] BASEADDR;
 wire  [ 4:0] vert = V[7:3]-5'h02;
@@ -439,8 +448,120 @@ wire [12:0] chram_y = BASEADDR;
 
 
 //  in EIGHTCOL mode we need each pixel, in 40 we pixel double
-wire  textpixel = EIGHTYCOL ? chrom_data_out[xpos[2:0]] : chrom_data_out[xpos[3:1]];
+// Apple II character ROM: 7 pixels wide (bits 0-6), bit 7 unused for text
+// In 80-column mode: xpos 0-6 maps directly to character bits 0-6
+// In 40-column mode: xpos 0-13 maps to character bits 0-6 (pixel doubled)
+// Ensure we don't access bit 7 which may be undefined
+wire [2:0] char_bit_80 = (xpos[2:0] > 6) ? 3'd6 : xpos[2:0];
+wire [2:0] char_bit_40 = (xpos[3:1] > 6) ? 3'd6 : xpos[3:1];
+wire  textpixel = EIGHTYCOL ? chrom_data_out[char_bit_80] : chrom_data_out[char_bit_40];
 
+    // Regular Hires
+    function automatic bit [7:0] expandHires40([7:0] vd);
+        reg [7:0] vs;
+        vs = {
+            vd[6],vd[5],vd[4],vd[3],
+            vd[2],vd[1],vd[0],vd[7]  // bit 7 goes to position 0 for color shift
+        };
+        return vs;
+    endfunction
+
+    // Double Hires
+    function automatic bit [6:0] expandHires80([7:0] vd);
+        reg [6:0] vs;
+        vs = vd[6:0];
+        return vs;
+    endfunction
+
+    // Regular Text
+    function automatic bit [6:0] expandText40([7:0] vd);
+        reg [6:0] vs;
+        vs = vd[6:0];
+        return vs;
+    endfunction
+
+    // Regular Lores
+    function automatic bit [6:0] expandLores40([7:0] vd, bit seg);
+        reg [6:0] vs;
+        case (seg)
+            1'b0: vs = {
+                vd[3],vd[2],vd[1],vd[0],
+                vd[3],vd[2],vd[1]
+            };
+            1'b1: vs = {
+                vd[7],vd[6],vd[5],vd[4],
+                vd[7],vd[6],vd[5]
+            };
+        endcase
+        return vs;
+    endfunction
+
+
+        // Double Lores
+    function automatic bit [6:0] expandLores80([7:0] vd, bit seg);
+        reg [6:0] vs;
+        case (seg)
+            1'b0: vs = {
+                vd[3],vd[2],vd[1],vd[0],
+                vd[3],vd[2],vd[1]
+            };
+            1'b1: vs = {
+                vd[7],vd[6],vd[5],vd[4],
+                vd[7],vd[6],vd[5]
+            };
+        endcase
+        return vs;
+    endfunction
+
+    // Memory address generation, per Sather
+    function automatic bit [15:0] lineaddr([9:0] y);
+        reg [15:0] a;
+        a[2:0] = 3'b0;
+        a[6:3] = ({ 1'b1, y[6], 1'b1, 1'b1}) +
+                 ({ y[7], 1'b1, y[7], 1'b1}) +
+                 ({ 3'b000,           y[6]});
+        a[9:7] = y[5:3];
+        a[14:10] = (HIRES_MODE & GR) == 1'b0 ?
+            {2'b00, 1'b0, PAGE2 &  ~STORE80, ~(PAGE2 &  ~STORE80)} :
+            {PAGE2 &  ~STORE80, ~(PAGE2 &  ~STORE80), y[2:0]};
+        a[15] = 1'b0;
+        return a;
+    endfunction
+
+    localparam [2:0] TEXT40_LINE = 0;
+    localparam [2:0] TEXT80_LINE = 1;
+    localparam [2:0] LORES40_LINE = 4;
+    localparam [2:0] LORES80_LINE = 5;
+    localparam [2:0] HIRES40_LINE = 6;
+    localparam [2:0] HIRES80_LINE = 7;
+
+
+        wire [2:0] line_type_w = (!GR & !EIGHTYCOL) ? TEXT40_LINE :
+        (!GR & EIGHTYCOL) ? TEXT80_LINE :
+        (GR & !HIRES_MODE & !EIGHTYCOL) ? LORES40_LINE :         // Standard Apple II lores
+        (GR & !HIRES_MODE & EIGHTYCOL & !AN3) ? LORES80_LINE :   // IIgs double lores  
+        (GR & HIRES_MODE & !EIGHTYCOL) ? HIRES40_LINE :          // Standard Apple II hires
+        (GR & HIRES_MODE & EIGHTYCOL & !AN3) ? HIRES80_LINE :    // IIgs double hires
+        TEXT40_LINE;
+
+//
+// Apple II Graphics Mode Support - Pixel Buffer System
+//
+
+// Pixel buffer system (inspired by apple_video.sv but adapted for vgc.v memory timing)
+reg [7:0] graphics_pix_shift;    // Shifts out one pixel per clock
+reg [3:0] graphics_color;        // Current pixel color
+reg graphics_pixel;              // Current pixel value
+reg buffer_needs_reload;         // Flag to reload buffer when chram_x increments
+
+// Color artifacting for hires mode (simplified version of apple2hack logic)
+reg [5:0] pixel_history;         // Last 6 pixels for color artifacting
+reg [3:0] hires_artifact_color;  // Color from artifacting logic
+
+// Current mode detection using existing line_type_w
+wire lores_mode = (line_type_w == LORES40_LINE) | (line_type_w == LORES80_LINE);
+wire hires_mode = (line_type_w == HIRES40_LINE) | (line_type_w == HIRES80_LINE);
+wire graphics_mode = lores_mode | hires_mode;
 
 //
 // Text Mode chars are 7 bits wide, not 8
@@ -456,16 +577,52 @@ begin
 		xpos<=0;
 		chram_x<=0;
 		aux<=0;
+		graphics_pix_shift <= 8'b0;
+		graphics_color <= 4'b0;
+		buffer_needs_reload <= 1'b1;
+		pixel_history <= 6'b0;
 	end
 	else
 	begin
+		// Graphics pixel buffer system - coordinate with memory timing
+		if (H >= 32 && H <= 100 && V == 16)
+			$display("  DEBUG CONDITION: graphics_mode=%b GR=%b line_type=%d condition=%b", graphics_mode, GR, line_type_w, (graphics_mode && GR));
+		if (graphics_mode && GR) begin
+			// Reload buffer when chram_x changes (new memory data available)
+			if (buffer_needs_reload) begin
+				if (lores_mode) begin
+					// Lores: expand nibbles based on line position
+					graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
+					graphics_color <= window_y_w[2] ? video_data[7:4] : video_data[3:0];
+					if (H >= 32 && H <= 100 && V == 16) 
+						$display("  LORES RELOAD: H=%d video_data=%h expanded=%b color=%h", H, video_data, {expandLores40(video_data, window_y_w[2]), 1'b0}, window_y_w[2] ? video_data[7:4] : video_data[3:0]);
+				end else if (hires_mode) begin
+					// Hires: expand bits 
+					graphics_pix_shift <= expandHires40(video_data);
+					// For hires, color will be determined by pixel value and artifacting
+					if (H >= 32 && H <= 100 && V == 16) 
+						$display("  HIRES RELOAD: H=%d video_data=%h expanded=%b", H, video_data, expandHires40(video_data));
+				end
+				buffer_needs_reload <= 1'b0;
+			end else begin
+				// Shift pixels out one per clock
+				graphics_pix_shift <= {1'b0, graphics_pix_shift[7:1]};
+				if (H >= 32 && H <= 100 && V == 16) 
+					$display("  PIXEL SHIFT: H=%d shift_before=%b shift_after=%b pixel_out=%b", H, graphics_pix_shift, {1'b0, graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
+			end
+			graphics_pixel <= graphics_pix_shift[0];
+			
+			// Update pixel history for color artifacting
+			pixel_history <= {graphics_pixel, pixel_history[5:1]};
+		end
 
 		xpos<=xpos+1'b1;
 		if (EIGHTYCOL) begin
 		  if (xpos=='d5) begin
-		    aux[16]<=~aux[16];
-		    if (aux[16]==1'b0)
-		      chram_x<=chram_x+1'b1;
+		    aux[16]<=~aux[16];                    // Toggle between main/aux every character
+		    if (aux[16]==1'b0)                    // Only increment memory address every 2 characters
+		      chram_x<=chram_x+1'b1;              // (each memory location holds 2 characters)
+		    buffer_needs_reload <= 1'b1;         // Signal buffer reload
 		  end
 		  if (xpos=='d6) begin
 			xpos<=0;
@@ -473,6 +630,7 @@ begin
 		end else if (xpos=='d13) begin
 			xpos<=0;
 			chram_x<=chram_x+1'b1;
+			buffer_needs_reload <= 1'b1;  // Signal buffer reload
 		end
 	end
      end
@@ -496,21 +654,71 @@ B <= {BORGB[3:0],BORGB[3:0]};
 end
 else
 begin
-R <= NEWVIDEO[7] ?  {shrg_r_pix,shrg_r_pix}  :   ~textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]}  ;
-G <= NEWVIDEO[7] ?  {shrg_g_pix,shrg_g_pix}  :   ~textpixel ? {TRGB[7:4],TRGB[7:4]} :  {BRGB[7:4],BRGB[7:4]};
-B <= NEWVIDEO[7] ?  {shrg_b_pix,shrg_b_pix}  :   ~textpixel ? {TRGB[3:0],TRGB[3:0]} :  {BRGB[3:0],BRGB[3:0]};
-
+    if (NEWVIDEO[7]) begin
+        // SHRG mode
+        R <= {shrg_r_pix,shrg_r_pix};
+        G <= {shrg_g_pix,shrg_g_pix};
+        B <= {shrg_b_pix,shrg_b_pix};
+    end else if (GR) begin
+        // Graphics mode (lores/hires)
+        R <= {graphics_rgb[11:8],graphics_rgb[11:8]};
+        G <= {graphics_rgb[7:4],graphics_rgb[7:4]};
+        B <= {graphics_rgb[3:0],graphics_rgb[3:0]};
+    end else begin
+        // Text mode
+        R <= ~textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]};
+        G <= ~textpixel ? {TRGB[7:4],TRGB[7:4]} : {BRGB[7:4],BRGB[7:4]};
+        B <= ~textpixel ? {TRGB[3:0],TRGB[3:0]} : {BRGB[3:0],BRGB[3:0]};
+    end
 end
 end
 
 
 //assign a = chrom_data_out[chpos_x[2:0]];
-wire [22:0] video_addr_ii = chram_y + chram_x +23'h400 + aux ;
+// Window coordinates derived from H and V
+wire [9:0] window_x_w = (H >= 32) ? H - 32 : 10'b0;
+wire [9:0] window_y_w = (V >= 16) ? V - 16 : 10'b0;
+
+// GR signal calculation for mixed mode support
+wire GR = ~(TEXTG | (window_y_w[5] & window_y_w[7] & MIXG));
+
+// Apple II address generation using lineaddr() function
+wire [15:0] lineaddr_result = lineaddr(window_y_w);
+wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + chram_x;
+
+// Text80 mode needs aux memory bank switching
+wire text80_mode = (!GR & EIGHTYCOL);
+wire use_aux_bank = text80_mode & aux[16];
+wire [22:0] video_addr_ii = use_aux_bank ? video_addr_ii_base + 23'h10000 : video_addr_ii_base;
+
+// Character Y position within 8-pixel character cell
+wire [2:0] chpos_y = window_y_w[2:0];
 assign chrom_addr = { ALTCHARSET,video_data[7:0], chpos_y};
 
 
 always @(posedge clk_vid) if (ce_pix)
 begin
+    // Debug text80 and graphics modes - show initial frames only  
+    if (H == 32 && V == 16) begin
+        $display("MODE: H=%d V=%d TEXTG=%b EIGHTYCOL=%b GR=%b HIRES_MODE=%b AN3=%b text80=%b graphics=%b line_type=%d",
+                 H, V, TEXTG, EIGHTYCOL, GR, HIRES_MODE, AN3, text80_mode, graphics_mode, line_type_w);
+        $display("Graphics debug: lores_mode=%b hires_mode=%b graphics_color=%h final_graphics_color=%h graphics_pixel=%b",
+                 lores_mode, hires_mode, graphics_color, final_graphics_color, graphics_pixel);
+        $display("Hires color: consistent_tint=%b pixel_pair=%b hires_artifact_color=%h pixel_history=%b",
+                 consistent_tint, pixel_pair, hires_artifact_color, pixel_history);
+        $display("Video data: video_data=%h video_addr=%h chram_x=%d xpos=%d",
+                 video_data, video_addr_ii, chram_x, xpos);
+        $display("Pixel timing: graphics_pix_shift=%b buffer_needs_reload=%b",
+                 graphics_pix_shift, buffer_needs_reload);
+        $display("Text debug: window_y_w=%d chpos_y=%d chrom_addr=%h chrom_data_out=%h textpixel=%b",
+                 window_y_w, chpos_y, chrom_addr, chrom_data_out, textpixel);
+    end
+    
+    // Debug character ROM and text pixel output - extensive debugging for a few pixels
+    if (H >= 32 && H <= 100 && V == 16 && !GR) begin
+        $display("  TEXT PIXEL: H=%d video_data=%h chrom_addr=%h chrom_data=%h xpos=%d textpixel=%b", 
+                 H, video_data, chrom_addr, chrom_data_out, xpos, textpixel);
+    end
 //	$display("V %x oldV %x chram_y %x base_y %x offset %x video_addr %x video_data %x video_data %x %c %x \n",V[8:3],oldV,chram_y,base_y,offset,video_addr,video_data,video_data[6:0],video_data[6:0],chrom_data_out);
 end
 
