@@ -615,11 +615,11 @@ wire graphics_mode = lores_mode | hires_mode;
 // This signal controls when to load new character/graphics data
 wire ldps_load;
 wire text80_mode = (!GR & EIGHTYCOL);
-assign ldps_load = (H >= 28 && H < 32) ||  // Pre-load during border
-                   (H >= 32 && (
-                     (EIGHTYCOL && (xpos == 3)) ||  // 80-col: load 2 cycles early
-                     (!EIGHTYCOL && (xpos == 11))   // 40-col: load 2 cycles early
-                   ));
+assign ldps_load = (NEWVIDEO[7]) ? 
+                   // SHRG mode timing
+                   ((H >= 28 && H < 32) || (H >= 32 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 11))))) :
+                   // Apple II mode timing  
+                   ((H >= 68 && H < 72) || (H >= 72 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 11)))));
 
 reg [3:0] xpos;
 reg [16:0] aux;
@@ -627,25 +627,38 @@ always @(posedge clk_vid)
 begin
    if (ce_pix)
    begin
-	if (H<32)
+	if ((NEWVIDEO[7] && H<32) || (!NEWVIDEO[7] && H<72))
 	begin
 		// Early character loading during border period
-		if (H == 26) begin
-			// Start even earlier - set up for 80-column mode
-			if (EIGHTYCOL) begin
-				// In 80-column mode, start with aux memory to get first character
-				chram_x <= 0;
-				aux[16] <= 1'b1;  // Start with aux memory
-			end else begin
-				chram_x <= 0;
-				aux <= 0;
+		// Different timing for SHRG vs Apple II modes
+		if (NEWVIDEO[7]) begin
+			// SHRG mode: start loading at H=28
+			if (H == 26) begin
+				if (EIGHTYCOL) begin
+					chram_x <= 0;
+					aux[16] <= 1'b1;
+				end else begin
+					chram_x <= 0;
+					aux <= 0;
+				end
+			end else if (H == 28) begin
+				buffer_needs_reload <= 1'b1;
+			end else if (H == 30) begin
+				buffer_needs_reload <= 1'b1;
 			end
-		end else if (H == 28) begin
-			// Pre-load first character during left border
-			buffer_needs_reload <= 1'b1;
-		end else if (H == 30) begin
-			// Give memory time to respond, then prepare for active display
-			buffer_needs_reload <= 1'b1;
+		end else begin
+			// Apple II modes: start loading at H=68
+			if (H == 68) begin
+				if (EIGHTYCOL) begin
+					chram_x <= 0;
+					aux[16] <= 1'b1;
+				end else begin
+					chram_x <= 0;
+					aux <= 0;
+				end
+			end else if (H == 70) begin
+				buffer_needs_reload <= 1'b1;
+			end
 		end
 		
 		xpos<=0;
@@ -695,10 +708,20 @@ begin
 			apple2_shift_reg <= {graphics_pixel, apple2_shift_reg[5:1]};
 			
 			// Increment pixel counter for color phase (during active video)
-			if (H >= 32 && H < 592 && V >= 16 && V < 208)
-				pixel_counter <= pixel_counter + 1'b1;
-			else if (H < 32)
-				pixel_counter <= 11'b0; // Reset at start of each line
+			// Mode-dependent boundaries: SHRG uses full width, Apple II modes are centered
+			if (NEWVIDEO[7]) begin
+				// SHRG mode: use full 640-pixel width
+				if (H >= 32 && H < 672 && V >= 16 && V < 208)
+					pixel_counter <= pixel_counter + 1'b1;
+				else if (H < 32)
+					pixel_counter <= 11'b0; // Reset at start of each line
+			end else begin
+				// Apple II modes: use centered 560-pixel area with borders
+				if (H >= 72 && H < 632 && V >= 16 && V < 208)
+					pixel_counter <= pixel_counter + 1'b1;
+				else if (H < 72)
+					pixel_counter <= 11'b0; // Reset at start of each line
+			end
 		end
 
 		xpos<=xpos+1'b1;
@@ -737,8 +760,10 @@ else
 
 
 
-//if (H < 'd32 || H > 'd32+'d560 || V < 'd16 || V > 'd207)
-if (H < 'd32 || H > 'd32+'d640 || V < 'd16 || V > 'd207)
+// Mode-dependent border generation
+// Outside total screen area OR inside Apple II mode margin areas
+if ((H < 'd32 || H > 'd671 || V < 'd16 || V > 'd207) ||
+    (!NEWVIDEO[7] && ((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd671))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
