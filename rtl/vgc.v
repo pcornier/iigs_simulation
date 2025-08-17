@@ -378,9 +378,9 @@ end
 reg [5:0] apple2_shift_reg;
 
 // Horizontal pixel counter for authentic Apple II color phase (modulo 4)
-// This should increment with each pixel during active video, not global H counter
+// Use H counter with offset to maintain proper phase relationship
 reg [10:0] pixel_counter;
-wire [1:0] color_phase = pixel_counter[1:0];
+wire [1:0] color_phase = H[1:0]; // Use original H-based approach
 
 // Authentic Apple II tint consistency check
 wire consistent_tint = (apple2_shift_reg[0] == apple2_shift_reg[4]) & 
@@ -610,6 +610,17 @@ wire graphics_mode = lores_mode | hires_mode;
 //
 // Text Mode chars are 7 bits wide, not 8
 //
+
+// LDPS_N equivalent for memory loading control (inspired by Apple IIe timing)
+// This signal controls when to load new character/graphics data
+wire ldps_load;
+wire text80_mode = (!GR & EIGHTYCOL);
+assign ldps_load = (H >= 28 && H < 32) ||  // Pre-load during border
+                   (H >= 32 && (
+                     (EIGHTYCOL && (xpos == 3)) ||  // 80-col: load 2 cycles early
+                     (!EIGHTYCOL && (xpos == 11))   // 40-col: load 2 cycles early
+                   ));
+
 reg [3:0] xpos;
 reg [16:0] aux;
 always @(posedge clk_vid) 
@@ -618,12 +629,28 @@ begin
    begin
 	if (H<32)
 	begin
+		// Early character loading during border period
+		if (H == 26) begin
+			// Start even earlier - set up for 80-column mode
+			if (EIGHTYCOL) begin
+				// In 80-column mode, start with aux memory to get first character
+				chram_x <= 0;
+				aux[16] <= 1'b1;  // Start with aux memory
+			end else begin
+				chram_x <= 0;
+				aux <= 0;
+			end
+		end else if (H == 28) begin
+			// Pre-load first character during left border
+			buffer_needs_reload <= 1'b1;
+		end else if (H == 30) begin
+			// Give memory time to respond, then prepare for active display
+			buffer_needs_reload <= 1'b1;
+		end
+		
 		xpos<=0;
-		chram_x<=0;
-		aux<=0;
 		graphics_pix_shift <= 8'b0;
 		graphics_color <= 4'b0;
-		buffer_needs_reload <= 1'b1;
 		apple2_shift_reg <= 6'b0;
 		pixel_counter <= 11'b0;
 	end
@@ -677,18 +704,25 @@ begin
 		xpos<=xpos+1'b1;
 		if (EIGHTYCOL) begin
 		  if (xpos=='d5) begin
+		    // Advance memory loading earlier in 80-column mode
 		    aux[16]<=~aux[16];                    // Toggle between main/aux every character
 		    if (aux[16]==1'b0)                    // Only increment memory address every 2 characters
 		      chram_x<=chram_x+1'b1;              // (each memory location holds 2 characters)
-		    buffer_needs_reload <= 1'b1;         // Signal buffer reload
 		  end
 		  if (xpos=='d6) begin
 			xpos<=0;
                   end
 		end else if (xpos=='d13) begin
+			// Advance memory loading earlier in 40-column mode too
 			xpos<=0;
 			chram_x<=chram_x+1'b1;
-			buffer_needs_reload <= 1'b1;  // Signal buffer reload
+		end else if (xpos=='d13) begin
+			xpos<=0;
+		end
+		
+		// Use LDPS equivalent for buffer reload timing - but only trigger on edges
+		if (ldps_load && !buffer_needs_reload) begin
+			buffer_needs_reload <= 1'b1;
 		end
 	end
      end
