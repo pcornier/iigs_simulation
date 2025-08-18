@@ -1461,7 +1461,7 @@ wire ready_out;
         .hdd_protect(HDD_PROTECT),
         .ram_addr(HDD_RAM_ADDR),
         .ram_di(HDD_RAM_DI),
-        .ram_do(HDD_RAM_DO),
+        .ram_do(HDD_RAM_DO),cpu_we_n
         .ram_we(HDD_RAM_WE)
     );
 */

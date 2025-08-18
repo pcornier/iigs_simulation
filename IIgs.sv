@@ -253,7 +253,6 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
 	
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
-
 	.joystick_0(joystick_0),
 	.joystick_l_analog_0(joystick_a0),
 	.paddle_0(paddle_0)
@@ -276,15 +275,19 @@ wire reset = RESET | status[0] | buttons[1];
 
 wire selftest_override = 1'b0;
 
+wire phi2;
+wire phi0;
+wire clk_7M;
+
 iigs iigs (
 	.reset(reset),
 	.CLK_14M(clk_sys),
 	.clk_vid(clk_vid),
-	.cpu_wait(cpu_wait_hdd),
+	.cpu_wait(cpu_wait_hdd|ch0_busy),
 	.ce_pix(ce_pix),
-	.phi2(fast_clk),
-	.phi0(fast_clk_delayed),
-	.clk_7M(fast_clk_delayed_mem),
+	.phi2(phi2),
+	.phi0(phi0),
+	.clk_7M(clk_7M),
 	.timestamp(TIMESTAMP),
 	.floppy_wp(1'b1),
 	.R(VGA_R),
@@ -363,7 +366,42 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
         .wren_a(fastram_we & fastram_ce),
         .ce_a(fastram_ce)
 );*/
-bram #(.widthad_a(16)) slowram
+wire ch0_busy;
+
+  sdram sdram
+  (
+  	.*,  // Connect all SDRAM_* signals automatically
+  	.init(~locked),
+  	.clk(clk_mem),
+
+  	// Channel 0: CPU fast RAM
+  	.ch0_addr({2'b00, fastram_address}),  // Pad to 25 bits
+  	.ch0_rd(phi2 & ~fastram_we & fastram_ce),
+  	.ch0_wr(phi2 & fastram_we & fastram_ce),
+  	.ch0_din(fastram_datatoram),
+  	.ch0_dout(fastram_datafromram),
+  	.ch0_busy(ch0_busy),
+
+  	// Channel 1: Video system (if needed)
+  	.ch1_addr(25'h0),    // Unused for now
+  	.ch1_rd(1'b0),
+  	.ch1_wr(1'b0),
+  	.ch1_din(8'h00),
+  	.ch1_dout(),         // Unconnected
+  	.ch1_busy(),         // Unconnected
+
+  	// Channel 2: Future expansion
+  	.ch2_addr(25'h0),    // Unused
+  	.ch2_rd(1'b0),
+  	.ch2_wr(1'b0),
+  	.ch2_din(8'h00),
+  	.ch2_dout(),         // Unconnected
+  	.ch2_busy()          // Unconnected
+  );
+
+
+/*
+bram #(.widthad_a(15)) slowram
 (
         .clock_a(clk_sys),
         .address_a(fastram_address),
@@ -376,6 +414,7 @@ bram #(.widthad_a(16)) slowram
 		  .enable_a(fastram_ce)
 `endif
 );
+*/
 
 reg ce_pix;
 always @(posedge clk_vid) begin
