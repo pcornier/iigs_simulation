@@ -165,21 +165,21 @@ dpram #(13,8) floppy_dpram
 );
 */
 
-bram #(8,13) floppy_dpram 
+bram #(.width_a(8),.widthad_a(13)) floppy_dpram 
 (
         .clock_a(clk),
         .address_a({rel_lba, sd_buff_addr}),
         .wren_a(sd_buff_wr & sd_ack),
         .data_a(sd_buff_dout),
         .q_a(sd_buff_din),
-        .byteena_a(1'b1),
+        //.byteena_a(1'b1),
 
         .clock_b(clk),
         .address_b(ram_addr),
         .wren_b(ram_we),
         .data_b(ram_di),
         .q_b(ram_do),
-        .byteena_b(1'b1),
+        //.byteena_b(1'b1),
         .enable_a(1'b1),
         .enable_b(1'b1)
 );

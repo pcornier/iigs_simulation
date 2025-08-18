@@ -201,7 +201,6 @@ localparam CONF_STR = {
 wire forced_scandoubler;
 wire  [1:0] buttons;
 wire [31:0] status;
-wire [10:0] ps2_key;
 
 wire [31:0] sd_lba[3];
 reg   [2:0] sd_rd;
@@ -216,6 +215,12 @@ wire        img_readonly;
 wire [63:0] img_size;
 
 wire [32:0] TIMESTAMP;
+wire [15:0] joystick_0;
+wire [15:0] joystick_a0;
+wire  [7:0] paddle_0;
+
+wire [10:0] ps2_key;
+wire [24:0] ps2_mouse;
 
 
 hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
@@ -246,7 +251,12 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
 	.status(status),
 	.status_menumask({status[5]}),
 	
-	.ps2_key(ps2_key)
+	.ps2_key(ps2_key),
+	.ps2_mouse(ps2_mouse),
+
+	.joystick_0(joystick_0),
+	.joystick_l_analog_0(joystick_a0),
+	.paddle_0(paddle_0)
 );
 
 ///////////////////////   CLOCKS   ///////////////////////////////
@@ -264,7 +274,7 @@ pll pll
 
 wire reset = RESET | status[0] | buttons[1];
 
-
+wire selftest_override = 1'b0;
 
 iigs iigs (
 	.reset(reset),
@@ -276,6 +286,7 @@ iigs iigs (
 	.phi0(fast_clk_delayed),
 	.clk_7M(fast_clk_delayed_mem),
 	.timestamp(TIMESTAMP),
+	.floppy_wp(1'b1),
 	.R(VGA_R),
 	.G(VGA_G),
 	.B(VGA_B),
@@ -313,7 +324,23 @@ iigs iigs (
 	.fastram_datatoram(fastram_datatoram),
 	.fastram_datafromram(fastram_datafromram),
 	.fastram_we(fastram_we),
-	.fastram_ce(fastram_ce)
+	.fastram_ce(fastram_ce),
+        .ps2_key(ps2_key),
+        .ps2_mouse(ps2_mouse),
+        .selftest_override(selftest_override),
+
+        .FLOPPY_WP(1'b1),
+
+        // Joystick and paddle inputs
+        .joystick_0(joystick_0),
+       // .joystick_1(joystick_1),
+       // .joystick_l_analog_0(joystick_l_analog_0),
+       // .joystick_l_analog_1(joystick_l_analog_1),
+        .paddle_0(paddle_0)
+       // .paddle_1(paddle_1),
+       // .paddle_2(paddle_2),
+       // .paddle_3(paddle_3)
+	
 );
 
 wire [22:0] fastram_address;
@@ -327,16 +354,28 @@ wire fast_clk_delayed_mem;
 
 logic [7:0] ram_data;
 /*
-dpram #(.widthad_a(16),.prefix("fast")) fastram
+dpram #(.widthad_a(23),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),
         .address_a( fastram_address ),
         .data_a(fastram_datatoram),
         .q_a(ram_data),
-        .wren_a(fastram_we),
+        .wren_a(fastram_we & fastram_ce),
         .ce_a(fastram_ce)
+);*/
+bram #(.widthad_a(23)) slowram
+(
+        .clock_a(clk_sys),
+        .address_a(fastram_address),
+        .data_a(fastram_datatoram),
+        .q_a(fastram_datafromram),
+        .wren_a(fastram_we & fastram_ce),
+`ifdef VERILATOR
+        .ce_a(fastram_ce),
+`else
+		  .enable_a(fastram_ce)
+`endif
 );
-*/
 
 reg ce_pix;
 always @(posedge clk_vid) begin

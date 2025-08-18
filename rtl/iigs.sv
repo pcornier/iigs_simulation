@@ -1192,15 +1192,23 @@ dpram #(.widthad_a(16)) fastram
 );
 `endif
 
+
+`ifdef VERILATOR
 dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
+`else
+bram #(.widthad_a(17)) slowram
+`endif
 (
         .clock_a(CLK_14M),
         .address_a({ bank[0], addr }),
         .data_a(dout),
         .q_a(slowram_dout),
         .wren_a(we),
+`ifdef VERILATOR
         .ce_a(slowram_ce),
-
+`else
+		  .enable_a(slowram_ce),
+`endif
         .clock_b(clk_vid),
         .address_b(video_addr[16:0]),
         .data_b(0),
@@ -1494,9 +1502,7 @@ wire ready_out;
 
   // Apple IIe compatibility signals now come from ADB module
   wire [6:0] key_keys = adb_K[6:0];        // Use ADB's Apple IIe character output
-  wire [7:0] key_keys_pressed = adb_K;     // Full character with strobe bit
-  wire       key_pressed = adb_K[7];       // Key pressed flag from ADB
-  wire       key_anykeydown = adb_akd;     // Any key down from ADB
+  //wire       key_anykeydown = adb_akd;     // Any key down from ADB
   wire       open_apple = adb_open_apple;  // Command key from ADB
   wire       closed_apple = adb_closed_apple; // Option key from ADB
   
@@ -1553,7 +1559,7 @@ wire ready_out;
   wire sw0 = joystick_0[4] | open_apple;    // Open Apple (Button 0)
   wire sw1 = joystick_0[5] | closed_apple;  // Closed Apple (Button 1)
   wire sw2 = joystick_0[6];                 // Button 2  
-  wire sw3 = joystick_0[7];                 // Button 3
+  //wire sw3 = joystick_0[7];                 // Button 3
 
 // Clock divider instance
 clock_divider clk_div_inst (

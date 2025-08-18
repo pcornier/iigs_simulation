@@ -81,6 +81,7 @@ module hdd(
     // Sector buffer
     // Double-ported RAM for holding a sector
     reg [7:0]        sector_buf[0:511];
+    reg [7:0]        sector_buf_read;
     
     // ProDOS constants
     parameter        PRODOS_COMMAND_STATUS = 8'h00;
@@ -114,7 +115,7 @@ module hdd(
                   4'h5: D_OUT <= reg_mem_h;       // MEM H
                   4'h6: D_OUT <= reg_block_l;     // BLK L
                   4'h7: D_OUT <= reg_block_h;     // BLK H
-                  4'h8: D_OUT <= sector_buf[sec_addr]; // NEXT BYTE
+                  4'h8: D_OUT <= sector_buf_read; // NEXT BYTE
                   default: D_OUT <= 8'hFF;
                 endcase
             end else if (IO_SELECT && RD) begin
@@ -209,11 +210,11 @@ module hdd(
                                 begin D_OUT <= reg_block_h; `ifdef SIMULATION $display("HDD RD C0F7: blkH=%02h", reg_block_h); `endif end
                             4'h8 :
                                 begin
-                                    D_OUT <= sector_buf[sec_addr];
+                                    D_OUT <= sector_buf_read;
 				    //$display("reading D_OUT %x to ram %x readonly %x",D_OUT,sec_addr,hdd_protect);
                                     increment_sec_addr <= 1'b1;
 `ifdef SIMULATION
-                                    $display("HDD RD C0F8[%03d] -> %02h", sec_addr, sector_buf[sec_addr]);
+                                    $display("HDD RD C0F8[%03d] -> %02h", sec_addr, sector_buf_read);
 `endif
                                 end
                             default :
@@ -288,6 +289,9 @@ end
             if (ram_we == 1'b1)
                 sector_buf[ram_addr] <= ram_di;
             ram_do <= sector_buf[ram_addr];
+            
+            // Register sector buffer reads for CPU interface
+            sector_buf_read <= sector_buf[sec_addr];
         end
     end
  

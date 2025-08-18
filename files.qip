@@ -25,8 +25,10 @@ set_global_assignment -name VERILOG_FILE rtl/scc_iigs_wrapper.v
 set_global_assignment -name VERILOG_FILE rtl/scc8530.v
 set_global_assignment -name VERILOG_FILE rtl/uart/rxuart.v
 set_global_assignment -name VERILOG_FILE rtl/uart/txuart.v
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/bram.sv
+#set_global_assignment -name SYSTEMVERILOG_FILE rtl/bram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/floppy_track.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
+set_global_assignment -name VHDL_FILE rtl/dpram_bram.vhd
+set_global_assignment -name VHDL_FILE rtl/slowram_spram.vhd
 set_global_assignment -name SYSTEMVERILOG_FILE IIgs.sv

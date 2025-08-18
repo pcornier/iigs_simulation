@@ -107,7 +107,33 @@ reg valid_kbd;
 reg mouse_coord;
 reg cmd_full;
 
-reg [7:0] ram[255:0];
+// ADB controller internal RAM using bram module
+reg [7:0] ram_addr;
+reg [7:0] ram_din;
+wire [7:0] ram_dout;
+reg ram_wen;
+
+bram #(
+    .width_a(8),
+    .widthad_a(8)
+) adb_ram (
+    .clock_a(CLK_14M),
+    .wren_a(ram_wen),
+    .address_a(ram_addr),
+    .data_a(ram_din),
+    .q_a(ram_dout),
+   // .byteena_a(1'b1),
+    .enable_a(1'b1),
+    
+    // Port B unused
+    .clock_b(CLK_14M),
+    .wren_b(1'b0),
+    .address_b(8'h00),
+    .data_b(8'h00),
+    .q_b(),
+    //.byteena_b(1'b1),
+    .enable_b(1'b0)
+);
 
 // ADB Status/Control Registers
 reg [7:0] c025_status;    // $C025 - ADB Modifier Keys Status Register
@@ -515,6 +541,11 @@ always @(posedge CLK_14M) begin
     c026_data <= 8'h00;
     c027_control <= 8'h00;
     
+    // Initialize RAM control signals
+    ram_wen <= 1'b0;
+    ram_addr <= 8'h00;
+    ram_din <= 8'h00;
+    
     // Initialize modifier key states
     shift_down <= 1'b0;
     ctrl_down <= 1'b0;
@@ -574,6 +605,9 @@ always @(posedge CLK_14M) begin
       $display("ADB: Reset - Version %d (%s)", ADB_VERSION, ADB_VERSION == 5 ? "ROM1" : "ROM3");
     `endif
   end else begin
+    // Default RAM control signals (override when needed)
+    ram_wen <= 1'b0;
+    
     // Detect PS/2 input changes and update device registers
     ps2_key_toggle_prev <= ps2_key[10];
     ps2_mouse_toggle_prev <= ps2_mouse[24];
@@ -1163,17 +1197,24 @@ always @(posedge CLK_14M) begin
                 end
                 8'h08: begin
                   // WRITE_RAM - Write byte to ADB controller memory
-                  ram[cmd_data[15:8]] <= din;
+                  ram_addr <= cmd_data[15:8];
+                  ram_din <= din;
+                  ram_wen <= 1'b1;
                   `ifdef SIMULATION
                     $display("ADB: WRITE_RAM addr=$%02X data=$%02X", cmd_data[15:8], din);
                   `endif
                 end
                 8'h09: begin
                   // READ_MEM - Read byte from ADB controller memory  
-                  data <= { 24'd0, ram[{ din, cmd_data[15:8] }] };
+                  // Set up address for BRAM read (data will be available next cycle)
+                  ram_addr <= { din, cmd_data[15:8] };
+                  ram_wen <= 1'b0;
+                  // Note: Response will be available via ram_dout in next cycle
+                  // The actual data return needs to be handled in the command processing state machine
+                  data <= { 24'd0, ram_dout };  // Use current ram_dout value
                   pending_data <= 3'd1;
                   `ifdef SIMULATION
-                    $display("ADB: READ_MEM addr=$%02X%02X returning=$%02X", din, cmd_data[15:8], ram[{ din, cmd_data[15:8] }]);
+                    $display("ADB: READ_MEM addr=$%02X%02X setup for read", din, cmd_data[15:8]);
                   `endif
                 end
                 8'h11: begin

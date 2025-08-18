@@ -490,7 +490,7 @@ wire [11:0] chrom_addr;
 //
 //wire [2:0] chpos_y = V[2:0];
 reg [5:0] chram_x;
-wire [12:0] chram_y = BASEADDR;
+//wire [12:0] chram_y = BASEADDR;
 
 
 //  in EIGHTCOL mode we need each pixel, in 40 we pixel double
@@ -793,7 +793,7 @@ end
 
 //assign a = chrom_data_out[chpos_x[2:0]];
 // Window coordinates derived from H and V
-wire [9:0] window_x_w = (H >= 32) ? H - 32 : 10'b0;
+//wire [9:0] window_x_w = (H >= 32) ? H - 32 : 10'b0;
 wire [9:0] window_y_w = (V >= 16) ? V - 16 : 10'b0;
 
 // GR signal calculation for mixed mode support
