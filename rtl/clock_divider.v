@@ -172,41 +172,43 @@ always @(posedge clk_14M) begin
 		
 		// Check for return to fast mode
         if (waitforC0C8 && IO && addr == 16'hC0C8) begin
-            slow <= 0;
             waitforC0C8 <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0C8 (slot4) t=%0t", $time);
 `endif
         end
         if (waitforC0D8 && IO && addr == 16'hC0D8) begin
-            slow <= 0;
             waitforC0D8 <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0D8 (slot5) t=%0t", $time);
 `endif
         end
         if (waitforC0E8 && IO && addr == 16'hC0E8) begin
-            slow <= 0;
             waitforC0E8 <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0E8 (slot6) t=%0t", $time);
 `endif
         end
         if (waitforC0F8 && IO && addr == 16'hC0F8) begin
-            slow <= 0;
             waitforC0F8 <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0F8 (slot7) t=%0t", $time);
 `endif
         end
         if (waitforC041 && IO && addr == 16'hC041) begin
-            slow <= 0;
             waitforC041<= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C041 (keyboard) t=%0t", $time);
 `endif
         end
+        if (IO && ( (waitforC041 && addr == 16'hC041) || (waitforC0F8 && addr == 16'hC0F8) || (waitforC0E8 && addr == 16'hC0E8) || (waitforC0D8 && addr == 16'hC0D8) || (waitforC0C8 && addr == 16'hC0C8)  )) begin
+            slow <= 0;
+`ifdef SIMULATION
+            $display("CLKDIV: slow exit " );
+`endif
+	end
 
+	
 	   
     // --- 1. Entire banks $E0 and $E1: always slow ---
         if ((bank == 8'hE0 || bank == 8'hE1) ||

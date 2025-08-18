@@ -16,7 +16,9 @@ module iigs
   output HS,
   output VS,
 
-
+  output phi2,
+  output phi0,
+  output clk_7M,
 
      // fastram sdram
   output [22:0] fastram_address,
@@ -1571,12 +1573,12 @@ clock_divider clk_div_inst (
     .ph0_state()
 );
 // Map clock enables to Apple IIgs standard names
-wire phi2 = ph2_en;
-wire phi0 = ph0_en;
+assign phi2 = ph2_en;
+assign phi0 = ph0_en;
 wire ph0_en;
 wire ph2_en;
 wire clk_7M_en;
-wire clk_7M = clk_7M_en;
+assign clk_7M = clk_7M_en;
 wire q3_en;
 
 endmodule

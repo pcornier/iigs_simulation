@@ -488,7 +488,7 @@ wire [11:0] chrom_addr;
 //
 // 40 and 80 column video modes
 //
-wire [2:0] chpos_y = V[2:0];
+//wire [2:0] chpos_y = V[2:0];
 reg [5:0] chram_x;
 wire [12:0] chram_y = BASEADDR;
 
@@ -614,7 +614,7 @@ wire graphics_mode = lores_mode | hires_mode;
 // LDPS_N equivalent for memory loading control (inspired by Apple IIe timing)
 // This signal controls when to load new character/graphics data
 wire ldps_load;
-wire text80_mode = (!GR & EIGHTYCOL);
+//wire text80_mode = (!GR & EIGHTYCOL);
 assign ldps_load = (NEWVIDEO[7]) ? 
                    // SHRG mode timing
                    ((H >= 28 && H < 32) || (H >= 32 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 11))))) :

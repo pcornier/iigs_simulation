@@ -256,9 +256,9 @@ pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_vid),
-	.outclk_1(clk_sys),
-	.outclk_2(clk_mem),
+	.outclk_0(clk_vid),//57.272728
+	.outclk_1(clk_sys),//28.636364
+	.outclk_2(clk_mem),//114.545456
 	.locked(locked)
 );
 
@@ -266,7 +266,7 @@ wire reset = RESET | status[0] | buttons[1];
 
 
 
-top top (
+iigs iigs (
 	.reset(reset),
 	.CLK_14M(clk_sys),
 	.clk_vid(clk_vid),
@@ -326,17 +326,17 @@ wire fast_clk_delayed;
 wire fast_clk_delayed_mem;
 
 logic [7:0] ram_data;
-
+/*
 dpram #(.widthad_a(16),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),
         .address_a( fastram_address ),
         .data_a(fastram_datatoram),
-        .q_a(ram_data/*fastram_datafromram*/),
+        .q_a(ram_data),
         .wren_a(fastram_we),
         .ce_a(fastram_ce)
 );
-
+*/
 
 reg ce_pix;
 always @(posedge clk_vid) begin
