@@ -363,7 +363,7 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
         .wren_a(fastram_we & fastram_ce),
         .ce_a(fastram_ce)
 );*/
-bram #(.widthad_a(23)) slowram
+bram #(.widthad_a(16)) slowram
 (
         .clock_a(clk_sys),
         .address_a(fastram_address),
