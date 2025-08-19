@@ -365,7 +365,11 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
         .q_a(ram_data),
         .wren_a(fastram_we & fastram_ce),
         .ce_a(fastram_ce)
-);*/
+);
+wire ch0_busy = 1'b0;
+*/
+
+/*
 wire ch0_busy;
 
   sdram sdram
@@ -399,8 +403,9 @@ wire ch0_busy;
   	.ch2_busy()          // Unconnected
   );
 
+*/
+wire ch0_busy = 1'b0;
 
-/*
 bram #(.widthad_a(15)) slowram
 (
         .clock_a(clk_sys),
@@ -414,7 +419,7 @@ bram #(.widthad_a(15)) slowram
 		  .enable_a(fastram_ce)
 `endif
 );
-*/
+
 
 reg ce_pix;
 always @(posedge clk_vid) begin
@@ -539,6 +544,7 @@ always @(posedge clk_sys) begin
                 //disk_protect <= img_readonly;
         end
 end
+/*
 floppy_track floppy_track_1
 (
    .clk(clk_sys),
@@ -567,6 +573,7 @@ floppy_track floppy_track_1
    .sd_wr       ( sd_wr[1]),
    .sd_ack       (sd_ack[1])
 );
+*/
 /*
 floppy_track floppy_track_2
 (
