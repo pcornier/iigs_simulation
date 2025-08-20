@@ -154,6 +154,7 @@ module hdd(
                                     sec_addr <= 9'b000000000;
                                     // For GS/OS probes, report success by default
                                     // and pulse read/write strobes when appropriate.
+				    $display("HDD: reg_command %x",reg_command);
                                     case (reg_command)
                                       PRODOS_COMMAND_STATUS: begin
                                         reg_status <= 8'h00; // ok
@@ -258,7 +259,11 @@ module hdd(
 `endif
                                 end
                             default :
-                                ;
+			    begin
+`ifdef SIMULATION
+                                    $display("HDD DEFAULT WR A[%x] D_IN  %02h", A[3:0], D_IN);
+`endif
+				end
                         endcase
                 end
                 // RD/WR

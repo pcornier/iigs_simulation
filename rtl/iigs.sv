@@ -123,8 +123,8 @@ module iigs
   //parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
     parameter RAMSIZE = 20; // 16x64k = 1MB, max = 127x64k = 8MB
 `else
-  parameter RAMSIZE = 15; // 16x64k = 1MB, max = 127x64k = 8MB //default 16
-  //parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
+  //parameter RAMSIZE = 15; // 16x64k = 1MB, max = 127x64k = 8MB //default 16
+  parameter RAMSIZE = 127; // 16x64k = 1MB, max = 127x64k = 8MB
 `endif
    logic [9:0]        H;
    logic [8:0]        V;

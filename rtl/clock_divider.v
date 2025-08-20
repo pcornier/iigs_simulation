@@ -285,10 +285,12 @@ always @(posedge clk_14M) begin
 	// Mhz, and sync it up with the PH0 clock
 	//
 	if (slow==1'b1 || slowMem==1'b1) begin
-		if (ph2_counter==4'd4 && ph0_en == 1'b1)
+		// BUG - THIS MAKES PH2 one cycle after ph0_en
+		//if (ph2_counter==4'd4 && ph0_en == 1'b1)
+      if (ph2_counter==4'd4 && ph0_counter == 4'd0)		
 		begin
 			ph2_en <= 1'b1;
-            		ph2_counter <= 4'd0;
+			ph2_counter <= 4'd0;
 		end else if (ph2_counter==4'd4 && ph0_en == 1'b0)
 		begin
 			ph2_en <= 1'b0;

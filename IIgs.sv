@@ -2,6 +2,7 @@
 /*============================================================================
 ===========================================================================*/
 
+
 module emu
 (
 	//Master input clock
@@ -260,14 +261,15 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 
-wire clk_mem,clk_sys,clk_vid,locked;
+wire clk_mem,clk_sys,clk_vid,locked,clk_28;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_vid),//57.272728
-	.outclk_1(clk_sys),//28.636364
+	.outclk_1(clk_28),//28.636364
 	.outclk_2(clk_mem),//114.545456
+	.outclk_3(clk_sys),//14.
 	.locked(locked)
 );
 
@@ -283,7 +285,7 @@ iigs iigs (
 	.reset(reset),
 	.CLK_14M(clk_sys),
 	.clk_vid(clk_vid),
-	.cpu_wait(cpu_wait_hdd|ch0_busy),
+	.cpu_wait(cpu_wait_hdd/*|ch0_busy*/),
 	.ce_pix(ce_pix),
 	.phi2(phi2),
 	.phi0(phi0),
@@ -369,8 +371,9 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
 wire ch0_busy = 1'b0;
 */
 
-/*
+
 wire ch0_busy;
+wire fastram_datafromramback;
 
   sdram sdram
   (
@@ -402,16 +405,16 @@ wire ch0_busy;
   	.ch2_dout(),         // Unconnected
   	.ch2_busy()          // Unconnected
   );
+/*
 
-*/
-wire ch0_busy = 1'b0;
+//wire ch0_busy = 1'b0;
 
 bram #(.widthad_a(15)) slowram
 (
         .clock_a(clk_sys),
         .address_a(fastram_address),
         .data_a(fastram_datatoram),
-        .q_a(fastram_datafromram),
+        .q_a(fastram_datafromramback),
         .wren_a(fastram_we & fastram_ce),
 `ifdef VERILATOR
         .ce_a(fastram_ce),
@@ -419,7 +422,7 @@ bram #(.widthad_a(15)) slowram
 		  .enable_a(fastram_ce)
 `endif
 );
-
+*/
 
 reg ce_pix;
 always @(posedge clk_vid) begin
