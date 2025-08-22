@@ -161,7 +161,9 @@ module emu
 
 assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
-assign {UART_RTS, UART_TXD, UART_DTR} = 0;
+//assign {UART_RTS, UART_TXD, UART_DTR} = 0;
+assign UART_DTR = UART_DSR;
+
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 //assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;  
@@ -217,7 +219,8 @@ wire  [7:0] sd_buff_din[3];
 wire        sd_buff_wr;
 wire  [2:0] img_mounted;
 wire        img_readonly;
-wire [63:0] img_size;
+wire [63:0] img_size;    
+
 
 wire [32:0] TIMESTAMP;
 wire [15:0] joystick_0;
@@ -251,6 +254,7 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
 	
 	.TIMESTAMP(TIMESTAMP),
 	
+
 	
 	.buttons(buttons),
 	.status(status),
@@ -287,6 +291,7 @@ wire clk_7M;
 
 iigs iigs (
 	.reset(reset),
+	.CLK_28M(clk_28),
 	.CLK_14M(clk_sys),
 	.clk_vid(clk_vid),
 	.cpu_wait(cpu_wait_hdd/*|ch0_busy*/),
@@ -313,42 +318,47 @@ iigs iigs (
 	.HDD_RAM_DI(sd_buff_dout),
 	.HDD_RAM_DO(sd_buff_din[0]),
 	.HDD_RAM_WE(sd_buff_wr & sd_ack[0]),
-    //-- track buffer interface for disk 1
-    .TRACK1(TRACK1),
-    .TRACK1_ADDR(TRACK1_RAM_ADDR),
-    .TRACK1_DO(TRACK1_RAM_DO),
-    .TRACK1_DI(TRACK1_RAM_DI),
-    .TRACK1_WE(TRACK1_RAM_WE),
-    .TRACK1_BUSY(TRACK1_RAM_BUSY),
-    //-- track buffer interface for disk 2
-    .TRACK2(TRACK2),
-    .TRACK2_ADDR(TRACK2_RAM_ADDR),
-    .TRACK2_DO(TRACK2_RAM_DO),
-    .TRACK2_DI(TRACK2_RAM_DI),
-    .TRACK2_WE(TRACK2_RAM_WE),
-    .TRACK2_BUSY(TRACK2_RAM_BUSY),
-    // Disk ready to IWM (pad to 4 bits)
-    .DISK_READY({2'b00, DISK_READY}),
+	//-- track buffer interface for disk 1
+	.TRACK1(TRACK1),
+	.TRACK1_ADDR(TRACK1_RAM_ADDR),
+	.TRACK1_DO(TRACK1_RAM_DO),
+	.TRACK1_DI(TRACK1_RAM_DI),
+	.TRACK1_WE(TRACK1_RAM_WE),
+	.TRACK1_BUSY(TRACK1_RAM_BUSY),
+	//-- track buffer interface for disk 2
+	.TRACK2(TRACK2),
+	.TRACK2_ADDR(TRACK2_RAM_ADDR),
+	.TRACK2_DO(TRACK2_RAM_DO),
+	.TRACK2_DI(TRACK2_RAM_DI),
+	.TRACK2_WE(TRACK2_RAM_WE),
+	.TRACK2_BUSY(TRACK2_RAM_BUSY),
+	// Disk ready to IWM (pad to 4 bits)
+	.DISK_READY({2'b00, DISK_READY}),
 	.fastram_address(fastram_address),
 	.fastram_datatoram(fastram_datatoram),
 	.fastram_datafromram(fastram_datafromram),
 	.fastram_we(fastram_we),
 	.fastram_ce(fastram_ce),
-        .ps2_key(ps2_key),
-        .ps2_mouse(ps2_mouse),
-        .selftest_override(selftest_override),
+	.ps2_key(ps2_key),
+	.ps2_mouse(ps2_mouse),
+	.selftest_override(selftest_override),
 
-        .FLOPPY_WP(1'b1),
+	.FLOPPY_WP(1'b1),
 
-        // Joystick and paddle inputs
-        .joystick_0(joystick_0),
-       // .joystick_1(joystick_1),
-       // .joystick_l_analog_0(joystick_l_analog_0),
-       // .joystick_l_analog_1(joystick_l_analog_1),
-        .paddle_0(paddle_0)
-       // .paddle_1(paddle_1),
-       // .paddle_2(paddle_2),
-       // .paddle_3(paddle_3)
+	// Joystick and paddle inputs
+	.joystick_0(joystick_0),
+	// .joystick_1(joystick_1),
+	// .joystick_l_analog_0(joystick_l_analog_0),
+	// .joystick_l_analog_1(joystick_l_analog_1),
+	.paddle_0(paddle_0),
+	// .paddle_1(paddle_1),
+	// .paddle_2(paddle_2),
+	// .paddle_3(paddle_3)
+
+	.UART_TXD(UART_TXD),
+	.UART_RXD(UART_RXD),
+	.UART_RTS(UART_RTS),
+	.UART_CTS(UART_CTS)
 	
 );
 
@@ -427,7 +437,7 @@ bram #(.widthad_a(15)) slowram
 `endif
 );
 */
-
+/*
 reg ce_pix;
 always @(posedge clk_vid) begin
 	reg [1:0] div;
@@ -435,12 +445,12 @@ always @(posedge clk_vid) begin
 	div <= div + 1'd1;
 	ce_pix <= !div;
 end
-/*
+*/
 reg ce_pix;
 always @(posedge clk_vid) begin	
 	ce_pix <= ~ce_pix;
 end
-*/
+
 wire hsync,vsync;
 wire hblank,vblank;
 assign CE_PIXEL=ce_pix;

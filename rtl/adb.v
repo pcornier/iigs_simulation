@@ -788,9 +788,11 @@ always @(posedge CLK_14M) begin
       // ALWAYS update the target, even if FIFO is full - this prevents infinite repeats
       // Use fast repeat rate for specific keys if enabled
       if (fast_repeat_enabled && is_fast_repeat_key(held_apple_key)) begin
-        repeat_vbl_target <= hz60_count + (repeat_rate_vbl >> 1);  // Double the rate (half the interval)
+        // Fast repeat: use 2/3 of normal interval (1.5x faster) with minimum of 2 ticks
+        // This prevents extremely fast repeat rates while still being noticeably faster
+        repeat_vbl_target <= hz60_count + ((repeat_rate_vbl * 2) / 3 < 2 ? 2 : (repeat_rate_vbl * 2) / 3);
 `ifdef SIMULATION
-        $display("ADB: REPEAT scheduled FAST next at hz60=%0d (current=%0d)", hz60_count + (repeat_rate_vbl >> 1), hz60_count);
+        $display("ADB: REPEAT scheduled FAST next at hz60=%0d (current=%0d)", hz60_count + ((repeat_rate_vbl * 2) / 3 < 2 ? 2 : (repeat_rate_vbl * 2) / 3), hz60_count);
 `endif
       end else begin
         repeat_vbl_target <= hz60_count + repeat_rate_vbl;

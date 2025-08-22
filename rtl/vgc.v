@@ -1,5 +1,6 @@
 
 module vgc (
+input CLK_28M,
 input CLK_14M,
 input clk_vid,
 input ce_pix,

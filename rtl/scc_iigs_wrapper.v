@@ -39,7 +39,8 @@ module scc_iigs_wrapper
     output              rts_a,          // Request to send A
     output              rts_b,          // Request to send B
     input               cts_a,          // Clear to send A  
-    input               cts_b           // Clear to send B
+    input               cts_b,           // Clear to send B
+	 input               dsr_a
 );
 
 

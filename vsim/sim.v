@@ -134,6 +134,7 @@ wire [5:0] TRACK2;
 wire clk_sys=CLK_14M;
 iigs  iigs(
         .reset(reset),
+        .CLK_28M(clk_sys),
         .CLK_14M(clk_sys),
         .clk_vid(clk_sys),
         .ce_pix(ce_pix),

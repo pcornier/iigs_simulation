@@ -2,6 +2,7 @@ module iigs
   (
    input              reset,
 
+   input              CLK_28M,
    input              CLK_14M,
    input              clk_vid, 
    input              ce_pix, 
@@ -86,8 +87,14 @@ module iigs
    input              TRACK2_BUSY,
 
    input [3:0]        DISK_READY,
-   input              FLOPPY_WP
+   input              FLOPPY_WP,
 
+	 output        UART_TXD,
+    input         UART_RXD,
+    output        UART_RTS,
+    input         UART_CTS
+
+	
 
 );
    logic [7:0]       bank;
@@ -1240,6 +1247,7 @@ wire scanline_irq;
 
 
 vgc vgc(
+        .CLK_28M(CLK_28M),
         .CLK_14M(CLK_14M),
         .clk_vid(clk_vid),
         .ce_pix(ce_pix),
@@ -1491,15 +1499,15 @@ wire ready_out;
             .rdata(scc_dout),
             .irq_n(scc_irq_n),
             // Serial ports - stubbed for now
-            .txd_a(),
+            .txd_a(UART_TXD),
             .txd_b(),
-            .rxd_a(1'b1),
+            .rxd_a(UART_RXD),
             .rxd_b(1'b1),
-            .rts_a(),
+            .rts_a(UART_RTS),
             .rts_b(),
-            .cts_a(1'b0),
+            .cts_a(UART_CTS),
             .cts_b(1'b0)
-            );
+				);
 
   // Apple IIe compatibility signals now come from ADB module
   wire [6:0] key_keys = adb_K[6:0];        // Use ADB's Apple IIe character output
