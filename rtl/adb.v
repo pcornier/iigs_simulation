@@ -102,13 +102,13 @@ reg ps2_key_held;                    // Flag indicating a PS/2 key is currently 
 reg [8:0] held_ps2_key;              // The PS/2 scancode currently being held
 reg [7:0] held_apple_key;            // The Apple keycode for the held key
 reg [7:0] held_iie_char;             // The Apple IIe ASCII for the held key
-reg [7:0] repeat_vbl_target;         // 60Hz count when next repeat should occur
+reg [15:0] repeat_vbl_target;        // 60Hz count when next repeat should occur (16-bit to match hz60_count)
 reg repeat_timer_active;             // Whether the repeat timer is running
 
 // 60Hz clock divider for proper key repeat timing (14MHz / 233333 ≈ 60Hz)
 reg [17:0] clk_60hz_counter;         // Counter for 60Hz generation (needs 18 bits for 233333)
 reg clk_60hz_enable;                 // 60Hz enable pulse
-reg [7:0] hz60_count;                // 60Hz tick counter for key repeat timing
+reg [15:0] hz60_count;               // 60Hz tick counter for key repeat timing (16-bit to prevent overflow)
 localparam CLK_60HZ_PERIOD = 18'd233333; // 14MHz / 60Hz = 233,333 clocks
 reg [7:0] repeat_delay_vbl;          // Repeat delay in VBL counts
 reg [7:0] repeat_rate_vbl;           // Repeat rate in VBL counts  
@@ -346,6 +346,7 @@ function is_repeatable_key;
                        (key_code != 8'h7F);     // Invalid (removed 8'h00 check - A key is valid!)
   end
 endfunction
+
 
 // Apple IIe ASCII conversion function 
 function [7:0] adb_to_apple_iie_ascii;
@@ -608,13 +609,13 @@ always @(posedge CLK_14M) begin
     held_ps2_key <= 9'd0;
     held_apple_key <= 8'd0;
     held_iie_char <= 8'd0;
-    repeat_vbl_target <= 8'd0;
+    repeat_vbl_target <= 16'd0;
     repeat_timer_active <= 1'b0;
     
     // Initialize 60Hz clock divider
     clk_60hz_counter <= 18'd0;
     clk_60hz_enable <= 1'b0;
-    hz60_count <= 8'd0;
+    hz60_count <= 16'd0;
     repeat_delay_vbl <= 8'd30;              // Default: 30 VBL = 500ms @ 60Hz (more reasonable)
     repeat_rate_vbl <= 8'd10;               // Default: 10 VBL = ~6 repeats/sec @ 60Hz (much slower)
     fast_repeat_enabled <= 1'b0;
@@ -745,7 +746,7 @@ always @(posedge CLK_14M) begin
               held_ps2_key <= 9'd0;
               held_apple_key <= 8'd0;
               held_iie_char <= 8'd0;
-              repeat_vbl_target <= 8'd0;
+              repeat_vbl_target <= 16'd0;
             end
             
             akd <= 1'b0;  // Clear any key down
@@ -785,7 +786,18 @@ always @(posedge CLK_14M) begin
       end
       
       // ALWAYS update the target, even if FIFO is full - this prevents infinite repeats
-      repeat_vbl_target <= hz60_count + repeat_rate_vbl;
+      // Use fast repeat rate for specific keys if enabled
+      if (fast_repeat_enabled && is_fast_repeat_key(held_apple_key)) begin
+        repeat_vbl_target <= hz60_count + (repeat_rate_vbl >> 1);  // Double the rate (half the interval)
+`ifdef SIMULATION
+        $display("ADB: REPEAT scheduled FAST next at hz60=%0d (current=%0d)", hz60_count + (repeat_rate_vbl >> 1), hz60_count);
+`endif
+      end else begin
+        repeat_vbl_target <= hz60_count + repeat_rate_vbl;
+`ifdef SIMULATION
+        $display("ADB: REPEAT scheduled NORMAL next at hz60=%0d (current=%0d)", hz60_count + repeat_rate_vbl, hz60_count);
+`endif
+      end
     end
     
     // PS/2 mouse event processing
@@ -879,13 +891,13 @@ always @(posedge CLK_14M) begin
                   // ABORT - Clear all ADB state including key repeat
                   ps2_key_held <= 1'b0;
                   repeat_timer_active <= 1'b0;
-                  repeat_vbl_target <= 8'd0;
+                  repeat_vbl_target <= 16'd0;
                 end
                 8'h03: begin
                   // FLUSH keyboard buffer - also stop key repeat
                   ps2_key_held <= 1'b0;
                   repeat_timer_active <= 1'b0;
-                  repeat_vbl_target <= 8'd0;
+                  repeat_vbl_target <= 16'd0;
                   
                   // Clear keyboard FIFO
                   kbd_fifo_head <= 4'd0;
