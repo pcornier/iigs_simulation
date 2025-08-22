@@ -195,6 +195,10 @@ localparam CONF_STR = {
 	"S0,HDV;",
 	"S1,DSK;",
 	"S2,DSK;",
+	"-;",
+	"OA,Force Self Test,OFF,ON;",
+	"-;",
+
 	"R0,Reset;",
 	"V,v",`BUILD_DATE 
 };
@@ -275,7 +279,7 @@ pll pll
 
 wire reset = RESET | status[0] | buttons[1];
 
-wire selftest_override = 1'b0;
+wire selftest_override = status[10];
 
 wire phi2;
 wire phi0;
@@ -300,7 +304,7 @@ iigs iigs (
 	.HS(hsync),
 	.VS(vsync),
 	/* hard drive */
-	.HDD_SECTOR(sd_lba[0]),
+	.HDD_SECTOR(hdd_sector),
 	.HDD_READ(hdd_read),
 	.HDD_WRITE(hdd_write),
 	.HDD_MOUNTED(hdd_mounted),
@@ -452,6 +456,9 @@ assign CLK_VIDEO=clk_vid;
 
 
 // HARD DRIVE PARTS
+wire [15:0] hdd_sector;
+
+assign sd_lba[0] = {16'b0,hdd_sector};
 
 
 reg  hdd_mounted = 0;
@@ -547,7 +554,7 @@ always @(posedge clk_sys) begin
                 //disk_protect <= img_readonly;
         end
 end
-/*
+
 floppy_track floppy_track_1
 (
    .clk(clk_sys),
@@ -576,8 +583,8 @@ floppy_track floppy_track_1
    .sd_wr       ( sd_wr[1]),
    .sd_ack       (sd_ack[1])
 );
-*/
-/*
+
+
 floppy_track floppy_track_2
 (
    .clk(clk_sys),
@@ -593,7 +600,7 @@ floppy_track floppy_track_2
    .change(DISK_CHANGE[1]),
    .mount (disk_mount[1]),
    .ready  (DISK_READY[1]),
-   .active (fd_disk_2),00
+   .active (fd_disk_2),
 
    .sd_buff_addr (sd_buff_addr),
    .sd_buff_dout (sd_buff_dout),
@@ -606,6 +613,6 @@ floppy_track floppy_track_2
    .sd_ack       (sd_ack[2])
 );
 
-*/
+
 
 endmodule

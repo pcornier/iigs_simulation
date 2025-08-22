@@ -16,7 +16,7 @@ set_global_assignment -name VERILOG_FILE rtl/syncram.v
 set_global_assignment -name VERILOG_FILE rtl/sound.v
 set_global_assignment -name VERILOG_FILE rtl/clock_divider.v
 set_global_assignment -name VERILOG_FILE rtl/iwm.v
-set_global_assignment -name VERILOG_FILE rtl/hdd2.v
+set_global_assignment -name VERILOG_FILE rtl/hdd.v
 set_global_assignment -name VERILOG_FILE rtl/iwm_controller.v
 set_global_assignment -name VERILOG_FILE rtl/iwm_core_ref.v
 set_global_assignment -name VERILOG_FILE rtl/paddle_timer.v
