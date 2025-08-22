@@ -1,4 +1,4 @@
-set_global_assignment -name VERILOG_MACRO "ROM3=1"
+#set_global_assignment -name VERILOG_MACRO "ROM3=1"
 set_global_assignment -name QIP_FILE rtl/65C816vhdl/65C816.qip
 #set_global_assignment -name QIP_FILE rtl/65C816/65C816.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/adb.v

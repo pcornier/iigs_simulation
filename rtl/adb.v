@@ -88,6 +88,13 @@ reg [3:0] mouse_fifo_head;               // FIFO head pointer
 reg [3:0] mouse_fifo_tail;               // FIFO tail pointer
 reg [3:0] mouse_fifo_count;              // Number of mouse events in FIFO
 
+// Modifier key tracking for selftest override and keyboard processing
+reg shift_down;           // Bit 0: Shift key down
+reg ctrl_down;            // Bit 1: Control key down  
+reg caps_lock_down;       // Bit 2: Caps Lock down
+reg option_down;          // Bit 6: Option key down
+reg cmd_down;             // Bit 7: Command key down
+
 // IRQ generation
 wire data_irq = data_int & (pending_data > 0);
 wire mouse_irq = mouse_int & valid_mouse_data;
@@ -128,8 +135,7 @@ reg [10:0] ps2_key_prev;
 reg [24:0] ps2_mouse_prev;
 reg ps2_key_toggle_prev, ps2_mouse_toggle_prev;
 
-// Modifier key states
-reg shift_down, ctrl_down, cmd_down, option_down;
+// Modifier key states (moved up above with other regs)
 reg caps_lock_state;
 
 // PS/2 to Apple IIgs keyboard translation function
@@ -495,6 +501,13 @@ always @(posedge CLK_14M) begin
     for (int i = 0; i < MAX_MOUSE_BUF; i++) begin
       mouse_fifo[i] <= 8'h00;
     end
+    
+    // Initialize modifier key states
+    shift_down <= 1'b0;
+    ctrl_down <= 1'b0;
+    caps_lock_down <= 1'b0;
+    option_down <= 1'b0;
+    cmd_down <= 1'b0;
   end else begin
     // Default RAM control signals (override when needed)
     ram_wen <= 1'b0;
@@ -515,25 +528,27 @@ always @(posedge CLK_14M) begin
         capslock <= ~caps_lock_state;
       end
       
-      // Handle modifier keys
-      case(ps2_key[8:0])
-        9'h012, 9'h059: begin  // Left/Right Shift
-          shift_down <= ps2_key[9];
-          apple_shift <= ps2_key[9];
-        end
-        9'h014, 9'h114: begin  // Left/Right Ctrl
-          ctrl_down <= ps2_key[9];
-          apple_ctrl <= ps2_key[9];
-        end
-        9'h011, 9'h111: begin  // Left/Right Alt (Command)
-          cmd_down <= ps2_key[9];
-          open_apple <= ps2_key[9];
-        end
-        9'h11f, 9'h127: begin  // Windows/Menu keys (Option)
-          option_down <= ps2_key[9];
-          closed_apple <= ps2_key[9];
-        end
-      endcase
+      // Handle modifier keys (only when selftest override is not active)
+      if (!selftest_override) begin
+        case(ps2_key[8:0])
+          9'h012, 9'h059: begin  // Left/Right Shift
+            shift_down <= ps2_key[9];
+            apple_shift <= ps2_key[9];
+          end
+          9'h014, 9'h114: begin  // Left/Right Ctrl
+            ctrl_down <= ps2_key[9];
+            apple_ctrl <= ps2_key[9];
+          end
+          9'h011, 9'h111: begin  // Left/Right Alt (Command)
+            cmd_down <= ps2_key[9];
+            open_apple <= ps2_key[9];
+          end
+          9'h11f, 9'h127: begin  // Windows/Menu keys (Option)
+            option_down <= ps2_key[9];
+            closed_apple <= ps2_key[9];
+          end
+        endcase
+      end
       
       // Process normal keys (not modifier keys)
       begin
@@ -607,6 +622,19 @@ always @(posedge CLK_14M) begin
       end
     end else begin
       cmd_timeout <= 16'd0;
+    end
+    
+    // Self-test override: simulate Command+Option+Control pressed
+    // This must be outside PS/2 processing to work continuously
+    if (selftest_override) begin
+      cmd_down <= 1'b1;
+      option_down <= 1'b1;
+      ctrl_down <= 1'b1;
+      
+      // Also set Apple IIe compatibility flags
+      open_apple <= 1'b1;     // Command key maps to open apple
+      closed_apple <= 1'b1;   // Option key maps to closed apple  
+      apple_ctrl <= 1'b1;     // Control key
     end
     
     // Address decoding and register access

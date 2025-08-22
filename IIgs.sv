@@ -189,7 +189,7 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 
 `include "build_id.v" 
 localparam CONF_STR = {
-	"IIgs;;",
+	"IIgs;UART19200:9600:4800:2400:1200:300;",
 	"-;",
 	//"S0,DSK;",
 	"S0,HDV;",
