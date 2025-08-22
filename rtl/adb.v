@@ -27,9 +27,9 @@ module adb(
 
 // Version parameter - set based on ROM type
 `ifdef ROM3
-  parameter VERSION = 3;  // ROM3 and later
+  parameter VERSION = 6;  // Version 6 for ROM3 (1MB Apple IIgs)
 `else
-  parameter VERSION = 1;  // ROM1
+  parameter VERSION = 5;  // Version 5 for ROM1 (256K Apple IIgs)  
 `endif
 
 // State machine states (from working stub)
@@ -48,7 +48,9 @@ reg [2:0] pending_data;
 reg [31:0] data;
 reg [7:0] cmd;
 reg [3:0] cmd_len;
+reg [15:0] cmd_timeout;  // Timeout counter for stuck commands
 reg [63:0] cmd_data;
+reg [3:0] initial_cmd_len;
 
 // Device configuration registers
 reg [7:0] adb_mode;
@@ -66,14 +68,57 @@ reg valid_kbd;
 reg mouse_coord;
 reg cmd_full;
 
+// Device simulation - 16 possible devices, 4 registers each
+reg [7:0] device_registers [15:0][3:0];  // [device][register]
+reg [15:0] device_present;               // Bit mask of present devices
+reg [7:0] device_data_pending [15:0];    // Pending data count per device
+
+// Keyboard FIFO and management
+parameter MAX_KBD_BUF = 8;
+reg [7:0] kbd_fifo [MAX_KBD_BUF-1:0];    // Keyboard FIFO buffer
+reg [3:0] kbd_fifo_head;                 // FIFO head pointer
+reg [3:0] kbd_fifo_tail;                 // FIFO tail pointer  
+reg [3:0] kbd_fifo_count;                // Number of keys in FIFO
+reg kbd_strobe;                          // Keyboard strobe bit
+
+// Mouse FIFO and management  
+parameter MAX_MOUSE_BUF = 8;
+reg [7:0] mouse_fifo [MAX_MOUSE_BUF-1:0]; // Mouse data FIFO
+reg [3:0] mouse_fifo_head;               // FIFO head pointer
+reg [3:0] mouse_fifo_tail;               // FIFO tail pointer
+reg [3:0] mouse_fifo_count;              // Number of mouse events in FIFO
+
 // IRQ generation
 wire data_irq = data_int & (pending_data > 0);
 wire mouse_irq = mouse_int & valid_mouse_data;
-wire kbd_irq = kbd_int & valid_kbd;
+wire kbd_irq = kbd_int & kbd_strobe;
 assign irq = data_irq | mouse_irq | kbd_irq;
 
-// Internal RAM for device registers
-reg [7:0] ram[255:0];
+// ADB controller internal RAM using bram module
+reg [7:0] ram_addr;
+reg [7:0] ram_din;
+wire [7:0] ram_dout;
+reg ram_wen;
+
+bram #(
+    .width_a(8),
+    .widthad_a(8)
+) adb_ram (
+    .clock_a(CLK_14M),
+    .wren_a(ram_wen),
+    .address_a(ram_addr),
+    .data_a(ram_din),
+    .q_a(ram_dout),
+    .enable_a(1'b1),
+    
+    // Port B unused
+    .clock_b(CLK_14M),
+    .wren_b(1'b0),
+    .address_b(8'h00),
+    .data_b(8'h00),
+    .q_b(),
+    .enable_b(1'b0)
+);
 
 // Apple IIe compatibility registers
 reg [7:0] c025;
@@ -368,6 +413,7 @@ always @(posedge CLK_14M) begin
     pending_data <= 3'd0;
     pending_irq <= 1'b0;
     cmd_full <= 1'b0;
+    cmd_timeout <= 16'd0;
     valid_mouse_data <= 1'b0;
     valid_kbd <= 1'b0;
     mouse_coord <= 1'b0;
@@ -379,6 +425,11 @@ always @(posedge CLK_14M) begin
     repeat_info <= 8'h23;
     char_set <= 8'd0;
     layout <= 8'd0;
+    
+    // Initialize RAM control signals
+    ram_wen <= 1'b0;
+    ram_addr <= 8'h00;
+    ram_din <= 8'h00;
     
     // PS/2 input tracking
     ps2_key_toggle_prev <= 1'b0;
@@ -406,7 +457,47 @@ always @(posedge CLK_14M) begin
     apple_ctrl <= 1'b0;
     akd <= 1'b0;
     K <= 8'd0;
+    
+    // Initialize ADB devices
+    device_present <= 16'b0000_0000_0000_1100;  // Devices 2 (kbd) and 3 (mouse) present
+    for (int i = 0; i < 16; i++) begin
+      device_data_pending[i] <= 8'h00;
+      for (int j = 0; j < 4; j++) begin
+        device_registers[i][j] <= 8'h00;
+      end
+    end
+    
+    // Set up keyboard device (address 2) default registers
+    device_registers[2][0] <= 8'h00;  // Register 0: Key data
+    device_registers[2][1] <= 8'h00;  // Register 1: LEDs (if any)
+    device_registers[2][2] <= 8'h00;  // Register 2: Exceptional event data
+    device_registers[2][3] <= 8'h02;  // Register 3: Device ID - keyboard handler ID
+    
+    // Set up mouse device (address 3) default registers  
+    device_registers[3][0] <= 8'h00;  // Register 0: Mouse button/movement data
+    device_registers[3][1] <= 8'h00;  // Register 1: Resolution/settings
+    device_registers[3][2] <= 8'h00;  // Register 2: Class data
+    device_registers[3][3] <= 8'h01;  // Register 3: Device ID - mouse handler ID
+    
+    // Initialize keyboard FIFO
+    kbd_fifo_head <= 4'd0;
+    kbd_fifo_tail <= 4'd0;
+    kbd_fifo_count <= 4'd0;
+    kbd_strobe <= 1'b0;
+    for (int i = 0; i < MAX_KBD_BUF; i++) begin
+      kbd_fifo[i] <= 8'h00;
+    end
+    
+    // Initialize mouse FIFO
+    mouse_fifo_head <= 4'd0;
+    mouse_fifo_tail <= 4'd0;
+    mouse_fifo_count <= 4'd0;
+    for (int i = 0; i < MAX_MOUSE_BUF; i++) begin
+      mouse_fifo[i] <= 8'h00;
+    end
   end else begin
+    // Default RAM control signals (override when needed)
+    ram_wen <= 1'b0;
     
     // Track PS/2 input changes
     ps2_key_prev <= ps2_key;
@@ -460,14 +551,26 @@ always @(posedge CLK_14M) begin
               caps_lock_state
             );
             
-            // Update Apple IIe compatibility registers
-            if (temp_iie_char != 8'hFF) begin
-              K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
-              akd <= 1'b1;  // Any key down
+            // Add to keyboard FIFO if there's space
+            if (kbd_fifo_count < MAX_KBD_BUF) begin
+              kbd_fifo[kbd_fifo_head] <= temp_apple_key;
+              kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
+              kbd_fifo_count <= kbd_fifo_count + 1;
+              
+              // If no current key, load immediately
+              if (kbd_fifo_count == 0) begin
+                kbd_strobe <= 1'b1;
+              end
+              
+              valid_kbd <= 1'b1;
+              device_data_pending[2] <= 8'h01;
+              
+              // Update Apple IIe compatibility registers
+              if (temp_iie_char != 8'hFF) begin
+                K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
+                akd <= 1'b1;  // Any key down
+              end
             end
-            
-            // Set keyboard interrupt flag
-            valid_kbd <= 1'b1;
           end else begin
             // Key released
             akd <= 1'b0;  // Clear any key down
@@ -478,10 +581,32 @@ always @(posedge CLK_14M) begin
     
     // PS/2 mouse event processing
     if (ps2_mouse[24] != ps2_mouse_toggle_prev) begin
+      // Only process mouse data if it's meaningful (not just zeros)
       if (ps2_mouse[7:0] != 8'h00) begin
-        // Mouse data available
-        valid_mouse_data <= 1'b1;
+        // Add to mouse FIFO if there's space
+        if (mouse_fifo_count < MAX_MOUSE_BUF) begin
+          mouse_fifo[mouse_fifo_head] <= ps2_mouse[7:0];
+          mouse_fifo_head <= (mouse_fifo_head + 1) % MAX_MOUSE_BUF;
+          mouse_fifo_count <= mouse_fifo_count + 1;
+          
+          // Store current mouse data in device register
+          device_registers[3][0] <= ps2_mouse[7:0];
+          valid_mouse_data <= 1'b1;
+          device_data_pending[3] <= 8'h01;
+        end
       end
+    end
+    
+    // Timeout handling for stuck commands
+    if (state == CMD) begin
+      cmd_timeout <= cmd_timeout + 16'd1;
+      if (cmd_timeout >= 16'd32000) begin  // ~2ms timeout at 14MHz
+        state <= IDLE;
+        cmd_full <= 1'b0;
+        cmd_timeout <= 16'd0;
+      end
+    end else begin
+      cmd_timeout <= 16'd0;
     end
     
     // Address decoding and register access
@@ -521,20 +646,24 @@ always @(posedge CLK_14M) begin
 
             IDLE: begin
               cmd <= din;
+              cmd_timeout <= 16'd0;  // Reset timeout for new command
+              cmd_data <= 64'd0;     // Clear command data buffer
+              initial_cmd_len <= 4'd0; // Clear initial length
               
               case (din)
                 8'h01: ; // abort
                 8'h03: ; // flush keyboard buffer
-                8'h04: begin cmd_len <= 4'd1; state <= CMD; end
-                8'h05: begin cmd_len <= 4'd1; state <= CMD; end
-                8'h06: begin cmd_len <= 4'd3; state <= CMD; end
+                8'h04: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
+                8'h05: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
+                8'h06: begin cmd_len <= 4'd3; initial_cmd_len <= 4'd3; state <= CMD; end
                 8'h07: begin 
                   // SYNC command - length depends on version
                   cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8; 
+                  initial_cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8;
                   state <= CMD; 
                 end
-                8'h08: begin cmd_len <= 4'd2; state <= CMD; end
-                8'h09: begin cmd_len <= 4'd2; state <= CMD; end
+                8'h08: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; end
+                8'h09: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; end
                 8'h0a: begin
                   // Read ADB modes
                   data <= { 24'd0, adb_mode };
@@ -551,9 +680,10 @@ always @(posedge CLK_14M) begin
                   pending_data <= 3'd4;
                 end
                 8'h0d: begin
-                  // Read ADB version
-                  data <= { 24'd0, (VERSION == 1 ? 8'd5 : 8'd6) };
+                  // ADB Version command - return version number
+                  data <= { 24'd0, VERSION };  // Clear upper bits, set version in LSB
                   pending_data <= 3'd1;
+                  state <= IDLE;  // Immediate response, return to IDLE
                 end
                 8'h0e: begin 
                   // Read charsets
@@ -566,36 +696,119 @@ always @(posedge CLK_14M) begin
                   pending_data <= 3'd2;
                 end
                 8'h10: soft_reset <= 1'b1;
-                8'h11: begin cmd_len <= 4'd1; state <= CMD; end
-                8'h12: if (VERSION >= 3) begin cmd_len <= 4'd2; state <= CMD; end
-                8'h13: if (VERSION >= 3) begin cmd_len <= 4'd2; state <= CMD; end
-                8'h73: ; // disable SRQ on mouse
-                8'hb0, 8'hb1, 8'hb2, 8'hb3,
-                8'hb4, 8'hb5, 8'hb6, 8'hb7,
-                8'hb8, 8'hb9, 8'hba, 8'hbb,
-                8'hbc, 8'hbd, 8'hbe, 8'hbf: begin
-                  cmd_len <= 4'd2;
-                  state <= CMD;
+                8'h11: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
+                8'h12: begin
+                  if (VERSION >= 6) begin 
+                    cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; 
+                  end else begin
+                    // ROM1 doesn't support command 0x12, return to IDLE
+                    state <= IDLE;
+                  end
                 end
-                8'hc0, 8'hc1, 8'hc2, 8'hc3,
-                8'hc4, 8'hc5, 8'hc6, 8'hc7,
-                8'hc8, 8'hc9, 8'hca, 8'hcb,
-                8'hcc, 8'hcd, 8'hce, 8'hcf:
-                  if (din[3:0] == kbd_ctl_addr[3:0]) begin
-                    // ADB keyboard talk
+                8'h13: begin
+                  if (VERSION >= 6) begin 
+                    cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; 
+                  end else begin
+                    // ROM1 doesn't support command 0x13, return to IDLE  
+                    state <= IDLE;
                   end
-                8'hf0, 8'hf1, 8'hf2, 8'hf3,
-                8'hf4, 8'hf5, 8'hf6, 8'hf7,
-                8'hf8, 8'hf9, 8'hfa, 8'hfb,
-                8'hfc, 8'hfd, 8'hfe, 8'hff:
-                  if (din[3:0] == kbd_ctl_addr[3:0]) begin
-                    // ADB response packet
+                end
+                8'h73: ; // disable SRQ on mouse
+                default: begin
+                  // Check if this is a device command (pattern: AAAARRCCT)
+                  // A=address, R=register, C=command, T=type
+                  if (din >= 8'h10) begin  // Device commands start at 0x10
+                    // Decode device command: AAAARRCCT (A=addr, R=reg, C=cmd bits)
+                    case (din[1:0])  // dev_cmd bits
+                      2'b01: begin // FLUSH device
+                        state <= IDLE;
+                      end
+                      2'b10: begin // LISTEN (write to device)
+                        if (device_present[din[7:4]]) begin
+                          cmd_len <= 4'd2;  // Expect 2 data bytes for LISTEN
+                          initial_cmd_len <= 4'd2;
+                          state <= CMD;
+                        end else begin
+                          state <= IDLE;
+                        end
+                      end
+                      2'b11: begin // TALK (read from device)
+                        if (device_present[din[7:4]]) begin
+                          // Check for special multi-byte responses
+                          if (din[7:4] == 4'd2 && din[3:2] == 2'd3) begin
+                            // Keyboard device register 3 - return device handler ID (2 bytes)
+                            data <= { 16'd0, 8'h02, 8'h07 };  // Handler ID=$02, some additional info
+                            pending_data <= 3'd2;
+                          end else if (din[7:4] == 4'd3 && din[3:2] == 2'd3) begin  
+                            // Mouse device register 3 - return device handler ID (2 bytes)
+                            data <= { 16'd0, 8'h01, 8'h63 };  // Handler ID=$01, mouse info
+                            pending_data <= 3'd2;
+                          end else if (din[7:4] == 4'd2 && din[3:2] == 2'd0) begin
+                            // Keyboard device register 0 - return key data if available
+                            if (device_data_pending[2] > 0) begin
+                              data <= { 24'd0, device_registers[2][0] };
+                              pending_data <= 3'd1;
+                              device_data_pending[2] <= 8'h00;  // Clear pending data
+                              if (device_registers[2][0] & 8'h80) valid_kbd <= 1'b0;  // Clear on key release
+                            end else begin
+                              data <= 32'd0;  // No data available
+                              pending_data <= 3'd0;
+                            end
+                          end else if (din[7:4] == 4'd3 && din[3:2] == 2'd0) begin
+                            // Mouse device register 0 - return mouse data if available
+                            if (device_data_pending[3] > 0) begin
+                              data <= { 24'd0, device_registers[3][0] };
+                              pending_data <= 3'd1;
+                              device_data_pending[3] <= 8'h00;  // Clear pending data
+                              valid_mouse_data <= 1'b0;  // Clear flag after reading
+                            end else begin
+                              data <= 32'd0;  // No data available
+                              pending_data <= 3'd0;
+                            end
+                          end else begin
+                            // Return single byte device register data
+                            data <= { 24'd0, device_registers[din[7:4]][din[3:2]] };
+                            pending_data <= 3'd1;
+                          end
+                          state <= IDLE;
+                        end else begin
+                          state <= IDLE;
+                        end
+                      end
+                      default: begin
+                        state <= IDLE;
+                      end
+                    endcase
+                  end else begin
+                    // Non-device command - unknown
+                    state <= IDLE;
                   end
+                end
               endcase
             end
 
             CMD: begin
-              cmd_data[(cmd_len-1)*8+:8] <= din;
+              // Store incoming data byte in the correct forward order
+              if (cmd_len > 0) begin
+                  case (initial_cmd_len)
+                      4'd1: cmd_data[7:0] <= din;
+                      4'd2: if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
+                      4'd3: if (cmd_len == 3) cmd_data[23:16] <= din; else if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
+                      4'd4: if (cmd_len == 4) cmd_data[31:24] <= din; else if (cmd_len == 3) cmd_data[23:16] <= din; else if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
+                      4'd8:
+                          case(cmd_len)
+                              4'd8: cmd_data[63:56] <= din;
+                              4'd7: cmd_data[55:48] <= din;
+                              4'd6: cmd_data[47:40] <= din;
+                              4'd5: cmd_data[39:32] <= din;
+                              4'd4: cmd_data[31:24] <= din;
+                              4'd3: cmd_data[23:16] <= din;
+                              4'd2: cmd_data[15:8] <= din;
+                              4'd1: cmd_data[7:0] <= din;
+                          endcase
+                      default: ; // Should not happen
+                  endcase
+              end
 
               // Process command when enough data received
               if (cmd_len == 4'd1) begin
@@ -605,37 +818,64 @@ always @(posedge CLK_14M) begin
                 case (cmd)
                   8'h04: adb_mode <= din | adb_mode;
                   8'h05: adb_mode <= adb_mode & ~din;
-                  8'h06, 8'h07: begin 
-                    // SYNC/ASYNC commands
-                    if (cmd[0]) adb_mode <= cmd_data[31:24] | adb_mode;
+                  8'h06: begin 
+                    // SET_CONFIG (0x06) - Configure ADB parameters (3 bytes)
+                    // Byte 2: mouse_ctl_addr, kbd_ctl_addr
+                    // Byte 1: (reserved)
+                    // Byte 0: repeat_info
                     mouse_ctl_addr <= cmd_data[23:20];
-                    kbd_ctl_addr <= cmd_data[19:16];
-                    repeat_delay <= din[7] ? 8'd0 : (din[7:4]+1)*8'd15;
-                    case (din[3:0])
-                      4'd0, 4'd1, 4'd2, 4'd3, 4'd4, 4'd5, 4'd6: repeat_rate <= din[3:0]+1;
-                      4'd7: repeat_rate <= 8'd15;
-                      4'd8: repeat_rate <= 8'd30;
-                      4'd9: repeat_rate <= 8'd60;
-                    endcase
+                    kbd_ctl_addr   <= cmd_data[19:16];
+                    repeat_info    <= cmd_data[7:0];
                   end
-                  8'h08: ram[cmd_data[15:8]] <= din;
+                  8'h07: begin 
+                    // SYNC (0x07) - Multi-byte command, process all data at once
+                    // Data is now stored correctly in cmd_data, apply it
+                    if (initial_cmd_len == 4'd4) begin // ROM1
+                      adb_mode       <= cmd_data[31:24];
+                      mouse_ctl_addr <= cmd_data[23:20];
+                      kbd_ctl_addr   <= cmd_data[19:16];
+                      // cmd_data[15:8] is reserved
+                      repeat_info    <= cmd_data[7:0];
+                    end else begin // ROM3 (8 bytes)
+                      // Implemented based on GSplus source
+                      adb_mode       <= cmd_data[63:56];
+                      mouse_ctl_addr <= cmd_data[55:52];
+                      kbd_ctl_addr   <= cmd_data[51:48];
+                      // cmd_data[47:40] is reserved
+                      repeat_info    <= cmd_data[39:32];
+                      char_set       <= cmd_data[23:16];
+                      layout         <= cmd_data[15:8];
+                      // cmd_data[7:0] is reserved
+                    end
+                  end
+                  8'h08: begin
+                    ram_addr <= cmd_data[15:8];
+                    ram_din <= din;
+                    ram_wen <= 1'b1;
+                  end
                   8'h09: begin
-                    data <= { 24'd0, ram[{din, cmd_data[15:8]}] };
+                    // READ_MEM - Read byte from ADB controller memory (2 bytes)
+                    // Byte 1: address high, Byte 0: address low
+                    ram_addr <= cmd_data[15:8];
+                    ram_wen <= 1'b0;
+                    // Note: Response will be available via ram_dout in next cycle
+                    data <= { 24'd0, ram_dout };
                     pending_data <= 3'd1;
                   end
                   8'h11: ; // send keycode data
-                  8'h12: if (VERSION >= 3) ; // ROM3 command
-                  8'h13: if (VERSION >= 3) ; // ROM3 command
-                  8'hb0, 8'hb1, 8'hb2, 8'hb3,
-                  8'hb4, 8'hb5, 8'hb6, 8'hb7,
-                  8'hb8, 8'hb9, 8'hba, 8'hbb,
-                  8'hbc, 8'hbd, 8'hbe, 8'hbf:
-                    if (cmd[3:0] == kbd_ctl_addr[3:0]) begin
-                      // Keyboard command processing
+                  8'h12: ; // cmd 12 - ROM3 only
+                  8'h13: ; // cmd 13 - ROM3 only
+                  default: begin
+                    // Check if this is a device LISTEN command that needs data
+                    if (cmd >= 8'h10) begin
+                      if (cmd[1:0] == 2'b10) begin // LISTEN command
+                        if (device_present[cmd[7:4]]) begin
+                          // Store data in device register (Byte 1 is data, Byte 0 is unused)
+                          device_registers[cmd[7:4]][cmd[3:2]] <= cmd_data[15:8];
+                        end
+                      end
                     end
-                    else if (cmd[3:0] == mouse_ctl_addr[3:0]) begin
-                      // Mouse command processing
-                    end
+                  end
                 endcase
               end
               else begin
@@ -647,20 +887,26 @@ always @(posedge CLK_14M) begin
       end
 
       8'h27: begin
-        // Read/Write $C027 - ADB Status Register
+        // $C027 - ADB Control Register  
         if (rw) begin
+          // Read $C027 - Status bits
           dout <= {
-            valid_mouse_data,
-            mouse_int,
-            pending_data > 0 ? 1'b1 : 1'b0,
-            data_int,
-            valid_kbd,
-            kbd_int,
-            mouse_coord,
-            cmd_full
+            valid_mouse_data,      // bit 7: mouse data available
+            mouse_int,             // bit 6: mouse interrupt enable
+            pending_data > 0 ? 1'b1 : 1'b0,  // bit 5: data valid
+            data_int,              // bit 4: data interrupt enable  
+            valid_kbd,             // bit 3: keyboard data valid
+            kbd_int,               // bit 2: keyboard interrupt enable
+            mouse_coord,           // bit 1: mouse coordinate flag
+            cmd_full               // bit 0: command full
           };
-        end
-        else if (cen & strobe) begin
+          
+          // Auto-clear valid_mouse_data if it's been read while no pending mouse data
+          if (valid_mouse_data && device_data_pending[3] == 0) begin
+            valid_mouse_data <= 1'b0;
+          end
+        end else begin
+          // Write $C027 - Interrupt enables
           mouse_int <= din[6];
           data_int <= din[4];
           kbd_int <= din[2];
@@ -679,7 +925,27 @@ always @(posedge CLK_14M) begin
           dout <= K;
         end else if (cen & strobe) begin
           K <= {1'b0, K[6:0]};  // Clear strobe bit
-          akd <= 1'b0;  // Clear any key down
+          kbd_strobe <= 1'b0;  // Clear ADB strobe
+          
+          // Advance FIFO to next character
+          if (kbd_fifo_count > 0) begin
+            kbd_fifo_tail <= (kbd_fifo_tail + 1) % MAX_KBD_BUF;
+            kbd_fifo_count <= kbd_fifo_count - 1;
+            
+            // Load next character if available
+            if (kbd_fifo_count > 1) begin
+              // Convert next FIFO entry to Apple IIe ASCII
+              reg [7:0] next_char;
+              next_char = adb_to_apple_iie_ascii(
+                kbd_fifo[(kbd_fifo_tail + 1) % MAX_KBD_BUF][6:0], 
+                shift_down, ctrl_down, caps_lock_state
+              );
+              K <= {1'b1, next_char[6:0]};  // Set strobe for next character
+              kbd_strobe <= 1'b1;
+            end else begin
+              akd <= 1'b0;  // Clear any key down status
+            end
+          end
         end
       end
       
@@ -690,6 +956,26 @@ always @(posedge CLK_14M) begin
 
       8'h64, 8'h65, 8'h66, 8'h67: begin
         dout <= 8'd0;
+      end
+
+      8'h24: begin
+        // $C024 - Mouse Data Register (read-only)  
+        if (rw) begin
+          // Return mouse data from FIFO
+          if (mouse_fifo_count > 0) begin
+            dout <= mouse_fifo[mouse_fifo_tail];
+            mouse_fifo_tail <= (mouse_fifo_tail + 1) % MAX_MOUSE_BUF;
+            mouse_fifo_count <= mouse_fifo_count - 1;
+            
+            // Clear mouse valid flag if FIFO is now empty
+            if (mouse_fifo_count == 1) begin
+              valid_mouse_data <= 1'b0;
+            end
+          end else begin
+            dout <= 8'h00;  // No mouse data available
+            valid_mouse_data <= 1'b0;
+          end
+        end
       end
 
       default: dout <= 8'd0;
