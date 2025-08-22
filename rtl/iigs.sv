@@ -1344,6 +1344,7 @@ wire ready_out;
           .ps2_key(ps2_key),
           .ps2_mouse(ps2_mouse),
           .selftest_override(selftest_override), // Self-test mode override
+          .vbl_count(V[8:0]),              // VBL counter for key repeat timing
           // Apple IIe compatibility outputs (replacing old keyboard module)
           .open_apple(adb_open_apple),     // Command key = Open Apple
           .closed_apple(adb_closed_apple), // Option key = Closed Apple
