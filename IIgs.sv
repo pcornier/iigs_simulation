@@ -548,13 +548,13 @@ assign CLK_VIDEO=clk_vid;
 
 
 
-// HARD DRIVE PARTS (supports 2 units - ProDOS limit)
-wire [15:0] hdd_sector;
-wire        hdd_unit;           // Which unit (0-1) is being accessed (from bit 7)
+// HARD DRIVE PARTS
+wire [31:0] hdd_sector;
 
-// Per-unit mounted and protect status for 2 HDD units
-// Using img_mounted indices: [0]=unit0, [1]=unit1
-reg  [1:0] hdd_mounted = 2'b0;
+assign sd_lba[0] = hdd_sector;
+
+
+reg  hdd_mounted = 0;
 wire hdd_read;
 wire hdd_write;
 reg  [1:0] hdd_protect = 2'b0;

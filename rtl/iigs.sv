@@ -75,8 +75,8 @@ module iigs
    input [7:0]        paddle_3,
 
  
-   // HDD control (supports 2 units - ProDOS limit)
-  output [15:0] HDD_SECTOR,
+   // HDD control
+  output [31:0] HDD_SECTOR,
   output        HDD_READ,
   output        HDD_WRITE,
   output        HDD_UNIT,           // Which unit (0-1) is being accessed (from bit 7)
