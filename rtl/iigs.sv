@@ -1494,13 +1494,13 @@ dpram #(.widthad_a(16)) fastram
 
 
 `ifdef VERILATOR
-dpram #(.widthad_a(18),.prefix("slow"),.p(" e")) slowram
+dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
 `else
-bram #(.widthad_a(18)) slowram
+bram #(.widthad_a(17)) slowram
 `endif
 (
         .clock_a(CLK_14M),
-        .address_a(slowram_addr_bus[17:0]),
+        .address_a(slowram_addr_bus[16:0]),
         .data_a(dout),
         .q_a(slowram_dout),
         .wren_a(slowram_we),
