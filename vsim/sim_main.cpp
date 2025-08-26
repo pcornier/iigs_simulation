@@ -611,6 +611,7 @@ void DumpInstruction() {
 	case 0x67: sta = "adc"; type = direct24; break;
 	case 0x69: sta = "adc"; type = immediate; break;
 	case 0x6D: sta = "adc"; type = absolute; break;
+	case 0x71: sta = "adc"; type = indirectY; break;
 	case 0x75: sta = "adc"; type = zeroPageX; break;
 	case 0x77: sta = "adc"; type = direct24Y; break;
 	case 0x79: sta = "adc"; type = absoluteY; break;

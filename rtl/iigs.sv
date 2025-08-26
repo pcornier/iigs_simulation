@@ -143,6 +143,8 @@ module iigs
   logic [23:0]        cpu_addr;
   logic [7:0]         cpu_dout;
   logic [23:0]        addr_bus;
+  logic [23:0]        fastram_addr_bus;
+  logic [23:0]        slowram_addr_bus;
   logic               cpu_vpa, cpu_vpb;
   logic               cpu_vda, cpu_mlb;
   logic               cpu_we_n;
@@ -254,6 +256,19 @@ module iigs
   assign dout = cpu_dout;
   assign we = ~cpu_we_n;
   assign valid = cpu_vpa | cpu_vda;
+  
+  // φ2 is a clock ENABLE, not a clock - always use CLK_14M as clock
+  wire mem_clk;
+  assign mem_clk = CLK_14M;
+
+  // Revert to simpler approach - let the system boot first
+  wire slowram_we;
+  assign slowram_we = we && (
+    // For E0/E1 Language Card areas ($D000-$FFFF), require LC_WE
+    ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff) ? LC_WE :
+    // For all other slowram areas, allow normal writes
+    1'b1
+  );
   assign slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
   assign slotid = addr[11:8];
 
@@ -270,130 +285,364 @@ module iigs
                (((bank == 8'h0 | bank == 8'h1) & ~shadow[6] & cpu_addr[15:8] == 8'hC0) |
                 ((bank == 8'he0 | bank == 8'he1) & cpu_addr[15:8] == 8'hC0));
 
+  // Use combinational logic but add debug to detect timing issues
   assign { bank_bef, addr_bef } = cpu_addr;
+  
+  // Debug: Track bank changes to detect potential timing issues
+  reg [7:0] prev_bank;
+  always @(posedge CLK_14M) begin
+    if (phi2) begin
+      if (bank_bef != prev_bank && addr_bef == 16'h0600) begin
+        $display("TIMING_DEBUG: Bank changed during $0600 access: %02x -> %02x", 
+                 prev_bank, bank_bef);
+      end
+      prev_bank <= bank_bef;
+    end
+  end
 
   always_comb begin
     lcram2_sel = 0;
-    if ((bank_bef == 'he0  || bank_bef == 8'he1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 && ~RDROM  )
-      begin
+    
+    // E0/E1 Banks - Language Card Implementation
+    if (bank_bef == 8'he0 || bank_bef == 8'he1) begin
+      if (addr_bef >= 16'hd000 && addr_bef <= 16'hffff) begin
+        // Language Card space ($D000-$FFFF) - use LCRAM2 for bank selection  
         lcram2_sel = 1;
-        if (aux && bank_bef==8'he0)
-          addr_bus = addr_bef- 'h1000 + 'h10000;
-        else
-          addr_bus = {bank_bef,16'h0} + addr_bef- 'h1000;
-      end
-    else if ((bank_bef == 'he0  || bank_bef == 8'he1) && addr_bef >= 'he000 && ~RDROM )
-      begin
-        lcram2_sel = 1;
-        if (aux && bank_bef==8'he0)
-          addr_bus = addr_bef + 'h10000;
-        else
-          addr_bus = {bank_bef,16'h0} + addr_bef;
-      end
-    else if ((bank_bef == 'h00  || bank_bef == 8'h1) && addr_bef >= 'hd000 && addr_bef <='hdfff && LCRAM2 /*&& RDROM*/ && ~shadow[6]  )
-      begin
-         lcram2_sel = 1;
-	 if (aux && bank_bef=='h00)
-           begin
-             //$display("HERE1: %x %x",addr_bef,addr_bef+'h10000);
-             addr_bus = addr_bef- 'h1000 + 'h10000;
-           end
-         else
-           addr_bus = {bank_bef,16'h0} +addr_bef- 'h1000;
-      end
-    else if ((bank_bef == 'h00  || bank_bef == 8'h1) && addr_bef >= 'he000 && ~RDROM && ~shadow[6] )
-      begin
-         lcram2_sel = 1;
-	 if (aux && bank_bef=='h00)
-           begin
-             addr_bus = addr_bef + 'h10000;
-           end
-         else
-           addr_bus = {bank_bef,16'h0} + addr_bef;
-      end
-    else
-      if (aux && (bank_bef=='h00 || bank_bef=='he0) )
-        //if (aux)
-        begin
-          //$display("HERE2: %x %x",addr_bef,addr_bef+'h10000);
-          addr_bus = addr_bef + 'h10000;
+        if (~RDROM) begin
+          // Reading/Writing LC RAM - map based on LCRAM2 bank selection
+          if (LCRAM2) begin
+            // Language Card Bank 2 (E1-style)
+            addr_bus = 24'h020000 + (addr_bef - 16'hd000);  // LC Bank 2: $20000-$23FFF
+            $display("LC_E0E1: bank=%02x addr=%04x LCRAM2=1 → LC_Bank2 addr_bus=%06x", bank_bef, addr_bef, addr_bus);
+          end else begin
+            // Language Card Bank 1 (E0-style)  
+            addr_bus = 24'h024000 + (addr_bef - 16'hd000);  // LC Bank 1: $24000-$27FFF
+            $display("LC_E0E1: bank=%02x addr=%04x LCRAM2=0 → LC_Bank1 addr_bus=%06x", bank_bef, addr_bef, addr_bus);
+          end
+        end else begin
+          // Reading from ROM - use original ROM mapping
+          addr_bus = {bank_bef, 16'h0000} + addr_bef;
+          $display("LC_E0E1: bank=%02x addr=%04x RDROM=1 → ROM addr_bus=%06x", bank_bef, addr_bef, addr_bus);
         end
-      else
-        addr_bus = cpu_addr;
-    /*RDROM <= 1'b1;
-     LCRAM2 <= 1'b1;
-     LC_WE <= 1'b1;
-     */
+      end else begin
+        // Non-LC space (below $D000) - E0 and E1 are separate memory spaces
+        if (bank_bef == 8'he0) begin
+          addr_bus = 24'h000000 + addr_bef;  // E0: $00000-$0CFFF
+          $display("E0_MEM: bank=%02x addr=%04x → addr_bus=%06x", bank_bef, addr_bef, addr_bus);
+        end else begin  // bank_bef == 8'he1
+          addr_bus = 24'h010000 + addr_bef;  // E1: $10000-$1CFFF  
+          $display("E1_MEM: bank=%02x addr=%04x → addr_bus=%06x", bank_bef, addr_bef, addr_bus);
+        end
+      end
+    end
+    // Banks $00/$01 Language Card space (existing logic)
+    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6]) begin
+      lcram2_sel = 1;
+      if (aux && bank_bef == 8'h00) begin
+        addr_bus = addr_bef - 16'h1000 + 24'h10000;
+      end else begin
+        addr_bus = {bank_bef, 16'h0000} + addr_bef - 16'h1000;
+      end
+    end
+    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'he000 && ~RDROM && ~shadow[6]) begin
+      lcram2_sel = 1;
+      if (aux && bank_bef == 8'h00) begin
+        addr_bus = addr_bef + 24'h10000;
+      end else begin
+        addr_bus = {bank_bef, 16'h0000} + addr_bef;
+      end
+    end
+    else begin
+      // Default address translation
+      if (aux && (bank_bef == 8'h00 || bank_bef == 8'he0)) begin
+        addr_bus = addr_bef + 24'h10000;
+      end else begin
+        addr_bus = cpu_addr;  // Normal mapping (includes ROM code addresses $C000-$FFFF)
+      end
+    end
   end
 
-  // RAM Chip Enables
-  //assign slowram_ce = bank == 8'he0 || bank == 8'he1;
+  // Calculate separate address buses for FastRAM and SlowRAM
   always_comb begin
-    // shadow
-    //Bit 6: I/O Memory, Bit 5: Alternate Display Mode
-    //Bit 4: Auxilary HGR, Bit 3: Super HiRes, Bit 2: HiRes Page 2
-    //Bit 1: HiRes Page 1, Bit 0: Text/LoRes
-    //
-    //if (~shadow[6]) $display("UNIMPLEMENTED SHADOW 6");
-    // read or write to e0 or e1 -- turn on the slowram
-    if ((bank == 8'he0 || bank == 8'he1 ) && ~IO )
-      slowram_ce = 1;
-    //Bit 6: I/O Memory
-    //else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hcfff )
-    else  if ((bank == 8'h00 || bank == 8'h01) && ~IO && ~shadow[6] && addr >= 'hc000 && addr <= 'hffff )
-      slowram_ce = 1;
-    //Bit 5: Alternate Display Mode
-    else  if (bank == 8'h00 && ~shadow[5] && addr >= 'h0800 && addr <= 'h0bff && ~IO)
-      slowram_ce = 1;
-    //Bit 5 AUX: Alt Display Mode
-    else  if (bank == 8'h01 && ~shadow[5] && ~shadow[4] && addr >= 'h0800 && addr <= 'h0bff && ~IO)
-      slowram_ce = 1;
-    //Bit 4: (used in combo)
-    //Bit 3,2: Super HiRes or parts or HiRes Page 2
-    else  if (bank == 8'h00 && (~shadow[2]  || ~shadow[3] ) && addr >= 'h4000 && addr <= 'h5fff && ~IO)
-      slowram_ce = 1;
-    //Bit 3,2: Super HiRes or parts or HiRes Page 2 and Aux
-    else  if (bank == 8'h01 && ((~shadow[2] && ~shadow[4]) || ~shadow[3] ) && addr >= 'h4000 && addr <= 'h5fff && ~IO)
-      slowram_ce = 1;
-    //Bit 3,1: Super HiRes or parts or HiRes Page 1
-    else  if (bank == 8'h00 && (~shadow[1]  || ~shadow[3] ) && addr >= 'h2000 && addr <= 'h3fff && ~IO)
-      slowram_ce = 1;
-    //Bit 3,1: Super HiRes or parts or HiRes Page 1 and Aux
-    else  if (bank == 8'h01 && ((~shadow[1] && ~shadow[4]) || ~shadow[3] ) && addr >= 'h2000 && addr <= 'h3fff && ~IO)
-      slowram_ce = 1;
-    //Bit 0: Alternate Display Mode
-    else  if (bank == 8'h00 && ~shadow[0] && addr >= 'h0400 && addr <= 'h07ff && ~IO)
-      slowram_ce = 1;
-    //Bit 0 AUX: Alt Display Mode
-    else  if (bank == 8'h01 && ~shadow[0] && ~shadow[4] && addr >= 'h0400 && addr <= 'h07ff && ~IO)
-      slowram_ce = 1;
-    else
-      slowram_ce =0;
-    //   if (bank == 8'h00
+    // Default: both use the same address bus
+    fastram_addr_bus = addr_bus;
+    slowram_addr_bus = addr_bus;
+    
+    // For Bank 00 shadow operations, redirect to proper shadow addresses
+    if (bank_bef == 8'h00 && (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow)) begin
+      // FastRAM: Keep Bank 00 address (original location)
+      fastram_addr_bus = {8'h00, 16'h0000} + addr_bef;
+      // SlowRAM: Map to Bank E0 within 18-bit SlowRAM space (Bank E0 → 00xxxx in SlowRAM) 
+      slowram_addr_bus = {2'b00, addr_bef};  // Direct mapping: $xxxx -> $00xxxx (18-bit)
+    end
+    
+    // For Bank 01 shadow operations (if implemented), map to SlowRAM Bank E1 space
+    if (bank_bef == 8'h01 && (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow)) begin
+      // FastRAM: Keep Bank 01 address (original location)
+      fastram_addr_bus = {8'h01, 16'h0000} + addr_bef;
+      // SlowRAM: Map to Bank E1 within 18-bit SlowRAM space (Bank E1 → 01xxxx in SlowRAM)
+      slowram_addr_bus = {2'b01, addr_bef};  // Direct mapping: $xxxx -> $01xxxx (18-bit)
+    end
   end
 
-  //assign fastram_ce = (bank < RAMSIZE) & ~slot_ce & ~slot_internalrom_ce ; // bank[7] == 0;
-  //
-  //assign rom_writethrough = ( (bank == 8'h0) & (addr>=16'hd000) & (addr <= 16'hdfff) & LC_WE);
-  assign rom_writethrough = ( (bank_bef == 8'h0) & (addr_bef >= 16'hd000) & (addr_bef <= 16'hffff) & LC_WE);
-  assign fastram_ce = (bank_bef < RAMSIZE)  & ( ~rom2_ce | rom_writethrough)  & ~rom1_ce &~IO; // bank[7] == 0;
+  // ============================================================================
+  // CLEAN SYSTEMATIC MEMORY CONTROLLER
+  // ============================================================================
+  
+  // Internal memory control signals
+  reg fastram_ce_int;
+  reg slowram_ce_int;
+  
+  // Assign outputs
+  assign fastram_ce = fastram_ce_int;
+  assign slowram_ce = slowram_ce_int;
+  
+  // Page and shadow detection helpers
+  wire [3:0] page = addr_bef[15:12];  // 16 pages per bank (256 bytes each)
+  
+  // Shadow region detection (when shadow bit = 0, shadowing is ACTIVE)  
+  wire txt1_shadow  = ~shadow[0] && (page == 4'h0 && addr_bef[11:8] >= 4'h4 && addr_bef[11:8] <= 4'h7);  // $0400-$07FF
+  wire txt2_shadow  = ~shadow[5] && (page == 4'h0 && addr_bef[11:8] <= 4'hB && addr_bef[11:8] >= 4'h8);  // $0800-$0BFF
+  wire hgr1_shadow  = ~shadow[1] && (page >= 4'h2 && page <= 4'h3);          // $2000-$3FFF
+  wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
+  wire shgr_shadow  = ~shadow[3] && (page >= 4'h6 && page <= 4'h9);          // $6000-$9FFF
+  wire lc_shadow    = ~shadow[6] && (page >= 4'hC);                          // $C000-$FFFF
+  wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
+  
+  // Dual-write detection: Bank 01 SHGR writes also go to Bank E1
+  wire shgr_dual_write = (bank_bef == 8'h01 && shgr_shadow && we && ~IO);
+  
+  // Memory Controller - Clean systematic approach
+  always_comb begin
+    fastram_ce_int = 0;
+    slowram_ce_int = 0;
+    
+    if (IO) begin
+      // I/O space - no RAM access
+      fastram_ce_int = 0;
+      slowram_ce_int = 0;
+    end else begin
+      case (bank_bef)
+        // Bank 00: Main memory with shadow regions
+        8'h00: begin
+          if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow) begin
+            // Shadowed regions: READS from Bank E0 shadow, WRITES to both Bank 00 AND Bank E0
+            if (we) begin
+              fastram_ce_int = 1; // WRITES go to original Bank 00 location
+              slowram_ce_int = 1; // WRITES also go to shadow Bank E0
+            end else begin
+              slowram_ce_int = 1; // READS come from shadow Bank E0 only
+            end
+          end else begin
+            fastram_ce_int = 1;  // Normal Bank 00 RAM (non-shadowed)
+          end
+        end
+        
+        // Bank 01: Auxiliary memory with conditional shadow regions
+        8'h01: begin
+          if (shgr_dual_write) begin
+            fastram_ce_int = 1;  // Write to both Bank 01 (FASTRAM) and Bank E1 (SLOWRAM)
+            slowram_ce_int = 1;  // Dual write to E1 shadow bank
+          end else if (!aux_disable && (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow)) begin
+            // Shadowed regions: READS from Bank 01, WRITES to both Bank 01 AND Bank E1
+            fastram_ce_int = 1;   // Always access Bank 01 (for reads, and writes to original location)
+            if (we) begin
+              slowram_ce_int = 1; // WRITES also go to shadow Bank E1
+            end
+          end else if (lc_shadow) begin
+            // Language card: READS from Bank 01, WRITES to both Bank 01 AND Bank E1
+            fastram_ce_int = 1;   // Always access Bank 01
+            if (we) begin
+              slowram_ce_int = 1; // WRITES also go to shadow Bank E1
+            end
+          end else begin
+            fastram_ce_int = 1;  // Normal Bank 01 RAM
+          end
+        end
+        
+        // Banks E0/E1: Shadow memory - always SLOWRAM
+        8'hE0, 8'hE1: begin
+          slowram_ce_int = 1;
+        end
+        
+        // Banks FC-FF: ROM banks - writes should be discarded
+        8'hFC, 8'hFD, 8'hFE, 8'hFF: begin
+          // ROM is read-only: reads from ROM space, writes are discarded
+          // Do NOT enable fastram_ce or slowram_ce for ROM writes
+          // This prevents ROM selftest code from corrupting system memory
+          if (~we) begin
+            // ROM reads: access ROM space (handled by rom1_ce/rom2_ce signals)
+            fastram_ce_int = 0;
+            slowram_ce_int = 0;
+          end else begin
+            // ROM writes: discard (no memory access)
+            fastram_ce_int = 0;
+            slowram_ce_int = 0;
+          end
+        end
+        
+        // All other banks: Normal RAM (if within RAMSIZE)
+        default: begin
+          if ((bank_bef < RAMSIZE) && ~rom1_ce && ~rom2_ce) begin
+            fastram_ce_int = 1;
+          end
+        end
+      endcase
+    end
+  end
 
-  assign romc_ce = bank == 8'hfc;
-  assign romd_ce = bank == 8'hfd;
-  assign rom1_ce = bank == 8'hfe;
-  assign rom2_ce = bank == 8'hff ||
-                   (bank == 8'h0 & addr >= 16'hd000 & addr <= 16'hdfff && (RDROM|~VPB)) ||
-                   (bank == 8'h0 & addr >= 16'hc000 & addr <= 16'hcfff && (RDROM|~VPB)) ||
-                   (bank == 8'h0 & addr >= 16'he000 &                     (RDROM|~VPB)) ||
-                   (bank == 8'h0 & addr >= 16'hc070 & addr <= 16'hc07f);
+  // ROM write-through for language card
+  assign rom_writethrough = (bank_bef == 8'h00 && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE);
+
+  // Debug: Clean memory controller verification
+  always @(posedge CLK_14M) begin
+    // Monitor critical $6200 and $0600 range accesses for testing
+    if (addr_bef == 16'h6200 || (addr_bef >= 16'h0600 && addr_bef <= 16'h0610)) begin
+      if (we) begin
+        if (fastram_ce_int && slowram_ce_int) begin
+          $display("REFACTOR_TEST: DUAL_WRITE bank_%02x data=%02x (FASTRAM+SLOWRAM)", bank_bef, cpu_dout);
+        end else if (slowram_ce_int) begin
+          $display("REFACTOR_TEST: SLOWRAM_ONLY bank_%02x data=%02x", bank_bef, cpu_dout);
+        end else if (fastram_ce_int) begin
+          $display("REFACTOR_TEST: FASTRAM_ONLY bank_%02x data=%02x", bank_bef, cpu_dout);
+        end else begin
+          $display("REFACTOR_TEST: NO_RAM_ACCESS bank_%02x data=%02x (ERROR)", bank_bef, cpu_dout);
+        end
+      end else begin
+        if (slowram_ce_int) begin
+          $display("REFACTOR_TEST: READ_SLOWRAM bank_%02x (shadowed)", bank_bef);
+        end else if (fastram_ce_int) begin
+          $display("REFACTOR_TEST: READ_FASTRAM bank_%02x (normal)", bank_bef);
+        end else begin
+          $display("REFACTOR_TEST: NO_READ bank_%02x (ERROR)", bank_bef);
+        end
+      end
+      // Debug shadow detection for these critical addresses
+      if (addr_bef >= 16'h0600 && addr_bef <= 16'h0610) begin
+        $display("TXT1_SHADOW_DEBUG: bank_%02x addr=%04x shadow[0]=%b txt1_shadow=%b page=%x addr[11:8]=%x", 
+                 bank_bef, addr_bef, shadow[0], txt1_shadow, page, addr_bef[11:8]);
+      end
+      
+      // Debug memory initialization for Text Page 1 range ($0400-$07FF)
+      if (we && (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)) begin
+        if (txt1_shadow) begin
+          $display("INIT_DEBUG: TXT1_WRITE bank_%02x addr=%04x data=%02x shadow[0]=%b txt1_shadow=%b -> FASTRAM(00) + SLOWRAM(E0)", 
+                   bank_bef, addr_bef, cpu_dout, shadow[0], txt1_shadow);
+        end else begin
+          $display("INIT_DEBUG: TXT1_WRITE bank_%02x addr=%04x data=%02x shadow[0]=%b txt1_shadow=%b -> FASTRAM(00)", 
+                   bank_bef, addr_bef, cpu_dout, shadow[0], txt1_shadow);
+        end
+      end
+      
+      // Track writes near $0600 that could cause wraparound overwrites
+      if (we && addr_bef >= 16'h05F8 && addr_bef <= 16'h0608 && addr_bef != 16'h0600) begin
+        $display("0600_NEARBY_WRITE: bank_%02x addr=%04x data=%02x (potential wraparound)", 
+                 bank_bef, addr_bef, cpu_dout);
+      end
+      
+      // Track ALL writes to $0600 (including potential overwrites)
+      if (addr_bef == 16'h0600 && we) begin
+        $display("0600_ALL_WRITES: bank_%02x data=%02x addr_bus=%06x fastram_ce=%b slowram_ce=%b", 
+                 bank_bef, cpu_dout, addr_bus, fastram_ce_int, slowram_ce_int);
+                 
+        // Memory dump after write - detailed address bus info
+        $display("MEM_DUMP_POST_WRITE: addr_bus=%06x fastram_ce=%b slowram_ce=%b", 
+                 addr_bus, fastram_ce_int, slowram_ce_int);
+      end
+      
+      // Track memory enable signals for debugging
+      if (addr_bef == 16'h0600) begin
+        $display("0600_MEM_CYCLE: we=%b slowram_we=%b slowram_ce_int=%b slowram_ce=%b", 
+                 we, slowram_we, slowram_ce_int, slowram_ce);
+      end
+      
+      // Track specific $0600 pattern writes/reads
+      if (addr_bef == 16'h0600) begin
+        if (we) begin
+          if (txt1_shadow) begin
+            $display("0600_PATTERN_WRITE: bank_%02x data=%02x shadow[0]=%b -> Bank_00 + Bank_E0 (dual write)", 
+                     bank_bef, cpu_dout, shadow[0]);
+            $display("0600_WRITE_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x", 
+                     fastram_ce_int, slowram_ce_int, addr_bus);
+            $display("0600_WRITE_ADDR: fastram_addr=%06x slowram_addr=%06x", 
+                     fastram_addr_bus, slowram_addr_bus);
+            $display("0600_WRITE_EN: fastram_we=%b slowram_we=%b mem_clk=%b CLK_14M=%b", 
+                     we, slowram_we, mem_clk, CLK_14M);
+            $display("0600_WRITE_TIMING: cpu_dout=%02x actual_write_data=%02x", 
+                     cpu_dout, dout);
+          end else begin
+            $display("0600_PATTERN_WRITE: bank_%02x data=%02x shadow[0]=%b -> Bank_00", 
+                     bank_bef, cpu_dout, shadow[0]);
+            $display("0600_WRITE_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x", 
+                     fastram_ce_int, slowram_ce_int, addr_bus);
+          end
+        end else begin
+          if (bank_bef >= 8'hFC) begin
+            $display("0600_PATTERN_READ: bank_%02x data=%02x shadow[0]=%b <- Bank_00 (ROM->FASTRAM)", 
+                     bank_bef, cpu_din, shadow[0]);
+          end else begin
+            $display("0600_PATTERN_READ: bank_%02x data=%02x shadow[0]=%b <- Bank_00", 
+                     bank_bef, cpu_din, shadow[0]);
+          end
+          
+          // Enhanced read debugging - show exactly where data comes from
+          $display("0600_READ_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x txt1_shadow=%b", 
+                   fastram_ce_int, slowram_ce_int, addr_bus, txt1_shadow);
+          $display("0600_READ_ADDR: fastram_addr=%06x slowram_addr=%06x", 
+                   fastram_addr_bus, slowram_addr_bus);
+          $display("0600_READ_DATA: cpu_din=%02x fastram_data=%02x slowram_data=%02x", 
+                   cpu_din, fastram_datafromram, slowram_dout);
+          $display("0600_READ_EN: slowram_we=%b mem_clk=%b slowram_ce_actual=%b", 
+                   slowram_we, mem_clk, slowram_ce);
+          $display("0600_READ_MUX: rom1_ce=%b rom2_ce=%b IO=%b data_source=%s", 
+                   rom1_ce, rom2_ce, IO, 
+                   (fastram_ce_int ? "FASTRAM" : (slowram_ce_int ? "SLOWRAM" : (rom1_ce | rom2_ce ? "ROM" : "UNKNOWN"))));
+        end
+      end
+    end
+    
+    // Monitor shadow register changes
+    if (shadow != prev_shadow) begin
+      $display("SHADOW_CHANGE: %08b -> %08b", prev_shadow, shadow);
+      prev_shadow <= shadow;
+    end
+    
+    // DEBUG: Monitor ALL memory controller logic for $0600 range (bypass all conditions)
+    if (addr_bef >= 16'h0600 && addr_bef <= 16'h0610) begin
+      $display("MEM_CTRL_ALL: bank_%02x addr=%04x IO=%b we=%b fastram_ce=%b slowram_ce=%b txt1_shadow=%b", 
+               bank_bef, addr_bef, IO, we, fastram_ce_int, slowram_ce_int, txt1_shadow);
+    end
+  end
+  
+  reg [7:0] prev_shadow = 8'h00;
+
+  assign romc_ce = bank_bef == 8'hfc;
+  assign romd_ce = bank_bef == 8'hfd;
+  assign rom1_ce = bank_bef == 8'hfe;
+  assign rom2_ce = bank_bef == 8'hff ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB)) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef <= 16'hcfff && (RDROM|~VPB)) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB)) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f);
 
   // driver for io_dout and fake registers
   always_ff @(posedge CLK_14M) begin
     if (reset) begin
       // dummy values dumped from emulator
-      CYAREG <= 8'h80; // motor speed
-      STATEREG <=  8'b0000_1001;
-      shadow <= 8'b0000_1000;
+      // C036 Speed Register initialization - match GSPlus behavior
+`ifdef ROM3
+      CYAREG <= 8'h80; // ROM03: FAST_ENABLED (bit 7) only -> force cold boot with selftest
+      $display("SPEED_REG_INIT: ROM03 detected -> CYAREG=$80 (POWERED_ON=0, FORCED cold boot, run selftest)");
+`else
+      CYAREG <= 8'h80; // ROM01: FAST_ENABLED (bit 7) only -> cold boot with selftest  
+      $display("SPEED_REG_INIT: ROM01 detected -> CYAREG=$80 (POWERED_ON=0, cold boot, run selftest)");
+`endif
+      STATEREG <=  8'b0000_1101;  // GSPlus: 0x0D (rdrom, lcbank2, intcx, bit2)
+      shadow <= 8'b0000_0000;
+      $display("SHADOW_REG_INIT: shadow=%08b (ALL SHADOWING ACTIVE)", 8'b0000_0000);
+      $display("  TXT1=%b HGR1=%b HGR2=%b SHGR=%b AUX=%b TXT2=%b LC=%b", 
+               1'b1, 1'b1, 1'b1, 1'b1, 1'b0, 1'b1, 1'b1);
+      $display("  Text Page 1 ($0400-$07FF): Bank_00 -> Bank_E0 shadowing ACTIVE");
       SOUNDCTL <= 8'd0;
       //SOUNDCTL <= 8'h05;
       NEWVIDEO <= 8'h41;
@@ -536,7 +785,15 @@ module iigs
               if (~addr[0])
                 BORDERCOLOR=cpu_dout[3:0];
             end
-            12'h035: shadow <= cpu_dout;
+            12'h035: begin
+              $display("SHADOW_REG_WRITE: old=%08b new=%08b", shadow, cpu_dout);
+              $display("  bit0(TXT1):%b->%b bit1(HGR1):%b->%b bit2(HGR2):%b->%b bit3(SHGR):%b->%b", 
+                       shadow[0], cpu_dout[0], shadow[1], cpu_dout[1], shadow[2], cpu_dout[2], shadow[3], cpu_dout[3]);
+              $display("  bit4(AUX):%b->%b bit5(TXT2):%b->%b bit6(LC):%b->%b bit7(RSVD):%b->%b", 
+                       shadow[4], cpu_dout[4], shadow[5], cpu_dout[5], shadow[6], cpu_dout[6], shadow[7], cpu_dout[7]);
+              $display("  TXT1_shadow_enable: %b->%b (0=active)", shadow[0], cpu_dout[0]);
+              shadow <= cpu_dout;
+            end
             12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
             // SCC (Serial Communications Controller) - Zilog 8530 
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
@@ -581,70 +838,90 @@ module iigs
             12'h080,	// Read RAM bank 2 no write
               12'h084:	// Read bank 2 no write
                 begin
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b1;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_WR C080/C084: RDROM=0 LCRAM2=1 LC_WE=0 (RAM read, no write)");
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b1;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h081,	// Read ROM write RAM bank 2 (RR)
               12'h085:
                 begin
-                  $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b1;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b1;
+                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
+                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                  end
                 end
             12'h082,	// Read ROM no write
               12'h086:
                 begin
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_WR C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h083,	// Read bank 2 write bank 2(RR)
               12'h087:
                 begin
-                  $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b1;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b1;
+                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
+                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                  end
                 end
             12'h088,
               12'h08C:
                 begin
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_WR C088/C08C: RDROM=0 LCRAM2=0 LC_WE=0 (Bank1 RAM read, no write)");
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h089,
               12'h08D:
                 begin
-                  $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
+                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                  end
                 end
             12'h08A,
               12'h08E:
                 begin
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_WR C08A/C08E: RDROM=1 LCRAM2=0 LC_WE=0 (Bank1 ROM read, no write)");
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h08B,
               12'h08F:
                 begin
-                  $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
+                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                  end
                 end
 
             12'h0e0, 12'h0e1, 12'h0e2, 12'h0e3,
@@ -710,7 +987,7 @@ module iigs
             12'h01a: io_dout <= {TEXTG, key_keys};
             12'h01b: io_dout <= {MIXG, key_keys};
             12'h01c: io_dout <= {PAGE2, key_keys};
-            12'h01d: io_dout <= {~HIRES_MODE, key_keys};
+            12'h01d: io_dout <= {HIRES_MODE, key_keys};
             12'h01e: io_dout <= {ALTCHARSET, key_keys};
             12'h01f: io_dout <= {EIGHTYCOL, key_keys};
 
@@ -845,81 +1122,97 @@ module iigs
             12'h080,	// Read RAM bank 2 no write
               12'h084:	// Read bank 2 no write
                 begin
-                  $display("READ 80/84: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b1;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_RD C080/C084: RDROM=0 LCRAM2=1 LC_WE=0 (RAM read, no write)");
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b1;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h081,	// Read ROM write RAM bank 2 (RR)
               12'h085:
                 begin
-                  $display("READ 81/85: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b1;
+                  if (phi2) begin
+                    $display("LC_RD C081/C085: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b1;
+                  end
                   if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;
+                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
                   end
                 end
             12'h082,	// Read ROM no write
               12'h086:
                 begin
-                  $display("READ 82/86: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_RD C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h083,	// Read bank 2 write bank 2(RR)
               12'h087:
                 begin
-                  $display("READ 83/87: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b1;
+                  if (phi2) begin
+                    $display("LC_RD C083/C087: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b1;
+                  end
                   if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;
+                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
                   end
                 end
             12'h088,
               12'h08C:
                 begin
-                  $display("READ 88/8C: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_RD C088/C08C: RDROM=0 LCRAM2=0 LC_WE=0 (Bank1 RAM read, no write)");
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h089,
               12'h08D:
                 begin
-                  $display("READ 89/8D: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b0;
+                  if (phi2) begin
+                    $display("LC_RD C089/C08D: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b0;
+                  end
                   if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;
+                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
                   end
                 end
             12'h08A,
               12'h08E:
                 begin
-                  $display("READ 8A/8E: NO ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b1;
-                  LCRAM2 <= 1'b0;
-                  LC_WE <= 1'b0;
-                  LC_WE_PRE<=1'b0;
+                  if (phi2) begin
+                    $display("LC_RD C08A/C08E: RDROM=1 LCRAM2=0 LC_WE=0 (Bank1 ROM read, no write)");
+                    RDROM <= 1'b1;
+                    LCRAM2 <= 1'b0;
+                    LC_WE <= 1'b0;
+                    LC_WE_PRE<=1'b0;
+                  end
                 end
             12'h08B,
               12'h08F:
                 begin
-                  $display("READ 8B/8F: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
-                  RDROM <= 1'b0;
-                  LCRAM2 <= 1'b0;
+                  if (phi2) begin
+                    $display("LC_RD C08B/C08F: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b0;
+                    LCRAM2 <= 1'b0;
+                  end
                   if (phi0) begin
                     LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;
+                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
                   end
                 end
 
@@ -1201,20 +1494,20 @@ dpram #(.widthad_a(16)) fastram
 
 
 `ifdef VERILATOR
-dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
+dpram #(.widthad_a(18),.prefix("slow"),.p(" e")) slowram
 `else
-bram #(.widthad_a(17)) slowram
+bram #(.widthad_a(18)) slowram
 `endif
 (
         .clock_a(CLK_14M),
-        .address_a({ bank[0], addr }),
+        .address_a(slowram_addr_bus[17:0]),
         .data_a(dout),
         .q_a(slowram_dout),
-        .wren_a(we),
+        .wren_a(slowram_we),
 `ifdef VERILATOR
         .ce_a(slowram_ce),
 `else
-		  .enable_a(slowram_ce),
+        .enable_a(slowram_ce),
 `endif
         .clock_b(clk_vid),
         .address_b(video_addr[16:0]),
