@@ -303,36 +303,21 @@ module iigs
   always_comb begin
     lcram2_sel = 0;
     
-    // E0/E1 Banks - Language Card Implementation
-    if (bank_bef == 8'he0 || bank_bef == 8'he1) begin
-      if (addr_bef >= 16'hd000 && addr_bef <= 16'hffff) begin
-        // Language Card space ($D000-$FFFF) - use LCRAM2 for bank selection  
-        lcram2_sel = 1;
-        if (~RDROM) begin
-          // Reading/Writing LC RAM - map based on LCRAM2 bank selection
-          if (LCRAM2) begin
-            // Language Card Bank 2 (E1-style)
-            addr_bus = 24'h020000 + (addr_bef - 16'hd000);  // LC Bank 2: $20000-$23FFF
-            $display("LC_E0E1: bank=%02x addr=%04x LCRAM2=1 → LC_Bank2 addr_bus=%06x", bank_bef, addr_bef, addr_bus);
-          end else begin
-            // Language Card Bank 1 (E0-style)  
-            addr_bus = 24'h024000 + (addr_bef - 16'hd000);  // LC Bank 1: $24000-$27FFF
-            $display("LC_E0E1: bank=%02x addr=%04x LCRAM2=0 → LC_Bank1 addr_bus=%06x", bank_bef, addr_bef, addr_bus);
-          end
-        end else begin
-          // Reading from ROM - use original ROM mapping
-          addr_bus = {bank_bef, 16'h0000} + addr_bef;
-          $display("LC_E0E1: bank=%02x addr=%04x RDROM=1 → ROM addr_bus=%06x", bank_bef, addr_bef, addr_bus);
-        end
+    // E0/E1 Banks - Language Card Implementation (simplified/fixed)
+    if ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~RDROM) begin
+      lcram2_sel = 1;
+      if (aux && bank_bef == 8'he0) begin
+        addr_bus = addr_bef - 16'h1000 + 24'h10000;
       end else begin
-        // Non-LC space (below $D000) - E0 and E1 are separate memory spaces
-        if (bank_bef == 8'he0) begin
-          addr_bus = 24'h000000 + addr_bef;  // E0: $00000-$0CFFF
-          $display("E0_MEM: bank=%02x addr=%04x → addr_bus=%06x", bank_bef, addr_bef, addr_bus);
-        end else begin  // bank_bef == 8'he1
-          addr_bus = 24'h010000 + addr_bef;  // E1: $10000-$1CFFF  
-          $display("E1_MEM: bank=%02x addr=%04x → addr_bus=%06x", bank_bef, addr_bef, addr_bus);
-        end
+        addr_bus = {bank_bef, 16'h0} + addr_bef - 16'h1000;
+      end
+    end
+    else if ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'he000 && ~RDROM) begin
+      lcram2_sel = 1;
+      if (aux && bank_bef == 8'he0) begin
+        addr_bus = addr_bef + 24'h10000;
+      end else begin
+        addr_bus = {bank_bef, 16'h0} + addr_bef;
       end
     end
     // Banks $00/$01 Language Card space (existing logic)
@@ -426,13 +411,9 @@ module iigs
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow) begin
-            // Shadowed regions: READS from Bank E0 shadow, WRITES to both Bank 00 AND Bank E0
-            if (we) begin
-              fastram_ce_int = 1; // WRITES go to original Bank 00 location
-              slowram_ce_int = 1; // WRITES also go to shadow Bank E0
-            end else begin
-              slowram_ce_int = 1; // READS come from shadow Bank E0 only
-            end
+            // Shadowed regions: Enable BOTH for compatibility (fastram takes priority in mux)
+            fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
+            slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)
           end else begin
             fastram_ce_int = 1;  // Normal Bank 00 RAM (non-shadowed)
           end
@@ -638,11 +619,11 @@ module iigs
       $display("SPEED_REG_INIT: ROM01 detected -> CYAREG=$80 (POWERED_ON=0, cold boot, run selftest)");
 `endif
       STATEREG <=  8'b0000_1101;  // GSPlus: 0x0D (rdrom, lcbank2, intcx, bit2)
-      shadow <= 8'b0000_0000;
-      $display("SHADOW_REG_INIT: shadow=%08b (ALL SHADOWING ACTIVE)", 8'b0000_0000);
+      shadow <= 8'b0000_1000;  // Original value: bit 3=1 (SHGR disabled), others=0 (enabled)
+      $display("SHADOW_REG_INIT: shadow=%08b (Original shadowing config)", 8'b0000_1000);
       $display("  TXT1=%b HGR1=%b HGR2=%b SHGR=%b AUX=%b TXT2=%b LC=%b", 
-               1'b1, 1'b1, 1'b1, 1'b1, 1'b0, 1'b1, 1'b1);
-      $display("  Text Page 1 ($0400-$07FF): Bank_00 -> Bank_E0 shadowing ACTIVE");
+               1'b1, 1'b1, 1'b1, 1'b0, 1'b0, 1'b1, 1'b1);
+      $display("  Text/HGR shadowing ACTIVE, Super HiRes shadowing DISABLED");
       SOUNDCTL <= 8'd0;
       //SOUNDCTL <= 8'h05;
       NEWVIDEO <= 8'h41;
@@ -675,7 +656,7 @@ module iigs
       AN3<=0;
       MONOCHROME<=0;
       RDROM<=1;
-      LCRAM2<=0;
+      LCRAM2<=1;  // Fix: Should be 1 to match STATEREG initialization (bit 1 = LCRAM2)
       LC_WE<=0;
       ROMBANK<=0;;
     end
