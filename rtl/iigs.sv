@@ -144,7 +144,6 @@ module iigs
   logic [7:0]         cpu_dout;
   logic [23:0]        addr_bus;
   logic [23:0]        fastram_addr_bus;
-  logic [23:0]        slowram_addr_bus;
   logic               cpu_vpa, cpu_vpb;
   logic               cpu_vda, cpu_mlb;
   logic               cpu_we_n;
@@ -347,27 +346,9 @@ module iigs
     end
   end
 
-  // Calculate separate address buses for FastRAM and SlowRAM
+  // FastRAM uses the full address bus from CPU
   always_comb begin
-    // Default: both use the same address bus
     fastram_addr_bus = addr_bus;
-    slowram_addr_bus = addr_bus;
-    
-    // For Bank 00 shadow operations, redirect to proper shadow addresses
-    if (bank_bef == 8'h00 && (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow)) begin
-      // FastRAM: Keep Bank 00 address (original location)
-      fastram_addr_bus = {8'h00, 16'h0000} + addr_bef;
-      // SlowRAM: Map to Bank E0 within 18-bit SlowRAM space (Bank E0 → 00xxxx in SlowRAM) 
-      slowram_addr_bus = {2'b00, addr_bef};  // Direct mapping: $xxxx -> $00xxxx (18-bit)
-    end
-    
-    // For Bank 01 shadow operations (if implemented), map to SlowRAM Bank E1 space
-    if (bank_bef == 8'h01 && (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow)) begin
-      // FastRAM: Keep Bank 01 address (original location)
-      fastram_addr_bus = {8'h01, 16'h0000} + addr_bef;
-      // SlowRAM: Map to Bank E1 within 18-bit SlowRAM space (Bank E1 → 01xxxx in SlowRAM)
-      slowram_addr_bus = {2'b01, addr_bef};  // Direct mapping: $xxxx -> $01xxxx (18-bit)
-    end
   end
 
   // ============================================================================
@@ -545,8 +526,8 @@ module iigs
                      bank_bef, cpu_dout, shadow[0]);
             $display("0600_WRITE_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x", 
                      fastram_ce_int, slowram_ce_int, addr_bus);
-            $display("0600_WRITE_ADDR: fastram_addr=%06x slowram_addr=%06x", 
-                     fastram_addr_bus, slowram_addr_bus);
+            $display("0600_WRITE_ADDR: fastram_addr=%06x slowram_addr=bank[0]_addr", 
+                     fastram_addr_bus);
             $display("0600_WRITE_EN: fastram_we=%b slowram_we=%b mem_clk=%b CLK_14M=%b", 
                      we, slowram_we, mem_clk, CLK_14M);
             $display("0600_WRITE_TIMING: cpu_dout=%02x actual_write_data=%02x", 
@@ -569,8 +550,8 @@ module iigs
           // Enhanced read debugging - show exactly where data comes from
           $display("0600_READ_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x txt1_shadow=%b", 
                    fastram_ce_int, slowram_ce_int, addr_bus, txt1_shadow);
-          $display("0600_READ_ADDR: fastram_addr=%06x slowram_addr=%06x", 
-                   fastram_addr_bus, slowram_addr_bus);
+          $display("0600_READ_ADDR: fastram_addr=%06x slowram_addr=bank[0]_addr", 
+                   fastram_addr_bus);
           $display("0600_READ_DATA: cpu_din=%02x fastram_data=%02x slowram_data=%02x", 
                    cpu_din, fastram_datafromram, slowram_dout);
           $display("0600_READ_EN: slowram_we=%b mem_clk=%b slowram_ce_actual=%b", 
@@ -1481,7 +1462,7 @@ bram #(.widthad_a(17)) slowram
 `endif
 (
         .clock_a(CLK_14M),
-        .address_a(slowram_addr_bus[16:0]),
+        .address_a({bank[0], addr}),
         .data_a(dout),
         .q_a(slowram_dout),
         .wren_a(slowram_we),
