@@ -166,6 +166,10 @@ module iigs
   logic               qtr_irq_d;
   logic               scc_irq_d;
 
+  // VBL interrupt state tracking (like Clemens/GSplus)
+  logic               vbl_started;      // Prevents re-triggering within same VBL period
+  logic               vbl_interrupt_set; // Persistent VBL interrupt flag
+
   logic [7:0]         adb_din;
   logic [7:0]         adb_dout;
   logic [7:0]         adb_addr;
@@ -624,6 +628,10 @@ module iigs
       VGCINT<=0; //23
       INTEN<=0; //41
       INTFLAG<=0; // 46, 47  AJS TODO
+      
+      // Initialize VBL state tracking
+      vbl_started <= 1'b0;
+      vbl_interrupt_set <= 1'b0;
 
       STORE80<=0;
       RAMRD<=0;
@@ -776,9 +784,17 @@ module iigs
             12'h041: begin $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]}); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
             12'h047: begin 
-              $display("CLEAR INT: C047 write (CLRVBLINT) - clearing INTFLAG[4:3] vbl_irq=%0d V=%0d", vbl_irq, V);
+              $display("VBL_DEBUG: C047 WRITE - Before clear: INTFLAG[4:3]=%02b cpu_irq=%0d vbl_irq=%0d V=%0d H=%0d phi2=%0d", INTFLAG[4:3], cpu_irq, vbl_irq, V, H, phi2);
+              $display("VBL_DEBUG: C047 WRITE - cpu_irq components: VGC6&2=%0d VGC5&1=%0d EN3&F3=%0d EN4&F4=%0d snd=%0d", 
+                       (VGCINT[6]&VGCINT[2]), (VGCINT[5]&VGCINT[1]), (INTEN[3]&INTFLAG[3]), (INTEN[4]&INTFLAG[4]), snd_irq);
               // Apple IIgs behavior: C047 write clears VBL and quarter-second interrupts (bits 4:3)
-              INTFLAG[4:3] <= 2'b00; 
+              // Clear both INTFLAG bits and our persistent VBL interrupt flag
+              INTFLAG[4:3] <= 2'b00;
+              vbl_interrupt_set <= 1'b0;  // Clear persistent VBL flag
+              $display("VBL_DEBUG: C047 WRITE - Clear executed, vbl_interrupt_set cleared (phi2=%0d) V=%0d vbl_started=%0d", phi2, V, vbl_started);
+              // Debug: Show both old and new cpu_irq calculation for timing verification
+              $display("VBL_DEBUG: C047 WRITE - cpu_irq timing: current=%0d next=%0d INTFLAG[3]=%0d", 
+                       cpu_irq, (INTEN[3]&1'b0)|(VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[4]&INTFLAG[4])|snd_irq, INTFLAG[3]);
             end // clear the interrupts
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
@@ -1016,11 +1032,9 @@ module iigs
             end
             //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
             12'h047: begin 
-              $display("CLEAR INT: C047 write - clearing INTFLAG[4:3] (VBL/QTR) vbl_irq=%0d V=%0d", vbl_irq, V);
-              // Apple IIgs behavior: C047 write clears VBL and quarter-second interrupts (bits 4:3)  
-              // This matches emulator code: g_c046_val &= 0xe7 (clears bits 4,3)
-              INTFLAG[4:3] <= 2'b00;
-            end // clear the interrupts
+              io_dout <= 8'h00;  // C047 reads return 0 but don't clear interrupts
+              $display("VBL_DEBUG: C047 READ - No clear action (interrupts cleared only on write)");
+            end
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
             12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -1237,26 +1251,53 @@ module iigs
 `endif
     end
 
-    // Latch VBL, quarter-second, and SCC on rising edges only
-    // to avoid immediate reassert after a clear while source stays high
-    vbl_irq_d <= vbl_irq;
+    // VBL interrupt logic matching Clemens/GSplus approach  
+    // VBL starts at scanline 199 (like Clemens CLEM_VGC_VBL_NTSC_LOWER_BOUND)
+    // GSplus uses 192.0/262.0 ≈ scanline 192, so we'll use 199 for accuracy
+    // 
+    // CRITICAL: This logic must run on clock edge to avoid race conditions with C047 clearing
+    if (V >= 199 && V < 262) begin
+      // In VBL region  
+      if (!vbl_started) begin
+        // Just entered VBL - set vbl_started flag but don't immediately assert interrupt
+        vbl_started <= 1'b1;
+`ifdef SIMULATION
+        if (INTEN[3]) begin
+          $display("VBL_DEBUG: VBL period started at V=%0d H=%0d, deferring interrupt until CPU sampling window", V, H);
+        end else begin
+          $display("VBL_DEBUG: VBL period started but disabled (INTEN[3]=0) at V=%0d H=%0d", V, H);
+        end
+`endif
+      end
+      
+      // Set VBL interrupt only during CPU interrupt sampling windows
+      if (INTEN[3] && !vbl_interrupt_set && cpu_interrupt_sample_window) begin
+        vbl_interrupt_set <= 1'b1;
+        INTFLAG[3] <= 1'b1;
+`ifdef SIMULATION
+        $display("VBL_DEBUG: VBL interrupt SET at V=%0d H=%0d during CPU sampling window!", V, H);
+        $display("VBL_TIMING: SYNCHRONIZED - LAST_CYCLE=%0d EN=%0d CE=%0d RDY_IN=%0d I_flag=%0d",
+                 cpu_last_cycle_debug, cpu_en_debug, cpu_ce_debug, cpu_rdy_in_debug, cpu_psr_debug[2]);
+        $display("VBL_TIMING: CPU state when VBL set - PSR=%02h I_flag=%0d IRQ_ACTIVE=%0d GotInt=%0d",
+                 cpu_psr_debug, cpu_psr_debug[2], cpu_irq_active_debug, cpu_got_interrupt_debug);
+`endif
+      end
+    end else begin
+      // Not in VBL region (V < 199 or V >= 262) - reset vbl_started for next frame
+      if (vbl_started) begin
+        vbl_started <= 1'b0;
+`ifdef SIMULATION
+        $display("VBL_DEBUG: VBL period ended at V=%0d H=%0d, vbl_started reset", V, H);
+        if (vbl_interrupt_set) begin
+          $display("VBL_WARNING: VBL period ended but vbl_interrupt_set still HIGH! This means interrupt was never cleared.");
+        end
+`endif
+      end
+    end
+    
+    // Quarter-second interrupt (keep existing logic)
     qtr_irq_d <= qtrsecond_irq;
     scc_irq_d <= ~scc_irq_n;  // SCC uses active-low interrupt
-    
-`ifdef SIMULATION
-    // Debug VBL interrupt state transitions
-    if (vbl_irq != vbl_irq_d) begin
-      $display("VBL: vbl_irq %0d -> %0d (V=%0d H=%0d) INTEN[3]=%0d INTFLAG[3]=%0d", 
-               vbl_irq_d, vbl_irq, V, H, INTEN[3], INTFLAG[3]);
-    end
-`endif
-    
-    if ((vbl_irq & ~vbl_irq_d) & INTEN[3]) begin
-      INTFLAG[3]<=1'b1;
-`ifdef SIMULATION
-      $display("INTFLAG: set VBL (3) due vbl_irq rising edge at V=%0d H=%0d", V, H);
-`endif
-    end
     if ((qtrsecond_irq & ~qtr_irq_d) & INTEN[4]) begin
       INTFLAG[4]<=1'b1;
 `ifdef SIMULATION
