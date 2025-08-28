@@ -1270,16 +1270,12 @@ module iigs
 `endif
       end
       
-      // Set VBL interrupt only during CPU interrupt sampling windows
-      if (INTEN[3] && !vbl_interrupt_set && cpu_interrupt_sample_window) begin
+      // Set VBL interrupt when VBL starts and is enabled
+      if (INTEN[3] && !vbl_interrupt_set) begin
         vbl_interrupt_set <= 1'b1;
         INTFLAG[3] <= 1'b1;
 `ifdef SIMULATION
-        $display("VBL_DEBUG: VBL interrupt SET at V=%0d H=%0d during CPU sampling window!", V, H);
-        $display("VBL_TIMING: SYNCHRONIZED - LAST_CYCLE=%0d EN=%0d CE=%0d RDY_IN=%0d I_flag=%0d",
-                 cpu_last_cycle_debug, cpu_en_debug, cpu_ce_debug, cpu_rdy_in_debug, cpu_psr_debug[2]);
-        $display("VBL_TIMING: CPU state when VBL set - PSR=%02h I_flag=%0d IRQ_ACTIVE=%0d GotInt=%0d",
-                 cpu_psr_debug, cpu_psr_debug[2], cpu_irq_active_debug, cpu_got_interrupt_debug);
+        $display("VBL_DEBUG: VBL interrupt SET at V=%0d H=%0d", V, H);
 `endif
       end
     end else begin
