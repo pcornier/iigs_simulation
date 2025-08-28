@@ -1023,7 +1023,7 @@ void show_help() {
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
 	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
-	printf("  ./Vemu --stop-at-frame 1000   Stop simulation after frame 1000\n");
+	printf("  ./Vemu --stop-at-frame 300   Stop simulation after frame 300\n");
 }
 
 void save_screenshot(int frame_number) {
