@@ -173,7 +173,7 @@ module keyboard(
                 rep_timer <= 7000000;		// 0.5s
             end
 	    
-            if (akd == 1'b1)
+            if (akd == 1'b1 && key_pressed == 1'b0)  // Only repeat if key was read
             begin
                 rep_timer <= rep_timer - 1;
                 if (rep_timer == 0)
