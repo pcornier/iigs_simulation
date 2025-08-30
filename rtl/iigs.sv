@@ -1897,15 +1897,18 @@ rom #(.memfile("rom1/rom2.mem")) rom2(
 `endif
 
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
-wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~inhibit_cxxx;
+wire m2_bank = (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
+wire slot_ce = m2_bank && addr >= 'hc100 && addr <= 'hcfff && ~inhibit_cxxx;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
 wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
 //wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
-wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && is_internal && ~inhibit_cxxx;
+wire slot_internalrom_ce =  m2_bank && addr >= 'hc100 && addr < 'hcfff && is_internal && ~inhibit_cxxx;
 
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
 reg [7:0] io_select;
+reg [2:0] c800_slot;
+reg [7:0] c800_select;
 wire [7:0] rom1_dout, rom2_dout, romc_dout, romd_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
@@ -1914,15 +1917,32 @@ always @(*)
 begin
    device_select=8'h0;
    io_select=8'h0;
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io && ~inhibit_cxxx)
+   c800_select=8'h0;
+   if (m2_bank && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io && ~inhibit_cxxx)
    begin
-//	   $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
+	  if (phi0) $display("device_select addr[10:8] %x %x ISINTERNAL? ",addr[6:4],din);
           device_select[addr[6:4]]=1'b1;
   end
-   if ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~CXROM && ~inhibit_cxxx)
+   if (slot_ce && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~CXROM && ~inhibit_cxxx)
    begin
-//	   $display("io_select addr[10:8] %x din %x HDD_DO %x fastclk %x addr %x RD %x",addr[10:8],din,HDD_DO,fast_clk,addr,we);
+          if (phi0) $display("io_select addr[10:8] %x din %x HDD_DO %x addr %x RD %x SLTROMSEL %x",addr[10:8],din,HDD_DO,addr,we, SLTROMSEL);
           io_select[addr[10:8]]=1'b1;
+          c800_slot = addr[10:8];
+   end
+   else begin
+      if (addr == 16'hc74f)
+	$display("NO io_select addr[10:8] %x din %x HDD_DO %x addr %x RD %x is_internal %x CXROM %x inhibit_cxxx %x SLTROMSEL %x",
+		 addr[10:8],din,HDD_DO,addr,we, is_internal, CXROM, inhibit_cxxx, SLTROMSEL);
+   end
+   if (slot_ce && addr >= 'hc800 && addr < 'hcfff && c800_slot != 3'b0 && ~CXROM && ~inhibit_cxxx)
+   begin
+	  if (phi0) $display("c800_select addr[10:8] %x din %x HDD_DO %x addr %x RD %x",addr[10:8],din,HDD_DO,addr,we);
+          c800_select[c800_slot]=1'b1;
+  end
+   if (slot_ce && addr == 'hcfff && ~CXROM && ~inhibit_cxxx)
+   begin
+	  if (phi0) $display("slot c800 deactivated addr[10:8] %x din %x HDD_DO %x addr %x RD %x",addr[10:8],din,HDD_DO,addr,we);
+          c800_slot = 3'b0;
   end
 end
 `ifdef NOTDEFINED
@@ -2022,7 +2042,7 @@ vgc vgc(
 wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef : 8'h80;
 
 wire [7:0] din =
-  (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
+  (io_select[7] == 1'b1 | device_select[7] == 1'b1 | c800_select[7] == 1'b1) ? HDD_DO :
   rom1_ce ? rom1_dout :
   rom2_ce ? rom2_dout :
   romc_ce ? romc_dout :
@@ -2585,7 +2605,38 @@ wire ready_out;
   );
   `endif
 
-    // Legacy slot-7 HDD (supports 4 units)
+    localparam SCSI_DEVS = 1;
+
+    wire [31:0] scsicard_lba[SCSI_DEVS];
+    wire [7:0]  scsicard_buff_din[SCSI_DEVS];
+    assign HDD_SECTOR = scsicard_lba[0];
+    assign HDD_RAM_DO = scsicard_buff_din[0];
+
+    // Apple II SCSI Card
+    scsicard #(.DEVS(SCSI_DEVS)) scsicard(
+        .CLK_14M(CLK_14M),
+        .phi0(phi0),
+        .IO_SELECT(io_select[7]),
+        .DEVICE_SELECT(device_select[7]),
+        .C800_SELECT(c800_select[7]),
+        .RESET(reset),
+        .A(addr),
+        .RD(~we),
+        .D_IN(dout),
+        .D_OUT(HDD_DO),
+        .sd_lba(scsicard_lba),
+        .sd_rd(sd_rd),
+        .sd_wr(sd_wr),
+        .sd_ack(sd_ack),
+        .img_mounted(img_mounted),
+        .sd_buff_addr(HDD_RAM_ADDR),
+        .sd_buff_dout(HDD_RAM_DI),
+        .sd_buff_din(scsicard_buff_din),
+        .sd_buff_wr(HDD_RAM_WE)
+    );
+
+   /*
+   // Legacy slot-7 HDD 
     hdd hdd(
         .CLK_14M(CLK_14M),
         .phi0(phi2),    // Gate on CPU clock (ph2_en) not raw ph0 to prevent double-fire during sync waits
@@ -2609,6 +2660,7 @@ wire ready_out;
         .ram_do(HDD_RAM_DO),
         .ram_we(HDD_RAM_WE)
     );
+    */
 /*
     // Native SmartPort HDD on Slot 5 ($C0D0–$C0DF), no ROM
     sp_hdd sp_hdd(

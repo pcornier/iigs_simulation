@@ -96,8 +96,9 @@ V_SRC = \
 	$(RTL)/floppy_track.sv \
 	$(RTL)/iwm.v \
 	$(RTL)/vgc.v \
-	$(RTL)/hdd.v \
-	$(RTL)/dpram.sv \
+	$(RTL)/scsicard.sv \
+	$(RTL)/ncr5380.sv \
+	$(RTL)/scsi.v \
 	$(RTL)/video_timing.v \
 	$(RTL)/uart/rxuart.v \
 	$(RTL)/uart/txuart.v \
