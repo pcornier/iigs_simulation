@@ -961,7 +961,7 @@ module iigs
             12'h016: io_dout <= {ALTZP, key_keys};
             12'h017: io_dout <= {SLOTC3ROM, key_keys};
             12'h018: io_dout <= {STORE80, key_keys};
-            12'h019: io_dout <= {~VBlank, key_keys};
+            12'h019: io_dout <= {VBlank, key_keys};
             12'h01a: io_dout <= {TEXTG, key_keys};
             12'h01b: io_dout <= {MIXG, key_keys};
             12'h01c: io_dout <= {PAGE2, key_keys};

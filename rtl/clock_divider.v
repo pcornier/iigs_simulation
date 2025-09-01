@@ -39,6 +39,15 @@ reg [4:0] ph2_cycle_length;    // Current PH2 cycle length
 reg       sync_requested;      // Flag to request sync cycle
 reg       refresh_requested;   // Flag to request refresh cycle
 
+// Pipeline registers for clean PH2/PH0 synchronization (Option 3)
+reg [3:0] ph0_counter_prev;     // Previous cycle ph0_counter value
+reg       ph0_en_prev;          // Previous cycle ph0_en value  
+reg       ph0_state_prev;       // Previous cycle ph0_state value
+reg [3:0] ph0_counter_next;     // Next cycle ph0_counter value (for enable calculation)
+reg       slow_prev;            // Previous cycle slow state (to avoid assignment conflicts)  
+reg       ph2_sync_pulse;       // Debug signal to show sync pulses in VCD
+reg       ph2_en_prev;          // Proper variable to track ph2_en changes
+
 
 
 // CYAREG:
@@ -99,6 +108,14 @@ always @(posedge clk_14M) begin
         ph0_state <= 1'b0;
         slow <= 1'b0;
         slowMem <= 1'b0;
+        slow_prev <= 1'b0;
+        
+        // Reset pipeline registers
+        ph0_counter_prev <= 4'd0;
+        ph0_en_prev <= 1'b0;
+        ph0_state_prev <= 1'b0;
+        ph2_sync_pulse <= 1'b0;
+        ph2_en_prev <= 1'b0;
 	waitforC0C8<=1'b0;
 	waitforC0D8<=1'b0;
 	waitforC0E8<=1'b0;
@@ -118,6 +135,11 @@ always @(posedge clk_14M) begin
         ph2_cycle_length <= 5'd5;  // Default to fast cycle
         sync_requested <= 1'b0;
         refresh_requested <= 1'b0;
+        
+        // Reset pipeline registers
+        ph0_counter_prev <= 4'd0;
+        ph0_en_prev <= 1'b0;
+        ph0_state_prev <= 1'b0;
     end else begin
         slowMem <= 1'b0;
 
@@ -262,59 +284,126 @@ always @(posedge clk_14M) begin
         
         // PH0 generation (Apple II compatible 1MHz clock)
         // PH0 cycle: 7 ticks high, 7 ticks low (14 total = ~1MHz from 14MHz)
-        ph0_counter <= ph0_counter + 1'b1;
+        
+        // Calculate next ph0_counter value for enable generation
+        ph0_counter_next = ph0_counter + 1'b1;
         if (ph0_counter == 4'd13) begin
-            ph0_counter <= 4'd0;
+            ph0_counter_next = 4'd0;
         end
         
-        // PH0 state and enable generation
-        if (ph0_counter < 4'd7) begin
+        // Update ph0_counter register
+        ph0_counter <= ph0_counter_next;
+        
+        // PH0 state and enable generation using NEXT counter value
+        if (ph0_counter_next < 4'd7) begin
             ph0_state <= 1'b0;  // PH0 low phase
-            ph0_en <= (ph0_counter == 4'd0);  // Enable at start of low phase
+            ph0_en <= (ph0_counter_next == 4'd0);  // Enable at start of low phase
         end else begin
             ph0_state <= 1'b1;  // PH0 high phase  
-        //    ph0_en <= (ph0_counter == 4'd7); // Enable at start of high phase
+            ph0_en <= 1'b0;  // Explicitly clear enable during high phase
+        //    ph0_en <= (ph0_counter_next == 4'd7); // Enable at start of high phase
         end
         
-        // Q3 generation 
-        q3_en <= (ph0_counter == 4'd0) || (ph0_counter == 4'd7);
+        // Q3 generation using next counter value
+        q3_en <= (ph0_counter_next == 4'd0) || (ph0_counter_next == 4'd7);
+        
+        // Update pipeline registers AFTER PH0 logic is complete
+        // This ensures ph0_en_prev reflects the ph0_en that was calculated this cycle
+        // ph0_counter_prev should store the CURRENT value (when ph0_en was calculated)
+        ph0_counter_prev <= ph0_counter;
+        ph0_en_prev <= ph0_en; 
+        ph0_state_prev <= ph0_state;
+        slow_prev <= slow;  // Capture slow state for next cycle's PH2 logic
       
 	// If we are in slow -- we need to change the PH2 clock to be 1.024
 	// Mhz, and sync it up with the PH0 clock
 	//
-	if (slow==1'b1 || slowMem==1'b1) begin
-		// BUG - THIS MAKES PH2 one cycle after ph0_en
-		//if (ph2_counter==4'd4 && ph0_en == 1'b1)
-      if (ph2_counter==4'd4 && ph0_counter == 4'd0)		
-		begin
-			ph2_en <= 1'b1;
-			ph2_counter <= 4'd0;
-		end else if (ph2_counter==4'd4 && ph0_en == 1'b0)
-		begin
-			ph2_en <= 1'b0;
-			// don't increment the counter, wait
-		end else
-		begin
-			ph2_en <= 1'b0;
-        		ph2_counter <= ph2_counter + 1'b1;
-        		// Safety clamp to prevent counter from exceeding 4 in slow mode
-        		if (ph2_counter >= 4'd4) begin
-        		    ph2_counter <= 4'd4;  // Hold at waiting state
-        		end
-		end
-	end else begin	
+`ifdef DEBUG_CLK_TIMING
+	// Debug: Check slow mode evaluation every 100 cycles
+	if (clk_14M_counter[6:0] == 7'd0) begin
+		$display("CLKDIV: slow=%b slowMem=%b condition=%b t=%0t", 
+		         slow, slowMem, (slow==1'b1 || slowMem==1'b1), $time);
+	end
+`endif
 
-        // PH2 generation (simplified 5 clock cycle)
+	// Use the CURRENT slow state but prevent override by making branches exclusive  
+	if (slow==1'b1 || slowMem==1'b1) begin
+		// Option 3: Slow mode PH2 synchronization with PH0 pipeline
+		// PH2 should ONLY pulse when ph0_en_prev was asserted (clean sync)
+		
+`ifdef DEBUG_CLK_TIMING
+		// Only debug when we have a potential sync event
+		if (ph2_counter >= 4'd4) begin
+			$display("CLKDIV: SLOW PH2 sync check - ph2_counter=%0d ph0_counter_next=%0d slow=%0b slowMem=%0b t=%0t", 
+			         ph2_counter, ph0_counter_next, slow, slowMem, $time);
+		end
+`endif
+		
+		// Check if we should pulse PH2 based on ph0_counter_next sync
+		if (ph2_counter >= 4'd4 && ph0_counter_next == 4'd0) begin
+			// PH2 sync pulse: synchronized with PH0_EN (same cycle, not delayed)
+			ph2_en <= 1'b1;
+			ph2_counter <= 4'd1;  // Start at 1, not 0, to avoid immediate retrigger
+			ph2_sync_pulse <= 1'b1;  // Debug signal - sync pulse occurred
+`ifdef DEBUG_CLK_TIMING
+			$display("CLKDIV: SYNC BRANCH EXECUTED - ph2_en set to 1, ph2_counter set to 1 at t=%0t", $time);
+			$display("CLKDIV: PH2 sync pulse - ph0_counter=%0d ph0_counter_next=%0d ph2_counter=%0d t=%0t", 
+			         ph0_counter, ph0_counter_next, ph2_counter, $time);
+`endif
+		end else if (ph2_counter >= 4'd4 && ph0_counter_next != 4'd0) begin
+			// Wait for PH0 sync - hold counter at 4, clear enable
+			ph2_en <= 1'b0;
+			ph2_counter <= 4'd4;
+			ph2_sync_pulse <= 1'b0;  // Debug signal - no sync pulse
+`ifdef DEBUG_CLK_TIMING
+			$display("CLKDIV: WAIT BRANCH executed - ph2_en=0, ph2_counter=4 (waiting for ph0_counter_next=0) t=%0t", $time);
+`endif
+		end else begin
+			// Normal increment toward sync point, clear enable
+			ph2_en <= 1'b0;
+			ph2_counter <= ph2_counter + 1'b1;
+			ph2_sync_pulse <= 1'b0;  // Debug signal - no sync pulse
+`ifdef DEBUG_CLK_TIMING
+			$display("CLKDIV: NORMAL BRANCH executed - ph2_en=0, ph2_counter+1=%0d t=%0t", ph2_counter + 1, $time);
+`endif
+		end
+	end else if (slow==1'b0 && slowMem==1'b0) begin	
+        // Fast mode PH2 generation (simplified 5 clock cycle)
+        // ONLY execute if definitively not in slow mode
+`ifdef DEBUG_CLK_TIMING
+        $display("CLKDIV: FAST BRANCH executing - slow=%0b slowMem=%0b ph2_counter=%0d t=%0t", 
+                 slow, slowMem, ph2_counter, $time);
+`endif
         ph2_counter <= ph2_counter + 1'b1;
         if (ph2_counter >= 4'd4) begin  // Fix: handle counter overflow from slow mode
             ph2_counter <= 4'd0;
         end
         
-        // PH2 enable generation (5 clock cycles long)
+        // PH2 enable generation (5 clock cycles long) - FAST MODE ONLY
         ph2_en <= (ph2_counter == 4'd0);
+        ph2_sync_pulse <= 1'b0;  // Debug signal - no sync pulse in fast mode
+`ifdef DEBUG_CLK_TIMING
+        $display("CLKDIV: FAST BRANCH ph2_en assignment - ph2_en=%0b (ph2_counter=%0d == 0?) t=%0t", 
+                 (ph2_counter == 4'd0), ph2_counter, $time);
+`endif
+`ifdef DEBUG_CLK_TIMING
+        if (ph2_counter == 4'd0) begin
+            $display("CLKDIV: PH2 fast mode pulse - ph2_counter=%0d t=%0t", ph2_counter, $time);
+        end
+`endif
+end else begin
+`ifdef DEBUG_CLK_TIMING
+        $display("CLKDIV: IMPOSSIBLE BRANCH - neither slow nor fast conditions met! slow=%0b slowMem=%0b t=%0t", slow, slowMem, $time);
+`endif
 end
         
 `ifdef SIMULATION
+        // Debug: Track all ph2_en changes 
+        //if (ph2_en != ph2_en_prev) begin
+        //    $display("CLKDIV: PH2_EN changed to %b - slow=%b slowMem=%b ph2_counter=%0d ph0_en_prev=%0b t=%0t", 
+        //             ph2_en, slow, slowMem, ph2_counter, ph0_en_prev, $time);
+        //end
+        
         // Accumulate simple stats about PH2 pulses while slow/fast
         if (ph2_en) begin
             if (slow || slowMem) slow_ph2_cnt <= slow_ph2_cnt + 1; else fast_ph2_cnt <= fast_ph2_cnt + 1;
@@ -325,7 +414,9 @@ end
             $display("CLKDIV: slow=%0d slowMem=%0d -> slow=%0d slowMem=%0d ph0_cnt=%0d ph2_cnt=%0d t=%0t", prev_slow, prev_slowMem, slow, slowMem, ph0_counter, ph2_counter, $time);
             if (!slow && !slowMem) begin
                 // exiting slow state: dump mini-stats
+`ifdef DEBUG_CLK_TIMING
                 $display("CLKDIV: slow phase stats: ph2=%0d 14Mcy=%0d; fast so far: ph2=%0d 14Mcy=%0d (last_event=%0d)", slow_ph2_cnt, slow_14m_cycles, fast_ph2_cnt, fast_14m_cycles, last_event);
+`endif
                 slow_ph2_cnt <= 0;
                 slow_14m_cycles <= 0;
                 last_event <= 0;
@@ -333,6 +424,7 @@ end
             prev_slow <= slow;
             prev_slowMem <= slowMem;
         end
+        ph2_en_prev <= ph2_en;  // Update ph2_en_prev for proper change detection
 `endif
     end
 end
