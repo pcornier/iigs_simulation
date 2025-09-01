@@ -276,11 +276,13 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
 ///////////////////////   CLOCKS   ///////////////////////////////
 
 wire clk_mem,clk_sys,clk_vid,locked,clk_28;
+wire clk_57;
+assign clk_vid = clk_28;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_vid),//57.272728
+	.outclk_0(clk_57),//57.272728
 	.outclk_1(clk_28),//28.636364
 	.outclk_2(clk_mem),//114.545456
 	.outclk_3(clk_sys),//14.
