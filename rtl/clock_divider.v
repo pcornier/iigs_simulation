@@ -128,6 +128,9 @@ always @(posedge clk_14M) begin
 	if (cyareg[7] == 1'b0) begin
 		slow <= 1;
 	end else begin
+		// Default to fast mode when CYAREG[7]=1 (unless overridden by slot conditions)
+		slow <= 0;
+		
 		// Check for slot-specific slow mode triggers (can be multiple slots enabled)
         if (cyareg[0] == 1'b1 && IO && addr == 16'hC0C9) begin
             slow <= 1;
@@ -170,43 +173,38 @@ always @(posedge clk_14M) begin
 `endif
         end
 		
+		// Keep slow mode active if any waitfor flags are set
+		if (waitforC0C8 || waitforC0D8 || waitforC0E8 || waitforC0F8 || waitforC041) begin
+			slow <= 1;
+		end
+		
 		// Check for return to fast mode
         if (waitforC0C8 && IO && addr == 16'hC0C8) begin
             waitforC0C8 <= 0;
-				if (!waitforC041 && !waitforC0F8 && !waitforC0D8 && !waitforC0E8)
-				            slow <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0C8 (slot4) t=%0t", $time);
 `endif
         end
         if (waitforC0D8 && IO && addr == 16'hC0D8) begin
             waitforC0D8 <= 0;
-				if (!waitforC0E8 && !waitforC0F8 && !waitforC041&& !waitforC0C8)
-				            slow <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0D8 (slot5) t=%0t", $time);
 `endif
         end
         if (waitforC0E8 && IO && addr == 16'hC0E8) begin
             waitforC0E8 <= 0;
-				if (!waitforC041 && !waitforC0F8 && !waitforC0D8 && !waitforC0C8)
-				            slow <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0E8 (slot6) t=%0t", $time);
 `endif
         end
         if (waitforC0F8 && IO && addr == 16'hC0F8) begin
             waitforC0F8 <= 0;
-				if (!waitforC041 && !waitforC0E8 && !waitforC0D8 && !waitforC0C8)
-				            slow <= 0;
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C0F8 (slot7) t=%0t", $time);
 `endif
         end
         if (waitforC041 && IO && addr == 16'hC041) begin
             waitforC041<= 0;
-				if (!waitforC0F8 && !waitforC0E8 && !waitforC0D8 && !waitforC0C8)
-				            slow <= 0;
 
 `ifdef SIMULATION
             $display("CLKDIV: slow exit via C041 (keyboard) t=%0t", $time);
@@ -299,12 +297,16 @@ always @(posedge clk_14M) begin
 		begin
 			ph2_en <= 1'b0;
         		ph2_counter <= ph2_counter + 1'b1;
+        		// Safety clamp to prevent counter from exceeding 4 in slow mode
+        		if (ph2_counter >= 4'd4) begin
+        		    ph2_counter <= 4'd4;  // Hold at waiting state
+        		end
 		end
 	end else begin	
 
         // PH2 generation (simplified 5 clock cycle)
         ph2_counter <= ph2_counter + 1'b1;
-        if (ph2_counter == 4'd4) begin
+        if (ph2_counter >= 4'd4) begin  // Fix: handle counter overflow from slow mode
             ph2_counter <= 4'd0;
         end
         

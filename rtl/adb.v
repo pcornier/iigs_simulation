@@ -104,6 +104,10 @@ reg [7:0] held_apple_key;            // The Apple keycode for the held key
 reg [7:0] held_iie_char;             // The Apple IIe ASCII for the held key
 reg [15:0] repeat_vbl_target;        // 60Hz count when next repeat should occur (16-bit to match hz60_count)
 reg repeat_timer_active;             // Whether the repeat timer is running
+reg k_register_updated;              // Flag: K register updated for current keypress (prevents duplicates)  
+reg fifo_key_added;                  // Flag: Key added to FIFO for current keypress (prevents duplicates)
+reg c010_processed_this_strobe;      // Flag: C010 write already processed this strobe transaction
+reg prev_strobe;                     // Previous strobe value to detect transaction boundaries
 
 // 60Hz clock divider for proper key repeat timing (14MHz / 233333 ≈ 60Hz)
 reg [17:0] clk_60hz_counter;         // Counter for 60Hz generation (needs 18 bits for 233333)
@@ -558,6 +562,7 @@ always @(posedge CLK_14M) begin
     apple_ctrl <= 1'b0;
     akd <= 1'b0;
     K <= 8'd0;
+    kbd_strobe <= 1'b0;
     
     // Initialize ADB devices
     device_present <= 16'b0000_0000_0000_1100;  // Devices 2 (kbd) and 3 (mouse) present
@@ -611,6 +616,10 @@ always @(posedge CLK_14M) begin
     held_iie_char <= 8'd0;
     repeat_vbl_target <= 16'd0;
     repeat_timer_active <= 1'b0;
+    k_register_updated <= 1'b0;
+    fifo_key_added <= 1'b0;
+    c010_processed_this_strobe <= 1'b0;
+    prev_strobe <= 1'b0;
     
     // Initialize 60Hz clock divider
     clk_60hz_counter <= 18'd0;
@@ -630,6 +639,14 @@ always @(posedge CLK_14M) begin
     ps2_mouse_prev <= ps2_mouse;
     ps2_key_toggle_prev <= ps2_key[10];
     ps2_mouse_toggle_prev <= ps2_mouse[24];
+    
+    // Track strobe signal to detect transaction boundaries
+    prev_strobe <= strobe;
+    
+    // Clear C010 processing flag when strobe goes low (end of bus transaction)
+    if (prev_strobe && !strobe) begin
+      c010_processed_this_strobe <= 1'b0;
+    end
     
     // Generate 60Hz enable pulse from 14MHz clock
     clk_60hz_enable <= 1'b0;  // Default to no pulse
@@ -714,11 +731,12 @@ always @(posedge CLK_14M) begin
               
             end
             
-            // Add to keyboard FIFO if there's space
-            if (kbd_fifo_count < MAX_KBD_BUF) begin
+            // Add to keyboard FIFO if there's space - prevent multiple additions per keypress
+            if (kbd_fifo_count < MAX_KBD_BUF && !fifo_key_added) begin
               kbd_fifo[kbd_fifo_head] <= temp_apple_key;
               kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
               kbd_fifo_count <= kbd_fifo_count + 1;
+              fifo_key_added <= 1'b1;  // Mark that we've added this key to FIFO
               
               // If no current key, load immediately
               if (kbd_fifo_count == 0) begin
@@ -728,10 +746,20 @@ always @(posedge CLK_14M) begin
               valid_kbd <= 1'b1;
               device_data_pending[2] <= 8'h01;
               
-              // Update Apple IIe compatibility registers
-              if (temp_iie_char != 8'hFF) begin
-                K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
-                akd <= 1'b1;  // Any key down
+              // Update Apple IIe compatibility registers - prevent multiple updates per keypress
+              if (temp_iie_char != 8'hFF && !k_register_updated) begin
+                // Check if this would be a duplicate of the current K register value
+                if (K[6:0] != temp_iie_char[6:0]) begin
+                  $display("ADB: Setting K register for new keypress: PS2=%03h Apple=%02h ASCII=%02h K=%02h", ps2_key[8:0], temp_apple_key, temp_iie_char, {1'b1, temp_iie_char[6:0]});
+                  K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
+                  akd <= 1'b1;  // Any key down
+                  k_register_updated <= 1'b1;  // Mark that we've updated K for this keypress
+                end else begin
+                  $display("ADB: BLOCKED duplicate K register value: current K=%02h, attempted=%02h", K, {1'b1, temp_iie_char[6:0]});
+                  k_register_updated <= 1'b1;  // Still mark as updated to prevent further attempts
+                end
+              end else if (temp_iie_char != 8'hFF && k_register_updated) begin
+                $display("ADB: BLOCKED duplicate K register update for PS2=%03h (k_updated=%b)", ps2_key[8:0], k_register_updated);
               end
             end
           end else begin
@@ -747,6 +775,8 @@ always @(posedge CLK_14M) begin
               held_apple_key <= 8'd0;
               held_iie_char <= 8'd0;
               repeat_vbl_target <= 16'd0;
+              k_register_updated <= 1'b0;  // Clear the flag so next keypress can update K
+              fifo_key_added <= 1'b0;      // Clear the flag so next keypress can be added to FIFO
             end
             
             akd <= 1'b0;  // Clear any key down
@@ -760,7 +790,7 @@ always @(posedge CLK_14M) begin
     end
     
     // Clemens approach: Check if held key should repeat - now using proper 60Hz timing!
-    if (ps2_key_held && repeat_timer_active && clk_60hz_enable && (hz60_count >= repeat_vbl_target)) begin
+    if (ps2_key_held && repeat_timer_active && clk_60hz_enable && (hz60_count == repeat_vbl_target)) begin
       // Time to repeat! Add the held key to the FIFO if there's space
 `ifdef SIMULATION
       $display("ADB: REPEAT TRIGGER hz60=%0d target=%0d PS2=%03h fifo=%0d", hz60_count, repeat_vbl_target, held_ps2_key, kbd_fifo_count);
@@ -778,11 +808,8 @@ always @(posedge CLK_14M) begin
         valid_kbd <= 1'b1;
         device_data_pending[2] <= 8'h01;
         
-        // Update Apple IIe compatibility registers with repeat
-        if (held_iie_char != 8'hFF) begin
-          K <= {1'b1, held_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
-          akd <= 1'b1;  // Any key down
-        end
+        // Key repeats should NOT update K register directly - they go through FIFO 
+        // The K register will be updated when the FIFO is processed by C010 reads
       end
       
       // ALWAYS update the target, even if FIFO is full - this prevents infinite repeats
@@ -847,7 +874,12 @@ always @(posedge CLK_14M) begin
     
     // Key repeat moved back to $C000 reads - no background repeat generation
     
-    // Address decoding and register access
+    // Address decoding and register access  
+    if (strobe) begin
+`ifdef ADB_DEBUG
+      $display("ADB MODULE: strobe=1, addr=0x%02h (%d), rw=%b", addr, addr, rw);
+`endif
+    end
     case (addr)
 
       8'h25: begin
@@ -859,6 +891,9 @@ always @(posedge CLK_14M) begin
       end
 
       8'h26: begin
+`ifdef ADB_DEBUG
+        $display("DEBUG: ADB 26 case entered, rw=%b cen=%b strobe=%b", rw, cen, strobe);
+`endif
         // Read $C026 - ADB Command/Data Register
         if (rw) begin
           case (state)
@@ -880,6 +915,9 @@ always @(posedge CLK_14M) begin
         end
         // Write $C026 - ADB Commands
         else if (cen & strobe) begin
+`ifdef ADB_DEBUG
+          $display("ADB_MODULE_WR_C026: cen=%b strobe=%b din=%02h [PROCESSING]", cen, strobe, din);
+`endif
           case (state)
 
             IDLE: begin
@@ -1164,10 +1202,17 @@ always @(posedge CLK_14M) begin
               end
             end
           endcase
+        end else if (strobe) begin
+`ifdef ADB_DEBUG
+          $display("ADB_MODULE_WR_C026: cen=%b strobe=%b din=%02h [BLOCKED - CEN NOT HIGH]", cen, strobe, din);
+`endif
         end
       end
 
       8'h27: begin
+`ifdef ADB_DEBUG
+        $display("DEBUG: ADB 27 case entered, rw=%b", rw);
+`endif
         // $C027 - ADB Control Register  
         if (rw) begin
           // Read $C027 - Status bits
@@ -1181,12 +1226,17 @@ always @(posedge CLK_14M) begin
             mouse_coord,           // bit 1: mouse coordinate flag
             cmd_full               // bit 0: command full
           };
+`ifdef ADB_DEBUG
+          $display("DEBUG: ADB 27 READ: valid_kbd=%b, kbd_int=%b, pending_data=%d, cmd_full=%b -> dout=0x%02h", 
+                   valid_kbd, kbd_int, pending_data, cmd_full, 
+                   {valid_mouse_data, mouse_int, pending_data > 0 ? 1'b1 : 1'b0, data_int, valid_kbd, kbd_int, mouse_coord, cmd_full});
+`endif
           
           // Auto-clear valid_mouse_data if it's been read while no pending mouse data
           if (valid_mouse_data && device_data_pending[3] == 0) begin
             valid_mouse_data <= 1'b0;
           end
-        end else begin
+        end else if (cen & strobe) begin
           // Write $C027 - Interrupt enables
           mouse_int <= din[6];
           data_int <= din[4];
@@ -1204,16 +1254,22 @@ always @(posedge CLK_14M) begin
       8'h10: begin  // $C010 - Keyboard strobe clear
         if (rw) begin
           dout <= K;
-        end else if (cen & strobe) begin
+        end else if (cen & strobe & !c010_processed_this_strobe) begin
+`ifdef ADB_DEBUG
+          $display("ADB C010 WRITE PROCESSED (cen=%b, strobe=%b, processed_flag=%b) - processing C010 clear", cen, strobe, c010_processed_this_strobe);
+`endif
+          $display("ADB C010: K before clear = %02h, fifo_count=%d, k_updated=%b, fifo_added=%b", K, kbd_fifo_count, k_register_updated, fifo_key_added);
+          c010_processed_this_strobe <= 1'b1;  // Mark that we processed C010 this strobe transaction
           K <= {1'b0, K[6:0]};  // Clear strobe bit
           kbd_strobe <= 1'b0;  // Clear ADB strobe
+          fifo_key_added <= 1'b0;      // Clear flag to allow next key to be added to FIFO
           
-          // Advance FIFO to next character
+          // Advance FIFO to next character  
           if (kbd_fifo_count > 0) begin
             kbd_fifo_tail <= (kbd_fifo_tail + 1) % MAX_KBD_BUF;
             kbd_fifo_count <= kbd_fifo_count - 1;
             
-            // Load next character if available
+            // Load next character if available, with simple duplicate detection
             if (kbd_fifo_count > 1) begin
               // Convert next FIFO entry to Apple IIe ASCII
               reg [7:0] next_char;
@@ -1221,12 +1277,38 @@ always @(posedge CLK_14M) begin
                 kbd_fifo[(kbd_fifo_tail + 1) % MAX_KBD_BUF][6:0], 
                 shift_down, ctrl_down, caps_lock_state
               );
-              K <= {1'b1, next_char[6:0]};  // Set strobe for next character
-              kbd_strobe <= 1'b1;
+              
+              // Check if next character is a duplicate and skip it
+              if (next_char[6:0] == K[6:0]) begin
+                $display("ADB C010: Next FIFO char is duplicate (%02h), skipping and clearing FIFO", next_char);
+                // Just clear the entire remaining FIFO to prevent any more duplicates
+                kbd_fifo_count <= 4'd0;
+                kbd_fifo_tail <= kbd_fifo_head;
+                akd <= 1'b0;
+                k_register_updated <= 1'b0;
+              end else begin
+                // Next character is different, load it normally
+                K <= {1'b1, next_char[6:0]};
+                kbd_strobe <= 1'b1;
+                $display("ADB C010: Loaded next FIFO char=%02h (different from current)", next_char);
+                // Keep k_register_updated = 1 since we just loaded another character
+              end
             end else begin
               akd <= 1'b0;  // Clear any key down status
+              k_register_updated <= 1'b0;  // Only clear flag when FIFO is empty
             end
+          end else begin
+            k_register_updated <= 1'b0;  // Clear flag when FIFO is completely empty
           end
+        end else if (cen & strobe & c010_processed_this_strobe) begin
+`ifdef ADB_DEBUG
+          $display("ADB C010 WRITE REJECTED - already processed this strobe transaction (cen=%b, strobe=%b)", cen, strobe);
+`endif
+        end else if (!cen | !strobe) begin
+          // Debug when C010 write is not processed due to timing
+`ifdef ADB_DEBUG
+          if (strobe) $display("ADB C010 WRITE IGNORED - cen=%b strobe=%b (waiting for both)", cen, strobe);
+`endif
         end
       end
       

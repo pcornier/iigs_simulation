@@ -184,9 +184,18 @@ long log_index;
 
 bool writeLog(const char* line)
 {
+	// Always print to stdout (for log files)
+	printf("%s\n",line);
+
+	// Only do memory-intensive operations when debug_6502 is enabled
 	if (debug_6502) {
-		// Write to cpu log
+		// Write to cpu log vector for GUI/debugging
 		log_cpu.push_back(line);
+		
+		// Prevent unbounded memory growth - keep only last 10000 entries
+		if (log_cpu.size() > 10000) {
+			log_cpu.erase(log_cpu.begin(), log_cpu.begin() + 5000);
+		}
 
 		// Compare with MAME log
 		bool match = true;
@@ -194,7 +203,6 @@ bool writeLog(const char* line)
 		std::string c_line = std::string(line);
 		std::string c = "%6d  CPU > " + c_line;
 		//printf("%s (%x)\n",line,ins_in[0]); // this has the instruction number
-		printf("%s\n",line);
 
 		if (log_index < log_mame.size()) {
 			std::string m_line = log_mame.at(log_index);
@@ -916,7 +924,10 @@ int verilate() {
 						if (0x011B==VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC)
 						   log.append(fmt::format("D={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP));
 							
-						console.AddLog(log.c_str());
+						// Only add to console log when debug_6502 is enabled (saves memory)
+						if (debug_6502) {
+							console.AddLog(log.c_str());
+						}
 					}
 
 					if ((vpa || vda) && !(vpa == 0 && vda == 1)) {
@@ -1019,11 +1030,13 @@ void show_help() {
 	printf("                                (comma-separated list, e.g., 100,200,300)\n");
 	printf("  -screenshot <frames>          Legacy form of --screenshot (deprecated)\n");
 	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
-	printf("  --selftest                    Enable self-test mode\n\n");
+	printf("  --selftest                    Enable self-test mode\n");
+	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
 	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
 	printf("  ./Vemu --stop-at-frame 300   Stop simulation after frame 300\n");
+	printf("  ./Vemu --selftest --no-cpu-log    Run selftest without CPU logging\n");
 }
 
 void save_screenshot(int frame_number) {
@@ -1104,6 +1117,9 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
 			printf("Self-test mode enabled - will simulate Command+Option+Control+Reset\n");
+		} else if (strcmp(argv[i], "--no-cpu-log") == 0) {
+			debug_6502 = false;
+			printf("CPU log memory storage disabled to save memory (stdout traces still enabled)\n");
 		}
 	}
 
