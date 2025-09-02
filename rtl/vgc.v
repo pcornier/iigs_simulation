@@ -768,10 +768,11 @@ else
 
 
 // Mode-dependent border generation (updated for 704-pixel visible area)
-// Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total
+// Layout: |Left Border(40px)|Active Display(560px)|Right Border(104px)| = 704 total for Apple II
+// Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total for SHRG
 // Outside total screen area OR inside Apple II mode margin areas
 if ((H < 'd32 || H > 'd703 || V < 'd32 || V > 'd207) ||
-    (!NEWVIDEO[7] && ((H >= 'd32 && H < 'd72) || (H >= 'd664 && H <= 'd703))))
+    (!NEWVIDEO[7] && ((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd703))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -801,17 +802,24 @@ end
 
 //assign a = chrom_data_out[chpos_x[2:0]];
 // Window coordinates derived from H and V
-wire [9:0] window_x_w = (H >= 32) ? H - 32 : 10'b0;  // Enable for memory addressing
+// Apple II modes: Active display H=72-632 (560 pixels for 40 chars × 14 pixels)
+// SHRG modes: Active display H=32-672 (640 pixels)
+wire [9:0] window_x_w = NEWVIDEO[7] ? 
+    ((H >= 32) ? H - 32 : 10'b0) :          // SHRG: start at H=32
+    ((H >= 72) ? H - 72 : 10'b0);           // Apple II: start at H=72
 wire [9:0] window_y_w = (V >= 32) ? V - 32 : 10'b0;  // Updated for new V=32 start
 
+// Apple II coordinate mapping: Limit to valid 192-line range for memory addressing
+// Apple II expects y coordinates 0-191, but we have window_y_w 0-199
+wire [7:0] apple_ii_y_clamped = (window_y_w > 191) ? 8'd191 : window_y_w[7:0];
+
 // GR signal calculation for mixed mode support  
-// Mixed mode should switch to text at y=160 in Apple II coordinates
-// With V=32 timing: window_y_w=144 corresponds to original y=160
-wire mixed_mode_active = (window_y_w >= 144) & MIXG;
+// Mixed mode should switch to text at y=160 in Apple II coordinates (192-line system)
+wire mixed_mode_active = (apple_ii_y_clamped >= 160) & MIXG;
 wire GR = ~(TEXTG | mixed_mode_active);
 
-// Apple II address generation using lineaddr() function
-wire [15:0] lineaddr_result = lineaddr(window_y_w);
+// Apple II address generation using lineaddr() function with clamped coordinates
+wire [15:0] lineaddr_result = lineaddr({2'b0, apple_ii_y_clamped});
 wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + chram_x;
 
 // Text80 mode needs aux memory bank switching
@@ -819,8 +827,8 @@ wire text80_mode = (!GR & EIGHTYCOL);
 wire use_aux_bank = text80_mode & aux[16];
 wire [22:0] video_addr_ii = use_aux_bank ? video_addr_ii_base + 23'h10000 : video_addr_ii_base;
 
-// Character Y position within 8-pixel character cell
-wire [2:0] chpos_y = window_y_w[2:0];
+// Character Y position within 8-pixel character cell (using clamped coordinates)
+wire [2:0] chpos_y = apple_ii_y_clamped[2:0];
 assign chrom_addr = { ALTCHARSET,video_data[7:0], chpos_y};
 
 
