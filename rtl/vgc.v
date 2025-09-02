@@ -723,8 +723,8 @@ begin
 				else if (H < 32)
 					pixel_counter <= 11'b0; // Reset at start of each line
 			end else begin
-				// Apple II modes: use centered 560-pixel area with borders (adjusted for 704 visible)
-				if (H >= 72 && H < 632 && V >= 32 && V < 232)
+				// Apple II modes: use centered 560-pixel area with 192 active lines (V=32 to V=223)
+				if (H >= 72 && H < 632 && V >= 32 && V < 224)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < 72)
 					pixel_counter <= 11'b0; // Reset at start of each line
@@ -771,8 +771,10 @@ else
 // Layout: |Left Border(40px)|Active Display(560px)|Right Border(104px)| = 704 total for Apple II
 // Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total for SHRG
 // Outside total screen area OR inside Apple II mode margin areas
-if ((H < 'd32 || H > 'd703 || V < 'd32 || V > 'd207) ||
-    (!NEWVIDEO[7] && ((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd703))))
+// For Apple II modes: V=32 to V=223 (192 lines), border V=224-231 (8 lines top+bottom)
+// For SHRG modes: V=32 to V=231 (200 lines), border V=232+ 
+if ((H < 'd32 || H > 'd703 || V < 'd32 || V > 'd231) ||
+    (!NEWVIDEO[7] && (((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd703)) || (V >= 'd224 && V <= 'd231))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
