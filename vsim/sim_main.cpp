@@ -1021,6 +1021,10 @@ bool screenshot_mode = false;
 int stop_at_frame = -1;
 bool stop_at_frame_enabled = false;
 
+// Disk image support
+// ---------------------------
+std::string disk_image = "hd.hdv";
+
 void show_help() {
 	printf("Apple IIgs Hardware Simulator\n");
 	printf("Usage: ./Vemu [options]\n\n");
@@ -1031,11 +1035,15 @@ void show_help() {
 	printf("  -screenshot <frames>          Legacy form of --screenshot (deprecated)\n");
 	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
 	printf("  --selftest                    Enable self-test mode\n");
-	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n\n");
+	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
+	printf("  --disk <filename>             Use specified disk image (default: hd.hdv)\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
 	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
 	printf("  ./Vemu --stop-at-frame 300   Stop simulation after frame 300\n");
+	printf("  ./Vemu --disk totalreplay.hdv  Use totalreplay.hdv as disk image\n");
+	printf("  ./Vemu --disk pd.hdv --screenshot 50 --stop-at-frame 100\n");
+	printf("                                Use pd.hdv, take screenshot at frame 50, stop at 100\n");
 	printf("  ./Vemu --selftest --no-cpu-log    Run selftest without CPU logging\n");
 }
 
@@ -1120,6 +1128,10 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--no-cpu-log") == 0) {
 			debug_6502 = false;
 			printf("CPU log memory storage disabled to save memory (stdout traces still enabled)\n");
+		} else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
+			disk_image = argv[i + 1];
+			printf("Using disk image: %s\n", disk_image.c_str());
+			i++; // Skip the next argument since it's the filename
 		}
 	}
 
@@ -1214,8 +1226,8 @@ int main(int argc, char** argv, char** env) {
 
     // Mount a test floppy image into Drive 1 to exercise IWM path in sim
     //blockdevice.MountDisk("floppy.nib", 0);
-    // Optionally, mount an HDD image into slot 7 backend
-   blockdevice.MountDisk("hd.hdv",1);
+    // Mount HDD image into slot 7 backend (using specified disk image)
+   blockdevice.MountDisk(disk_image.c_str(), 1);
 
        // iwm_init();
        // iwm_reset();
