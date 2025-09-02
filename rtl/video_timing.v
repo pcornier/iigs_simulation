@@ -27,22 +27,36 @@ reg [9:0] vcount;
 //                                            Htotal Vtotal     hsync   vsync   clock     porch hsync porch  porch vsync porch
 //    mode       name      res                pixels lines      kHz  pol pol     MHz       pix   pix   pix   lines lines lines
 //a   arcade monitor        512x240@60.0       632    262      15.7199 - -       9.935        8    47   65      1    3   18        arcade/game modelines; fixed hsync freq arcade monitor
-//Ch  CGA                   640x200@59.923     912    262      15.6998 + +      14.31818    112    64   96     25    3   34        [ref]
-//t   "NTSC-59.94i"         768x483i@29.971    912    525      15.7346          14.35        40    56   48      2    6   34        MythTV modelines, DTV-PCTweakedModes
-parameter HFP = 640;    // front porch
-parameter HSP = HFP+64; // sync pulse
-parameter HBP = HSP+96; // back porch
-parameter HWL = HBP+112; // whole line
-parameter VFP = 231;    // front porch
-parameter VSP = VFP+3; // sync pulse
-parameter VBP = VSP+3;  // back porch
-parameter VWL = VBP+25; // whole line
+// Apple IIgs Video Timing (Super Hi-Res compatible)
+// Based on: 640x200 active display, 912x262 total frame, ~60Hz NTSC
+// Visible area: 640x200 pixels with proper borders
+// Total frame: 912x262 (NTSC standard)
+
+// Horizontal Timing (912 pixels total)
+// Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)|H-Sync|
+parameter BORDER_WIDTH = 32;
+parameter ACTIVE_WIDTH = 640;
+parameter HFP = ACTIVE_WIDTH + 2*BORDER_WIDTH; // Total visible area (704 pixels)
+parameter HSP = HFP + 48;   // Start horizontal sync (752)
+parameter HBP = HSP + 64;   // End horizontal sync (816)
+parameter HWL = HBP + 96;   // Total line width (912 pixels)
+
+// Vertical Timing (262 lines total - NTSC standard)
+// Layout: |Top Border(32)|Active Display(200)|Bottom Border(30)| = 262 total
+parameter V_TOP_BORDER = 32;    // Top border lines
+parameter V_ACTIVE = 200;       // Active display lines (Super Hi-Res)
+parameter V_BOTTOM_BORDER = 30; // Bottom border lines
+
+parameter VFP = V_TOP_BORDER + V_ACTIVE;        // 232 - End of active display
+parameter VSP = VFP + (V_BOTTOM_BORDER/2);     // 247 - Start vertical sync
+parameter VBP = VSP + 3;                       // 250 - End vertical sync  
+parameter VWL = V_TOP_BORDER + V_ACTIVE + V_BOTTOM_BORDER; // 262 - Total frame
 
 assign hsync = ~((hcount >= HSP) && (hcount < HBP));
 assign vsync = ~((vcount >= VSP) && (vcount < VBP));
 
 assign hblank = hcount >= HFP;
-assign vblank = vcount >= VFP;
+assign vblank = vcount >= 232;  // VBlank starts at line 232 (after active display)
 
 always @(posedge clk_vid) if (ce_pix) begin
   hcount <= hcount + 11'd1;

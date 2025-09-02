@@ -116,20 +116,20 @@ begin
 	if (H=='h38c) begin
 		if (linear_mode)
 		begin
-			video_addr_shrg <= 'h19D00+(V-'d16+1);
+			video_addr_shrg <= 'h19D00+(V-'d32+1);
 		end
 		else
 		begin
 		if (V[0])
-			video_addr_shrg <= 'h19D00+((V-'d16+1)>>1);
+			video_addr_shrg <= 'h19D00+((V-'d32+1)>>1);
 		else
-			video_addr_shrg <= 'h15D00+((V-'d16+1)>>1);
+			video_addr_shrg <= 'h15D00+((V-'d32+1)>>1);
 		end
 	end
 	else if (H=='h38e) begin
 		scb <= video_data;
 		// might need to move the scanline interrupt..
-		if (video_data[6] && NEWVIDEO[7] && V > 'd15 && V < 'd206)
+		if (video_data[6] && NEWVIDEO[7] && V > 'd31 && V < 'd206)
 			scanline_irq<=1;	
 		
 		//$display("SCB = %x video_addr %x",video_data,video_addr);
@@ -215,16 +215,16 @@ begin
 			begin
 				// linear mode
 				//$display("NONWORKING NEWVIDEO 6 MODE - LINEAR");
-				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg_2 <= 'h11fff + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_1 <= 'h12000 + ((V-32) * 'd160);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg <= 'h12000 + ((V-32) * 'd160);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_2 <= 'h11fff + ((V-32) * 'd160);  // AJS REMOVE MULTIPLY??
 			end
 			else
 			begin
 				//$display("NONLINEAR NEWVIDEO 6 MODE");
-				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg_2 <= 'h16000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_1 <= 'h12000 + ((V-32) * 'd80);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg <= 'h12000 + ((V-32) * 'd80);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_2 <= 'h16000 + ((V-32) * 'd80);  // AJS REMOVE MULTIPLY??
 			end
 			h_counter<=0;
 			base_toggle<=0;
@@ -441,7 +441,7 @@ wire [11:0] graphics_rgb = lores_mode ? palette_rgb_r[final_graphics_color] :
                                        {apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]};
 
 reg [12:0] BASEADDR;
-wire  [ 4:0] vert = V[7:3]-5'h02;
+wire  [ 4:0] vert = V[7:3]-5'h04;  // Changed from 5'h02 (V-16) to 5'h04 (V-32)
 always @(*) begin
 	case (vert)
 		5'h00: BASEADDR= 13'h000;
@@ -671,7 +671,7 @@ begin
 	else
 	begin
 		// Graphics pixel buffer system - coordinate with memory timing
-		if (H >= 32 && H <= 100 && V == 16)
+		if (H >= 32 && H <= 100 && V == 32)
 			$display("  DEBUG CONDITION: graphics_mode=%b GR=%b line_type=%d condition=%b", graphics_mode, GR, line_type_w, (graphics_mode && GR));
 		if (graphics_mode && GR) begin
 			// Reload buffer when chram_x changes (new memory data available)
@@ -681,14 +681,14 @@ begin
 					graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
 					graphics_color <= window_y_w[2] ? video_data[7:4] : video_data[3:0];
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 16) 
+					if (H >= 32 && H <= 100 && V == 32) 
 						$display("  LORES RELOAD: H=%d video_data=%h expanded=%b color=%h", H, video_data, {expandLores40(video_data, window_y_w[2]), 1'b0}, window_y_w[2] ? video_data[7:4] : video_data[3:0]);
 `endif
 				end else if (hires_mode) begin
 					// Hires: expand pixel bits (0-6), store color bit (7) separately
 					graphics_pix_shift <= expandHires40(video_data);
 					graphics_color <= {3'b0, video_data[7]};  // Store color/palette bit
-					if (H >= 32 && H <= 100 && V == 16) 
+					if (H >= 32 && H <= 100 && V == 32) 
 						$display("  HIRES RELOAD: H=%d video_data=%h expanded=%b color_bit=%b", H, video_data, expandHires40(video_data), video_data[7]);
 				end
 				buffer_needs_reload <= 1'b0;
@@ -698,13 +698,13 @@ begin
 				if (EIGHTYCOL || xpos[0] == 1'b1) begin
 					graphics_pix_shift <= {1'b0, graphics_pix_shift[7:1]};
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 16) 
+					if (H >= 32 && H <= 100 && V == 32) 
 						$display("  PIXEL SHIFT: H=%d xpos=%d shift_before=%b shift_after=%b pixel_out=%b", H, xpos, graphics_pix_shift, {1'b0, graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
 `endif
 				end else begin
 					// Hold pixel for doubling in 40-column mode
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 16) 
+					if (H >= 32 && H <= 100 && V == 32) 
 						$display("  PIXEL HOLD: H=%d xpos=%d shift=%b pixel_out=%b", H, xpos, graphics_pix_shift, graphics_pix_shift[0]);
 `endif
 				end
@@ -717,14 +717,14 @@ begin
 			// Increment pixel counter for color phase (during active video)
 			// Mode-dependent boundaries: SHRG uses full width, Apple II modes are centered
 			if (NEWVIDEO[7]) begin
-				// SHRG mode: use full 640-pixel width
-				if (H >= 32 && H < 672 && V >= 16 && V < 208)
+				// SHRG mode: use full 640-pixel width (within 704 visible area)
+				if (H >= 32 && H < 672 && V >= 32 && V < 232)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < 32)
 					pixel_counter <= 11'b0; // Reset at start of each line
 			end else begin
-				// Apple II modes: use centered 560-pixel area with borders
-				if (H >= 72 && H < 632 && V >= 16 && V < 208)
+				// Apple II modes: use centered 560-pixel area with borders (adjusted for 704 visible)
+				if (H >= 72 && H < 632 && V >= 32 && V < 232)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < 72)
 					pixel_counter <= 11'b0; // Reset at start of each line
@@ -759,18 +759,19 @@ begin
 //$display("xpos[2:0] %x xpos[3:1] %x xpos %x",xpos[2:0],xpos[3:1],xpos);
 //$display("chram_x[6:1] %x chram_x %x chrom_data_out %x chrom_addr %x",chram_x[6:1],chram_x,chrom_data_out,chrom_addr);
 
-// VBL is at 192 + border top
-if (V == 'd16+'d192)
+// VBL starts at end of active display (line 232)
+if (V == 'd232)
 	vbl_irq<=1;
 else
 	vbl_irq<=0;
 
 
 
-// Mode-dependent border generation
+// Mode-dependent border generation (updated for 704-pixel visible area)
+// Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total
 // Outside total screen area OR inside Apple II mode margin areas
-if ((H < 'd32 || H > 'd671 || V < 'd16 || V > 'd207) ||
-    (!NEWVIDEO[7] && ((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd671))))
+if ((H < 'd32 || H > 'd703 || V < 'd32 || V > 'd207) ||
+    (!NEWVIDEO[7] && ((H >= 'd32 && H < 'd72) || (H >= 'd664 && H <= 'd703))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -800,11 +801,14 @@ end
 
 //assign a = chrom_data_out[chpos_x[2:0]];
 // Window coordinates derived from H and V
-//wire [9:0] window_x_w = (H >= 32) ? H - 32 : 10'b0;
-wire [9:0] window_y_w = (V >= 16) ? V - 16 : 10'b0;
+wire [9:0] window_x_w = (H >= 32) ? H - 32 : 10'b0;  // Enable for memory addressing
+wire [9:0] window_y_w = (V >= 32) ? V - 32 : 10'b0;  // Updated for new V=32 start
 
-// GR signal calculation for mixed mode support
-wire GR = ~(TEXTG | (window_y_w[5] & window_y_w[7] & MIXG));
+// GR signal calculation for mixed mode support  
+// Mixed mode should switch to text at y=160 in Apple II coordinates
+// With V=32 timing: window_y_w=144 corresponds to original y=160
+wire mixed_mode_active = (window_y_w >= 144) & MIXG;
+wire GR = ~(TEXTG | mixed_mode_active);
 
 // Apple II address generation using lineaddr() function
 wire [15:0] lineaddr_result = lineaddr(window_y_w);
@@ -823,7 +827,7 @@ assign chrom_addr = { ALTCHARSET,video_data[7:0], chpos_y};
 always @(posedge clk_vid) if (ce_pix)
 begin
     // Debug text80 and graphics modes - show initial frames only  
-    if (H == 32 && V == 16) begin
+    if (H == 32 && V == 32) begin
         $display("MODE: H=%d V=%d TEXTG=%b EIGHTYCOL=%b GR=%b HIRES_MODE=%b AN3=%b text80=%b graphics=%b line_type=%d",
                  H, V, TEXTG, EIGHTYCOL, GR, HIRES_MODE, AN3, text80_mode, graphics_mode, line_type_w);
         $display("Graphics debug: lores_mode=%b hires_mode=%b graphics_color=%h final_graphics_color=%h graphics_pixel=%b",
@@ -839,7 +843,7 @@ begin
     end
     
     // Debug character ROM and text pixel output - extensive debugging for a few pixels
-    if (H >= 32 && H <= 100 && V == 16 && !GR) begin
+    if (H >= 32 && H <= 100 && V == 32 && !GR) begin
         $display("  TEXT PIXEL: H=%d video_data=%h chrom_addr=%h chrom_data=%h xpos=%d textpixel=%b", 
                  H, video_data, chrom_addr, chrom_data_out, xpos, textpixel);
     end
