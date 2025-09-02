@@ -723,7 +723,7 @@ begin
 				else if (H < 32)
 					pixel_counter <= 11'b0; // Reset at start of each line
 			end else begin
-				// Apple II modes: use centered 560-pixel area with 192 active lines (V=32 to V=223)
+				// Apple II modes: 192 lines starting at V=32 (scanline 0 to 191)
 				if (H >= 72 && H < 632 && V >= 32 && V < 224)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < 72)
@@ -771,10 +771,11 @@ else
 // Layout: |Left Border(40px)|Active Display(560px)|Right Border(104px)| = 704 total for Apple II
 // Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total for SHRG
 // Outside total screen area OR inside Apple II mode margin areas
-// For Apple II modes: V=32 to V=223 (192 lines), border V=224-231 (8 lines top+bottom)
-// For SHRG modes: V=32 to V=231 (200 lines), border V=232+ 
-if ((H < 'd32 || H > 'd703 || V < 'd32 || V > 'd231) ||
-    (!NEWVIDEO[7] && (((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd703)) || (V >= 'd224 && V <= 'd231))))
+// Border generation: 
+// Apple II modes: active display V=32-223 (192 lines), border V<32 or V>=224
+// SHRG modes: active display V=32-231 (200 lines), border V<32 or V>=232
+if ((!NEWVIDEO[7] && ((H < 'd32 || H > 'd703) || (V < 'd32 || V >= 'd224) || ((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd703)))) ||
+    (NEWVIDEO[7] && ((H < 'd32 || H > 'd703 || V < 'd32 || V > 'd231))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -809,11 +810,11 @@ end
 wire [9:0] window_x_w = NEWVIDEO[7] ? 
     ((H >= 32) ? H - 32 : 10'b0) :          // SHRG: start at H=32
     ((H >= 72) ? H - 72 : 10'b0);           // Apple II: start at H=72
-wire [9:0] window_y_w = (V >= 32) ? V - 32 : 10'b0;  // Updated for new V=32 start
+wire [9:0] window_y_w = (V >= 32) ? V - 32 : 10'b0;  // Apple II display starts at V=32 (scanline 0)
 
-// Apple II coordinate mapping: Limit to valid 192-line range for memory addressing
-// Apple II expects y coordinates 0-191, but we have window_y_w 0-199
-wire [7:0] apple_ii_y_clamped = (window_y_w > 191) ? 8'd191 : window_y_w[7:0];
+// Apple II coordinate mapping: Now properly centered, window_y_w is 0-191 (192 lines)
+// No clamping needed since we're properly centered within the 200-line area
+wire [7:0] apple_ii_y_clamped = window_y_w[7:0];
 
 // GR signal calculation for mixed mode support  
 // Mixed mode should switch to text at y=160 in Apple II coordinates (192-line system)
