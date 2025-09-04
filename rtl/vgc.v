@@ -504,11 +504,11 @@ wire [2:0] char_bit_40 = (xpos[3:1] > 6) ? 3'd6 : xpos[3:1];
 wire  textpixel = EIGHTYCOL ? chrom_data_out[char_bit_80] : chrom_data_out[char_bit_40];
 
     // Regular Hires - Apple II hi-res: 7 pixels per byte (bits 0-6), bit 7 is color/palette
-    // Return only the 7 pixel bits in correct order: bit 0 first, then 1, 2, 3, 4, 5, 6
-    // Bit 7 (color bit) should NOT be included in pixel stream
+    // Emit 7 pixel bits LSB-first and replicate the last pixel into the pad bit.
+    // This prevents a black seam if an extra shift occurs before the next reload.
     function automatic bit [7:0] expandHires40([7:0] vd);
         reg [7:0] vs;
-        vs = {1'b0, vd[6:0]};  // 7 pixel bits in correct order, pad with 0
+        vs = {vd[6], vd[6:0]};  // replicate last pixel instead of zero padding
         return vs;
     endfunction
 
@@ -695,13 +695,14 @@ begin
 			end else begin
 				// Shift pixels out: every clock in 80-col, every 2 clocks in 40-col (pixel doubling)
 				// In 40-col mode: shift on odd xpos (1,3,5,7,9,11,13) so each pixel displays twice
-				if (EIGHTYCOL || xpos[0] == 1'b1) begin
-					graphics_pix_shift <= {1'b0, graphics_pix_shift[7:1]};
+                if (EIGHTYCOL || xpos[0] == 1'b1) begin
+                    // Shift with last-pixel fill to avoid introducing black seams
+                    graphics_pix_shift <= {graphics_pix_shift[0], graphics_pix_shift[7:1]};
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 32) 
-						$display("  PIXEL SHIFT: H=%d xpos=%d shift_before=%b shift_after=%b pixel_out=%b", H, xpos, graphics_pix_shift, {1'b0, graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
+                    if (H >= 32 && H <= 100 && V == 32) 
+                        $display("  PIXEL SHIFT: H=%d xpos=%d shift_before=%b shift_after=%b pixel_out=%b", H, xpos, graphics_pix_shift, {graphics_pix_shift[0], graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
 `endif
-				end else begin
+                end else begin
 					// Hold pixel for doubling in 40-column mode
 `ifdef VGC_DEBUG
 					if (H >= 32 && H <= 100 && V == 32) 
@@ -742,13 +743,11 @@ begin
 		  if (xpos=='d6) begin
 			xpos<=0;
                   end
-		end else if (xpos=='d13) begin
-			// Advance memory loading earlier in 40-column mode too
-			xpos<=0;
-			chram_x<=chram_x+1'b1;
-		end else if (xpos=='d13) begin
-			xpos<=0;
-		end
+        end else if (xpos=='d13) begin
+            // Advance memory loading in 40-column mode (every 14 pixels)
+            xpos<=0;
+            chram_x<=chram_x+1'b1;
+        end
 		
 		// Use LDPS equivalent for buffer reload timing - but only trigger on edges
 		if (ldps_load && !buffer_needs_reload) begin
