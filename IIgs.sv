@@ -485,7 +485,6 @@ wire hdd_write;
 reg  hdd_protect;
 reg  cpu_wait_hdd = 0;
 
-
 always @(posedge clk_sys) begin
 	reg old_ack =0;
 	reg hdd_read_pending =0;
@@ -519,14 +518,14 @@ always @(posedge clk_sys) begin
 	end
 	else begin
 		if (~old_ack & sd_ack[0]) begin
-			hdd_read_pending <= 0;
-			hdd_write_pending <= 0;
 			sd_rd[0] <= 0;
 			sd_wr[0] <= 0;
 		end
 		else if(old_ack & ~sd_ack[0]) begin
 			state <= 0;
 			cpu_wait_hdd <= 0;
+			hdd_read_pending <= 0;
+			hdd_write_pending <= 0;
 		end
 	end
 end

@@ -1021,6 +1021,11 @@ bool screenshot_mode = false;
 int stop_at_frame = -1;
 bool stop_at_frame_enabled = false;
 
+// Memory dump functionality
+// -------------------------
+std::vector<int> memory_dump_frames;
+bool memory_dump_mode = false;
+
 // Disk image support
 // ---------------------------
 std::string disk_image = "hd.hdv";
@@ -1033,6 +1038,8 @@ void show_help() {
 	printf("  --screenshot <frames>         Take screenshots at specified frame numbers\n");
 	printf("                                (comma-separated list, e.g., 100,200,300)\n");
 	printf("  -screenshot <frames>          Legacy form of --screenshot (deprecated)\n");
+	printf("  --memory-dump <frames>        Dump memory at specified frame numbers\n");
+	printf("                                (comma-separated list, e.g., 100,200,300)\n");
 	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
@@ -1044,6 +1051,7 @@ void show_help() {
 	printf("  ./Vemu --disk totalreplay.hdv  Use totalreplay.hdv as disk image\n");
 	printf("  ./Vemu --disk pd.hdv --screenshot 50 --stop-at-frame 100\n");
 	printf("                                Use pd.hdv, take screenshot at frame 50, stop at 100\n");
+	printf("  ./Vemu --memory-dump 200      Dump memory at frame 200\n");
 	printf("  ./Vemu --selftest --no-cpu-log    Run selftest without CPU logging\n");
 }
 
@@ -1100,6 +1108,70 @@ void save_screenshot(int frame_number) {
 	}
 }
 
+void save_memory_dump(int frame_number) {
+	printf("Saving memory dump at frame %d...\n", frame_number);
+	
+	char filename[256];
+	
+	// Dump Fast RAM (8MB) - Banks 00-3F
+	snprintf(filename, sizeof(filename), "memdump_frame_%04d_fastram.bin", frame_number);
+	FILE* f = fopen(filename, "wb");
+	if (f) {
+		fwrite(&VERTOPINTERN->emu__DOT__fastram__DOT__ram, 1, 8388608, f);
+		fclose(f);
+		printf("Fast RAM dump saved: %s (8MB)\n", filename);
+	} else {
+		printf("Error: Could not save fast RAM dump %s\n", filename);
+	}
+	
+	// Dump Slow RAM (128KB) - Banks E0-E1 
+	snprintf(filename, sizeof(filename), "memdump_frame_%04d_slowram.bin", frame_number);
+	f = fopen(filename, "wb");
+	if (f) {
+		fwrite(&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram, 1, 131072, f);
+		fclose(f);
+		printf("Slow RAM dump saved: %s (128KB)\n", filename);
+	} else {
+		printf("Error: Could not save slow RAM dump %s\n", filename);
+	}
+	
+	// Also create a text dump of key memory regions for easy comparison
+	snprintf(filename, sizeof(filename), "memdump_frame_%04d_summary.txt", frame_number);
+	f = fopen(filename, "w");
+	if (f) {
+		fprintf(f, "Memory dump at frame %d\n", frame_number);
+		fprintf(f, "========================================\n\n");
+		
+		// Dump Bank E1 page 0600 (text screen area where errors occur)
+		fprintf(f, "Bank E1 $0600-$06FF (text screen area):\n");
+		uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+		for (int i = 0; i < 256; i += 16) {
+			fprintf(f, "E1:%04X: ", 0x0600 + i);
+			for (int j = 0; j < 16 && (i + j) < 256; j++) {
+				// Bank E1 is at offset 65536 in slowram, page 06 is at offset 0x600
+				fprintf(f, "%02X ", slowram[65536 + 0x600 + i + j]);
+			}
+			fprintf(f, "\n");
+		}
+		
+		fprintf(f, "\nBank 00 $0600-$06FF (main text screen):\n");
+		uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+		for (int i = 0; i < 256; i += 16) {
+			fprintf(f, "00:%04X: ", 0x0600 + i);
+			for (int j = 0; j < 16 && (i + j) < 256; j++) {
+				// Bank 00 page 06 is at offset 0x600
+				fprintf(f, "%02X ", fastram[0x600 + i + j]);
+			}
+			fprintf(f, "\n");
+		}
+		
+		fclose(f);
+		printf("Memory summary saved: %s\n", filename);
+	} else {
+		printf("Error: Could not save memory summary %s\n", filename);
+	}
+}
+
 int main(int argc, char** argv, char** env) {
 
 	// Parse command line arguments
@@ -1116,6 +1188,16 @@ int main(int argc, char** argv, char** env) {
 				screenshot_frames.push_back(std::stoi(frame_num));
 			}
 			printf("Screenshot mode enabled for frames: %s\n", frames_str.c_str());
+			i++; // Skip the next argument since it's the frame list
+		} else if (strcmp(argv[i], "--memory-dump") == 0 && i + 1 < argc) {
+			memory_dump_mode = true;
+			std::string frames_str = argv[i + 1];
+			std::stringstream ss(frames_str);
+			std::string frame_num;
+			while (std::getline(ss, frame_num, ',')) {
+				memory_dump_frames.push_back(std::stoi(frame_num));
+			}
+			printf("Memory dump mode enabled for frames: %s\n", frames_str.c_str());
 			i++; // Skip the next argument since it's the frame list
 		} else if (strcmp(argv[i], "--stop-at-frame") == 0 && i + 1 < argc) {
 			stop_at_frame_enabled = true;
@@ -1386,6 +1468,15 @@ int main(int argc, char** argv, char** env) {
 				save_screenshot(video.count_frame);
 				screenshot_frames.erase(it);  // Remove frame from list after capturing
 				took_screenshot_this_frame = true;
+			}
+		}
+		
+		// Check if this frame should have memory dumped
+		if (memory_dump_mode) {
+			auto it = std::find(memory_dump_frames.begin(), memory_dump_frames.end(), video.count_frame);
+			if (it != memory_dump_frames.end()) {
+				save_memory_dump(video.count_frame);
+				memory_dump_frames.erase(it);  // Remove frame from list after dumping
 			}
 		}
 		
