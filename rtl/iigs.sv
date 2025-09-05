@@ -1678,6 +1678,14 @@ wire ready_out;
       end
       any_irq_d <= (|irq_pending[15:1]);
 
+      // Apply C046 read side-effect to the mirror after the read is observed
+      if (c046_read) begin
+        c046_mirror <= (c046_mirror & 8'hbf) | (c046_mirror[7] ? 8'h40 : 8'h00);
+`ifdef SIMULATION
+        $display("C046_READ_SIDE_EFFECT: Applied bit manipulation to INTFLAG mirror (7->6, 7 cleared)");
+`endif
+      end
+
     end
   end
   
@@ -1692,17 +1700,6 @@ wire ready_out;
   // from the cpu_irq OR to avoid a persistent level-driven VBL from Mega II.
   assign cpu_irq = |(irq_pending & 16'hFFE6);  // mask out bit0 (aggregator), bit3 (VBL), bit4 (QSEC)
 
-  // Apply C046 read side-effect to the mirror after the read is observed
-  always @(posedge CLK_14M) begin
-    if (!reset) begin
-      if (c046_read) begin
-        c046_mirror <= (c046_mirror & 8'hbf) | (c046_mirror[7] ? 8'h40 : 8'h00);
-`ifdef SIMULATION
-        $display("C046_READ_SIDE_EFFECT: Applied bit manipulation to INTFLAG mirror (7->6, 7 cleared)");
-`endif
-      end
-    end
-  end
 
   always @(posedge CLK_14M)
     begin

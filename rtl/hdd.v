@@ -110,7 +110,7 @@ module hdd(
                   4'h5: D_OUT <= reg_mem_h;       // MEM H
                   4'h6: D_OUT <= reg_block_l;     // BLK L
                   4'h7: D_OUT <= reg_block_h;     // BLK H
-                  4'h8: D_OUT <= sector_buf_read; // NEXT BYTE
+                  4'h8: D_OUT <= sector_buf[sec_addr]; // NEXT BYTE - read current data
                   default: D_OUT <= 8'hFF;
                 endcase
             end else if (IO_SELECT && RD) begin
@@ -213,7 +213,7 @@ module hdd(
                                 begin D_OUT <= reg_block_h; `ifdef SIMULATION $display("HDD RD C0F7: blkH=%02h", reg_block_h); `endif end
                             4'h8 :
                                 begin
-                                    D_OUT <= sector_buf[sec_addr];
+                                    // D_OUT already driven by async path, just increment address
 				    //$display("reading D_OUT %x to ram %x readonly %x",D_OUT,sec_addr,hdd_protect);
                                     sec_addr <= sec_addr + 1;
 `ifdef SIMULATION
