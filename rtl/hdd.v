@@ -103,11 +103,6 @@ module hdd(
             // READ PATH: drive D_OUT regardless of phi0 so CPU sees stable data
             if (DEVICE_SELECT && RD) begin
                 case (A[3:0])
-                  4'h0: begin
-                    // C0F0 EXEC/STATUS returns reg_status (0=ok,1=err) in bit0 after ROR hd_error
-                    // Here return 0 to indicate success; write strobes handled below on phi0
-                    D_OUT <= 8'h00;
-                  end
                   4'h1: D_OUT <= reg_status;      // STATUS/ERROR
                   4'h2: D_OUT <= reg_command;     // COMMAND
                   4'h3: D_OUT <= reg_unit;        // UNIT
@@ -125,9 +120,7 @@ module hdd(
 
             // WRITE/CONTROL PATH: gate side-effects to phi0
             if (phi0) begin
-                hdd_read  <= 1'b0;
-                hdd_write <= 1'b0;
-            if (RESET == 1'b1)
+                if (RESET == 1'b1)
             begin
                 reg_status <= 8'h00;
                 reg_command <= 8'h00;
@@ -138,9 +131,16 @@ module hdd(
                 reg_block_h <= 8'h00;
                 sec_addr <= 9'd0;
                 increment_sec_addr <= 1'b0;
+                hdd_read <= 1'b0;
+                hdd_write <= 1'b0;
             end
             else
             begin
+                // Create a clean, one-cycle pulse for read/write strobes.
+                // De-assert on the cycle after assertion.
+                if (hdd_read) hdd_read <= 1'b0;
+                if (hdd_write) hdd_write <= 1'b0;
+
                 select_d <= DEVICE_SELECT;
                 if (DEVICE_SELECT == 1'b1)
                 begin
@@ -164,6 +164,7 @@ module hdd(
 `endif
                                       end
                                       PRODOS_COMMAND_READ: begin
+                                        $display("HDD: READ command initiated. Asserting hdd_read.");
                                         reg_status <= 8'h00;
                                         D_OUT <= 8'h00;
                                         if (~select_d) hdd_read <= 1'b1;
@@ -179,6 +180,7 @@ module hdd(
                                           $display("HDD RD C0F0: WRITE protect");
 `endif
                                         end else begin
+                                          $display("HDD: WRITE command initiated. Asserting hdd_write.");
                                           D_OUT <= 8'h00;
                                           reg_status <= 8'h00;
                                           hdd_write <= 1'b1;
@@ -211,11 +213,11 @@ module hdd(
                                 begin D_OUT <= reg_block_h; `ifdef SIMULATION $display("HDD RD C0F7: blkH=%02h", reg_block_h); `endif end
                             4'h8 :
                                 begin
-                                    D_OUT <= sector_buf_read;
+                                    D_OUT <= sector_buf[sec_addr];
 				    //$display("reading D_OUT %x to ram %x readonly %x",D_OUT,sec_addr,hdd_protect);
-                                    increment_sec_addr <= 1'b1;
+                                    sec_addr <= sec_addr + 1;
 `ifdef SIMULATION
-                                    $display("HDD RD C0F8[%03d] -> %02h", sec_addr, sector_buf_read);
+                                    $display("HDD CPU READ C0F8[%03d] -> %02h", sec_addr, sector_buf[sec_addr]);
 `endif
                                 end
                             default :
@@ -226,6 +228,8 @@ module hdd(
                         case (A[3:0])
                             4'h2 :
                                 begin
+                                    hdd_read <= 1'b0;
+                                    hdd_write <= 1'b0;
                                     if (D_IN == 8'h02)
                                         sec_addr <= 9'b000000000;
                                     reg_command <= D_IN;
@@ -253,9 +257,9 @@ module hdd(
                                 begin
  				    //$display("writing D_IN %x to ram %x readonly %x",D_IN,sec_addr,hdd_protect);
                                     sector_buf[sec_addr] <= D_IN;
-                                    increment_sec_addr <= 1'b1;
+                                    sec_addr <= sec_addr + 1;
 `ifdef SIMULATION
-                                    $display("HDD WR C0F8[%03d] <= %02h", sec_addr, D_IN);
+                                    $display("HDD CPU WRITE C0F8[%03d] <= %02h", sec_addr, D_IN);
 `endif
                                 end
                             default :
@@ -270,11 +274,6 @@ module hdd(
                 else if (DEVICE_SELECT == 1'b0 & select_d == 1'b1)
                 begin
 			//$display("DEVICE_SELECT==0 select_d==1");
-                    if (increment_sec_addr == 1'b1)
-                    begin
-                        sec_addr <= sec_addr + 1;
-                        increment_sec_addr <= 1'b0;
-                    end
                 end
                 // No extra latching required for ROM; D_OUT is driven in read path
             end
@@ -291,8 +290,10 @@ end
     begin: sec_storage
         
         begin
-            if (ram_we == 1'b1)
+            if (ram_we == 1'b1) begin
                 sector_buf[ram_addr] <= ram_di;
+                $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", ram_addr, ram_di);
+            end
             ram_do <= sector_buf[ram_addr];
             
             // Register sector buffer reads for CPU interface

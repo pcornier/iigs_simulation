@@ -522,6 +522,10 @@ always @(posedge CLK_14M) begin
     valid_kbd <= 1'b0;
     mouse_coord <= 1'b0;
     
+    // Initialize data register with ADB ready status (GSplus-style)
+    // Set bit 3 (0x08) = SRQ flag to indicate ADB controller is ready
+    data <= 32'h00000008;  // SRQ bit set, indicating ADB ready for keyboard operations
+    
     // Initialize device addresses
     kbd_ctl_addr <= 8'd2;
     mouse_ctl_addr <= 8'd3;
@@ -898,7 +902,10 @@ always @(posedge CLK_14M) begin
         if (rw) begin
           case (state)
             IDLE: begin
-              dout <= data[7:0];
+              // GSplus behavior: return interrupt byte in IDLE state
+              // Set bit 3 (0x08) for keyboard SRQ when keyboard is ready
+              // This is what the ROM is waiting for (>= 6 check)
+              dout <= data[7:0];  // data[7:0] contains SRQ status (0x08)
               if (pending_irq) dout <= 8'b0001_0000;
               if (pending_data > 3'd0) state <= DATA;
             end

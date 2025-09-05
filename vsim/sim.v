@@ -91,7 +91,7 @@ module emu (
         input [9:0]             img_mounted,
         input                   img_readonly,
 
-        input [63:0]            img_size
+        input [63:0]			img_size
 
 
 
@@ -322,8 +322,6 @@ always @(posedge clk_sys) begin
         end
         else begin
                 if (~old_ack & sd_ack[1]) begin
-                        hdd_read_pending <= 0;
-                        hdd_write_pending <= 0;
                         sd_rd_hd <= 0;
                         sd_wr_hd <= 0;
 `ifdef SIMULATION
@@ -336,6 +334,8 @@ always @(posedge clk_sys) begin
 `endif
                         state <= 0;
                         cpu_wait_hdd <= 0;
+                        hdd_read_pending <= 0;
+                        hdd_write_pending <= 0;
 `ifdef SIMULATION
                         $display("HDD: cpu_wait deasserted; stalled cycles=%0d", hdd_wait_14m_cycles);
                         hdd_wait_14m_cycles <= 0;
@@ -356,6 +356,7 @@ wire [1:0] DISK_READY;
 reg  [1:0] DISK_CHANGE;
 reg  [1:0] disk_mount;
 reg        img_mounted0_d, img_mounted2_d;
+
 
 
 

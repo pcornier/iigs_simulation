@@ -330,7 +330,7 @@ if (clock_data==0)
 		clock_data<=clock_data+1;
 
 	end
-	if (clock_counter2=='d3579545)
+	if (clock_counter2=='d3818186)
 	begin
 		clock_counter2<=0;
 		qtrsecond_irq<=1;

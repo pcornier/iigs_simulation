@@ -135,6 +135,10 @@ module iigs
 `endif
    logic [9:0]        H;
    logic [8:0]        V;
+   
+   // Video counter intermediate calculations for C02E/C02F
+   logic [8:0] v_adjusted;
+   assign v_adjusted = V + 9'hFA;
 
 
   logic [7:0]         bank_bef;
@@ -165,10 +169,6 @@ module iigs
   logic               vbl_irq_d;
   logic               qtr_irq_d;
   logic               scc_irq_d;
-
-  // VBL interrupt state tracking (like Clemens/GSplus)
-  logic               vbl_started;      // Prevents re-triggering within same VBL period
-  logic               vbl_interrupt_set; // Persistent VBL interrupt flag
 
   logic [7:0]         adb_din;
   logic [7:0]         adb_dout;
@@ -215,7 +215,7 @@ module iigs
 
   logic [7:0]         VGCINT; //23
   logic [7:0]         INTEN; //41
-  logic [7:0]         INTFLAG; // 46, 47  AJS TODO
+  reg [7:0]           INTFLAG = 0; // 46, 47 - Interrupt flags register
 
   logic               STORE80;
   logic               RAMRD;
@@ -627,12 +627,7 @@ module iigs
       DISK35<=0;
       VGCINT<=0; //23
       INTEN<=0; //41
-      INTFLAG<=0; // 46, 47  AJS TODO
-      
-      // Initialize VBL state tracking
-      vbl_started <= 1'b0;
-      vbl_interrupt_set <= 1'b0;
-
+      // INTFLAG now managed by centralized IRQ logic in iigs.sv
       STORE80<=0;
       RAMRD<=0;
       RAMWRT<=0;
@@ -649,6 +644,9 @@ module iigs
       LC_WE<=0;
       ROMBANK<=0;;
     end
+
+    // INTFLAG changes are tracked by centralized IRQ logic in iigs.sv
+    // interrupt_clear_pulse is managed in IO section to avoid race condition
 
     // Default pass-through for unhandled IO: feed external bus data
     io_dout <= din;
@@ -679,6 +677,8 @@ module iigs
     scc_we <= 1'b0;
 
     if (IO) begin
+      // interrupt_clear_pulse is now auto-cleared after use, no need to clear here
+      
       if (~cpu_we_n)
         // write
         begin
@@ -781,20 +781,20 @@ module iigs
               snd_din <= cpu_dout;
               $display("SOUND WR %03h <= %02h (SNDCTL/DATA/APL/APH)", addr[11:0], cpu_dout);
             end
-            12'h041: begin $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]}); INTEN <= {INTEN[7:5],cpu_dout[4:0]}; end
+            12'h041: begin 
+              $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]}); 
+              INTEN <= {INTEN[7:5],cpu_dout[4:0]};
+`ifdef SIMULATION
+              if (~cpu_dout[3]) $display("INTEN: VBL interrupt disabled, will be cleared centrally");
+              if (~cpu_dout[4]) $display("INTEN: Quarter-second interrupt disabled, will be cleared centrally");
+`endif
+            end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
             12'h047: begin 
-              $display("VBL_DEBUG: C047 WRITE - Before clear: INTFLAG[4:3]=%02b cpu_irq=%0d vbl_irq=%0d V=%0d H=%0d phi2=%0d", INTFLAG[4:3], cpu_irq, vbl_irq, V, H, phi2);
-              $display("VBL_DEBUG: C047 WRITE - cpu_irq components: VGC6&2=%0d VGC5&1=%0d EN3&F3=%0d EN4&F4=%0d snd=%0d", 
-                       (VGCINT[6]&VGCINT[2]), (VGCINT[5]&VGCINT[1]), (INTEN[3]&INTFLAG[3]), (INTEN[4]&INTFLAG[4]), snd_irq);
-              // Apple IIgs behavior: C047 write clears VBL and quarter-second interrupts (bits 4:3)
-              // Clear both INTFLAG bits and our persistent VBL interrupt flag
-              INTFLAG[4:3] <= 2'b00;
-              vbl_interrupt_set <= 1'b0;  // Clear persistent VBL flag
-              $display("VBL_DEBUG: C047 WRITE - Clear executed, vbl_interrupt_set cleared (phi2=%0d) V=%0d vbl_started=%0d", phi2, V, vbl_started);
-              // Debug: Show both old and new cpu_irq calculation for timing verification
-              $display("VBL_DEBUG: C047 WRITE - cpu_irq timing: current=%0d next=%0d INTFLAG[3]=%0d", 
-                       cpu_irq, (INTEN[3]&1'b0)|(VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[4]&INTFLAG[4])|snd_irq, INTFLAG[3]);
+              if (phi2) begin  // Add phi2 gating like other critical I/O
+                // C047 write will be detected by centralized IRQ manager  
+                $display("VBL_DEBUG: C047 WRITE - Will be processed by centralized IRQ manager at V=%0d H=%0d", V, H);
+              end
             end // clear the interrupts
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
@@ -802,8 +802,8 @@ module iigs
             12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
             12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
             12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
-            12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
-            12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
+            12'h056: begin $display("**LORES %x",0);HIRES_MODE<=1'b0; end // LORES - turn off hi-res
+            12'h057: begin $display("**HIRES %x",1);HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
             12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
             12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
             // $C068: bit0 stays high during boot sequence, why?
@@ -929,6 +929,13 @@ module iigs
           // read
           //$display("** IO_RD %x, RDROM %x ",addr[11:0], RDROM);
           case (addr[11:0])
+            12'h046: begin
+              // Return C046 mirror (pre-side-effect) on read
+              io_dout <= c046_mirror;
+`ifdef SIMULATION
+              $display("READ INTFLAG ($C046) -> %02h (mirror, INTEN=%02h cpu_irq=%0d)", c046_mirror, INTEN, cpu_irq);
+`endif
+            end
             12'h000, 12'h010, 12'h024, 12'h025,
             12'h026, 12'h027, 12'h044, 12'h045,
             12'h064, 12'h065,
@@ -961,7 +968,7 @@ module iigs
             12'h016: io_dout <= {ALTZP, key_keys};
             12'h017: io_dout <= {SLOTC3ROM, key_keys};
             12'h018: io_dout <= {STORE80, key_keys};
-            12'h019: io_dout <= {VBlank, key_keys};
+            12'h019: io_dout <= {(V >= 199), key_keys};  // IIgs VBL: bit 7 HIGH when V >= 199 (like Clemens)
             12'h01a: io_dout <= {TEXTG, key_keys};
             12'h01b: io_dout <= {MIXG, key_keys};
             12'h01c: io_dout <= {PAGE2, key_keys};
@@ -970,7 +977,28 @@ module iigs
             12'h01f: io_dout <= {EIGHTYCOL, key_keys};
 
             12'h022: io_dout <= TEXTCOLOR;
-            12'h023: begin $display("READ VGCINT %x",VGCINT);io_dout <= VGCINT; end /* vgc int */
+            // C023: VGC IRQ control/status (GSplus/Clemens semantics)
+            // Read returns synthesized status:
+            //  bit7: any VGC IRQ pending (scanline or 1-sec) when enabled
+            //  bit6: 1-sec pending
+            //  bit5: scanline pending
+            //  bit2: 1-sec enable
+            //  bit1: scanline enable
+            12'h023: begin
+              // Pending when status bit set AND enable bit set
+              // (declare temps as regs via inline assignments)
+              reg vgc_scan_pending;
+              reg vgc_1sec_pending;
+              reg vgc_any_pending;
+              vgc_scan_pending = (VGCINT[5] & VGCINT[1]);
+              vgc_1sec_pending = (VGCINT[6] & VGCINT[2]);
+              vgc_any_pending = (vgc_scan_pending | vgc_1sec_pending);
+              io_dout <= {vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, 2'b00, VGCINT[2], VGCINT[1], 1'b0};
+`ifdef SIMULATION
+              $display("READ C023 (VGC IRQ ctrl/status): any=%0d 1sec_pend=%0d scan_pend=%0d en1s=%0d ensl=%0d -> %02h",
+                       vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, VGCINT[2], VGCINT[1], io_dout);
+`endif
+            end
 
 
             // C028: ROMBANK register does not exist as a separate register on real Apple IIgs hardware.
@@ -981,15 +1009,15 @@ module iigs
             12'h02b: io_dout <= C02BVAL; // from gsplus
             12'h02c: io_dout <= 'h0; // from gsplus
             12'h02d: io_dout <= SLTROMSEL;
-            12'h02e: io_dout <= V[8:1]; /* vertcount */
-            12'h02f: io_dout <= {V[0], H[9:2]}; /* horizcount */
+            12'h02e: io_dout <= v_adjusted >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
+            12'h02f: io_dout <= {v_adjusted[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
             12'h030: io_dout <= SPKR;
             12'h031: io_dout <= DISK35;
+            // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
             12'h032: begin
-              io_dout <= VGCINT; 
-              VGCINT[6:5] <= 2'b00; // Clear 1-sec and scanline IRQs on read
+              io_dout <= VGCINT;
 `ifdef SIMULATION
-              $display("VGCINT: Read from $C032, clearing one-second and scanline IRQ flags. VGCINT was %02h", VGCINT);
+              $display("READ C032 (no side-effect): VGCINT=%02h", VGCINT);
 `endif
             end
             12'h033, 12'h034: begin
@@ -1020,15 +1048,10 @@ module iigs
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
             //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
             12'h046: begin
-              io_dout <= INTFLAG;
+              io_dout <= c046_mirror; // pre-side-effect mirror
 `ifdef SIMULATION
-              $display("READ INTFLAG -> %02h vbl_irq=%0d INTFLAG[3:0]=%04b", 
-                       INTFLAG, vbl_irq, INTFLAG[3:0]);
+              $display("READ INTFLAG -> %02h (mirror before side-effect)", c046_mirror);
 `endif
-              // Real Apple IIgs behavior: reading C046 does bit manipulation (bit 7->6, clear 7)
-              // But don't automatically clear interrupts - that should only happen on C047 write
-              INTFLAG[6] <= INTFLAG[7];  // Move bit 7 to bit 6  
-              INTFLAG[7] <= 1'b0;        // Clear bit 7
             end
             //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
             12'h047: begin 
@@ -1041,8 +1064,8 @@ module iigs
             12'h053: begin $display("**MIXG %x",1); MIXG<=1'b1;end
             12'h054: begin $display("**PAGE2 %x",0);PAGE2<=1'b0; end
             12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
-            12'h056: begin $display("**%x",0);HIRES_MODE<=1'b0; end
-            12'h057: begin $display("**%x",1);HIRES_MODE<=1'b1; end
+            12'h056: begin $display("**LORES %x",0);HIRES_MODE<=1'b0; end // LORES - turn off hi-res
+            12'h057: begin $display("**HIRES %x",1);HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
             12'h058: io_dout <= 'h0; // some kind of soft switch?
             12'h05a: io_dout <= 'h0; // some kind of soft switch?
             12'h05d: io_dout <= 'h0; // some kind of soft switch?
@@ -1251,79 +1274,16 @@ module iigs
 `endif
     end
 
-    // VBL interrupt logic matching Clemens/GSplus approach  
-    // VBL starts at scanline 199 (like Clemens CLEM_VGC_VBL_NTSC_LOWER_BOUND)
-    // GSplus uses 192.0/262.0 ≈ scanline 192, so we'll use 199 for accuracy
-    // 
-    // CRITICAL: This logic must run on clock edge to avoid race conditions with C047 clearing
-    if (V >= 199 && V < 262) begin
-      // In VBL region  
-      if (!vbl_started) begin
-        // Just entered VBL - set vbl_started flag but don't immediately assert interrupt
-        vbl_started <= 1'b1;
-`ifdef SIMULATION
-        if (INTEN[3]) begin
-          $display("VBL_DEBUG: VBL period started at V=%0d H=%0d, deferring interrupt until CPU sampling window", V, H);
-        end else begin
-          $display("VBL_DEBUG: VBL period started but disabled (INTEN[3]=0) at V=%0d H=%0d", V, H);
-        end
-`endif
-      end
-      
-      // Set VBL interrupt when VBL starts and is enabled
-      if (INTEN[3] && !vbl_interrupt_set) begin
-        vbl_interrupt_set <= 1'b1;
-        INTFLAG[3] <= 1'b1;
-`ifdef SIMULATION
-        $display("VBL_DEBUG: VBL interrupt SET at V=%0d H=%0d", V, H);
-`endif
-      end
-    end else begin
-      // Not in VBL region (V < 199 or V >= 262) - reset vbl_started for next frame
-      if (vbl_started) begin
-        vbl_started <= 1'b0;
-`ifdef SIMULATION
-        $display("VBL_DEBUG: VBL period ended at V=%0d H=%0d, vbl_started reset", V, H);
-        if (vbl_interrupt_set) begin
-          $display("VBL_WARNING: VBL period ended but vbl_interrupt_set still HIGH! This means interrupt was never cleared.");
-        end
-`endif
-      end
-    end
+    // VBL interrupt logic is now handled by interrupt controller
     
-    // Quarter-second interrupt (keep existing logic)
-    qtr_irq_d <= qtrsecond_irq;
-    scc_irq_d <= ~scc_irq_n;  // SCC uses active-low interrupt
-    if ((qtrsecond_irq & ~qtr_irq_d) & INTEN[4]) begin
-      INTFLAG[4]<=1'b1;
-`ifdef SIMULATION
-      $display("INTFLAG: set QTR (4) due qtrsecond_irq rising edge");
-`endif
-    end
+    // Quarter-second and SCC interrupts now handled by interrupt controller
+    scc_irq_d <= ~scc_irq_n;  // Keep SCC edge detection for debugging
     // SCC interrupts disabled - SCC wrapper handles interrupt masking
     // if ((~scc_irq_n & ~scc_irq_d) & INTEN[7]) begin
     //   INTFLAG[7]<=1'b1;
     // end
 
-    // INTFLAG[0] represents pending IRQ - set when any interrupt condition is active
-    // This should only be cleared when ALL interrupt sources are resolved
-    // Don't recalculate every cycle to avoid race conditions with interrupt clearing
-    if (INTFLAG[3] | INTFLAG[4] | VGCINT[6] | VGCINT[7] | snd_irq) begin
-      INTFLAG[0] <= 1'b1;
-`ifdef SIMULATION
-      if (!INTFLAG[0]) begin
-        $display("INTFLAG[0]: 0 -> 1 (F3=%0d F4=%0d V6=%0d V7=%0d snd=%0d)", 
-                 INTFLAG[3], INTFLAG[4], VGCINT[6], VGCINT[7], snd_irq);
-      end
-`endif
-    end else begin
-      INTFLAG[0] <= 1'b0;
-`ifdef SIMULATION
-      if (INTFLAG[0]) begin
-        $display("INTFLAG[0]: 1 -> 0 (all interrupt sources clear)");
-      end
-`endif
-    end
+    // INTFLAG[0] management is now handled by interrupt controller
     /*
      enum irq_sources
      {
@@ -1339,7 +1299,9 @@ module iigs
      */
 
   end
-  wire cpu_irq =  (VGCINT[6]&VGCINT[2])|(VGCINT[5]&VGCINT[1])|(INTEN[3]&INTFLAG[3])|(INTEN[4]&INTFLAG[4])|snd_irq;
+  
+  // CPU interrupt output
+  wire cpu_irq;
 
 `ifdef SIMULATION
   // Trace sound IRQ line transitions and cpu_irq composition to verify behavior
@@ -1510,7 +1472,7 @@ bram #(.widthad_a(17)) slowram
 `endif
         .clock_b(clk_vid),
         .address_b(video_addr[16:0]),
-        .data_b(0),
+        .data_b(8'b0),
         .q_b(video_data),
         .wren_b(1'b0)
 
@@ -1534,7 +1496,7 @@ video_timing video_timing(
 
 wire [22:0] video_addr;
 wire [7:0] video_data;
-wire vbl_irq;
+// vbl_irq now handled internally in interrupt logic
 wire scanline_irq;
 
 
@@ -1544,7 +1506,6 @@ vgc vgc(
         .clk_vid(clk_vid),
         .ce_pix(ce_pix),
         .scanline_irq(scanline_irq),
-        .vbl_irq(vbl_irq),
         .H(H),
         .V(V),
         .R(R),
@@ -1603,6 +1564,145 @@ wire ready_out;
               .VPB(cpu_vpb)
               );
 
+  // Centralized IRQ management - matches GSplus/Clemens architecture
+  reg [15:0] irq_pending = 0;  // 16-bit interrupt pending register
+  reg interrupt_clear_pulse = 0;
+  reg qtrsecond_irq_d = 0;
+  reg vbl_started = 0;
+  // Persistent C046 mirror and aggregated IRQ edge detect
+  reg [7:0] c046_mirror = 8'h00;
+  reg       any_irq_d = 1'b0;
+  
+  // Control signals for centralized IRQ management (combinational detection)
+  reg inten_was_written = 0;
+  reg [7:0] inten_prev_data = 0;
+  reg c047_was_written = 0;
+  
+  // Detect C046 reads combinationally (scope to IO region)  
+  wire c046_read = !we && IO && (addr_bef[11:0] == 12'h046);
+
+  // Centralized interrupt management - single always block handles all IRQ sources
+  always @(posedge CLK_14M) begin
+    if (reset) begin
+      irq_pending <= 16'h0000;
+      qtrsecond_irq_d <= 1'b0;
+      vbl_started <= 1'b0;
+      interrupt_clear_pulse <= 1'b0;
+      c046_mirror <= 8'h00;
+      any_irq_d <= 1'b0;
+    end else begin
+      
+      // Auto-clear interrupts when INTEN bits are disabled
+      if (!INTEN[3]) begin
+        irq_pending[3] <= 1'b0;
+      end
+      if (!INTEN[4]) begin
+        irq_pending[4] <= 1'b0;
+      end
+      
+      // Handle C047 clear on write (scope to IO region)
+      if (we && IO && phi2 && (addr_bef[11:0] == 12'h047)) begin
+        interrupt_clear_pulse <= 1'b1;
+`ifdef SIMULATION
+        $display("IRQ_MANAGER: C047 clear request processed (write)");
+`endif
+      end
+      
+      // VBL interrupt (bit 3) - fire once per frame at NTSC VBL entry (Clemens lower bound)
+      if (V == 199 && !vbl_started) begin
+        vbl_started <= 1'b1;
+        if (INTEN[3]) begin
+          irq_pending[3] <= 1'b1;  // Set VBL interrupt pending
+`ifdef SIMULATION
+          $display("VBL_INTERRUPT: Set at V=%0d (VBL region), INTEN[3]=%0d", V, INTEN[3]);
+`endif
+        end
+      end else if (!INTEN[3]) begin
+        irq_pending[3] <= 1'b0;  // Auto-clear when disabled
+      end
+      
+      // Reset vbl_started at frame end
+      if (V >= 262) begin
+        vbl_started <= 1'b0;
+      end
+      
+      // Quarter-second interrupt (bit 4) - edge detection
+      qtrsecond_irq_d <= qtrsecond_irq;
+      if ((qtrsecond_irq & ~qtrsecond_irq_d) && INTEN[4]) begin
+        irq_pending[4] <= 1'b1;  // Set quarter-second interrupt pending
+`ifdef SIMULATION
+        $display("QSEC_INTERRUPT: Set, INTEN[4]=%0d", INTEN[4]);
+`endif
+      end else if (!INTEN[4]) begin
+        irq_pending[4] <= 1'b0;  // Auto-clear when disabled
+      end
+      
+      // VGC interrupts (bits 1, 2)
+      if (VGCINT[5] & VGCINT[1]) begin
+        irq_pending[1] <= 1'b1;  // VGC scanline interrupt
+      end else begin
+        irq_pending[1] <= 1'b0;
+      end
+      
+      if (VGCINT[6] & VGCINT[2]) begin
+        irq_pending[2] <= 1'b1;  // VGC second interrupt  
+      end else begin
+        irq_pending[2] <= 1'b0;
+      end
+      
+      // Sound interrupt (direct from sound module)
+      irq_pending[7] <= snd_irq;
+      
+      // Interrupt clearing (C047 write)
+      if (interrupt_clear_pulse) begin
+`ifdef SIMULATION
+        $display("INTERRUPTS: Before clear: INTEN=%02h INTFLAG=%02h VGCINT=%02h V=%0d H=%0d", INTEN, INTFLAG, VGCINT, V, H);
+`endif
+        irq_pending[3] <= 1'b0;  // Clear VBL interrupt
+        irq_pending[4] <= 1'b0;  // Clear quarter-second interrupt
+        interrupt_clear_pulse <= 1'b0;  // Auto-clear the pulse after one cycle
+`ifdef SIMULATION
+        $display("INTERRUPTS: Cleared VBL and QSEC flags via C047 write");
+`endif
+      end
+      
+      // Central pending bit management (bit 0) - OR of all interrupt sources
+      irq_pending[0] <= |irq_pending[15:1];
+
+      // Maintain C046 mirror bits for VBL/QSEC
+      c046_mirror[3] <= irq_pending[3];
+      c046_mirror[4] <= irq_pending[4];
+      // Set aggregator (bit7) on rising edge of any IRQ pending
+      if ((|irq_pending[15:1]) & ~any_irq_d) begin
+        c046_mirror[7] <= 1'b1;
+      end
+      any_irq_d <= (|irq_pending[15:1]);
+
+    end
+  end
+  
+  // Map centralized IRQ register to INTFLAG for compatibility (no read side-effects here)
+  always @(*) begin
+    INTFLAG = irq_pending[7:0];
+  end
+  
+  // Centralized CPU interrupt output - single point of control
+  // Match Clemens/GSplus: Video IRQs are driven via the VGC path (C023/C032),
+  // not by the Mega II VBL/QSEC (C041/C046) directly. Exclude bits 3 (VBL) and 4 (QSEC)
+  // from the cpu_irq OR to avoid a persistent level-driven VBL from Mega II.
+  assign cpu_irq = |(irq_pending & 16'hFFE6);  // mask out bit0 (aggregator), bit3 (VBL), bit4 (QSEC)
+
+  // Apply C046 read side-effect to the mirror after the read is observed
+  always @(posedge CLK_14M) begin
+    if (!reset) begin
+      if (c046_read) begin
+        c046_mirror <= (c046_mirror & 8'hbf) | (c046_mirror[7] ? 8'h40 : 8'h00);
+`ifdef SIMULATION
+        $display("C046_READ_SIDE_EFFECT: Applied bit manipulation to INTFLAG mirror (7->6, 7 cleared)");
+`endif
+      end
+    end
+  end
 
   always @(posedge CLK_14M)
     begin
@@ -1611,7 +1711,8 @@ wire ready_out;
           //$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x cpu_dout %x cpu_we_n %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,cpu_dout,cpu_we_n,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
           // to debug interrupts:
           if (cpu_irq)
-            $display("cpu_irq %x vgc7 any %x vgc second %x vgc scanline %x second enable %x scanline enable %x INTEN[4] %x INTEN[3] %x INTFLAG 4 %x INTFLG 3 %x snd_irq %x",cpu_irq,VGCINT[7],VGCINT[6],VGCINT[5],VGCINT[2],VGCINT[1],INTEN[4],INTEN[3],INTFLAG[4],INTFLAG[3], snd_irq);
+            $display("cpu_irq %x VBL(any=%0d,1s=%0d,sl=%0d,en1s=%0d,ensl=%0d) INTEN=%02h INTFLAG=%02h VGCINT=%02h snd_irq %0d", cpu_irq,
+                     (VGCINT[7]), (VGCINT[6]&VGCINT[2]), (VGCINT[5]&VGCINT[1]), VGCINT[2], VGCINT[1], INTEN, INTFLAG, VGCINT, snd_irq);
         end
     end
 
