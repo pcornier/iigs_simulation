@@ -30,5 +30,4 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/floppy_track.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
 set_global_assignment -name VHDL_FILE rtl/dpram_bram.vhd
-set_global_assignment -name VHDL_FILE rtl/slowram_spram.vhd
 set_global_assignment -name SYSTEMVERILOG_FILE IIgs.sv

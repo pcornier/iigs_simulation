@@ -78,10 +78,11 @@ module hdd(
     reg              increment_sec_addr;
     reg              select_d;
     
-    // Sector buffer
-    // Double-ported RAM for holding a sector
-    reg [7:0]        sector_buf[0:511];
-    reg [7:0]        sector_buf_read;
+    // Sector buffer: true dual-port RAM (512x8)
+    wire [7:0]       sector_dma_q;   // DMA (Port A) read data
+    wire [7:0]       sector_cpu_q;   // CPU (Port B, C0F8) read data
+    reg              cpu_c0f8_we;    // CPU writes to C0F8 during WRITE
+    reg  [7:0]       cpu_c0f8_din;
     
     // ProDOS constants
     parameter        PRODOS_COMMAND_STATUS = 8'h00;
@@ -115,7 +116,7 @@ module hdd(
                   4'h5: D_OUT <= reg_mem_h;       // MEM H
                   4'h6: D_OUT <= reg_block_l;     // BLK L
                   4'h7: D_OUT <= reg_block_h;     // BLK H
-                  4'h8: D_OUT <= sector_buf[sec_addr]; // NEXT BYTE (no increment here)
+                  4'h8: D_OUT <= sector_cpu_q;         // NEXT BYTE mirror (no increment here)
                   default: D_OUT <= 8'hFF;
                 endcase
                 $display("HDD CPU %s 00:%04h -> %02h (cmd=%02h unit=%02h blk=%04h mem=%04h sec_idx=%03d)",
@@ -141,6 +142,7 @@ module hdd(
                 increment_sec_addr <= 1'b0;
                 hdd_read <= 1'b0;
                 hdd_write <= 1'b0;
+                cpu_c0f8_we <= 1'b0;
             end
             else
             begin
@@ -148,6 +150,7 @@ module hdd(
                 // De-assert on the cycle after assertion.
                 if (hdd_read) hdd_read <= 1'b0;
                 if (hdd_write) hdd_write <= 1'b0;
+                cpu_c0f8_we <= 1'b0;
 
                 select_d <= DEVICE_SELECT;
                 if (DEVICE_SELECT == 1'b1)
@@ -240,7 +243,7 @@ module hdd(
 `endif
                                     end
 `ifdef SIMULATION
-                                    $display("HDD CPU READ C0F8[%03d] -> %02h", sec_addr, sector_buf[sec_addr]);
+                                    $display("HDD CPU READ C0F8[%03d] -> %02h", sec_addr, sector_cpu_q);
 `endif
                                 end
                             default :
@@ -283,9 +286,10 @@ module hdd(
                                 begin reg_block_h <= D_IN; `ifdef SIMULATION $display("HDD WR C0F7: blkH <= %02h (blk=%04h)", D_IN, {D_IN, reg_block_l}); `endif end
                             4'h8 :
                                 begin
-				    //$display("writing D_IN %x to ram %x readonly %x",D_IN,sec_addr,hdd_protect);
-                                    sector_buf[sec_addr] <= D_IN;
-                                    sec_addr <= sec_addr + 1;
+					    //$display("writing D_IN %x to NEXT BYTE at %x",D_IN,sec_addr);
+                                    cpu_c0f8_we  <= 1'b1;
+                                    cpu_c0f8_din <= D_IN;
+                                    sec_addr     <= sec_addr + 1;
 `ifdef SIMULATION
                                     $display("HDD CPU WRITE C0F8[%03d] <= %02h", sec_addr, D_IN);
 `endif
@@ -311,22 +315,59 @@ end
     // DEVICE_SELECT/IO_SELECT
     // RESET
     // cpu_interface
-    
+`ifdef VERILATOR
+dpram #(.widthad_a(9),.prefix("hdd"),.p(" a")) sector_ram
+`else
+bram #(.widthad_a(9)) sector_ram
+`endif
+(
+        // Port A: DMA
+        .clock_a(CLK_14M),
+        .wren_a(ram_we),
+        .address_a(ram_addr),
+        .data_a(ram_di),
+        .q_a(sector_dma_q),
+        // Port B: CPU NEXT BYTE (read-only)
+        .clock_b(CLK_14M),
+        .wren_b(cpu_c0f8_we),
+        .address_b(sec_addr),
+        .data_b(cpu_c0f8_din),
+        .q_b(sector_cpu_q),
+        // Unused enables
+       // .byteena_a(1'b1),
+       // .byteena_b(1'b1),
+        //.ce_a(1'b1),
+        .enable_b(1'b1)
+);
+    /*
     // Dual-ported RAM holding the contents of the sector
-    
-    always @(posedge CLK_14M)
-    begin: sec_storage
-        
-        begin
-            if (ram_we == 1'b1) begin
-                sector_buf[ram_addr] <= ram_di;
-                $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", ram_addr, ram_di);
-            end
-            ram_do <= sector_buf[ram_addr];
-            
-            // Register sector buffer reads for CPU interface
-            sector_buf_read <= sector_buf[sec_addr];
-        end
+    dpram #(
+        .width_a(8),
+        .widthad_a(9)
+    ) sector_ram (
+        // Port A: DMA
+        .clock_a(CLK_14M),
+        .wren_a(ram_we),
+        .address_a(ram_addr),
+        .data_a(ram_di),
+        .q_a(sector_dma_q),
+        // Port B: CPU NEXT BYTE (read-only)
+        .clock_b(CLK_14M),
+        .wren_b(cpu_c0f8_we),
+        .address_b(sec_addr),
+        .data_b(cpu_c0f8_din),
+        .q_b(sector_cpu_q),
+        // Unused enables
+        .byteena_a(1'b1),
+        .byteena_b(1'b1),
+        .ce_a(1'b1),
+        .enable_b(1'b1)
+    );
+*/
+    // Registered DMA readback
+    always @(posedge CLK_14M) begin
+        ram_do <= sector_dma_q;
+        if (ram_we) $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", ram_addr, ram_di);
     end
  
 

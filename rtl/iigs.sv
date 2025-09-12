@@ -308,6 +308,13 @@ module iigs
 
   always_comb begin
     lcram2_sel = 0;
+    // Provide a safe default for addr_bus to avoid latches in branches
+    // Default maps CPU address, including aux mapping for Bank 00/E0
+    if (aux && (bank_bef == 8'h00 || bank_bef == 8'he0)) begin
+      addr_bus = addr_bef + 24'h10000;
+    end else begin
+      addr_bus = cpu_addr;
+    end
     
     // E0/E1 Banks - Language Card Implementation (simplified/fixed)
     if ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~RDROM) begin
@@ -352,12 +359,7 @@ module iigs
       end
     end
     else begin
-      // Default address translation
-      if (aux && (bank_bef == 8'h00 || bank_bef == 8'he0)) begin
-        addr_bus = addr_bef + 24'h10000;
-      end else begin
-        addr_bus = cpu_addr;  // Normal mapping (includes ROM code addresses $C000-$FFFF)
-      end
+      // Default address translation already applied above
     end
   end
 
@@ -404,10 +406,12 @@ module iigs
     slowram_ce_int = 0;
     
     // Debug: Show physical_bank vs bank_bef for $BF00 accesses
+`ifdef SIMULATION
     if (addr_bef == 16'hBF00 && ~IO) begin
       $display("MEM_CTRL_DEBUG: addr_bef=%04x bank_bef=%02x physical_bank=%02x addr_bus=%06x", 
                addr_bef, bank_bef, physical_bank, addr_bus);
     end
+`endif
     
     if (IO) begin
       // I/O space - no RAM access
@@ -427,9 +431,11 @@ module iigs
             // Writes always go to RAM when LC_WE=1 (handled by lcram2_sel logic)
             fastram_ce_int = 1; 
             slowram_ce_int = 1;
+`ifdef SIMULATION
             if (addr_bef == 16'hBF00) begin
               $display("MEM_CTRL_DEBUG: Enabling RAM for Bank00 LC area - ROM mux handles RDROM logic");
             end
+`endif
           end else begin
             fastram_ce_int = 1;  // Normal Bank 00 RAM (non-shadowed)
           end
