@@ -282,6 +282,14 @@ pram[8'hfc]=8'h71;
 pram[8'hfd]=8'h53;
 pram[8'hfe]=8'hdb;
 pram[8'hff]=8'hf9;
+`ifdef SIMULATION
+// Seed to deterministic values; CTL starts at 0x00 to match early read
+c033 = 8'h06;   // DATA
+c034 = 8'h00;   // CTL initial read returns 0x00
+`else
+c033 = 8'h00;
+c034 = 8'h00;
+`endif
 end
 
 reg [31:0] clock_data;
@@ -315,12 +323,20 @@ always @(posedge CLK_14M) begin
 	onesecond_irq<=0;
     qtrsecond_irq<=0;
 
+// Initialize clock deterministically under simulation to avoid nondeterministic diffs
+// Otherwise, hook up host timestamp (Mac epoch) on first use
+`ifdef SIMULATION
+if (clock_data==0)
+	clock_data <= 32'h0600_0000; // match Clemens early read of C033 (high byte = $06)
+`else
 // hook up unix timestamp
 if (clock_data==0)
 	clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
+`endif
 
 
 
+`ifndef SIMULATION
 	clock_counter<=clock_counter+1;
 	clock_counter2<=clock_counter2+1;
 	if (clock_counter=='d14318181)
@@ -335,6 +351,7 @@ if (clock_data==0)
 		clock_counter2<=0;
 		qtrsecond_irq<=1;
 	end
+`endif
 
 
   case (checksum_state)

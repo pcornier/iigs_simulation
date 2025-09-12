@@ -29,6 +29,7 @@
 #include "sim_audio.h"
 #include "sim_input.h"
 #include "sim_clock.h"
+#include "parallel_clemens.h"
 
 #define FMT_HEADER_ONLY
 #include <fmt/core.h>
@@ -80,6 +81,52 @@ int pc_breakpoint_addr = 0;
 bool pc_break_enabled;
 bool break_pending = false;
 bool old_vpb = false;
+// Track MVN operands for better source/dest diagnostics
+static unsigned char last_mvn_src_bank = 0xFF;
+static unsigned char last_mvn_dst_bank = 0xFF;
+static int mvn_expect_operands = 0; // 2 -> expect dst then src on next two VPA fetches
+static int mvn_logged_data_reads = 0; // limit noisy logs
+static unsigned short mvn_pc_at_opcode = 0xFFFF;
+
+// STA abs,Y tracing
+static int sta99_expect_operands = 0; // expect 2 bytes following IR=0x99
+static unsigned char sta99_op_lo = 0xFF;
+static unsigned char sta99_op_hi = 0xFF;
+static unsigned short sta99_base = 0xFFFF;
+
+// Monitor entry trap (first time we enter ROM monitor idle loop)
+static bool monitor_trap_fired = false;
+static bool loader_entry_trap_fired = false;
+static int loader_ifetch_trace_budget = 0;
+
+// Ring buffer of recent instruction fetches (for postmortem at monitor entry)
+struct IfetchEntry { unsigned short pc; unsigned char pbr; unsigned char ir; };
+static const int IFETCH_RING_CAP = 128;
+static IfetchEntry ifetch_ring[IFETCH_RING_CAP];
+static int ifetch_wptr = 0;
+
+static inline void ifetch_ring_record(unsigned char pbr, unsigned short pc, unsigned char ir) {
+    ifetch_ring[ifetch_wptr].pbr = pbr;
+    ifetch_ring[ifetch_wptr].pc = pc;
+    ifetch_ring[ifetch_wptr].ir = ir;
+    ifetch_wptr = (ifetch_wptr + 1) & (IFETCH_RING_CAP - 1);
+}
+
+// HDD C0F0-C0FF event ring for protocol forensics at monitor entry
+struct HddEvt { unsigned short pc; unsigned char pbr; unsigned short addr16; unsigned char bank; unsigned char rw; unsigned char data; };
+static const int HDD_RING_CAP = 128;
+static HddEvt hdd_ring[HDD_RING_CAP];
+static int hdd_wptr = 0;
+static inline void hdd_ring_record(unsigned char pbr, unsigned short pc, unsigned char bank, unsigned short a16, bool is_write, unsigned char data) {
+    hdd_ring[hdd_wptr].pbr = pbr;
+    hdd_ring[hdd_wptr].pc = pc;
+    hdd_ring[hdd_wptr].addr16 = a16;
+    hdd_ring[hdd_wptr].bank = bank;
+    hdd_ring[hdd_wptr].rw = is_write ? 'W' : 'R';
+    hdd_ring[hdd_wptr].data = data;
+    hdd_wptr = (hdd_wptr + 1) & (HDD_RING_CAP - 1);
+}
+
 
 // Self-test mode support
 bool selftest_mode = false;
@@ -119,6 +166,38 @@ const int input_menu = 12;
 #define VGA_SCALE_Y vga_scale
 SimVideo video(VGA_WIDTH, VGA_HEIGHT, VGA_ROTATE);
 float vga_scale = 1.0;
+// Headless mode flag (no SDL/ImGui rendering)
+bool headless = false;
+
+// CSV trace (Clemens-like) for per-access mapping and value comparison
+static FILE* g_vsim_trace_csv = nullptr;
+static unsigned long long g_vsim_seq = 0ULL;
+static bool g_vsim_trace_active = false;
+static void vsim_trace_open_fresh() {
+    if (g_vsim_trace_csv) { fclose(g_vsim_trace_csv); g_vsim_trace_csv = nullptr; }
+    g_vsim_trace_csv = fopen("vsim_trace.csv", "w");
+    if (g_vsim_trace_csv) {
+        fprintf(g_vsim_trace_csv,
+                "seq,phase,type,pc,pbr,ir,a_bank,a_adr,data,mmap,phys,rom,slow,io\n");
+        fflush(g_vsim_trace_csv);
+    }
+    g_vsim_seq = 0ULL;
+}
+static void vsim_trace_log(char phase, char type,
+                           unsigned pc, unsigned pbr, unsigned ir,
+                           unsigned a_bank, unsigned a_adr, unsigned data,
+                           unsigned phys_bank, int is_rom, int is_slow, int is_io) {
+    if (!g_vsim_trace_active) return;
+    if (!g_vsim_trace_csv) vsim_trace_open_fresh();
+    // mmap not synthesized; output 0 to align columns
+    fprintf(g_vsim_trace_csv,
+            "%llu,%c,%c,%04X,%02X,%02X,%02X,%04X,%02X,%08X,%02X,%d,%d,%d\n",
+            (unsigned long long)g_vsim_seq++, phase, type,
+            pc & 0xFFFF, pbr & 0xFF, ir & 0xFF,
+            a_bank & 0xFF, a_adr & 0xFFFF, data & 0xFF,
+            0U, phys_bank & 0xFF, is_rom ? 1 : 0, is_slow ? 1 : 0, is_io ? 1 : 0);
+    fflush(g_vsim_trace_csv);
+}
 
 // Verilog module
 // --------------
@@ -155,8 +234,11 @@ void resetSim() {
 	top->reset = 1;
 	break_pending = false;
 	old_vpb = true;
-	printf("resetSim!! main_time %d top->reset %d\n",main_time,top->reset);
+    printf("resetSim!! main_time %llu top->reset %d\n", (unsigned long long)main_time, top->reset);
 	CLK_14M.Reset();
+	
+	// Initialize parallel memory tracking system
+	parallel_clemens_init();
 }
 
 //#define DEBUG
@@ -208,7 +290,7 @@ bool writeLog(const char* line)
 			std::string m_line = log_mame.at(log_index);
 			std::string m = "%6d MAME > " + m_line;
 			if (stop_on_log_mismatch && m_line != c_line) {
-				console.AddLog("DIFF at %06d - %06x", cpu_instruction_count, ins_pc[0]);
+                                console.AddLog("DIFF at %06ld - %06x", cpu_instruction_count, ins_pc[0]);
 				console.AddLog(m.c_str(), cpu_instruction_count);
 				console.AddLog(c.c_str(), cpu_instruction_count);
 				match = false;
@@ -882,9 +964,483 @@ int verilate() {
 					unsigned char vpa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__VPA;
 					unsigned char vda = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__VDA;
 					unsigned char vpb = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__VPB;
-					unsigned char din = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D_IN;
+                    unsigned char din = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D_IN;
+					unsigned char dout = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D_OUT;
+					// CPU WE signal is ACTIVE LOW: 0=write, 1=read
+					// This is opposite of iigs.sv internal 'we' signal which is active HIGH
+					unsigned char we_n = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__WE;
+					unsigned char we = !we_n;  // Convert to active HIGH for consistency
 					unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
 					unsigned char nextstate = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__NextState;
+					
+                    // Extract bank and address for memory tracking
+                    unsigned char bank = (addr >> 16) & 0xFF;
+                    unsigned short addr16 = addr & 0xFFFF;
+
+                    // Read memory control state from hardware and feed into Clemens shadow mapper
+                    unsigned char hw_RDROM   = VERTOPINTERN->emu__DOT__iigs__DOT__RDROM;
+                    unsigned char hw_LCRAM2  = VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2;
+                    unsigned char hw_LC_WE   = VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE;
+                    // Use CPU VPB for mapping semantics
+                    unsigned char hw_VPB     = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__VPB;
+                    unsigned char hw_SHADOW  = VERTOPINTERN->emu__DOT__iigs__DOT__shadow;
+                    unsigned char hw_ALTZP   = VERTOPINTERN->emu__DOT__iigs__DOT__ALTZP;
+                    unsigned char hw_INTCXROM= VERTOPINTERN->emu__DOT__iigs__DOT__INTCXROM;
+                    unsigned char hw_PAGE2   = VERTOPINTERN->emu__DOT__iigs__DOT__PAGE2;
+                    unsigned char hw_RAMRD   = VERTOPINTERN->emu__DOT__iigs__DOT__RAMRD;
+                    unsigned char hw_RAMWRT  = VERTOPINTERN->emu__DOT__iigs__DOT__RAMWRT;
+                    unsigned char hw_SLTROMSEL=VERTOPINTERN->emu__DOT__iigs__DOT__SLTROMSEL;
+                    unsigned char hw_STORE80 = VERTOPINTERN->emu__DOT__iigs__DOT__STORE80;
+                    unsigned char hw_HIRES   = VERTOPINTERN->emu__DOT__iigs__DOT__HIRES_MODE;
+                    parallel_clemens_update_hw(hw_RDROM, hw_LCRAM2, hw_LC_WE, hw_VPB, hw_SHADOW, hw_ALTZP, hw_INTCXROM, hw_PAGE2, hw_RAMRD, hw_RAMWRT, hw_SLTROMSEL, hw_STORE80, hw_HIRES);
+					
+					// Enhanced debug info for timing analysis
+					static unsigned long last_addr = 0;
+					static unsigned char last_bank = 0xFF;
+					static unsigned char last_din = 0xFF;
+					static bool debug_bf00_timing = false;
+					static bool debug_mvn_area = false;
+					
+					// Get memory controller signals for debugging
+					// The issue is likely that CPU A_OUT shows logical address (Bank 00)
+					// but memory controller redirects to physical address (Bank 01)
+					
+                    // Track memory accesses 
+                    if (vda && we) {
+                        // Memory write - add MVN debug for Language Card area
+                        if ((bank >= 0xFC || bank == 0x00) && addr16 >= 0xBF00) {
+							debug_mvn_area = true;
+							printf("TIMING DEBUG MVN WRITE: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DOUT=%02X\n", 
+								   vda, we, bank, addr16, dout);
+							printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n", 
+								   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR, 
+								   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
+							printf("  LC_WE=%d RDROM=%d LCRAM2=%d (should enable write-through)\n",
+								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE,
+								   VERTOPINTERN->emu__DOT__iigs__DOT__RDROM,
+								   VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2);
+						}
+						
+                        // Actual mapping sampling from hardware: use address bus and ROM selects
+                        unsigned int phys_addr_bus = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
+                        unsigned int actual_phys_bank = (phys_addr_bus >> 16) & 0xFF;
+                        int romc = VERTOPINTERN->emu__DOT__iigs__DOT__romc_ce;
+                        int romd = VERTOPINTERN->emu__DOT__iigs__DOT__romd_ce;
+                        int rom1 = VERTOPINTERN->emu__DOT__iigs__DOT__rom1_ce;
+                        int rom2 = VERTOPINTERN->emu__DOT__iigs__DOT__rom2_ce;
+                        int actual_is_rom = (int)(romc | romd | rom1 | rom2);
+                        if (actual_is_rom) {
+                            if (romc) actual_phys_bank = 0xFC;
+                            else if (romd) actual_phys_bank = 0xFD;
+                            else if (rom1) actual_phys_bank = 0xFE;
+                            else if (rom2) actual_phys_bank = 0xFF;
+                        }
+                        if (we) actual_is_rom = 0; // writes never go to ROM
+                        // Infer fast/slow from phys bank (slow if E0/E1); IO page is also slow
+                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        int actual_is_fast = (!actual_is_rom && !actual_is_slow) ? 1 : 0;
+
+                        // Shadow compare access mapping with Clemens-derived expectation
+                        unsigned short pc_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                        unsigned char  pbr_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        parallel_clemens_compare_access(bank, addr16, dout, /*is_write*/1,
+                                                         actual_phys_bank, actual_is_rom, actual_is_fast, actual_is_slow,
+                                                         pc_local, pbr_local);
+
+                        parallel_clemens_compare_write(bank, addr16, dout);
+                        parallel_clemens_value_compare_write(bank, addr16, dout);
+                        parallel_clemens_track_hw_write(bank, addr16, actual_phys_bank, dout);
+                        // Ring-log this write for later dump on failure
+                        parallel_clemens_recent_log_write(bank, addr16, actual_phys_bank, dout);
+
+                        // CSV trace for write
+                        unsigned short pc_local_write = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                        unsigned char  pbr_local_write = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        unsigned char  ir_local_write  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                        int is_io = ((bank == 0x00 || bank == 0x01 || bank == 0xE0 || bank == 0xE1) &&
+                                     (addr16 >= 0xC000 && addr16 <= 0xC0FF)) ? 1 : 0;
+                        if (is_io) {
+                            // Approximate Clemens IO slow/fast classification:
+                            // - Many early boot accesses in $C000-$C02F are slow
+                            // - Known fast exceptions: $C036 (CYAREG/SPEED), $C035 (SHADOW reg read mirror), $C039 (SCCAREG), $C068 (STATEREG)
+                            bool io_is_slow = (addr16 >= 0xC000 && addr16 <= 0xC02F) && (addr16 != 0xC036) && (addr16 != 0xC035) && (addr16 != 0xC039) && (addr16 != 0xC068);
+                            if (io_is_slow) actual_is_slow = 1; else {/*leave as inferred*/}
+                            // Normalize phys bank reporting for IO to match Clemens
+                            // Clemens logs phys equal to the logical bank for IO ($00 or $E1)
+                            actual_phys_bank = bank;
+                            actual_is_rom = 0;
+                        }
+                        // For non-ROM, non-IO accesses, log phys as logical bank to match Clemens
+                        if (!actual_is_rom && !is_io) {
+                            actual_phys_bank = bank;
+                        }
+                        // Suppress spurious ROM reporting for non-ROM regions
+                        if (actual_is_rom && !(actual_phys_bank >= 0xFC)) {
+                            actual_is_rom = 0;
+                        }
+                        // For ROM reads Clemens logs a_bank=phys. For writes keep logical bank.
+                        vsim_trace_log(/*phase*/ vpa ? 'I' : 'D', /*type*/ 'W',
+                                       pc_local_write, pbr_local_write, ir_local_write,
+                                       bank, addr16, dout,
+                                       actual_phys_bank, actual_is_rom, actual_is_slow, is_io);
+                        // Additional write-time diagnostics for STA abs,Y and BFxx
+                        if (ir_local_write == 0x99 && sta99_base != 0xFFFF) {
+                            unsigned short eff = (unsigned short)(sta99_base + VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                            printf("STA abs,Y WRITE: eff=%02X:%04X actual=%02X:%04X data=%02X\n",
+                                   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR,
+                                   eff, bank, addr16, dout);
+                        }
+                        if (bank == 0x00 && addr16 >= 0xBF00 && addr16 <= 0xBFFF) {
+                            printf("BFxx WRITE: %02X:%04X <= %02X (PC=%04X PBR=%02X)\n",
+                                   bank, addr16, dout,
+                                   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC,
+                                   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR);
+                        }
+						
+						if (debug_mvn_area) {
+							debug_mvn_area = false;
+							printf("TIMING DEBUG MVN WRITE COMPLETE: Data %02X written to Bank %02X Addr %04X\n", 
+								   dout, bank, addr16);
+						}
+                    } else if (vda && !we) {
+                        // Memory read - add timing debug for $BF00
+                        if (bank == 0x00 && addr16 == 0xBF00) {
+							debug_bf00_timing = true;
+							printf("TIMING DEBUG $BF00: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DIN=%02X\n", 
+								   vda, we, bank, addr16, din);
+							printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n", 
+								   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR, 
+								   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
+							
+							// Check Language Card state
+							printf("  LC_WE=%d RDROM=%d LC_WE_PRE=%d LCRAM2=%d\n",
+								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE,
+								   VERTOPINTERN->emu__DOT__iigs__DOT__RDROM,
+								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE_PRE,
+								   VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2);
+                    } else if (vpa && !we) {
+                        // Instruction fetch only (VPA=1, VDA=0): log mapping and CSV
+                        unsigned int phys_addr_bus = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
+                        unsigned int actual_phys_bank = (phys_addr_bus >> 16) & 0xFF;
+                        int romc2 = VERTOPINTERN->emu__DOT__iigs__DOT__romc_ce;
+                        int romd2 = VERTOPINTERN->emu__DOT__iigs__DOT__romd_ce;
+                        int rom12 = VERTOPINTERN->emu__DOT__iigs__DOT__rom1_ce;
+                        int rom22 = VERTOPINTERN->emu__DOT__iigs__DOT__rom2_ce;
+                        int actual_is_rom = (int)(romc2 | romd2 | rom12 | rom22);
+                        if (actual_is_rom) {
+                            if (romc2) actual_phys_bank = 0xFC;
+                            else if (romd2) actual_phys_bank = 0xFD;
+                            else if (rom12) actual_phys_bank = 0xFE;
+                            else if (rom22) actual_phys_bank = 0xFF;
+                        }
+                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        int is_io2 = ((bank == 0x00 || bank == 0x01 || bank == 0xE0 || bank == 0xE1) &&
+                                      (addr16 >= 0xC000 && addr16 <= 0xC0FF)) ? 1 : 0;
+                        if (is_io2) {
+                            bool io_is_slow2 = (addr16 >= 0xC000 && addr16 <= 0xC02F) && (addr16 != 0xC036);
+                            if (addr16 == 0xC035 || addr16 == 0xC039 || addr16 == 0xC068) io_is_slow2 = false;
+                            if (io_is_slow2) actual_is_slow = 1;
+                            // Normalize IO phys bank and ROM flag
+                            actual_phys_bank = bank;
+                            actual_is_rom = 0;
+                        }
+                        // For non-ROM, non-IO accesses, log phys as logical bank to match Clemens
+                        if (!actual_is_rom && !is_io2) {
+                            actual_phys_bank = bank;
+                        }
+                        // Suppress spurious ROM reporting for non-ROM regions
+                        if (actual_is_rom && !(actual_phys_bank >= 0xFC)) {
+                            actual_is_rom = 0;
+                        }
+                        // Gate CSV at reset vector
+                        if (!g_vsim_trace_active && (actual_is_rom) && (actual_phys_bank == 0xFF) && addr16 == 0xFFFC) {
+                            g_vsim_trace_active = true;
+                            vsim_trace_open_fresh();
+                        }
+                        unsigned short pc_local_read = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                        unsigned char  pbr_local_read = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        unsigned char  ir_local_read  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                        {
+                            unsigned csv_bank_ifetch = (vpb ? actual_phys_bank : bank);
+                            vsim_trace_log(/*phase*/ 'I', /*type*/ 'R',
+                                           pc_local_read, pbr_local_read, ir_local_read,
+                                           csv_bank_ifetch, addr16, din,
+                                           actual_phys_bank, actual_is_rom, actual_is_slow, is_io2);
+                        }
+                    }
+						
+                        // Actual mapping sampling from hardware: use address bus and ROM selects
+                        unsigned int phys_addr_bus = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
+                        unsigned int actual_phys_bank = (phys_addr_bus >> 16) & 0xFF;
+                        int romc2 = VERTOPINTERN->emu__DOT__iigs__DOT__romc_ce;
+                        int romd2 = VERTOPINTERN->emu__DOT__iigs__DOT__romd_ce;
+                        int rom12 = VERTOPINTERN->emu__DOT__iigs__DOT__rom1_ce;
+                        int rom22 = VERTOPINTERN->emu__DOT__iigs__DOT__rom2_ce;
+                        int actual_is_rom = (int)(romc2 | romd2 | rom12 | rom22);
+                        if (actual_is_rom) {
+                            if (romc2) actual_phys_bank = 0xFC;
+                            else if (romd2) actual_phys_bank = 0xFD;
+                            else if (rom12) actual_phys_bank = 0xFE;
+                            else if (rom22) actual_phys_bank = 0xFF;
+                        }
+                        // Infer fast/slow from phys bank
+                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        int actual_is_fast = (!actual_is_rom && !actual_is_slow) ? 1 : 0;
+
+                        // Shadow compare access mapping with Clemens-derived expectation
+                        unsigned short pc_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                        unsigned char  pbr_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        parallel_clemens_compare_access(bank, addr16, din, /*is_write*/0,
+                                                         actual_phys_bank, actual_is_rom, actual_is_fast, actual_is_slow,
+                                                         pc_local, pbr_local);
+
+                        parallel_clemens_compare_read(bank, addr16, din);
+                        parallel_clemens_value_compare_read(bank, addr16, din);
+                        // Log reads in text/page regions for correlation
+                        parallel_clemens_recent_log_read(bank, addr16, actual_phys_bank, din);
+
+                        // Gate CSV tracing to start at first vector fetch (ROM overlay at FF:FFFC)
+                        if (!g_vsim_trace_active && (actual_is_rom) && (actual_phys_bank == 0xFF) && addr16 == 0xFFFC) {
+                            g_vsim_trace_active = true;
+                            vsim_trace_open_fresh();
+                        }
+                        // Gate CSV tracing to start at first vector fetch FF:FFFC
+                        if (!g_vsim_trace_active && bank == 0xFF && addr16 == 0xFFFC) {
+                            g_vsim_trace_active = true;
+                            vsim_trace_open_fresh();
+                        }
+                        // CSV trace for read
+                        unsigned short pc_local_read = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                        unsigned char  pbr_local_read = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        unsigned char  ir_local_read  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                        int is_io2 = ((bank == 0x00 || bank == 0x01 || bank == 0xE0 || bank == 0xE1) &&
+                                      (addr16 >= 0xC000 && addr16 <= 0xC0FF)) ? 1 : 0;
+                        if (is_io2) actual_is_slow = 1; // IO page is slow
+                        {
+                            unsigned csv_bank_read = (vpb ? actual_phys_bank : bank);
+                            vsim_trace_log(/*phase*/ vpa ? 'I' : 'D', /*type*/ 'R',
+                                           pc_local_read, pbr_local_read, ir_local_read,
+                                           csv_bank_read, addr16, din,
+                                           actual_phys_bank, actual_is_rom, actual_is_slow, is_io2);
+                        }
+
+                        // MVN tracing: generic detection independent of hardcoded PC values
+                        {
+                            unsigned char ir_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                            unsigned char vpa_sig = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__VPA;
+                            static unsigned char last_ir = 0xFF;
+                            if (vpa_sig) {
+                                // Instruction/operand fetch phase
+                                // Capture STA abs,Y operands
+                                if (sta99_expect_operands > 0) {
+                                    if (sta99_expect_operands == 2) sta99_op_lo = din; else sta99_op_hi = din;
+                                    sta99_expect_operands--;
+                                    if (sta99_expect_operands == 0) {
+                                        unsigned short base = (unsigned short)(sta99_op_lo | (sta99_op_hi << 8));
+                                        printf("STA abs,Y operands: base=%04X Y=%04X\n",
+                                               base, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                                    }
+                                } else if (ir_now == 0x99 && last_ir != 0x99) {
+                                    sta99_expect_operands = 2; sta99_op_lo = sta99_op_hi = 0xFF;
+                                    printf("STA abs,Y opcode: PC=%04X PBR=%02X\n",
+                                           VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC,
+                                           VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR);
+                                }
+                                if (mvn_expect_operands > 0) {
+                                    if (mvn_expect_operands == 2) {
+                                        last_mvn_dst_bank = din;
+                                    printf("MVN DEST BANK operand=%02X (DBR before=%02X X=%04X Y=%04X)\n",
+                                               last_mvn_dst_bank,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                                    } else if (mvn_expect_operands == 1) {
+                                        last_mvn_src_bank = din;
+                                    printf("MVN SRC BANK operand=%02X (DBR before=%02X X=%04X Y=%04X)\n",
+                                               last_mvn_src_bank,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                                    }
+                                    mvn_expect_operands--;
+                                    if (mvn_expect_operands == 0) {
+                                        // After both operands fetched, dump DBR state
+                                        printf("MVN OPERANDS latched: dst=%02X src=%02X, DBR now=%02X X=%04X Y=%04X\n",
+                                               last_mvn_dst_bank, last_mvn_src_bank,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                                    }
+                                } else if (ir_now == 0x54 && last_ir != 0x54) {
+                                    // MVN opcode fetch observed, expect next two bytes as dst,src banks
+                                    mvn_expect_operands = 2;
+                                    last_mvn_dst_bank = 0xFF; last_mvn_src_bank = 0xFF;
+                                    mvn_logged_data_reads = 0;
+                                    mvn_pc_at_opcode = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                    printf("MVN OPCODE: PC=%04X PBR=%02X A_OUT=%06lX IR=54\n",
+                                           VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC,
+                                           VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR,
+                                           addr);
+                                } else if (ir_now == 0x54 && mvn_pc_at_opcode != 0xFFFF) {
+                                    // PC-based operand detection fallback: if we see VPA at PC+1 or PC+2, treat as operands
+                                    unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                    if ((unsigned short)(mvn_pc_at_opcode + 1) == pc_now && last_mvn_dst_bank == 0xFF) {
+                                        last_mvn_dst_bank = din;
+                                        printf("MVN DEST BANK operand=%02X (PC-based) DBR=%02X X=%04X Y=%04X\n",
+                                               last_mvn_dst_bank,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                                    } else if ((unsigned short)(mvn_pc_at_opcode + 2) == pc_now && last_mvn_src_bank == 0xFF) {
+                                        last_mvn_src_bank = din;
+                                        printf("MVN SRC BANK operand=%02X (PC-based) DBR=%02X X=%04X Y=%04X\n",
+                                               last_mvn_src_bank,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                                        printf("MVN OPERANDS latched: dst=%02X src=%02X, DBR now=%02X X=%04X Y=%04X (PC-based)\n",
+                                               last_mvn_dst_bank, last_mvn_src_bank,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X,
+                                               VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
+                                    }
+                                }
+                                last_ir = ir_now;
+                            } else {
+                                // Data phase: log first few MVN source reads if operands known
+                                if (last_mvn_src_bank != 0xFF && mvn_logged_data_reads < 8) {
+                                    unsigned char dbr_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                    printf("MVN SRC READ: A_OUT=%06lX bank=%02X addr=%04X DIN=%02X DBR=%02X MVN.src=%02X dst=%02X\n",
+                                           addr, bank, addr16, din, dbr_local, last_mvn_src_bank, last_mvn_dst_bank);
+                                    mvn_logged_data_reads++;
+                                }
+                                // Log STA abs,Y writes: when IR was 0x99 and we see a W, print effective address/components
+                                if (ir_now == 0x99 && (!we)) {
+                                    // no-op here for reads
+                                }
+                            }
+                        }
+						
+                        if (debug_bf00_timing && bank == 0x00 && addr16 == 0xBF00) {
+                            debug_bf00_timing = false;
+                            printf("TIMING DEBUG $BF00 COMPLETE: Data returned = %02X (should be ProDOS MLI, not BRK!)\n", din);
+                            // Dump recent writes to correlate with possible bad LC stub or misrouted early text writes
+                            parallel_clemens_dump_recent_writes("Reached $00:BF00");
+                        }
+
+                        // Loader entry detection: first ifetch at 00:0801
+                        if (!loader_entry_trap_fired) {
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (pbr_now == 0x00 && pc_now == 0x0801 && vpa) {
+                                loader_entry_trap_fired = true;
+                                loader_ifetch_trace_budget = 64; // trace next 64 ifetches in 00:08xx
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                unsigned short y = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                unsigned char RDROM = VERTOPINTERN->emu__DOT__iigs__DOT__RDROM;
+                                unsigned char LCRAM2 = VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2;
+                                unsigned char LC_WE = VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE;
+                                unsigned char INTCXROM = VERTOPINTERN->emu__DOT__iigs__DOT__INTCXROM;
+                                unsigned char ALTZP = VERTOPINTERN->emu__DOT__iigs__DOT__ALTZP;
+                                unsigned char RAMRD = VERTOPINTERN->emu__DOT__iigs__DOT__RAMRD;
+                                unsigned char RAMWRT = VERTOPINTERN->emu__DOT__iigs__DOT__RAMWRT;
+                                unsigned char STORE80 = VERTOPINTERN->emu__DOT__iigs__DOT__STORE80;
+                                unsigned char PAGE2 = VERTOPINTERN->emu__DOT__iigs__DOT__PAGE2;
+                                printf("LOADER ENTRY TRAP: PC=%02X:%04X A=%04X X=%04X Y=%04X P=%02X SP=%04X D=%04X DBR=%02X\n",
+                                       pbr_now, pc_now, a, x, y, p, sp, d, dbr);
+                                printf("  MAP: RDROM=%d LCRAM2=%d LC_WE=%d INTCXROM=%d ALTZP=%d RAMRD=%d RAMWRT=%d STORE80=%d PAGE2=%d\n",
+                                       RDROM, LCRAM2, LC_WE, INTCXROM, ALTZP, RAMRD, RAMWRT, STORE80, PAGE2);
+                            }
+                        }
+
+                        // Monitor entry detection: trap when PC enters FF:9Axx–FF:9Bxx region
+                        if (!monitor_trap_fired) {
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (pbr_now == 0xFF && pc_now >= 0x9A00 && pc_now <= 0x9BFF) {
+                                monitor_trap_fired = true;
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                unsigned short y = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                // Mapping flags
+                                unsigned char RDROM = VERTOPINTERN->emu__DOT__iigs__DOT__RDROM;
+                                unsigned char LCRAM2 = VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2;
+                                unsigned char LC_WE = VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE;
+                                unsigned char INTCXROM = VERTOPINTERN->emu__DOT__iigs__DOT__INTCXROM;
+                                unsigned char ALTZP = VERTOPINTERN->emu__DOT__iigs__DOT__ALTZP;
+                                unsigned char RAMRD = VERTOPINTERN->emu__DOT__iigs__DOT__RAMRD;
+                                unsigned char RAMWRT = VERTOPINTERN->emu__DOT__iigs__DOT__RAMWRT;
+                                unsigned char STORE80 = VERTOPINTERN->emu__DOT__iigs__DOT__STORE80;
+                                unsigned char PAGE2 = VERTOPINTERN->emu__DOT__iigs__DOT__PAGE2;
+                                printf("MONITOR ENTRY TRAP: PC=%02X:%04X A=%04X X=%04X Y=%04X P=%02X SP=%04X D=%04X DBR=%02X\n",
+                                       pbr_now, pc_now, a, x, y, p, sp, d, dbr);
+                                printf("  MAP: RDROM=%d LCRAM2=%d LC_WE=%d INTCXROM=%d ALTZP=%d RAMRD=%d RAMWRT=%d STORE80=%d PAGE2=%d\n",
+                                       RDROM, LCRAM2, LC_WE, INTCXROM, ALTZP, RAMRD, RAMWRT, STORE80, PAGE2);
+                                // Dump a few bytes at the top of stack (bank always 00 in native mode)
+                                for (int i = 0; i < 8; i++) {
+                                    unsigned short saddr = (sp + i) & 0xFFFF;
+                                    printf("  STK[%02d] @00:%04X\n", i, saddr);
+                                }
+                                // Dump recent ifetch history
+                                printf("RECENT IFETCHES (most recent last):\n");
+                                int idx = ifetch_wptr;
+                                for (int i = 0; i < 32; i++) {
+                                    idx = (idx - 1) & (IFETCH_RING_CAP - 1);
+                                    printf("  %02X:%04X IR=%02X\n", ifetch_ring[idx].pbr, ifetch_ring[idx].pc, ifetch_ring[idx].ir);
+                                }
+                                // Dump recent HDD C0F0-C0FF activity
+                                printf("RECENT HDD IO (C0F0-C0FF, most recent last):\n");
+                                int hidx = hdd_wptr;
+                                for (int i = 0; i < 32; i++) {
+                                    hidx = (hidx - 1) & (HDD_RING_CAP - 1);
+                                    printf("  %02X:%04X %c 00:%04X = %02X\n", hdd_ring[hidx].pbr, hdd_ring[hidx].pc,
+                                           hdd_ring[hidx].rw, hdd_ring[hidx].addr16, hdd_ring[hidx].data);
+                                }
+                            }
+                        }
+
+                        // While in loader area (00:0800-08FF), trace upcoming ifetches to see opcodes executed
+                        if (loader_ifetch_trace_budget > 0 && vpa) {
+                            unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+                            unsigned char bank = (addr >> 16) & 0xFF;
+                            unsigned short addr16 = addr & 0xFFFF;
+                            if (bank == 0x00 && (addr16 >= 0x0800 && addr16 <= 0x08FF)) {
+                                printf("LOADER IFETCH: PC=%02X:%04X IR=%02X\n", bank, addr16,
+                                       (unsigned int)din & 0xFF);
+                                loader_ifetch_trace_budget--;
+                            } else {
+                                // Stop tracing if we leave the loader page
+                                loader_ifetch_trace_budget = 0;
+                            }
+                        }
+					}
+					
+					// Track address/bank changes for timing analysis
+					if (addr != last_addr || bank != last_bank || din != last_din) {
+						if ((addr & 0xFFFF) >= 0xBF00 && (addr & 0xFFFF) <= 0xBFFF) {
+							printf("ADDR CHANGE: %06lX->%06lX BANK: %02X->%02X DIN: %02X->%02X\n",
+								   last_addr, addr, last_bank, bank, last_din, din);
+						}
+						last_addr = addr;
+						last_bank = bank;
+						last_din = din;
+					}
+					
+					// Track CPU state
+					unsigned short pc = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+					unsigned char pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+					unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+					unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+					parallel_clemens_sync_cpu_state(pc, pbr, sp, p);
 
 					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
@@ -930,19 +1486,41 @@ int verilate() {
 						}
 					}
 
-					if ((vpa || vda) && !(vpa == 0 && vda == 1)) {
-						ins_pc[ins_index] = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
-						if (ins_pc[ins_index] > 0) {
-							ins_in[ins_index] = din;
-							ins_ma[ins_index] = addr;
-							ins_dbr[ins_index] = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
-							//console.AddLog(fmt::format("! PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} I={6:x}", ins_pc[ins_index], ins_in[ins_index], ins_ma[ins_index], vpa, vpb, vda, ins_index).c_str());
+                        if ((vpa || vda) && !(vpa == 0 && vda == 1)) {
+                            ins_pc[ins_index] = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            if (ins_pc[ins_index] > 0) {
+                                ins_in[ins_index] = din;
+                                ins_ma[ins_index] = addr;
+                                ins_dbr[ins_index] = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                //console.AddLog(fmt::format("! PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} I={6:x}", ins_pc[ins_index], ins_in[ins_index], ins_ma[ins_index], vpa, vpb, vda, ins_index).c_str());
 
-							ins_index++;
-							if (ins_index > ins_size - 1) { ins_index = 0; }
+                                ins_index++;
+                                if (ins_index > ins_size - 1) { ins_index = 0; }
 
-						}
-					}
+                            }
+                        }
+
+                        // Record ifetch ring on start-of-instruction fetch
+                        if (vpa && nextstate == 1) {
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            ifetch_ring_record(pbr_now, pc_now, (unsigned char)din);
+                        }
+
+                        // HDD event ring for C0F0-C0FF accesses (bank 00 only)
+                        if (vda) {
+                            unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+                            unsigned char bank = (addr >> 16) & 0xFF;
+                            unsigned short addr16 = addr & 0xFFFF;
+                            if (bank == 0x00 && (addr16 >= 0xC0F0 && addr16 <= 0xC0FF)) {
+                                unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                // Prefer top-level bus write-enable computed in iigs.sv (we = ~cpu_we_n)
+                                bool is_write = VERTOPINTERN->emu__DOT__iigs__DOT__we;
+                                unsigned char data = is_write ? (unsigned char)VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D_OUT : (unsigned char)din;
+                                hdd_ring_record(pbr_now, pc_now, bank, addr16, is_write, data);
+                            }
+                        }
 				}
 
 			}
@@ -951,17 +1529,21 @@ int verilate() {
 		}
 
 #ifndef DISABLE_AUDIO
-		if (CLK_14M.IsRising())
-		{
-			audio.Clock(top->AUDIO_L, top->AUDIO_R);
-		}
+        if (!headless) {
+            if (CLK_14M.IsRising())
+            {
+                audio.Clock(top->AUDIO_L, top->AUDIO_R);
+            }
+        }
 #endif
 
 		// Output pixels on rising edge of pixel clock
-		if (CLK_14M.IsRising() && top->CE_PIXEL) {
-			uint32_t colour = 0xFF000000 | top->VGA_B << 16 | top->VGA_G << 8 | top->VGA_R;
-			video.Clock(top->VGA_HB, top->VGA_VB, top->VGA_HS, top->VGA_VS, colour);
-		}
+        if (!headless) {
+            if (CLK_14M.IsRising() && top->CE_PIXEL) {
+                uint32_t colour = 0xFF000000 | top->VGA_B << 16 | top->VGA_G << 8 | top->VGA_R;
+                video.Clock(top->VGA_HB, top->VGA_VB, top->VGA_HS, top->VGA_VS, colour);
+            }
+        }
 
 		if (CLK_14M.IsRising()) {
 
@@ -1173,6 +1755,9 @@ void save_memory_dump(int frame_number) {
 }
 
 int main(int argc, char** argv, char** env) {
+    // Detect headless from env
+    const char* env_headless = getenv("HEADLESS");
+    if (env_headless && env_headless[0] && env_headless[0] != '0') headless = true;
 
 	// Parse command line arguments
 	for (int i = 1; i < argc; i++) {
@@ -1210,18 +1795,21 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--no-cpu-log") == 0) {
 			debug_6502 = false;
 			printf("CPU log memory storage disabled to save memory (stdout traces still enabled)\n");
-		} else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
-			disk_image = argv[i + 1];
-			printf("Using disk image: %s\n", disk_image.c_str());
-			i++; // Skip the next argument since it's the filename
-		}
-	}
+        } else if (strcmp(argv[i], "--headless") == 0) {
+            headless = true;
+        } else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
+            disk_image = argv[i + 1];
+            printf("Using disk image: %s\n", disk_image.c_str());
+            i++; // Skip the next argument since it's the filename
+        }
+    }
 
 	// Create core and initialise
 	top = new Vemu();
 	Verilated::commandArgs(argc, argv);
 
-
+	// Initialize parallel memory tracking system
+	parallel_clemens_init();
 
 #ifdef WIN32
 	// Attach debug console to the verilated code
@@ -1303,13 +1891,26 @@ int main(int argc, char** argv, char** env) {
 	input.SetMapping(input_select, SDL_SCANCODE_2);
 	input.SetMapping(input_menu, SDL_SCANCODE_M);
 #endif
-	// Setup video output
-	if (video.Initialise(windowTitle) == 1) { return 1; }
+    // Setup video output
+    if (!headless) {
+        if (video.Initialise(windowTitle) == 1) { return 1; }
+    }
 
     // Mount a test floppy image into Drive 1 to exercise IWM path in sim
     //blockdevice.MountDisk("floppy.nib", 0);
     // Mount HDD image into slot 7 backend (using specified disk image)
    blockdevice.MountDisk(disk_image.c_str(), 1);
+
+   // In headless mode, run a limited simulation loop without UI and exit
+   if (headless) {
+       printf("Headless mode enabled. Running limited simulation...\n");
+       run_state = RunState::Running;
+       for (int i = 0; i < 500; ++i) {
+           RunBatch(1024);
+       }
+       printf("Headless simulation finished: frames=%d time=%lu\n", video.count_frame, (unsigned long)main_time);
+       return 0;
+   }
 
        // iwm_init();
        // iwm_reset();

@@ -100,9 +100,14 @@ module hdd(
             // Default output unless a read path below overrides
             D_OUT <= 8'hFF;
 
-            // READ PATH: drive D_OUT regardless of phi0 so CPU sees stable data
+            // Asynchronous read path for slot ROM (C6xx) and a read-only mirror for HDD regs (C0F0–C0FF)
             if (DEVICE_SELECT && RD) begin
+                // Mirror register values without side-effects; phi0-gated path handles semantics
                 case (A[3:0])
+                  4'h0: begin
+                    // EXECUTE/STATUS mirror: just return current status (no side-effect here)
+                    D_OUT <= reg_status;
+                  end
                   4'h1: D_OUT <= reg_status;      // STATUS/ERROR
                   4'h2: D_OUT <= reg_command;     // COMMAND
                   4'h3: D_OUT <= reg_unit;        // UNIT
@@ -110,9 +115,12 @@ module hdd(
                   4'h5: D_OUT <= reg_mem_h;       // MEM H
                   4'h6: D_OUT <= reg_block_l;     // BLK L
                   4'h7: D_OUT <= reg_block_h;     // BLK H
-                  4'h8: D_OUT <= sector_buf[sec_addr]; // NEXT BYTE - read current data
+                  4'h8: D_OUT <= sector_buf[sec_addr]; // NEXT BYTE (no increment here)
                   default: D_OUT <= 8'hFF;
                 endcase
+                $display("HDD CPU %s 00:%04h -> %02h (cmd=%02h unit=%02h blk=%04h mem=%04h sec_idx=%03d)",
+                         "READ-MIRROR", {12'h0F0, A[3:0]}, D_OUT, reg_command, reg_unit,
+                         {reg_block_h, reg_block_l}, {reg_mem_h, reg_mem_l}, sec_addr);
             end else if (IO_SELECT && RD) begin
                 // Directly drive slot ROM data
                 D_OUT <= rom_dout; // C6xx-C7xx slot ROM reads
@@ -157,19 +165,25 @@ module hdd(
 				    $display("HDD: reg_command %x",reg_command);
                                     case (reg_command)
                                       PRODOS_COMMAND_STATUS: begin
-                                        reg_status <= 8'h00; // ok
-                                        D_OUT <= 8'h00;
+                                        // Report mounted status as ok(0) or error(1)
+                                        reg_status <= hdd_mounted ? 8'h00 : 8'h01;
+                                        D_OUT      <= reg_status;
 `ifdef SIMULATION
-                                        $display("HDD RD C0F0: STATUS ok (unit=%02h)", reg_unit);
+                                        $display("HDD RD C0F0: STATUS read -> %02h (mounted=%0d unit=%02h)", reg_status, hdd_mounted, reg_unit);
 `endif
                                       end
                                       PRODOS_COMMAND_READ: begin
-                                        $display("HDD: READ command initiated. Asserting hdd_read.");
-                                        reg_status <= 8'h00;
-                                        D_OUT <= 8'h00;
-                                        if (~select_d) hdd_read <= 1'b1;
+                                        // Initiate read if mounted; otherwise report error immediately
+                                        if (hdd_mounted) begin
+                                          if (~select_d) hdd_read <= 1'b1;
+                                          // Do not change status here; reg_status should be 0x80 after C0F2
+                                          D_OUT <= reg_status;
+                                        end else begin
+                                          reg_status <= 8'h01; // error
+                                          D_OUT      <= 8'h01;
+                                        end
 `ifdef SIMULATION
-                                        $display("HDD RD C0F0: READ (blk=%04h) ok", {reg_block_h,reg_block_l});
+                                        $display("HDD RD C0F0: READ start (blk=%04h) status=%02h mounted=%0d", {reg_block_h,reg_block_l}, reg_status, hdd_mounted);
 `endif
                                       end
                                       PRODOS_COMMAND_WRITE: begin
@@ -180,19 +194,22 @@ module hdd(
                                           $display("HDD RD C0F0: WRITE protect");
 `endif
                                         end else begin
-                                          $display("HDD: WRITE command initiated. Asserting hdd_write.");
-                                          D_OUT <= 8'h00;
-                                          reg_status <= 8'h00;
-                                          hdd_write <= 1'b1;
+                                          if (hdd_mounted) begin
+                                            $display("HDD: WRITE command initiated. Asserting hdd_write.");
+                                            D_OUT <= reg_status; // report busy
+                                            hdd_write <= 1'b1;
+                                          end else begin
+                                            reg_status <= 8'h01; D_OUT <= 8'h01;
+                                          end
 `ifdef SIMULATION
-                                          $display("HDD RD C0F0: WRITE (blk=%04h) ok", {reg_block_h,reg_block_l});
+                                          $display("HDD RD C0F0: WRITE (blk=%04h) status=%02h mounted=%0d", {reg_block_h,reg_block_l}, reg_status, hdd_mounted);
 `endif
                                         end
                                       end
                                       default: begin
-                                        reg_status <= 8'h00; D_OUT <= 8'h00;
+                                        D_OUT <= reg_status; // no change
 `ifdef SIMULATION
-                                        $display("HDD RD C0F0: unknown cmd %02h -> ok", reg_command);
+                                        $display("HDD RD C0F0: unknown cmd %02h -> status %02h", reg_command, reg_status);
 `endif
                                       end
                                     endcase
@@ -216,6 +233,12 @@ module hdd(
                                     // D_OUT already driven by async path, just increment address
 				    //$display("reading D_OUT %x to ram %x readonly %x",D_OUT,sec_addr,hdd_protect);
                                     sec_addr <= sec_addr + 1;
+                                    if (sec_addr == 9'd511) begin
+                                        reg_status <= 8'h00; // clear busy at end of sector
+`ifdef SIMULATION
+                                        $display("HDD: READ complete via NEXT BYTE stream; status cleared");
+`endif
+                                    end
 `ifdef SIMULATION
                                     $display("HDD CPU READ C0F8[%03d] -> %02h", sec_addr, sector_buf[sec_addr]);
 `endif
@@ -234,28 +257,33 @@ module hdd(
                                         sec_addr <= 9'b000000000;
                                     reg_command <= D_IN;
 `ifdef SIMULATION
-                                    $display("HDD WR C0F2: cmd <= %02h", D_IN);
+                                    $display("HDD WR C0F2: cmd <= %02h (unit=%02h blk=%04h mem=%04h)", D_IN, reg_unit, {reg_block_h,reg_block_l}, {reg_mem_h,reg_mem_l});
 `endif
+                                    if (D_IN == PRODOS_COMMAND_READ || D_IN == PRODOS_COMMAND_WRITE) begin
+                                        reg_status <= 8'h80; // busy
+                                        sec_addr   <= 9'd0;
+                                    end else begin
+                                        reg_status <= 8'h00;
+                                    end
                                 end
-                            4'h1 : begin // allow RMW ops (eg. ROR C0F1)
-                                reg_status <= D_IN;
+                            4'h1 : begin // ignore writes to status
 `ifdef SIMULATION
-                                $display("HDD WR C0F1: status <= %02h", D_IN);
+                                $display("HDD WR C0F1 IGNORED (status read-only)");
 `endif
-                              end
+                            end
                             4'h3 :
                                 begin reg_unit <= D_IN; `ifdef SIMULATION $display("HDD WR C0F3: unit <= %02h", D_IN); `endif end
                             4'h4 :
-                                begin reg_mem_l <= D_IN; `ifdef SIMULATION $display("HDD WR C0F4: memL <= %02h", D_IN); `endif end
+                                begin reg_mem_l <= D_IN; `ifdef SIMULATION $display("HDD WR C0F4: memL <= %02h (mem=%04h)", D_IN, {reg_mem_h, D_IN}); `endif end
                             4'h5 :
-                                begin reg_mem_h <= D_IN; `ifdef SIMULATION $display("HDD WR C0F5: memH <= %02h", D_IN); `endif end
+                                begin reg_mem_h <= D_IN; `ifdef SIMULATION $display("HDD WR C0F5: memH <= %02h (mem=%04h)", D_IN, {D_IN, reg_mem_l}); `endif end
                             4'h6 :
-                                begin reg_block_l <= D_IN; `ifdef SIMULATION $display("HDD WR C0F6: blkL <= %02h", D_IN); `endif end
+                                begin reg_block_l <= D_IN; `ifdef SIMULATION $display("HDD WR C0F6: blkL <= %02h (blk=%04h)", D_IN, {reg_block_h, D_IN}); `endif end
                             4'h7 :
-                                begin reg_block_h <= D_IN; `ifdef SIMULATION $display("HDD WR C0F7: blkH <= %02h", D_IN); `endif end
+                                begin reg_block_h <= D_IN; `ifdef SIMULATION $display("HDD WR C0F7: blkH <= %02h (blk=%04h)", D_IN, {D_IN, reg_block_l}); `endif end
                             4'h8 :
                                 begin
- 				    //$display("writing D_IN %x to ram %x readonly %x",D_IN,sec_addr,hdd_protect);
+				    //$display("writing D_IN %x to ram %x readonly %x",D_IN,sec_addr,hdd_protect);
                                     sector_buf[sec_addr] <= D_IN;
                                     sec_addr <= sec_addr + 1;
 `ifdef SIMULATION

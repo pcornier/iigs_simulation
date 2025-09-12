@@ -157,7 +157,7 @@ always @(posedge clk_14M) begin
         if (cyareg[0] == 1'b1 && IO && addr == 16'hC0C9) begin
             slow <= 1;
             waitforC0C8 <= 1;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             last_event <= 4'd1;
             $display("CLKDIV: slow enter due C0C9 (slot4) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
 `endif
@@ -165,7 +165,7 @@ always @(posedge clk_14M) begin
         if (cyareg[1] == 1'b1 && IO && addr == 16'hC0D9) begin
             slow <= 1;
             waitforC0D8 <= 1;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             last_event <= 4'd2;
             $display("CLKDIV: slow enter due C0D9 (slot5) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
 `endif
@@ -173,7 +173,7 @@ always @(posedge clk_14M) begin
         if (cyareg[2] == 1'b1 && IO && addr == 16'hC0E9) begin
             slow <= 1;
             waitforC0E8 <= 1;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             last_event <= 4'd3;
             $display("CLKDIV: slow enter due C0E9 (slot6) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
 `endif
@@ -181,7 +181,7 @@ always @(posedge clk_14M) begin
         if (cyareg[3] == 1'b1 && IO && addr == 16'hC0F9) begin
             slow <= 1;
             waitforC0F8 <= 1;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             last_event <= 4'd4;
             $display("CLKDIV: slow enter due C0F9 (slot7) cyareg=%02h bank=%02h addr=%04h IO=%0d t=%0t", cyareg, bank, addr, IO, $time);
 `endif
@@ -189,7 +189,7 @@ always @(posedge clk_14M) begin
         if (IO && addr == 16'hC042) begin
             slow <= 1;
             waitforC041<= 1;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             last_event <= 4'd5;
             $display("CLKDIV: slow enter due C042 (keyboard) bank=%02h addr=%04h IO=%0d t=%0t", bank, addr, IO, $time);
 `endif
@@ -203,32 +203,31 @@ always @(posedge clk_14M) begin
 		// Check for return to fast mode
         if (waitforC0C8 && IO && addr == 16'hC0C8) begin
             waitforC0C8 <= 0;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             $display("CLKDIV: slow exit via C0C8 (slot4) t=%0t", $time);
 `endif
         end
         if (waitforC0D8 && IO && addr == 16'hC0D8) begin
             waitforC0D8 <= 0;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             $display("CLKDIV: slow exit via C0D8 (slot5) t=%0t", $time);
 `endif
         end
         if (waitforC0E8 && IO && addr == 16'hC0E8) begin
             waitforC0E8 <= 0;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             $display("CLKDIV: slow exit via C0E8 (slot6) t=%0t", $time);
 `endif
         end
         if (waitforC0F8 && IO && addr == 16'hC0F8) begin
             waitforC0F8 <= 0;
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             $display("CLKDIV: slow exit via C0F8 (slot7) t=%0t", $time);
 `endif
         end
         if (waitforC041 && IO && addr == 16'hC041) begin
             waitforC041<= 0;
-
-`ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
             $display("CLKDIV: slow exit via C041 (keyboard) t=%0t", $time);
 `endif
         end
@@ -264,10 +263,12 @@ always @(posedge clk_14M) begin
             begin
                 slowMem<=1;
 `ifdef SIMULATION
+`ifdef DEBUG_CLK_TIMING
                 if (!prev_slow && !prev_slowMem) begin
                     last_event <= 4'd6;
                     $display("CLKDIV: slowMem active (shadowed/slow region) bank=%02h addr=%04h t=%0t", bank, addr, $time);
                 end
+`endif
 `endif
             end
         end
