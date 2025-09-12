@@ -81,8 +81,14 @@ module hdd(
     // Sector buffer: true dual-port RAM (512x8)
     wire [7:0]       sector_dma_q;   // DMA (Port A) read data
     wire [7:0]       sector_cpu_q;   // CPU (Port B, C0F8) read data
+    // Stage Port-B q to hide BRAM latency and align NEXT BYTE stream
+    reg  [7:0]       next_byte_q;
     reg              cpu_c0f8_we;    // CPU writes to C0F8 during WRITE
     reg  [7:0]       cpu_c0f8_din;
+    // First-byte prefetch to cover BRAM read latency on READ command
+    reg              prefetch_armed;
+    reg              prefetch_valid;
+    reg  [7:0]       prefetch_data;
     
     // ProDOS constants
     parameter        PRODOS_COMMAND_STATUS = 8'h00;
@@ -116,7 +122,7 @@ module hdd(
                   4'h5: D_OUT <= reg_mem_h;       // MEM H
                   4'h6: D_OUT <= reg_block_l;     // BLK L
                   4'h7: D_OUT <= reg_block_h;     // BLK H
-                  4'h8: D_OUT <= sector_cpu_q;         // NEXT BYTE mirror (no increment here)
+                  4'h8: D_OUT <= next_byte_q;          // NEXT BYTE mirror (no increment here)
                   default: D_OUT <= 8'hFF;
                 endcase
                 $display("HDD CPU %s 00:%04h -> %02h (cmd=%02h unit=%02h blk=%04h mem=%04h sec_idx=%03d)",
@@ -143,6 +149,8 @@ module hdd(
                 hdd_read <= 1'b0;
                 hdd_write <= 1'b0;
                 cpu_c0f8_we <= 1'b0;
+                prefetch_armed <= 1'b0;
+                prefetch_valid <= 1'b0;
             end
             else
             begin
@@ -162,7 +170,6 @@ module hdd(
                         case (A[3:0])
                             4'h0 :
                                 begin
-                                    sec_addr <= 9'b000000000;
                                     // For GS/OS probes, report success by default
                                     // and pulse read/write strobes when appropriate.
 				    $display("HDD: reg_command %x",reg_command);
@@ -233,18 +240,30 @@ module hdd(
                                 begin D_OUT <= reg_block_h; `ifdef SIMULATION $display("HDD RD C0F7: blkH=%02h", reg_block_h); `endif end
                             4'h8 :
                                 begin
-                                    // D_OUT already driven by async path, just increment address
-				    //$display("reading D_OUT %x to ram %x readonly %x",D_OUT,sec_addr,hdd_protect);
-                                    sec_addr <= sec_addr + 1;
+                                    // First-byte guard: if a READ was just armed, return the prefetched byte
+                                    // to hide BRAM's 1-cycle latency on Port-B and only then advance.
+                                    if (prefetch_valid) begin
+                                        D_OUT <= prefetch_data;
+                                        prefetch_valid <= 1'b0; // consume prefetch
+                                        sec_addr <= sec_addr + 1;
+`ifdef SIMULATION
+                                        $display("HDD CPU READ C0F8[%03d] -> %02h (prefetch)", sec_addr, prefetch_data);
+`endif
+                                    end else begin
+                                        // Present staged NEXT BYTE on gated path, then increment address
+                                        D_OUT <= next_byte_q;
+                                        sec_addr <= sec_addr + 1;
+`ifdef SIMULATION
+                                        $display("HDD CPU READ C0F8[%03d] -> %02h (gated)", sec_addr, next_byte_q);
+`endif
+                                    end
+
                                     if (sec_addr == 9'd511) begin
                                         reg_status <= 8'h00; // clear busy at end of sector
 `ifdef SIMULATION
                                         $display("HDD: READ complete via NEXT BYTE stream; status cleared");
 `endif
                                     end
-`ifdef SIMULATION
-                                    $display("HDD CPU READ C0F8[%03d] -> %02h", sec_addr, sector_cpu_q);
-`endif
                                 end
                             default :
                                 ;
@@ -265,8 +284,13 @@ module hdd(
                                     if (D_IN == PRODOS_COMMAND_READ || D_IN == PRODOS_COMMAND_WRITE) begin
                                         reg_status <= 8'h80; // busy
                                         sec_addr   <= 9'd0;
+                                        // Arm prefetch for first NEXT BYTE on READ to cover BRAM latency
+                                        prefetch_armed <= (D_IN == PRODOS_COMMAND_READ);
+                                        prefetch_valid <= 1'b0;
                                     end else begin
                                         reg_status <= 8'h00;
+                                        prefetch_armed <= 1'b0;
+                                        prefetch_valid <= 1'b0;
                                     end
                                 end
                             4'h1 : begin // ignore writes to status
@@ -333,11 +357,18 @@ bram #(.widthad_a(9)) sector_ram
         .address_b(sec_addr),
         .data_b(cpu_c0f8_din),
         .q_b(sector_cpu_q),
-        // Unused enables
-       // .byteena_a(1'b1),
-       // .byteena_b(1'b1),
-        //.ce_a(1'b1),
+        // Enables (keep Port A always enabled; Port B read always enabled)
+`ifdef VERILATOR
+        .byteena_a(1'b1),
+        .byteena_b(1'b1),
+        .ce_a(1'b1),
         .enable_b(1'b1)
+`else
+        .byteena_a(1'b1),
+        .byteena_b(1'b1),
+        .enable_a(1'b1),
+        .enable_b(1'b1)
+`endif
 );
     /*
     // Dual-ported RAM holding the contents of the sector
@@ -368,6 +399,22 @@ bram #(.widthad_a(9)) sector_ram
     always @(posedge CLK_14M) begin
         ram_do <= sector_dma_q;
         if (ram_we) $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", ram_addr, ram_di);
+    end
+
+    // Stage Port-B q so mirror/gated paths return the correct byte with BRAM latency
+    always @(posedge CLK_14M) begin
+        next_byte_q <= sector_cpu_q;
+    end
+    // Latch first byte after a READ command to ensure the first C0F8 returns correctly
+    always @(posedge CLK_14M) begin
+        if (prefetch_armed) begin
+            prefetch_data  <= sector_cpu_q;
+            prefetch_valid <= 1'b1;
+            prefetch_armed <= 1'b0;
+`ifdef SIMULATION
+            $display("HDD PREFETCH armed -> data=%02h at sec_addr=%03d", sector_cpu_q, sec_addr);
+`endif
+        end
     end
  
 

@@ -2006,6 +2006,7 @@ wire ready_out;
     hdd hdd(
         .CLK_14M(CLK_14M),
         .phi0(phi0),
+        // Slot 7 option ROM is at C700–C7FF; use io_select[7]
         .IO_SELECT(io_select[7]),
         .DEVICE_SELECT(device_select[7]),
         //.IO_SELECT(1'b0),
