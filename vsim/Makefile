@@ -97,7 +97,6 @@ V_SRC = \
 	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \
 	$(RTL)/dpram.sv \
-	$(RTL)/sp_hdd.v \
 	$(RTL)/video_timing.v \
 	$(RTL)/uart/rxuart.v \
 	$(RTL)/uart/txuart.v \

@@ -117,6 +117,21 @@ struct HddEvt { unsigned short pc; unsigned char pbr; unsigned short addr16; uns
 static const int HDD_RING_CAP = 128;
 static HddEvt hdd_ring[HDD_RING_CAP];
 static int hdd_wptr = 0;
+static FILE* hdd_csv = nullptr;
+static bool hdd_csv_inited = false;
+static inline void hdd_csv_maybe_init() {
+    if (!hdd_csv_inited) {
+        const char* path = getenv("HDD_CSV");
+        if (path && *path) {
+            hdd_csv = fopen(path, "w");
+            if (hdd_csv) {
+                fprintf(hdd_csv, "time,pc_bank,pc,bank,addr,rw,data\n");
+                fflush(hdd_csv);
+            }
+        }
+        hdd_csv_inited = true;
+    }
+}
 static inline void hdd_ring_record(unsigned char pbr, unsigned short pc, unsigned char bank, unsigned short a16, bool is_write, unsigned char data) {
     hdd_ring[hdd_wptr].pbr = pbr;
     hdd_ring[hdd_wptr].pc = pc;
@@ -125,6 +140,16 @@ static inline void hdd_ring_record(unsigned char pbr, unsigned short pc, unsigne
     hdd_ring[hdd_wptr].rw = is_write ? 'W' : 'R';
     hdd_ring[hdd_wptr].data = data;
     hdd_wptr = (hdd_wptr + 1) & (HDD_RING_CAP - 1);
+
+    // Optional CSV logging for cross-emulator diffing
+    hdd_csv_maybe_init();
+    if (hdd_csv) {
+        // main_time is in units of half-cycles (from Verilator sim harness); use it as a sortable timestamp
+        extern vluint64_t main_time;
+        fprintf(hdd_csv, "%llu,%02X,%04X,%02X,%04X,%c,%02X\n",
+                (unsigned long long)main_time, pbr, pc, bank, a16, is_write ? 'W' : 'R', data);
+        // Avoid excessive flushes; OS buffers are fine
+    }
 }
 
 
@@ -169,6 +194,10 @@ float vga_scale = 1.0;
 // Headless mode flag (no SDL/ImGui rendering)
 bool headless = false;
 
+// Verilog module
+// --------------
+Vemu* top = NULL;
+
 // CSV trace (Clemens-like) for per-access mapping and value comparison
 static FILE* g_vsim_trace_csv = nullptr;
 static unsigned long long g_vsim_seq = 0ULL;
@@ -189,19 +218,38 @@ static void vsim_trace_log(char phase, char type,
                            unsigned phys_bank, int is_rom, int is_slow, int is_io) {
     if (!g_vsim_trace_active) return;
     if (!g_vsim_trace_csv) vsim_trace_open_fresh();
-    // mmap not synthesized; output 0 to align columns
+    // Build Clemens-like memory map (mmap) flags from current iigs signals
+    // Bits map to clemens_iigs/clem_mmio_defs.h where feasible
+    // 0x00000001 ALTZPLC, 0x00000002 RAMRD, 0x00000004 RAMWRT
+    // 0x00000008 80COLSTORE (STORE80), 0x00000010 TXTPAGE2 (PAGE2), 0x00000020 HIRES
+    // 0x00000100 RDLCRAM (RDROM==0), 0x00000200 WRLCRAM (LC_WE), 0x00000400 LCBANK2 (LCRAM2)
+    // 0x00080000 CXROM (INTCXROM==0)
+    uint32_t mmap = 0;
+    // Protect against null top in early startup
+    if (VERTOPINTERN) {
+        // Access internal signals under emu->iigs
+        // These names come from the Verilated model with public_flat annotations
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__ALTZP)       mmap |= 0x00000001;
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__RAMRD)       mmap |= 0x00000002;
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__RAMWRT)      mmap |= 0x00000004;
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__STORE80)     mmap |= 0x00000008;
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__PAGE2)       mmap |= 0x00000010;
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__HIRES_MODE)  mmap |= 0x00000020;
+        if (!VERTOPINTERN->emu__DOT__iigs__DOT__RDROM)      mmap |= 0x00000100;
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE)       mmap |= 0x00000200;
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2)      mmap |= 0x00000400;
+        if (!VERTOPINTERN->emu__DOT__iigs__DOT__INTCXROM)   mmap |= 0x00080000;
+        // Note: C1–C7 ROM select and shadow masks are omitted for now
+    }
     fprintf(g_vsim_trace_csv,
             "%llu,%c,%c,%04X,%02X,%02X,%02X,%04X,%02X,%08X,%02X,%d,%d,%d\n",
             (unsigned long long)g_vsim_seq++, phase, type,
             pc & 0xFFFF, pbr & 0xFF, ir & 0xFF,
             a_bank & 0xFF, a_adr & 0xFFFF, data & 0xFF,
-            0U, phys_bank & 0xFF, is_rom ? 1 : 0, is_slow ? 1 : 0, is_io ? 1 : 0);
+            mmap, phys_bank & 0xFF, is_rom ? 1 : 0, is_slow ? 1 : 0, is_io ? 1 : 0);
     fflush(g_vsim_trace_csv);
 }
 
-// Verilog module
-// --------------
-Vemu* top = NULL;
 
 vluint64_t main_time = 0;	// Current simulation time.
 double sc_time_stamp() {	// Called by $time in Verilog.

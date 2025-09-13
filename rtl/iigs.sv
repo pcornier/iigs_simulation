@@ -1666,7 +1666,8 @@ wire [7:0] dfetch_rom_data =
     rom2_dout;
 
 // Prioritize instruction-fetch ROM override above I/O so we never execute from I/O page ($C000-$C0FF)
-wire [7:0] din =
+  wire [7:0] din =
+  // HDD only at slot-7 I/O ($C0F0–$C0FF) and C7xx ROM; no aliasing on slot 5
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
   (ifetch_rom2 ? ifetch_rom_data :
    (dfetch_rom2_window ? dfetch_rom_data :
