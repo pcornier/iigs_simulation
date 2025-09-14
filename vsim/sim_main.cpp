@@ -207,7 +207,7 @@ static void vsim_trace_open_fresh() {
     g_vsim_trace_csv = fopen("vsim_trace.csv", "w");
     if (g_vsim_trace_csv) {
         fprintf(g_vsim_trace_csv,
-                "seq,phase,type,pc,pbr,ir,a_bank,a_adr,data,mmap,phys,rom,slow,io\n");
+                "seq,phase,type,pc,pbr,ir,a_bank,a_adr,data,mmap,phys,rom,slow,io,p\n");
         fflush(g_vsim_trace_csv);
     }
     g_vsim_seq = 0ULL;
@@ -241,12 +241,17 @@ static void vsim_trace_log(char phase, char type,
         if (!VERTOPINTERN->emu__DOT__iigs__DOT__INTCXROM)   mmap |= 0x00080000;
         // Note: C1–C7 ROM select and shadow masks are omitted for now
     }
+    // CPU P flags (status register) for instruction analysis
+    unsigned Pflags = 0U;
+    if (top) {
+        Pflags = (unsigned)(top->emu__DOT__iigs__DOT__cpu__DOT__P & 0xFF);
+    }
     fprintf(g_vsim_trace_csv,
-            "%llu,%c,%c,%04X,%02X,%02X,%02X,%04X,%02X,%08X,%02X,%d,%d,%d\n",
+            "%llu,%c,%c,%04X,%02X,%02X,%02X,%04X,%02X,%08X,%02X,%d,%d,%d,%02X\n",
             (unsigned long long)g_vsim_seq++, phase, type,
             pc & 0xFFFF, pbr & 0xFF, ir & 0xFF,
             a_bank & 0xFF, a_adr & 0xFFFF, data & 0xFF,
-            mmap, phys_bank & 0xFF, is_rom ? 1 : 0, is_slow ? 1 : 0, is_io ? 1 : 0);
+            mmap, phys_bank & 0xFF, is_rom ? 1 : 0, is_slow ? 1 : 0, is_io ? 1 : 0, Pflags & 0xFF);
     fflush(g_vsim_trace_csv);
 }
 
@@ -1555,7 +1560,46 @@ int verilate() {
                             ifetch_ring_record(pbr_now, pc_now, (unsigned char)din);
                         }
 
-                        // HDD event ring for C0F0-C0FF accesses (bank 00 only)
+                        // Lightweight D-phase ring for hotloop diagnostics
+                        static const int D_RING_CAP = 128;
+                        static struct { unsigned char bank; unsigned short a16; unsigned char is_wr; unsigned char data; } d_ring[D_RING_CAP];
+                        static int d_wptr = 0;
+                        if (vda && !vpa) {
+                            unsigned long a_bus = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+                            unsigned char d_bank = (a_bus >> 16) & 0xFF;
+                            unsigned short d_addr = a_bus & 0xFFFF;
+                            bool d_wr = (VERTOPINTERN->emu__DOT__iigs__DOT__we != 0);
+                            unsigned char d_data = d_wr ? (unsigned char)VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D_OUT : (unsigned char)din;
+                            d_ring[d_wptr].bank = d_bank;
+                            d_ring[d_wptr].a16 = d_addr;
+                            d_ring[d_wptr].is_wr = d_wr ? 1 : 0;
+                            d_ring[d_wptr].data = d_data;
+                            d_wptr = (d_wptr + 1) & (D_RING_CAP - 1);
+                        }
+
+                        // Hotloop watch: bank 00, PC in C7C0..C7E0 around BNE/INY
+                        if (vpa) {
+                            unsigned short pc_now2 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now2 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (pbr_now2 == 0x00 && pc_now2 >= 0xC7C0 && pc_now2 <= 0xC7E0) {
+                                unsigned char opc = (unsigned char)din;
+                                if (opc == 0xC8 /*INY*/ || opc == 0xD0 /*BNE*/ || opc == 0x30 /*BMI*/ || opc == 0xF0 /*BEQ*/) {
+                                    unsigned char P = (unsigned char)(VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P & 0xFF);
+                                    unsigned short Xr = (unsigned short)(VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X & 0xFFFF);
+                                    unsigned short Yr = (unsigned short)(VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y & 0xFFFF);
+                                    unsigned char Xf = (P >> 5) & 1; // index width flag
+                                    unsigned char Mf = (P >> 4) & 1; // acc width flag
+                                    printf("HOTLOOP: PC=%02X:%04X OPC=%02X P=%02X X=%04X Y=%04X (X=%d M=%d)\n", pbr_now2, pc_now2, opc, P, Xr, Yr, Xf, Mf);
+                                    for (int k = 0; k < 16; ++k) {
+                                        int idx = (d_wptr - 1 - k) & (D_RING_CAP - 1);
+                                        printf("   D[%02d] %02X:%04X %c %02X\n", k, d_ring[idx].bank, d_ring[idx].a16,
+                                               d_ring[idx].is_wr ? 'W' : 'R', d_ring[idx].data);
+                                    }
+                                }
+                            }
+                        }
+
+  // HDD event ring for C0F0-C0FF accesses (bank 00 only)
                         if (vda) {
                             unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
                             unsigned char bank = (addr >> 16) & 0xFF;
