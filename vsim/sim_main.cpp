@@ -1003,7 +1003,8 @@ int verilate() {
 			// Log 6502 instructions
 			cpu_clock = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__CLK;
 			bool cpu_reset = top->reset;
-			if (cpu_clock != cpu_clock_last && cpu_reset == 0) {
+			// Only log on rising edge of CPU clock to avoid duplicates
+			if (cpu_clock && !cpu_clock_last && cpu_reset == 0) {
 
 
 				unsigned char en = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__EN;
@@ -1018,7 +1019,7 @@ int verilate() {
 					// This is opposite of iigs.sv internal 'we' signal which is active HIGH
 					unsigned char we_n = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__WE;
 					unsigned char we = !we_n;  // Convert to active HIGH for consistency
-					unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+					unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
 					unsigned char nextstate = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__NextState;
 					
                     // Extract bank and address for memory tracking
@@ -1166,6 +1167,47 @@ int verilate() {
 								   VERTOPINTERN->emu__DOT__iigs__DOT__RDROM,
 								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE_PRE,
 								   VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2);
+                        }
+
+                        // CSV logging for VDA reads (including operand fetches that come through as data reads)
+                        unsigned int phys_addr_bus = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
+                        unsigned int actual_phys_bank = (phys_addr_bus >> 16) & 0xFF;
+                        int romc = VERTOPINTERN->emu__DOT__iigs__DOT__romc_ce;
+                        int romd = VERTOPINTERN->emu__DOT__iigs__DOT__romd_ce;
+                        int rom1 = VERTOPINTERN->emu__DOT__iigs__DOT__rom1_ce;
+                        int rom2 = VERTOPINTERN->emu__DOT__iigs__DOT__rom2_ce;
+                        int actual_is_rom = (int)(romc | romd | rom1 | rom2);
+                        if (actual_is_rom) {
+                            if (romc) actual_phys_bank = 0xFC;
+                            else if (romd) actual_phys_bank = 0xFD;
+                            else if (rom1) actual_phys_bank = 0xFE;
+                            else if (rom2) actual_phys_bank = 0xFF;
+                        }
+                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        int is_io = ((bank == 0x00 || bank == 0x01 || bank == 0xE0 || bank == 0xE1) &&
+                                     (addr16 >= 0xC000 && addr16 <= 0xC0FF)) ? 1 : 0;
+                        if (is_io) {
+                            bool io_is_slow = (addr16 >= 0xC000 && addr16 <= 0xC02F) && (addr16 != 0xC036);
+                            if (addr16 == 0xC035 || addr16 == 0xC039 || addr16 == 0xC068) io_is_slow = false;
+                            if (io_is_slow) actual_is_slow = 1;
+                            actual_phys_bank = bank;
+                            actual_is_rom = 0;
+                        }
+                        if (!actual_is_rom && !is_io) {
+                            actual_phys_bank = bank;
+                        }
+                        if (actual_is_rom && !(actual_phys_bank >= 0xFC)) {
+                            actual_is_rom = 0;
+                        }
+
+                        unsigned short pc_local_read = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                        unsigned char  pbr_local_read = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        unsigned char  ir_local_read  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+
+                        vsim_trace_log(/*phase*/ 'D', /*type*/ 'R',
+                                       pc_local_read, pbr_local_read, ir_local_read,
+                                       bank, addr16, din,
+                                       actual_phys_bank, actual_is_rom, actual_is_slow, is_io);
                     } else if (vpa && !we) {
                         // Instruction fetch only (VPA=1, VDA=0): log mapping and CSV
                         unsigned int phys_addr_bus = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
@@ -1458,7 +1500,7 @@ int verilate() {
 
                         // While in loader area (00:0800-08FF), trace upcoming ifetches to see opcodes executed
                         if (loader_ifetch_trace_budget > 0 && vpa) {
-                            unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+                            unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
                             unsigned char bank = (addr >> 16) & 0xFF;
                             unsigned short addr16 = addr & 0xFFFF;
                             if (bank == 0x00 && (addr16 >= 0x0800 && addr16 <= 0x08FF)) {
@@ -1470,7 +1512,7 @@ int verilate() {
                                 loader_ifetch_trace_budget = 0;
                             }
                         }
-					}
+					
 					
 					// Track address/bank changes for timing analysis
 					if (addr != last_addr || bank != last_bank || din != last_din) {
@@ -1557,7 +1599,7 @@ int verilate() {
 
                         // HDD event ring for C0F0-C0FF accesses (bank 00 only)
                         if (vda) {
-                            unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+                            unsigned long addr = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
                             unsigned char bank = (addr >> 16) & 0xFF;
                             unsigned short addr16 = addr & 0xFFFF;
                             if (bank == 0x00 && (addr16 >= 0xC0F0 && addr16 <= 0xC0FF)) {
@@ -1572,6 +1614,9 @@ int verilate() {
 				}
 
 			}
+
+			// Update cpu_clock_last to properly track clock edge transitions
+			cpu_clock_last = cpu_clock;
 
 			if (CLK_14M.clk) { bus.AfterEval(); blockdevice.AfterEval(); }
 		}
@@ -1604,7 +1649,7 @@ int verilate() {
                 g_c031_disk35 = VERTOPINTERN->emu__DOT__iigs__DOT__iwm__DOT__DISK35;
             }
 	    */
-last_cpu_addr=VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+last_cpu_addr=VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
 
 
 
