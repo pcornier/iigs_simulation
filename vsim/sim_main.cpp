@@ -239,7 +239,16 @@ static void vsim_trace_log(char phase, char type,
         if (VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE)       mmap |= 0x00000200;
         if (VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2)      mmap |= 0x00000400;
         if (!VERTOPINTERN->emu__DOT__iigs__DOT__INTCXROM)   mmap |= 0x00080000;
-        // Note: C1–C7 ROM select and shadow masks are omitted for now
+
+        // Shadow register bits (matching clemens CLEM_MEM_IO_MMAP_NSHADOW_* flags)
+        // Note: shadow register uses inverted logic - bit=0 means shadowing enabled, bit=1 means disabled
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x01) mmap |= 0x00100000; // NSHADOW_TXT1
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x02) mmap |= 0x00400000; // NSHADOW_HGR1
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x04) mmap |= 0x00800000; // NSHADOW_HGR2
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x08) mmap |= 0x01000000; // NSHADOW_SHGR
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x10) mmap |= 0x02000000; // NSHADOW_AUX
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x20) mmap |= 0x00200000; // NSHADOW_TXT2
+        if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x40) mmap |= 0x04000000; // NIOLC
     }
     fprintf(g_vsim_trace_csv,
             "%llu,%c,%c,%04X,%02X,%02X,%02X,%04X,%02X,%08X,%02X,%d,%d,%d\n",
