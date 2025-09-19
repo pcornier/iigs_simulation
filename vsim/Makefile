@@ -11,7 +11,7 @@ V_INC = +incdir+$(RTL)
 #   make             -> defaults to rom3
 ROM ?= rom3
 
-V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -I../software_emulators/clemens_iigs -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD -Wno-fatal \
+V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD -Wno-fatal \
 	-I$(RTL)  \
 	-I$(RTL)/65C816  \
 	-I..
@@ -47,7 +47,7 @@ ifeq ($(UNAME_S), Linux) #LINUX
 	ECHO_MESSAGE = "Linux"
 	LIBS += -lGL -ldl `sdl2-config --libs`
 
-	CXXFLAGS += `sdl2-config --cflags` -Iimgui -I../software_emulators/clemens_iigs
+	CXXFLAGS += `sdl2-config --cflags` -Iimgui
 	CFLAGS = $(CXXFLAGS)
 endif
 
@@ -110,8 +110,7 @@ V_SRC = \
 C_SRC = \
 	sim_main.cpp  \
 	sim/sim_bus.cpp sim/sim_blkdevice.cpp sim/sim_clock.cpp sim/sim_console.cpp sim/sim_video.cpp sim/sim_console.cpp sim/sim_input.cpp  sim/sim_audio.cpp \
-	sim/imgui/imgui_impl_sdl.cpp sim/imgui/imgui_impl_opengl2.cpp sim/imgui/imgui_draw.cpp sim/imgui/imgui_widgets.cpp sim/imgui/imgui_tables.cpp sim/imgui/imgui.cpp sim/imgui/ImGuiFileDialog.cpp sim/imgui/implot.cpp sim/imgui/implot_items.cpp \
-	parallel_clemens.cpp
+	sim/imgui/imgui_impl_sdl.cpp sim/imgui/imgui_impl_opengl2.cpp sim/imgui/imgui_draw.cpp sim/imgui/imgui_widgets.cpp sim/imgui/imgui_tables.cpp sim/imgui/imgui.cpp sim/imgui/ImGuiFileDialog.cpp sim/imgui/implot.cpp sim/imgui/implot_items.cpp
 
 VOUT = obj_dir/Vemu.cpp
 

@@ -29,7 +29,7 @@
 #include "sim_audio.h"
 #include "sim_input.h"
 #include "sim_clock.h"
-#include "parallel_clemens.h"
+// parallel_clemens.h removed
 
 #define FMT_HEADER_ONLY
 #include <fmt/core.h>
@@ -294,8 +294,7 @@ void resetSim() {
     printf("resetSim!! main_time %llu top->reset %d\n", (unsigned long long)main_time, top->reset);
 	CLK_14M.Reset();
 	
-	// Initialize parallel memory tracking system
-	parallel_clemens_init();
+	// parallel_clemens removed
 }
 
 //#define DEBUG
@@ -1050,7 +1049,7 @@ int verilate() {
                     unsigned char hw_SLTROMSEL=VERTOPINTERN->emu__DOT__iigs__DOT__SLTROMSEL;
                     unsigned char hw_STORE80 = VERTOPINTERN->emu__DOT__iigs__DOT__STORE80;
                     unsigned char hw_HIRES   = VERTOPINTERN->emu__DOT__iigs__DOT__HIRES_MODE;
-                    parallel_clemens_update_hw(hw_RDROM, hw_LCRAM2, hw_LC_WE, hw_VPB, hw_SHADOW, hw_ALTZP, hw_INTCXROM, hw_PAGE2, hw_RAMRD, hw_RAMWRT, hw_SLTROMSEL, hw_STORE80, hw_HIRES);
+                    // parallel_clemens_update_hw removed
 					
 					// Enhanced debug info for timing analysis
 					static unsigned long last_addr = 0;
@@ -1101,15 +1100,13 @@ int verilate() {
                         // Shadow compare access mapping with Clemens-derived expectation
                         unsigned short pc_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                         unsigned char  pbr_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                        parallel_clemens_compare_access(bank, addr16, dout, /*is_write*/1,
-                                                         actual_phys_bank, actual_is_rom, actual_is_fast, actual_is_slow,
-                                                         pc_local, pbr_local);
+                        // parallel_clemens_compare_access removed
 
-                        parallel_clemens_compare_write(bank, addr16, dout);
-                        parallel_clemens_value_compare_write(bank, addr16, dout);
-                        parallel_clemens_track_hw_write(bank, addr16, actual_phys_bank, dout);
+                        // parallel_clemens_compare_write removed
+                        // parallel_clemens_value_compare_write removed
+                        // parallel_clemens_track_hw_write removed
                         // Ring-log this write for later dump on failure
-                        parallel_clemens_recent_log_write(bank, addr16, actual_phys_bank, dout);
+                        // parallel_clemens_recent_log_write removed
 
                         // CSV trace for write
                         unsigned short pc_local_write = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
@@ -1289,14 +1286,12 @@ int verilate() {
                         // Shadow compare access mapping with Clemens-derived expectation
                         unsigned short pc_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                         unsigned char  pbr_local = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                        parallel_clemens_compare_access(bank, addr16, din, /*is_write*/0,
-                                                         actual_phys_bank, actual_is_rom, actual_is_fast, actual_is_slow,
-                                                         pc_local, pbr_local);
+                        // parallel_clemens_compare_access removed
 
-                        parallel_clemens_compare_read(bank, addr16, din);
-                        parallel_clemens_value_compare_read(bank, addr16, din);
+                        // parallel_clemens_compare_read removed
+                        // parallel_clemens_value_compare_read removed
                         // Log reads in text/page regions for correlation
-                        parallel_clemens_recent_log_read(bank, addr16, actual_phys_bank, din);
+                        // parallel_clemens_recent_log_read removed
 
                         // Gate CSV tracing to start at first vector fetch (ROM overlay at FF:FFFC)
                         if (!g_vsim_trace_active && (actual_is_rom) && (actual_phys_bank == 0xFF) && addr16 == 0xFFFC) {
@@ -1424,7 +1419,7 @@ int verilate() {
                             debug_bf00_timing = false;
                             printf("TIMING DEBUG $BF00 COMPLETE: Data returned = %02X (should be ProDOS MLI, not BRK!)\n", din);
                             // Dump recent writes to correlate with possible bad LC stub or misrouted early text writes
-                            parallel_clemens_dump_recent_writes("Reached $00:BF00");
+                            // parallel_clemens_dump_recent_writes removed
                         }
 
                         // Loader entry detection: first ifetch at 00:0801
@@ -1539,7 +1534,7 @@ int verilate() {
 					unsigned char pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
 					unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
 					unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
-					parallel_clemens_sync_cpu_state(pc, pbr, sp, p);
+					// parallel_clemens_sync_cpu_state removed
 
 					//console.AddLog(fmt::format(">> PC={0:06x} IN={1:02x} MA={2:06x} VPA={3:x} VPB={4:x} VDA={5:x} NEXT={6:x}", ins_pc[ins_index], din, addr, vpa, vpb, vda, nextstate).c_str());
 
@@ -1910,8 +1905,7 @@ int main(int argc, char** argv, char** env) {
 	top = new Vemu();
 	Verilated::commandArgs(argc, argv);
 
-	// Initialize parallel memory tracking system
-	parallel_clemens_init();
+	// parallel_clemens removed
 
 #ifdef WIN32
 	// Attach debug console to the verilated code
