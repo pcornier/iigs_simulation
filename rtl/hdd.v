@@ -103,6 +103,16 @@ module hdd(
     
     always @(posedge CLK_14M)
     begin: cpu_interface
+        if (prefetch_armed) begin
+            prefetch_data  <= sector_cpu_q;
+            prefetch_valid <= 1'b1;
+            prefetch_armed <= 1'b0;
+`ifdef SIMULATION
+            $display("HDD PREFETCH armed -> data=%02h at sec_addr=%03d", sector_cpu_q, sec_addr);
+`endif
+        end
+
+
         begin
             // Default output unless a read path below overrides
             D_OUT <= 8'hFF;
@@ -364,8 +374,6 @@ bram #(.widthad_a(9)) sector_ram
         .ce_a(1'b1),
         .enable_b(1'b1)
 `else
-        .byteena_a(1'b1),
-        .byteena_b(1'b1),
         .enable_a(1'b1),
         .enable_b(1'b1)
 `endif
@@ -407,14 +415,6 @@ bram #(.widthad_a(9)) sector_ram
     end
     // Latch first byte after a READ command to ensure the first C0F8 returns correctly
     always @(posedge CLK_14M) begin
-        if (prefetch_armed) begin
-            prefetch_data  <= sector_cpu_q;
-            prefetch_valid <= 1'b1;
-            prefetch_armed <= 1'b0;
-`ifdef SIMULATION
-            $display("HDD PREFETCH armed -> data=%02h at sec_addr=%03d", sector_cpu_q, sec_addr);
-`endif
-        end
     end
  
 

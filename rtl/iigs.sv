@@ -108,7 +108,7 @@ module iigs
    logic [7:0] shadow/*verilator public_flat*/;
    logic [7:0] TEXTCOLOR;
    logic [3:0] BORDERCOLOR;
-  logic [7:0] SLTROMSEL/*verilator public_flat*/;
+   logic [7:0] SLTROMSEL;
    logic [7:0] CYAREG;
    logic CXROM;
    logic       RDROM;
@@ -146,7 +146,7 @@ module iigs
 
   logic [23:0]        cpu_addr;
   logic [7:0]         cpu_dout;
-  logic [23:0]        addr_bus/*verilator public_flat*/;
+  logic [23:0]        addr_bus;
   logic [23:0]        fastram_addr_bus;
   logic               cpu_vpa, cpu_vpb;
   logic               cpu_vda, cpu_mlb;
@@ -217,10 +217,10 @@ module iigs
   logic [7:0]         INTEN; //41
   reg [7:0]           INTFLAG = 0; // 46, 47 - Interrupt flags register
 
-  logic               STORE80/*verilator public_flat*/;
-  logic               RAMRD/*verilator public_flat*/;
-  logic               RAMWRT/*verilator public_flat*/;
-  logic               INTCXROM/*verilator public_flat*/;
+  logic               STORE80;
+  logic               RAMRD;
+  logic               RAMWRT;
+  logic               INTCXROM;
   logic               ALTZP;
   logic               SLOTC3ROM;
   //logic               EIGHTYCOL;
@@ -279,10 +279,7 @@ module iigs
 
   assign EXTERNAL_IO =    ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io);
 
-  // FIX: Language Card should NOT inhibit slot ROM access (C100-C7FF).
-  // Only inhibit C800–CFFF expansion window when LC is active.
-  assign inhibit_cxxx = ((bank == 8'h00 || bank == 8'h01 || bank == 8'he0 || bank == 8'he1)
-                         && (addr[15:8] >= 8'hC8) && shadow[6]);
+  assign inhibit_cxxx = lcram2_sel | ((bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1) & shadow[6]);
 
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
@@ -308,13 +305,6 @@ module iigs
 
   always_comb begin
     lcram2_sel = 0;
-    // Provide a safe default for addr_bus to avoid latches in branches
-    // Default maps CPU address, including aux mapping for Bank 00/E0
-    if (aux && (bank_bef == 8'h00 || bank_bef == 8'he0)) begin
-      addr_bus = addr_bef + 24'h10000;
-    end else begin
-      addr_bus = cpu_addr;
-    end
     
     // E0/E1 Banks - Language Card Implementation (simplified/fixed)
     if ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~RDROM) begin
@@ -333,23 +323,15 @@ module iigs
         addr_bus = {bank_bef, 16'h0} + addr_bef;
       end
     end
-    // Banks $00/$01 Language Card space at $D000-$DFFF
-    // Align to Clemens/GSplus: only redirect reads to RAM when RDROM=0.
-    // When RDROM=1 (or during ~VPB), instruction/data reads here should come from ROM overlay.
-    // Writes still go to RAM when LC_WE and LCRAM2 allow.
+    // Banks $00/$01 Language Card space (existing logic)
     else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6]) begin
-      if ((we && LC_WE) || (~we && ~RDROM)) begin
-        lcram2_sel = 1;
-        if (aux && bank_bef == 8'h00) begin
-          addr_bus = addr_bef - 16'h1000 + 24'h10000;
-        end else begin
-          addr_bus = {bank_bef, 16'h0000} + addr_bef - 16'h1000;
-        end
+      lcram2_sel = 1;
+      if (aux && bank_bef == 8'h00) begin
+        addr_bus = addr_bef - 16'h1000 + 24'h10000;
+      end else begin
+        addr_bus = {bank_bef, 16'h0000} + addr_bef - 16'h1000;
       end
-      // else: leave addr_bus as default; ROM overlay logic (rom2_ce) will take precedence for read
     end
-    // Note: BFxx ($BF00-$BFFF) and C8xx–CFFF are NOT part of the language card window.
-    // Do not redirect these ranges via LC; leave to default/I/O/CxROM logic.
     else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'he000 && ~RDROM && ~shadow[6]) begin
       lcram2_sel = 1;
       if (aux && bank_bef == 8'h00) begin
@@ -359,7 +341,12 @@ module iigs
       end
     end
     else begin
-      // Default address translation already applied above
+      // Default address translation
+      if (aux && (bank_bef == 8'h00 || bank_bef == 8'he0)) begin
+        addr_bus = addr_bef + 24'h10000;
+      end else begin
+        addr_bus = cpu_addr;  // Normal mapping (includes ROM code addresses $C000-$FFFF)
+      end
     end
   end
 
@@ -393,49 +380,25 @@ module iigs
   wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
   
   // Dual-write detection: Bank 01 SHGR writes also go to Bank E1
-  // NOTE: Use bank_bef here because dual-write depends on the logical bank accessed by CPU
   wire shgr_dual_write = (bank_bef == 8'h01 && shgr_shadow && we && ~IO);
   
   // Memory Controller - Clean systematic approach
-  // FIX: Use translated physical bank from addr_bus, not logical bank_bef
-  // This ensures Language Card redirections are handled correctly
-  wire [7:0] physical_bank = addr_bus[23:16];
-  
   always_comb begin
     fastram_ce_int = 0;
     slowram_ce_int = 0;
-    
-    // Debug: Show physical_bank vs bank_bef for $BF00 accesses
-`ifdef SIMULATION
-    if (addr_bef == 16'hBF00 && ~IO) begin
-      $display("MEM_CTRL_DEBUG: addr_bef=%04x bank_bef=%02x physical_bank=%02x addr_bus=%06x", 
-               addr_bef, bank_bef, physical_bank, addr_bus);
-    end
-`endif
     
     if (IO) begin
       // I/O space - no RAM access
       fastram_ce_int = 0;
       slowram_ce_int = 0;
     end else begin
-      case (physical_bank)
+      case (bank_bef)
         // Bank 00: Main memory with shadow regions
         8'h00: begin
-          if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow) begin
-            // Non-LC shadow regions: Enable BOTH for compatibility (fastram takes priority in mux)
+          if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow) begin
+            // Shadowed regions: Enable BOTH for compatibility (fastram takes priority in mux)
             fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
             slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)
-          end else if (lc_shadow) begin
-            // Language Card area: ALWAYS enable RAM for Bank 00 Language Card region
-            // The ROM mux will handle RDROM logic for reads
-            // Writes always go to RAM when LC_WE=1 (handled by lcram2_sel logic)
-            fastram_ce_int = 1; 
-            slowram_ce_int = 1;
-`ifdef SIMULATION
-            if (addr_bef == 16'hBF00) begin
-              $display("MEM_CTRL_DEBUG: Enabling RAM for Bank00 LC area - ROM mux handles RDROM logic");
-            end
-`endif
           end else begin
             fastram_ce_int = 1;  // Normal Bank 00 RAM (non-shadowed)
           end
@@ -468,26 +431,19 @@ module iigs
           slowram_ce_int = 1;
         end
         
-        // Banks FC-FF: ROM banks - writes should be discarded EXCEPT for Language Card write-through
+        // Banks FC-FF: ROM banks - writes should be discarded
         8'hFC, 8'hFD, 8'hFE, 8'hFF: begin
+          // ROM is read-only: reads from ROM space, writes are discarded
+          // Do NOT enable fastram_ce or slowram_ce for ROM writes
+          // This prevents ROM selftest code from corrupting system memory
           if (~we) begin
             // ROM reads: access ROM space (handled by rom1_ce/rom2_ce signals)
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else begin
-            // ROM writes: Check for Language Card write-through
-            if (rom_writethrough) begin
-              // Language Card write-through: write to Bank 01 instead of discarding
-              fastram_ce_int = 1;  // Enable Bank 01 write (since physical_bank will be 01)
-              if (addr_bef >= 16'hbf00) begin
-                $display("ROM_WRITETHROUGH_ENABLE: ROM Bank %02X write to %04X -> enabling fastram_ce for Bank 01", 
-                         physical_bank, addr_bef);
-              end
-            end else begin
-              // Normal ROM writes: discard (no memory access)
-              fastram_ce_int = 0;
-              slowram_ce_int = 0;
-            end
+            // ROM writes: discard (no memory access)
+            fastram_ce_int = 0;
+            slowram_ce_int = 0;
           end
         end
         
@@ -502,16 +458,7 @@ module iigs
   end
 
   // ROM write-through for language card
-  // This should trigger when writing to ROM addresses in the Language Card area with LC_WE enabled
-  assign rom_writethrough = (((bank_bef >= 8'hFC) || (bank_bef == 8'h00)) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE);
-  
-  // Debug ROM write-through for MVN copying
-  always @(posedge CLK_14M) begin
-    if (phi2 && we && rom_writethrough && addr_bef >= 16'hbf00) begin
-      $display("ROM_WRITETHROUGH: Bank=%02X Addr=%04X Data=%02X LC_WE=%d (writing through ROM to LC)", 
-               bank_bef, addr_bef, cpu_dout, LC_WE);
-    end
-  end
+  assign rom_writethrough = (bank_bef == 8'h00 && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE);
 
   // Debug: Clean memory controller verification
   always @(posedge CLK_14M) begin
@@ -635,46 +582,14 @@ module iigs
   
   reg [7:0] prev_shadow = 8'h00;
 
-// Instruction/operand fetch CE helpers based on CPU PC
-wire ifetch_ce_romc = cpu_vpa && (cpu_addr[23:16] == 8'hfc);
-wire ifetch_ce_romd = cpu_vpa && (cpu_addr[23:16] == 8'hfd);
-wire ifetch_ce_rom1 = cpu_vpa && (cpu_addr[23:16] == 8'hfe);
-wire ifetch_ce_rom2_ff = cpu_vpa && (cpu_addr[23:16] == 8'hff);
-// Bank 00 overlays for LC only (D000-FFFF) when RDROM is active
-wire ifetch_ce_rom2_ovl00 = cpu_vpa && (cpu_addr[23:16] == 8'h00) && RDROM &&
-                             (cpu_addr[15:0] >= 16'hd000);
-// Narrow trampoline: treat 00:C071–C07F as ROM fetches (IRQ/BRK path), like Clemens/GSPlus
-wire ifetch_ce_rom2_c07 = cpu_vpa && (cpu_addr[23:16] == 8'h00) &&
-                          (cpu_addr[15:8] == 8'hC0) &&
-                          (cpu_addr[7:0]  >= 8'h71) && (cpu_addr[7:0] <= 8'h7F);
-
-assign romc_ce = (bank_bef == 8'hfc) | ifetch_ce_romc;
-assign romd_ce = (bank_bef == 8'hfd) | ifetch_ce_romd;
-assign rom1_ce = (bank_bef == 8'hfe) | ifetch_ce_rom1;
-  // ROM chip enable (ROM2: bank FF and Bank00 overlays under RDROM)
-  // - Always enable for bank FF
-  // - Enable for Bank 00 when RDROM is active in these ranges:
-  //   * $D000-$DFFF and $E000-$FFFF (except when Language Card RAM explicitly selected)
-  //   * $C100-$CFFF (do NOT overlay I/O page $C000-$C0FF)
-  // Instruction/operand fetch overlay uses CPU address directly (cpu_vpa)
-  // For instruction/operand fetches, mirror Clemens/GSPlus behavior strictly:
-  // - Bank FF always ROM
-  // - Bank 00 overlays in $C100–$CFFF and $D000–$FFFF are always read from ROM for fetches
-  //   (to ensure correct operand bytes even if LC paths are being configured)
-  wire rom2_ce_ifetch = ifetch_ce_rom2_ff || ifetch_ce_rom2_ovl00 || ifetch_ce_rom2_c07;
-
-  assign rom2_ce = rom2_ce_ifetch ||
-                   bank_bef == 8'hff ||
-                   // Bank 00: $D000-$DFFF under RDROM unless LC bank RAM is selected
-                   (bank_bef == 8'h0 && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && RDROM && ~lcram2_sel) ||
-                   // Bank 00: $E000-$FFFF under RDROM unless LC bank RAM is selected
-                   (bank_bef == 8'h0 && addr_bef >= 16'he000 &&                     RDROM && ~lcram2_sel) ||
-                   // NOTE: Do not overlay $BF00-$BFFF under RDROM. The MLI stub is copied to RAM
-                   // and then executed from RAM (even if RDROM remains set briefly). Overlaying
-                   // here caused the bank byte of the JML in the stub to be fetched from ROM,
-                   // jumping to bank $80 instead of $E1. So leave $BFxx reads to normal LC/RAM mapping.
-                   // No special-case overlays below $C100; $C000-$C0FF remains I/O only
-                   1'b0;
+  assign romc_ce = bank_bef == 8'hfc;
+  assign romd_ce = bank_bef == 8'hfd;
+  assign rom1_ce = bank_bef == 8'hfe;
+  assign rom2_ce = bank_bef == 8'hff ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB)) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef <= 16'hcfff && (RDROM|~VPB)) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB)) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f);
 
   // driver for io_dout and fake registers
   always_ff @(posedge CLK_14M) begin
@@ -696,8 +611,7 @@ assign rom1_ce = (bank_bef == 8'hfe) | ifetch_ce_rom1;
       $display("  Text/HGR shadowing ACTIVE, Super HiRes shadowing DISABLED");
       SOUNDCTL <= 8'd0;
       //SOUNDCTL <= 8'h05;
-      // Initialize NEWVIDEO to match Clemens/GSplus default (bit0 set only)
-      NEWVIDEO <= 8'h01;
+      NEWVIDEO <= 8'h41;
       C02BVAL <= 8'h08;
 
       // FROM GSPLUS
@@ -717,9 +631,7 @@ assign rom1_ce = (bank_bef == 8'hfe) | ifetch_ce_rom1;
       STORE80<=0;
       RAMRD<=0;
       RAMWRT<=0;
-      // INTCXROM must default to 1 at reset (internal ROM selected),
-      // matching Clemens/GSplus and real hardware power-on state.
-      INTCXROM<=1'b1;
+      INTCXROM<=0;
       ALTZP<=0;
       SLOTC3ROM<=0;
       EIGHTYCOL<=0;
@@ -729,7 +641,7 @@ assign rom1_ce = (bank_bef == 8'hfe) | ifetch_ce_rom1;
       MONOCHROME<=0;
       RDROM<=1;
       LCRAM2<=1;  // Fix: Should be 1 to match STATEREG initialization (bit 1 = LCRAM2)
-      LC_WE<=1;  // FIX: Enable Language Card writes by default for ROM boot
+      LC_WE<=0;
       ROMBANK<=0;;
     end
 
@@ -1217,16 +1129,17 @@ assign rom1_ce = (bank_bef == 8'hfe) | ifetch_ce_rom1;
                     LC_WE_PRE<=1'b0;
                   end
                 end
-            12'h081,	// Read ROM write RAM bank 2 (RR)  
+            12'h081,	// Read ROM write RAM bank 2 (RR)
               12'h085:
                 begin
                   if (phi2) begin
-                    $display("LC_RD C081/C085: ROM READ + RAM WRITE LC_WE_PRE %x LC_WE %x OLD_RDROM=%d",LC_WE_PRE,LC_WE,RDROM);
-                    RDROM <= 1'b1;  // FIX: Read from ROM (GSplus sets 0x08 bit)
+                    $display("LC_RD C081/C085: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    RDROM <= 1'b1;
                     LCRAM2 <= 1'b1;
-                    LC_WE <= 1'b1;  // Enable writing to Language Card
-                    LC_WE_PRE <= 1'b1;
-                    $display("LC_RD C081/C085: RDROM=1 LC_WE=1 assignment executed");
+                  end
+                  if (phi0) begin
+                    LC_WE <= LC_WE_PRE  ;
+                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
                   end
                 end
             12'h082,	// Read ROM no write
@@ -1244,12 +1157,13 @@ assign rom1_ce = (bank_bef == 8'hfe) | ifetch_ce_rom1;
               12'h087:
                 begin
                   if (phi2) begin
-                    $display("LC_RD C083/C087: ENABLE RAM READ AND WRITE LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+                    $display("LC_RD C083/C087: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b1;
-                    LC_WE <= 1'b1;  // FIX: Immediately enable writing
-                    LC_WE_PRE <= 1'b1;
-                    $display("LC_RD C083/C087: RDROM=0 LC_WE=1 assignment executed");
+                  end
+                  if (phi0) begin
+                    LC_WE <= LC_WE_PRE  ;
+                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
                   end
                 end
             12'h088,
@@ -1429,24 +1343,15 @@ assign rom1_ce = (bank_bef == 8'hfe) | ifetch_ce_rom1;
 
   always @(*)
     begin: aux_ctrl
-      // Base rule per Clemens/GSPlus:
-      // - Bank 01/E1 always auxiliary
-      // - Bank 00/E0:
-      //    * $0000-$01FF -> ALTZP controls aux
-      //    * $0200-$BFFF -> RAMRD (reads) / RAMWRT (writes) select aux
-      //    * $C000+      -> I/O/slot/LC handled elsewhere (stay main here)
       aux = 1'b0;
-      if (bank_bef==8'h01 || bank_bef==8'he1) begin
-        aux = 1'b1;
-      end else if (bank_bef==8'h00 || bank_bef==8'he0) begin
-        if (addr_bef < 16'h0200) begin
-          aux = ALTZP;
-        end else if (addr_bef < 16'hC000) begin
-          aux = (cpu_we_n ? RAMRD : RAMWRT);
-        end else begin
-          aux = 1'b0;
-        end
-      end
+      if ((bank_bef==0 || bank_bef==8'he0) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
+        aux = ALTZP;
+      else if ((bank_bef==0 || bank_bef==1 || bank_bef==8'he0 || bank_bef==8'he1) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
+      else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
+      else
+        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
     end
 assign     fastram_address = {bank[6:0],addr};
 assign     fastram_datatoram = dout;
@@ -1503,16 +1408,12 @@ rom #(.memfile("rom1/rom2.mem")) rom2(
 );
 `endif
 
-// External slot ROM enable (C100–C7FF) only when peripheral ROM is selected (CXROM=0)
-wire slot_ce =  (bank == 8'h00 || bank == 8'h01 || bank == 8'he0 || bank == 8'he1)
-                && (addr >= 16'hC100 && addr < 16'hC800)
-                && ~is_internal && ~inhibit_cxxx && ~CXROM;
+//wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
+wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~inhibit_cxxx;
 wire is_internal =   ~SLTROMSEL[addr[10:8]];
 wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
-// Internal slot ROM enable (C100–C7FF) only when internal ROM is selected (CXROM=1)
-wire slot_internalrom_ce =  (bank == 8'h00 || bank == 8'h01 || bank == 8'he0 || bank == 8'he1)
-                           && (addr >= 16'hC100 && addr < 16'hC800)
-                           && is_internal && ~inhibit_cxxx && CXROM;
+//wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
+wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && is_internal && ~inhibit_cxxx;
 
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
@@ -1627,107 +1528,21 @@ vgc vgc(
 
 
 
-// Force instruction/operand fetch data from ROM for overlay regions, using CPU address
-// Match Clemens/GSPlus semantics:
-//  - Bank FF always from ROM
-//  - Bank 00 overlays when RDROM and in D000–FFFF (Language Card)
-//  - Special case: 00:C071–C07F fetch from ROM regardless (IRQ/BRK trampoline)
-wire ifetch_c07_tramp = cpu_vpa && (cpu_addr[23:16] == 8'h00) &&
-                        (cpu_addr[15:8] == 8'hC0) && (cpu_addr[7:0] >= 8'h71) && (cpu_addr[7:0] <= 8'h7F);
-wire ifetch_rom2 = cpu_vpa && (
-                      (cpu_addr[23:16] == 8'hff) ||
-                      ifetch_c07_tramp ||
-                      (cpu_addr[23:16] == 8'h00 && RDROM && (
-                          (cpu_addr[15:0] >= 16'hd000)
-                      ))
-                   );
-
-// Correct priority mux for CPU data: optional IFETCH ROM override first, then normal map
-wire [7:0] ifetch_rom_data =
-    (cpu_addr[23:16] == 8'hff) ? rom2_dout :
-    (cpu_addr[23:16] == 8'hfe) ? rom1_dout :
-    (cpu_addr[23:16] == 8'hfd) ? romd_dout :
-    (cpu_addr[23:16] == 8'hfc) ? romc_dout :
-    rom2_dout; // bank 00 overlay windows map to FF
-
-// Data-phase ROM overlay for Bank FF/FE/FD/FC and Bank00 overlays when RDROM=1
-wire dfetch_rom2_window = cpu_vda && (~we) && (
-                            (cpu_addr[23:16] == 8'hff) ||
-                            (cpu_addr[23:16] == 8'h00 && RDROM && (
-                                (cpu_addr[15:0] >= 16'hd000) ||
-                                (cpu_addr[15:0] >= 16'hc100 && cpu_addr[15:0] <= 16'hcfff)
-                            ))
-                         );
-wire [7:0] dfetch_rom_data =
-    (cpu_addr[23:16] == 8'hff) ? rom2_dout :
-    (cpu_addr[23:16] == 8'hfe) ? rom1_dout :
-    (cpu_addr[23:16] == 8'hfd) ? romd_dout :
-    (cpu_addr[23:16] == 8'hfc) ? romc_dout :
-    rom2_dout;
-
-// Prioritize instruction-fetch ROM override above I/O so we never execute from I/O page ($C000-$C0FF)
-  wire [7:0] din =
-  // HDD only at slot-7 I/O ($C0F0–$C0FF) and C7xx ROM; no aliasing on slot 5
+wire [7:0] din =
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
-  (ifetch_rom2 ? ifetch_rom_data :
-   (dfetch_rom2_window ? dfetch_rom_data :
-    (rom1_ce ? rom1_dout :
-     rom2_ce ? rom2_dout :
-     romc_ce ? romc_dout :
-     romd_ce ? romd_dout :
-     slot_internalrom_ce ? rom2_dout :
-     slot_ce ? slot_dout :
-     fastram_ce ? fastram_dout :
-     slowram_ce ? slowram_dout :
-     8'h80)));
-
-`ifdef SIMULATION
-  // Deep source tracing for operand fetch and BFxx accesses
-  always @(posedge CLK_14M) begin
-    // Loader page (00:0800–08FF) ifetch tracing
-    if (cpu_vpa && (cpu_addr[23:16]==8'h00) && (cpu_addr[15:8]==8'h08)) begin
-      $display("LOADER IFETCH (SV): PC=%02X:%04X din=%02X RDROM=%b ALTZP=%b RAMRD=%b RAMWRT=%b src(ifetch=%b dfetch=%b rom1=%b rom2=%b romc=%b romd=%b fast=%b slow=%b slotint=%b slot=%b io=%b)",
-               cpu_addr[23:16], cpu_addr[15:0], din, RDROM, ALTZP, RAMRD, RAMWRT,
-               ifetch_rom2, dfetch_rom2_window, rom1_ce, rom2_ce, romc_ce, romd_ce,
-               fastram_ce, slowram_ce, slot_internalrom_ce, slot_ce, IO);
-      $display("  Candidates: rom2=%02X rom1=%02X romc=%02X romd=%02X fast=%02X slow=%02X slot=%02X io=%02X",
-               rom2_dout, rom1_dout, romc_dout, romd_dout, fastram_dout, slowram_dout, slot_dout, io_dout);
-    end
-    if (cpu_vpa && ((cpu_addr[23:16]==8'h00 && cpu_addr[15:0]>=16'hF8C6 && cpu_addr[15:0]<=16'hF8CF) ||
-                    (cpu_addr[23:16]==8'h00 && cpu_addr[15:0]>=16'hBF00 && cpu_addr[15:0]<=16'hBF10))) begin
-      $display("IFETCH TRACE: PC=%02X:%04X VPA=1 RDROM=%b din=%02X src(ifetch=%b dfetch=%b rom1=%b rom2=%b romc=%b romd=%b fast=%b slow=%b slotint=%b io=%b)",
-               cpu_addr[23:16], cpu_addr[15:0], RDROM, din,
-               ifetch_rom2, dfetch_rom2_window, rom1_ce, rom2_ce, romc_ce, romd_ce,
-               fastram_ce, slowram_ce, slot_internalrom_ce, IO);
-      $display("  Candidates: rom2=%02X rom1=%02X romc=%02X romd=%02X fast=%02X slow=%02X slot=%02X io=%02X",
-               rom2_dout, rom1_dout, romc_dout, romd_dout, fastram_dout, slowram_dout, slot_dout, io_dout);
-    end
-    // Data-phase BFxx read/write tracing
-    if (cpu_vda && (bank_bef==8'h00) && (addr_bef>=16'hBF00 && addr_bef<=16'hBFFF)) begin
-      $display("BFxx DATA: %s %02X:%04X din=%02X dout=%02X RDROM=%b LC_WE=%b LCRAM2=%b VDA=1 WE=%b src(ifetch=%b dfetch=%b rom1=%b rom2=%b romc=%b romd=%b fast=%b slow=%b slotint=%b io=%b)",
-               we?"WRITE":"READ ", bank_bef, addr_bef, cpu_din, cpu_dout, RDROM, LC_WE, LCRAM2, we,
-               ifetch_rom2, dfetch_rom2_window, rom1_ce, rom2_ce, romc_ce, romd_ce,
-               fastram_ce, slowram_ce, slot_internalrom_ce, IO);
-      $display("  Candidates: rom2=%02X rom1=%02X romc=%02X romd=%02X fast=%02X slow=%02X slot=%02X io=%02X",
-               rom2_dout, rom1_dout, romc_dout, romd_dout, fastram_dout, slowram_dout, slot_dout, io_dout);
-    end
-    // Data-phase read tracing for early text stack/zero-page region relevant to MVN divergence ($0800-$08FF)
-    if (cpu_vda && ~we && (bank_bef==8'h00) && (addr_bef>=16'h0800 && addr_bef<=16'h08FF)) begin
-      $display("A2 PAGE READ: %02X:%04X din=%02X RDROM=%b LC_WE=%b LCRAM2=%b src(dfetch=%b rom1=%b rom2=%b romc=%b romd=%b fast=%b slow=%b slotint=%b io=%b)",
-               bank_bef, addr_bef, cpu_din, RDROM, LC_WE, LCRAM2,
-               dfetch_rom2_window, rom1_ce, rom2_ce, romc_ce, romd_ce,
-               fastram_ce, slowram_ce, slot_internalrom_ce, IO);
-      $display("  Candidates: rom2=%02X rom1=%02X romc=%02X romd=%02X fast=%02X slow=%02X slot=%02X io=%02X",
-               rom2_dout, rom1_dout, romc_dout, romd_dout, fastram_dout, slowram_dout, slot_dout, io_dout);
-    end
-  end
-`endif
+  rom1_ce ? rom1_dout :
+  rom2_ce ? rom2_dout :
+  romc_ce ? romc_dout :
+  romd_ce ? romd_dout :
+  slot_internalrom_ce ?  rom2_dout :
+  fastram_ce ? fastram_dout :
+  slowram_ce ? slowram_dout :
+  slot_ce ? slot_dout :
+  8'h80;
 
 wire [7:0] HDD_DO;
 
-  // For instruction fetch cycles (VPA) in overlay regions, use ROM data even if address falls in I/O page.
-  // Only treat as I/O for non-instruction cycles.
-  wire [7:0] cpu_din = (cpu_vpa && ifetch_rom2) ? ifetch_rom_data : (IO ? (iwm_strobe ? iwm_dout : io_dout) : din);
+  wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
 wire ready_out;
 
   P65C816 cpu(
@@ -2007,7 +1822,6 @@ wire ready_out;
     hdd hdd(
         .CLK_14M(CLK_14M),
         .phi0(phi0),
-        // Slot 7 option ROM is at C700–C7FF; use io_select[7]
         .IO_SELECT(io_select[7]),
         .DEVICE_SELECT(device_select[7]),
         //.IO_SELECT(1'b0),
