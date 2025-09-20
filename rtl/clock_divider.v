@@ -237,20 +237,19 @@ always @(posedge clk_14M) begin
 	
 	   
     // --- Corrected slowMem Logic ---
-    // A memory access is slow if it's to a Mega II bank, a peripheral slot,
-    // the main I/O page (with exceptions for fast registers), or a write to a shadowed region.
+    // A memory access is slow if it's to a Mega II bank, the main I/O page (with exceptions),
+    // or a write to a shadowed region.
     if ( (bank == 8'hE0 || bank == 8'hE1) ||
-         // Slot ROM banks are slow for peripheral card compatibility
-         (bank >= 8'hC1 && bank <= 8'hCF) ||
          // The I/O page ($C000-$CFFF) is slow, EXCEPT for known fast FPI registers
          ( (bank == 8'h00 || bank == 8'h01) && addr[15:12] == 4'hC &&
            !(
-             (addr == 16'hC02D) || // INTCROM (Fast Read)
-             (addr == 16'hC035) || // Shadow Register (Fast R/W)
-             (addr == 16'hC036) || // Speed Register (Fast R/W)
-             (addr == 16'hC068) || // State Register (Fast Read)
-             (addr == 16'hC069) || // State Register (Fast Read)
-             (addr >= 16'hC071 && addr <= 16'hC07F) // Interrupt ROM (Fast Read)
+             (addr == 16'hC02D) || // INTCROM
+             (addr == 16'hC035) || // Shadow Register
+             (addr == 16'hC036) || // Speed Register
+             (addr == 16'hC037) || // DMA Bank Register
+             (addr == 16'hC068) || // State Register
+             (addr == 16'hC069) || // State Register
+             (addr >= 16'hC071 && addr <= 16'hC07F) // Interrupt ROM
            )
          ) ||
          // Shadowed writes are slow
