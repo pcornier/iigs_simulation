@@ -118,6 +118,10 @@ The `lineaddr()` function implements the authentic Apple II memory layout where 
 
 ## Testing and Debugging
 
+### Regression testing
+
+- After each change run the regression.sh script in the vsim directory. If there are any changes stop and notify the user. Changes will be reported by diff of a binary png. You can optionaly analyze the images and see what the differences are.
+
 ### Debug Output Analysis
 The simulation produces extensive debug output including:
 - CPU instruction traces with addresses and opcodes

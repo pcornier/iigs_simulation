@@ -6,6 +6,7 @@ module clock_divider (
     input wire [7:0] shadow,           // SHADOW REG
     input wire [15:0] addr,            // CPU ADDR
     input wire IO,
+    input wire we,                     // NEW: Write enable signal
 
     input  wire        stretch,        // Stretch signal for extended cycles
     
@@ -235,33 +236,39 @@ always @(posedge clk_14M) begin
 
 	
 	   
-    // --- 1. Entire banks $E0 and $E1: always slow ---
-        if ((bank == 8'hE0 || bank == 8'hE1) ||
-
-    // --- 2. I/O space $C000-$CFFF in bank $00 or $01 ---
-    ((bank == 8'h00 || bank == 8'h01) && addr[15:12] == 4'hC) ||
-
-    // --- 3. Bank $00: $E000-$FFFF (ROM/softswitch region) ---
-    (bank == 8'h00 && addr[15:13] == 3'b111) ||
-
-    // --- 4. Slot ROM space: banks $C1-$CF, $C8-$CF
-    //     (Accesses to slot firmware are slow)
-    ((bank >= 8'hC1 && bank <= 8'hCF)) ||
-
-    // --- 5. Peripheral slow mapping (shadowed video memory) ---
-    // Bank $00/$01: $0400-$07FF (text page 1)
-    ((bank == 8'h00 || bank == 8'h01) &&
-        (addr >= 16'h0400 && addr <= 16'h07FF)) ||
-
-    // Bank $00/$01: $0800-$0BFF (text page 2 / hi-res page 1)
-    ((bank == 8'h00 || bank == 8'h01) &&
-        (addr >= 16'h0800 && addr <= 16'h0BFF)) ||
-
-    // Bank $00/$01: $2000-$3FFF (hi-res page 2)
-    ((bank == 8'h00 || bank == 8'h01) &&
-        (addr >= 16'h2000 && addr <= 16'h3FFF)) )
-            begin
-                slowMem<=1;
+    // --- Corrected slowMem Logic ---
+    // A memory access is slow if it's to a Mega II bank, a peripheral slot,
+    // the main I/O page (with exceptions for fast registers), or a write to a shadowed region.
+    if ( (bank == 8'hE0 || bank == 8'hE1) ||
+         // Slot ROM banks are slow for peripheral card compatibility
+         (bank >= 8'hC1 && bank <= 8'hCF) ||
+         // The I/O page ($C000-$CFFF) is slow, EXCEPT for known fast FPI registers
+         ( (bank == 8'h00 || bank == 8'h01) && addr[15:12] == 4'hC &&
+           !(
+             (addr == 16'hC02D) || // INTCROM (Fast Read)
+             (addr == 16'hC035) || // Shadow Register (Fast R/W)
+             (addr == 16'hC036) || // Speed Register (Fast R/W)
+             (addr == 16'hC068) || // State Register (Fast Read)
+             (addr == 16'hC069) || // State Register (Fast Read)
+             (addr >= 16'hC071 && addr <= 16'hC07F) // Interrupt ROM (Fast Read)
+           )
+         ) ||
+         // Shadowed writes are slow
+         (we && (bank == 8'h00 || bank == 8'h01) &&
+            (
+                // Text Page 1 ($0400-$07FF) is shadowed
+                (addr >= 16'h0400 && addr <= 16'h07FF && shadow[0]) ||
+                // Text Page 2 ($0800-$0BFF) is shadowed
+                (addr >= 16'h0800 && addr <= 16'h0BFF && shadow[5]) ||
+                // Hires Page 1 ($2000-$3FFF) is shadowed
+                (addr >= 16'h2000 && addr <= 16'h3FFF && shadow[1]) ||
+                // Hires Page 2 ($4000-$5FFF) is shadowed
+                (addr >= 16'h4000 && addr <= 16'h5FFF && shadow[2])
+            )
+         )
+       )
+    begin
+        slowMem<=1;
 `ifdef SIMULATION
 `ifdef DEBUG_CLK_TIMING
                 if (!prev_slow && !prev_slowMem) begin
