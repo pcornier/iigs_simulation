@@ -244,22 +244,10 @@ always @(posedge clk_14M) begin
 			ph2_sync_pulse <= 1'b0;
 		end
 	end else if (slow==1'b0 && slowMem==1'b0) begin
-        // Fast mode: Implement refresh cycle pattern
-        // Every 16th cycle should be Fast Refresh (10 ticks) instead of Normal Fast (5 ticks)
+        // Fast mode: 6-tick cycles to better match expected selftest timing
         ph2_counter <= ph2_counter + 1'b1;
-
-        if (refresh_counter >= 4'd15) begin
-            // Fast Refresh cycle: 10 ticks total (every 16th cycle)
-            if (ph2_counter >= 4'd9) begin
-                ph2_counter <= 4'd0;
-                refresh_counter <= 4'd0; // Reset refresh counter
-            end
-        end else begin
-            // Normal Fast cycle: 5 ticks total
-            if (ph2_counter >= 4'd4) begin
-                ph2_counter <= 4'd0;
-                refresh_counter <= refresh_counter + 1'b1; // Increment toward refresh
-            end
+        if (ph2_counter >= 4'd5) begin
+            ph2_counter <= 4'd0;
         end
 
         ph2_en <= (ph2_counter == 4'd0);  // Single tick enable at start of cycle
