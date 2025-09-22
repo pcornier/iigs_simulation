@@ -7,7 +7,8 @@ input ce_pix,
 input[9:0] H,
 input[8:0] V,
 output reg scanline_irq,
-output reg vbl_irq,
+
+output vbl_irq,
 output reg [7:0] R,
 output reg [7:0] G,
 output reg [7:0] B,
@@ -759,10 +760,7 @@ begin
 //$display("chram_x[6:1] %x chram_x %x chrom_data_out %x chrom_addr %x",chram_x[6:1],chram_x,chrom_data_out,chrom_addr);
 
 // VBL starts at end of active display (line 232)
-if (V == 'd232)
-	vbl_irq<=1;
-else
-	vbl_irq<=0;
+
 
 
 
@@ -860,5 +858,27 @@ begin
 //	$display("V %x oldV %x chram_y %x base_y %x offset %x video_addr %x video_data %x video_data %x %c %x \n",V[8:3],oldV,chram_y,base_y,offset,video_addr,video_data,video_data[6:0],video_data[6:0],chrom_data_out);
 end
 
+
+
+`ifdef SIMULATION
+/*
+    reg [8:0] V_d;
+    always @(posedge clk_vid) if(ce_pix) begin
+        V_d <= V;
+        if (V != V_d) begin
+            $display("VGC_DEBUG @ %0t: V counter changed to %d", $time, V);
+        end
+    end
+*/
+`endif
+
+
+// VBL Pulse Generation
+// Generate a single-cycle pulse at the start of the vertical blanking interval
+// to avoid IRQ storms.
+wire v_blank = (V >= 199);
+reg v_blank_d;
+always @(posedge clk_vid) if(ce_pix) v_blank_d <= v_blank;
+assign vbl_irq = v_blank & ~v_blank_d;
 
 endmodule

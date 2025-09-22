@@ -124,6 +124,9 @@ module iigs
    logic [7:0] NEWVIDEO/*verilator public_flat*/;
    logic IO/*verilator public_flat*/;
    logic we/*verilator public_flat*/;
+   logic slow/*verilator public_flat*/;
+   logic slowMem/*verilator public_flat*/;
+   logic ph0_state;
    logic VPB;
 
 `ifdef VERILATOR
@@ -285,8 +288,7 @@ module iigs
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
 //assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
   assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  
-               (((bank == 8'h0 | bank == 8'h1) & ~shadow[6] & cpu_addr[15:8] == 8'hC0) |
-                ((bank == 8'he0 | bank == 8'he1) & cpu_addr[15:8] == 8'hC0));
+               ((bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1) & cpu_addr[15:8] == 8'hC0);
 
   // Use combinational logic but add debug to detect timing issues
   assign { bank_bef, addr_bef } = cpu_addr;
@@ -593,6 +595,9 @@ module iigs
 
   // driver for io_dout and fake registers
   always_ff @(posedge CLK_14M) begin
+    if (addr == 16'hC036) begin
+        $display("C036_DEBUG: IO=%b, we=%b, dout=%h", IO, ~cpu_we_n, cpu_dout);
+    end
     if (reset) begin
       // dummy values dumped from emulator
       // C036 Speed Register initialization - match GSPlus behavior
@@ -674,8 +679,6 @@ module iigs
 
     // Clear SCC control signals
     scc_cs <= 1'b0;
-    scc_we <= 1'b0;
-
     if (IO) begin
       // interrupt_clear_pulse is now auto-cleared after use, no need to clear here
       
@@ -1497,7 +1500,8 @@ video_timing video_timing(
 wire [22:0] video_addr;
 wire [7:0] video_data;
 // vbl_irq now handled internally in interrupt logic
-wire scanline_irq;
+  wire scanline_irq;
+  wire vgc_vbl_irq_pulse;
 
 
 vgc vgc(
@@ -1506,6 +1510,7 @@ vgc vgc(
         .clk_vid(clk_vid),
         .ce_pix(ce_pix),
         .scanline_irq(scanline_irq),
+	.vbl_irq(vgc_vbl_irq_pulse),
         .H(H),
         .V(V),
         .R(R),
@@ -1608,22 +1613,19 @@ wire ready_out;
 `endif
       end
       
-      // VBL interrupt (bit 3) - fire once per frame at NTSC VBL entry (Clemens lower bound)
-      if (V == 199 && !vbl_started) begin
-        vbl_started <= 1'b1;
+      // VBL interrupt (bit 3) - driven by single-cycle pulse from VGC
+      if (vgc_vbl_irq_pulse) begin
         if (INTEN[3]) begin
           irq_pending[3] <= 1'b1;  // Set VBL interrupt pending
 `ifdef SIMULATION
-          $display("VBL_INTERRUPT: Set at V=%0d (VBL region), INTEN[3]=%0d", V, INTEN[3]);
+          $display("VBL_INTERRUPT: Pulse detected at V=%0d, INTEN[3]=%0d. IRQ pending.", V, INTEN[3]);
 `endif
         end
-      end else if (!INTEN[3]) begin
-        irq_pending[3] <= 1'b0;  // Auto-clear when disabled
       end
       
-      // Reset vbl_started at frame end
-      if (V >= 262) begin
-        vbl_started <= 1'b0;
+      // Auto-clear VBL IRQ when disabled
+      if (!INTEN[3]) begin
+        irq_pending[3] <= 1'b0;
       end
       
       // Quarter-second interrupt (bit 4) - edge detection
@@ -1968,6 +1970,7 @@ clock_divider clk_div_inst (
     .addr(addr),
     .shadow(shadow),
     .IO(IO),
+    .we(we),
     .reset(reset),
     .stretch(1'b0),  // TODO: Connect to VGC stretch signal
     .clk_14M_en(),
@@ -1975,7 +1978,9 @@ clock_divider clk_div_inst (
     .ph0_en(ph0_en),
     .ph2_en(ph2_en),
     .q3_en(q3_en),
-    .ph0_state()
+    .ph0_state(ph0_state),
+    .slow(slow),
+    .slowMem(slowMem)
 );
 // Map clock enables to Apple IIgs standard names
 assign phi2 = ph2_en;

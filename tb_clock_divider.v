@@ -272,6 +272,35 @@ initial begin
     
     $display("\n=== Memory Access Tests Completed ===");
     $display("\nTest completed successfully!");
+
+    // === FPI Speed Change Test ===
+    $display("\n=== Testing FPI Speed Change (C036) ===");
+    cyareg = 8'h80; // Ensure fast mode
+    IO = 0;
+    addr = 16'h0000;
+    bank = 8'h00;
+    #(CLK_PERIOD * 4);
+
+    $display("Requesting SLOW mode via cyareg[7]=0");
+    cyareg = 8'h00;
+    #(CLK_PERIOD * 4); // Wait for change to propagate through register
+
+    if (slow !== 1'b1) begin
+        $display("TEST FAILED: 'slow' signal did not go high after writing 0x00 to cyareg.");
+        $finish;
+    end
+
+    $display("Requesting FAST mode via cyareg[7]=1");
+    cyareg = 8'h80;
+    #(CLK_PERIOD * 4); // Wait for change to propagate
+
+    if (slow !== 1'b0) begin
+        $display("TEST FAILED: 'slow' signal did not go low after writing 0x80 to cyareg.");
+        $finish;
+    end
+
+    $display("FPI Speed Change Test PASSED!");
+    
     $finish;
 end
 
