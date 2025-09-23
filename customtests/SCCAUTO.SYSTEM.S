@@ -98,6 +98,45 @@ DO_SCC_TEST
             LDA     SCC_A_DATA          ; Read from Channel A data
             JSR     PRINT_HEX_BYTE      ; Display received data
 
+            ; Reproduce the problematic polling pattern from ROM selftest
+            ; This should trigger the same 0x80 failure we see in the trace
+POLL_TEST
+            LDA     #$09                ; Write register 9 select (like ROM selftest)
+            STA     SCC_A_CMD           ; Write to C039
+            LDA     SCC_A_CMD           ; Read back from C039 (should get status, might get 0x80)
+            JSR     PRINT_HEX_BYTE      ; Display what we got
+
+            ; Do multiple rapid reads like selftest does
+            LDA     SCC_A_CMD           ; Read again immediately
+            JSR     PRINT_HEX_BYTE      ; Display second read
+
+            LDA     SCC_A_CMD           ; Read third time
+            JSR     PRINT_HEX_BYTE      ; Display third read
+
+            ; If we get 0x80, we've reproduced the bug
+            CMP     #$80                ; Check if we got the problematic 0x80
+            BEQ     BUG_FOUND           ; If so, show we found the bug
+
+            ; Add intensive polling loop like ROM selftest to stress timing
+            LDX     #100                ; Poll 100 times
+POLL_LOOP
+            LDA     #$00                ; RR0 register select
+            STA     SCC_A_CMD           ; Write to C039
+            LDA     SCC_A_CMD           ; Read back immediately
+            CMP     #$80                ; Check for the bug value
+            BEQ     BUG_FOUND           ; Exit if we find the bug
+            DEX
+            BNE     POLL_LOOP           ; Continue polling
+
+BUG_FOUND
+            ; Print bug indicator
+            LDA     #$42                ; 'B' for Bug found
+            JSR     COUT
+            LDA     #$55                ; 'U'
+            JSR     COUT
+            LDA     #$47                ; 'G'
+            JSR     COUT
+
             ; Print success message
             LDX     #0
 PRINT_DONE  LDA     DONE_MSG,X
