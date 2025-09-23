@@ -677,6 +677,11 @@ module iigs
       io_dout <= snd_dout;
     end
 
+    // Handle SCC read response (delayed by one cycle like other peripherals)
+    if (scc_cs & cpu_we_n) begin
+      io_dout <= scc_dout;
+    end
+
     // Clear SCC control signals
     scc_cs <= 1'b0;
     if (IO) begin
@@ -1038,7 +1043,7 @@ module iigs
               scc_cs <= 1'b1;
               scc_we <= 1'b0;
               scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
-              io_dout <= scc_dout;
+              // io_dout will be set in next cycle when scc_dout is valid
 		end
             end
 
@@ -1882,6 +1887,7 @@ wire ready_out;
   scc_iigs_wrapper scc_inst(
             .clk_14m(CLK_14M),
             .ph0_en(phi0),
+            .ph2_en(phi2),
             .q3_en(q3_en),
             .reset(reset),
             .cs(scc_cs),

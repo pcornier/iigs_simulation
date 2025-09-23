@@ -879,75 +879,92 @@ wr_3_a[7:6]  -- bits per char
 // case the baud rate based on wr12_a and 13_a
 // wr_12_a  -- contains the baud rate lower byte
 // wr_13_a  -- contains the baud rate high byte
-/*
+// Apple IIgs SCC clock: 14.32MHz (actual clock used by UART modules)
+// Formula: Clock_Frequency / Baud_Rate = Divider
+// 14,320,000 Hz / Baud_Rate = Divider
+
         always @(posedge clk) begin
                 case ({wr13_a,wr12_a})
                         16'd380:  // 300 baud
-                                baud_divid_speed_a <= 24'd108333;
+                                baud_divid_speed_a <= 24'd47733;  // 14,320,000 / 300
                         16'd94:  // 1200 baud
-                                baud_divid_speed_a <= 24'd27083;
+                                baud_divid_speed_a <= 24'd11933;  // 14,320,000 / 1200
                         16'd46:  // 2400 baud
-                                baud_divid_speed_a <= 24'd13542;
+                                baud_divid_speed_a <= 24'd5967;   // 14,320,000 / 2400
                         16'd22:  // 4800 baud
-                                baud_divid_speed_a <= 24'd6770;
+                                baud_divid_speed_a <= 24'd2983;   // 14,320,000 / 4800
                         16'd10:  // 9600 baud
-                                baud_divid_speed_a <= 24'd3385;
+                                baud_divid_speed_a <= 24'd1492;   // 14,320,000 / 9600
                         16'd6:  // 14400 baud
-                                baud_divid_speed_a <= 24'd2257;
+                                baud_divid_speed_a <= 24'd994;    // 14,320,000 / 14400
                         16'd4:  // 19200 baud
-                                baud_divid_speed_a <= 24'd1693;
+                                baud_divid_speed_a <= 24'd746;    // 14,320,000 / 19200
                         16'd2:  // 28800 baud
-                                baud_divid_speed_a <= 24'd1128;
+                                baud_divid_speed_a <= 24'd497;    // 14,320,000 / 28800
                         16'd1:  // 38400 baud
-                                baud_divid_speed_a <= 24'd846;
+                                baud_divid_speed_a <= 24'd373;    // 14,320,000 / 38400
                         16'd0:  // 57600 baud
-                                baud_divid_speed_a <= 24'd564;
-                        default: 
-                                baud_divid_speed_a <= 24'd282;
+                                baud_divid_speed_a <= 24'd249;    // 14,320,000 / 57600
+                        default:
+                                baud_divid_speed_a <= 24'd1492;   // Default to 9600 baud
                 endcase
         end
 
-*/
-
-
-
-//reg [23:0] baud_divid_speed_a = 24'd1088;
-//reg [23:0] baud_divid_speed_a = 24'd544;
-reg [23:0] baud_divid_speed_a = 24'd282;
-//reg [23:0] baud_divid_speed_a = 24'd564;
+// Default to 9600 baud (most common for Apple IIgs)
+reg [23:0] baud_divid_speed_a = 24'd1492;
 wire tx_busy_a;
 wire rx_wr_a;
 wire [30:0] uart_setup_rx_a = { 1'b0, bit_per_char_a, 1'b0, parity_ena_a, 1'b0, parity_even_a, baud_divid_speed_a  } ;
 wire [30:0] uart_setup_tx_a = { 1'b0, bit_per_char_a, 1'b0, parity_ena_a, 1'b0, parity_even_a, baud_divid_speed_a  } ;
 //wire [30:0] uart_setup_rx_a = { 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, baud_divid_speed_a  } ;
 //wire [30:0] uart_setup_tx_a = { 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, 1'b0, baud_divid_speed_a  } ;
+
+/* Loopback and Auto-Echo implementation for WR14 register
+ * WR14[1:0] loopback control:
+ * 00 = Normal operation
+ * 01 = Auto echo mode
+ * 10 = Local loopback mode
+ * 11 = Remote loopback mode (internal loopback)
+ */
+wire auto_echo_a = (wr14_a[1:0] == 2'b01);                               // Auto echo mode
+wire local_loopback_a = (wr14_a[1:0] == 2'b11) || (wr14_a[1:0] == 2'b10); // Local or remote loopback
+wire tx_internal_a;  // Internal TX signal for loopback/auto-echo
+wire rx_input_a = local_loopback_a ? tx_internal_a : rxd;  // Switch RX input
+
+// Auto-echo: when data is received, automatically retransmit it
+// This requires connecting received data to transmit data path
+wire [7:0] auto_echo_tx_data = auto_echo_a ? data_a : tx_data_a;  // Use RX data for TX in auto-echo mode
+wire auto_echo_tx_wr = auto_echo_a ? rx_wr_a : wr_data_a;   // Use RX write pulse for TX in auto-echo mode
 rxuart rxuart_a (
-	.i_clk(clk), 
-	.i_reset(reset_a|reset_hw), 
-	.i_setup(uart_setup_rx_a), 
-	.i_uart_rx(rxd), 
+	.i_clk(clk),
+	.i_reset(reset_a|reset_hw),
+	.i_setup(uart_setup_rx_a),
+	.i_uart_rx(rx_input_a),  // Use switchable input for loopback support
 	.o_wr(rx_wr_a), // TODO -- check on this flag
 	.o_data(data_a),   // TODO we need to save this off only if wreq is set, and mux it into data_a in the right spot
 	.o_break(break_a),
-	.o_parity_err(parity_err_a), 
-	.o_frame_err(frame_err_a), 
+	.o_parity_err(parity_err_a),
+	.o_frame_err(frame_err_a),
 	.o_ck_uart()
 	);
 txuart txuart_a
 	(
-	.i_clk(clk), 
-	.i_reset(reset_a|reset_hw), 
-	.i_setup(uart_setup_tx_a), 
-	.i_break(1'b0), 
-	.i_wr(wr_data_a),   // TODO -- we need to send data when we get the register command i guess???
-	.i_data(tx_data_a),
-	//.i_cts_n(~cts), 
-	.i_cts_n(1'b0), 
-	.o_uart_tx(txd), 
+	.i_clk(clk),
+	.i_reset(reset_a|reset_hw),
+	.i_setup(uart_setup_tx_a),
+	.i_break(1'b0),
+	.i_wr(auto_echo_tx_wr),   // Use auto-echo write pulse when in auto-echo mode
+	.i_data(auto_echo_tx_data),  // Use auto-echo data when in auto-echo mode
+	//.i_cts_n(~cts),
+	.i_cts_n(1'b0),
+	.o_uart_tx(tx_internal_a),  // Connect to internal signal for loopback
 	.o_busy(tx_busy_a)); // TODO -- do we need this busy line?? probably 
 
 	wire cts_a = ~tx_busy_a;
-	
+
+	// External TX output: normal operation or idle high during loopback
+	assign txd = local_loopback_a ? 1'b1 : tx_internal_a;
+
 	// RTS and CTS are active low
 	assign rts = rx_wr_a_latch;
 	assign wreq=1;

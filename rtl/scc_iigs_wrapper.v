@@ -20,6 +20,7 @@ module scc_iigs_wrapper
 (
     input               clk_14m,        // 14.32MHz IIgs master clock
     input               ph0_en,
+    input               ph2_en,
     input               q3_en,
     input               reset,
     
@@ -102,8 +103,8 @@ wire scc_out;
 // Instantiate existing SCC with adapted clocking
 scc scc_inst (
     .clk(clk_14m),                      // Master clock
-    .cep( ph0_en),                   // Positive edge enable  
-    .cen( ph0_en),                  // Negative edge enable (inverted)
+    .cep( ph2_en),                   // Positive edge enable - CPU timing
+    .cen( ph2_en),                  // Negative edge enable - CPU timing
     .reset_hw(reset),
     
     // Bus interface
@@ -138,31 +139,26 @@ scc scc_inst (
 assign txd_b = txd_a;
 assign rts_b = rts_a;
 
-// Interrupt control: Disable SCC interrupts but allow internal processing
-// The issue is that even though SCC registers work, the interrupt timing
-// still interferes with the sound system. Keep interrupts disabled but
-// ensure the SCC can still process register access properly.
-assign irq_n = 1'b0;
-//assign irq_n = scc_internal_irq_n;  // Re-enable SCC interrupts
+// Interrupt control: Enable SCC interrupts properly
+// Connect the actual SCC interrupt signal so the SCC can function correctly
+assign irq_n = scc_internal_irq_n;  // Use actual SCC interrupt signal
 
 // Add some debug output for initial testing
 `ifdef SIMULATION
-`ifdef FAKESERIAL
 always @(posedge clk_14m) begin
     if (cs && we) begin
-        $display("SCC IIgs: WR %s%s <= %02h", 
+        $display("SCC IIgs: WR %s%s <= %02h",
                  rs[0] ? "A" : "B",
-                 rs[1] ? "DATA" : "CTRL", 
+                 rs[1] ? "DATA" : "CTRL",
                  wdata);
     end
     if (cs && !we) begin
         $display("SCC IIgs: RD %s%s => %02h",
-                 rs[0] ? "A" : "B", 
+                 rs[0] ? "A" : "B",
                  rs[1] ? "DATA" : "CTRL",
                  rdata);
     end
 end
-`endif
 `endif
 
 endmodule
