@@ -128,6 +128,9 @@ POLL_LOOP
             DEX
             BNE     POLL_LOOP           ; Continue polling
 
+            ; If we reach here, test passed - no 0x80 values found
+            JMP     TEST_PASSED
+
 BUG_FOUND
             ; Print bug indicator
             LDA     #$42                ; 'B' for Bug found
@@ -136,7 +139,16 @@ BUG_FOUND
             JSR     COUT
             LDA     #$47                ; 'G'
             JSR     COUT
+            JMP     PRINT_RESULTS       ; Skip to results printing
 
+TEST_PASSED
+            ; Print success indicator
+            LDA     #$4F                ; 'O' for OK
+            JSR     COUT
+            LDA     #$4B                ; 'K'
+            JSR     COUT
+
+PRINT_RESULTS
             ; Print success message
             LDX     #0
 PRINT_DONE  LDA     DONE_MSG,X

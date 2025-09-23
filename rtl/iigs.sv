@@ -677,13 +677,11 @@ module iigs
       io_dout <= snd_dout;
     end
 
-    // Handle SCC read response (delayed by one cycle like other peripherals)
+    // Handle SCC read response (same cycle pattern like other peripherals)
+    scc_cs <= 1'b0;
     if (scc_cs & cpu_we_n) begin
       io_dout <= scc_dout;
     end
-
-    // Clear SCC control signals
-    scc_cs <= 1'b0;
     if (IO) begin
       // interrupt_clear_pulse is now auto-cleared after use, no need to clear here
       
@@ -1897,14 +1895,14 @@ wire ready_out;
             .rdata(scc_dout),
             .irq_n(scc_irq_n),
             // Serial ports - stubbed for now
-            .txd_a(UART_TXD),
-            .txd_b(),
-            .rxd_a(UART_RXD),
-            .rxd_b(1'b1),
-            .rts_a(UART_RTS),
-            .rts_b(),
-            .cts_a(UART_CTS),
-            .cts_b(1'b0)
+            .txd_a(),
+            .txd_b(UART_TXD),
+            .rxd_a(1'b1),
+            .rxd_b(UART_RXD),
+            .rts_a(),
+            .rts_b(UART_RTS),
+            .cts_a(1'b0),
+            .cts_b(UART_CTS)
 				);
 
   // Apple IIe compatibility signals now come from ADB module
