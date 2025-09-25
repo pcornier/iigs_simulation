@@ -37,22 +37,93 @@ PRINT_LOOP  LDA     TEST_MSG,X
             BNE     PRINT_LOOP
 
 DO_SCC_TEST
-            ; Phase 1: Reset/Clear all SCC registers (like Clemens selftest)
-            ; Write FF to all SCC registers to reset them
-            LDA     #$FF
-            STA     SCC_B_CMD           ; Write FF to C038
-            STA     SCC_A_CMD           ; Write FF to C039
-            STA     SCC_B_DATA          ; Write FF to C03A
-            STA     SCC_A_DATA          ; Write FF to C03B
+            ; **NEW: Memory Bank Context Test**
+            ; Test SCC access from different memory banks to reproduce the issue
+            ; Clemens works with bank E0, FPGA fails with bank 00
 
-            ; Phase 2: Initialize registers (like Clemens selftest)
-            ; Write 00 to setup registers
+            ; Print bank test header
+            LDX     #0
+BANK_MSG_LOOP LDA   BANK_MSG,X
+            BEQ     BANK_TESTS
+            JSR     COUT
+            INX
+            BNE     BANK_MSG_LOOP
+
+BANK_TESTS
+            ; Save current Data Bank Register
+            PHB                         ; Push current DBR to stack
+
+            ; Test 1: Force Bank 00 context (like failing FPGA trace)
+            PEA     $0000               ; Push bank 00 to stack
+            PLB                         ; Pull into Data Bank Register
+            JSR     TEST_SCC_BANK       ; Test SCC in this context
+
+            ; Test 2: Force Bank E0 context (like working Clemens trace)
+            PEA     $E000               ; Push bank E0 to stack
+            PLB                         ; Pull into Data Bank Register
+            JSR     TEST_SCC_BANK       ; Test SCC in this context
+
+            ; Test 3: Force Bank FF context (ROM bank)
+            PEA     $FF00               ; Push bank FF to stack
+            PLB                         ; Pull into Data Bank Register
+            JSR     TEST_SCC_BANK       ; Test SCC in this context
+
+            ; Restore original Data Bank Register
+            PLB                         ; Restore original DBR
+
+            ; Continue with original test pattern
+            ; Phase 1: Extended Address Range Reset (like Clemens selftest)
+            ; Write FF to extended range C038-C040 as seen in trace
+            LDX     #$00
+RESET_LOOP  LDA     #$FF
+            STA     $C038,X             ; Write FF to C038+X
+            INX
+            CPX     #$08                ; Test C038-C03F range
+            BNE     RESET_LOOP
+
+            ; Phase 2: Initialize specific registers (like Clemens selftest)
             LDA     #$00
             STA     SCC_B_CMD           ; Write 00 to C038
             STA     SCC_A_DATA          ; Write 00 to C03B
 
-            ; Phase 3: Register R/W Test (Error BB=01)
-            ; Test basic register readback
+            ; Phase 3: Extended Address Range Read Test
+            ; Verify reset worked and test read timing across all addresses
+            LDX     #$00
+ADDR_LOOP   LDA     $C038,X             ; Read from C038+X
+            JSR     PRINT_HEX_BYTE      ; Display each result
+            INX
+            CPX     #$04                ; Test C038-C03B (main SCC registers)
+            BNE     ADDR_LOOP
+
+            ; Phase 4: Comprehensive Register Index Test (01-1F as seen in trace)
+            ; This tests the register selection mechanism extensively
+            LDX     #$01                ; Start with register 1
+REG_INDEX_LOOP
+            TXA                         ; Use X as register selector
+            STA     SCC_A_CMD           ; Write register index to C039
+            LDA     SCC_A_CMD           ; Read back from C039
+            JSR     PRINT_HEX_BYTE      ; Display result
+            INX
+            CPX     #$10                ; Test registers 01-0F
+            BNE     REG_INDEX_LOOP
+
+            ; Phase 5: Write-Read-Verify Pattern for Key Registers
+            ; Test register data storage and retrieval
+            LDX     #$01
+WRV_LOOP    TXA                         ; Register selector
+            STA     SCC_A_CMD           ; Select register
+            LDA     #$AA                ; Test pattern
+            STA     SCC_A_CMD           ; Write test data
+            TXA                         ; Re-select register
+            STA     SCC_A_CMD           ; Write register index again
+            LDA     SCC_A_CMD           ; Read back data
+            JSR     PRINT_HEX_BYTE      ; Display result
+            INX
+            CPX     #$08                ; Test registers 01-07
+            BNE     WRV_LOOP
+
+            ; Phase 6: Basic Register R/W Test (Error BB=01)
+            ; Test basic register readback (original test)
             LDA     #$00                ; WR0 register select
             STA     SCC_A_CMD           ; Write to C039
             LDA     SCC_A_CMD           ; Read back from C039
@@ -71,7 +142,33 @@ DO_SCC_TEST
             LDA     SCC_A_CMD           ; Read status
             JSR     PRINT_HEX_BYTE      ; Display status
 
-            ; Phase 5: Loopback Configuration Test (Error BB=07, BB=08)
+            ; Phase 7: Intensive Status Polling (like ROM selftest)
+            ; This stresses the SCC timing with rapid consecutive reads
+            LDX     #$32                ; Poll 50 times (reduced from ROM's 100 for speed)
+POLL_INTENSIVE
+            LDA     #$00                ; RR0 status register
+            STA     SCC_A_CMD           ; Select status register
+            LDA     SCC_A_CMD           ; Read status (1st read)
+            LDA     SCC_A_CMD           ; Read again immediately (2nd read)
+            LDA     SCC_A_CMD           ; Read third time (3rd read)
+            CMP     #$80                ; Check for timing bug (0x80 return)
+            BEQ     BUG_FOUND           ; Exit immediately if timing issue found
+            DEX
+            BNE     POLL_INTENSIVE      ; Continue polling
+
+            ; Phase 8: Multi-Register Status Verification
+            ; Test different status register combinations
+            LDA     #$01                ; RR1 register select
+            STA     SCC_A_CMD           ; Select RR1
+            LDA     SCC_A_CMD           ; Read RR1 status
+            JSR     PRINT_HEX_BYTE      ; Display RR1 result
+
+            LDA     #$02                ; RR2 register select
+            STA     SCC_A_CMD           ; Select RR2
+            LDA     SCC_A_CMD           ; Read RR2 status
+            JSR     PRINT_HEX_BYTE      ; Display RR2 result
+
+            ; Phase 9: Loopback Configuration Test (Error BB=07, BB=08)
             ; Set up internal loopback
             LDA     #$0E                ; WR14 register select
             STA     SCC_A_CMD           ; Write to command register
@@ -160,6 +257,52 @@ PRINT_DONE  LDA     DONE_MSG,X
 HANG        JMP     HANG                ; Hang here so we can see results
 
 ;****************************************************************
+;* BANK CONTEXT TEST SUBROUTINE
+;****************************************************************
+
+;--- Test SCC access from current Data Bank context
+TEST_SCC_BANK
+            ; Print current bank identifier
+            LDA     #$5B                ; '['
+            JSR     COUT
+
+            ; Print a simple bank indicator (we'll see different results)
+            LDA     #$30                ; '0' base
+            JSR     COUT
+
+            LDA     #$5D                ; ']'
+            JSR     COUT
+
+            ; Test basic SCC register access in current bank context
+            LDA     #$00                ; WR0 register select
+            STA     SCC_A_CMD           ; Write to C039
+            LDA     SCC_A_CMD           ; Read back from C039
+            JSR     PRINT_HEX_BYTE      ; Show what we got
+
+            ; Test if we get the problematic 0x80 or proper register values
+            CMP     #$80                ; Check for bus default (timing issue)
+            BEQ     BANK_BUG_FOUND
+
+            ; Print "OK" for this bank
+            LDA     #$4F                ; 'O'
+            JSR     COUT
+            LDA     #$4B                ; 'K'
+            JSR     COUT
+            JMP     BANK_TEST_DONE
+
+BANK_BUG_FOUND
+            ; Print "BG" for this bank
+            LDA     #$42                ; 'B'
+            JSR     COUT
+            LDA     #$47                ; 'G'
+            JSR     COUT
+
+BANK_TEST_DONE
+            LDA     #$20                ; Space
+            JSR     COUT
+            RTS                         ; Return to caller
+
+;****************************************************************
 ;* SUBROUTINES
 ;****************************************************************
 
@@ -189,4 +332,5 @@ PRINT_DIGIT
 ;****************************************************************
 
 TEST_MSG    ASC     'SCC COMPLETE TEST',0D,0A,00
+BANK_MSG    ASC     'BANK CONTEXT TESTS: ',00
 DONE_MSG    ASC     ' - RESULTS: ',00

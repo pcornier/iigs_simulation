@@ -1093,8 +1093,8 @@ int verilate() {
                             else if (rom2) actual_phys_bank = 0xFF;
                         }
                         if (we) actual_is_rom = 0; // writes never go to ROM
-                        // Infer fast/slow from phys bank (slow if E0/E1); IO page is also slow
-                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        // Use actual slowMem signal from hardware instead of incorrect inference
+                        int actual_is_slow = VERTOPINTERN->emu__DOT__iigs__DOT__clk_div_inst__DOT__slowMem ? 1 : 0;
                         int actual_is_fast = (!actual_is_rom && !actual_is_slow) ? 1 : 0;
 
                         // Shadow compare access mapping with Clemens-derived expectation
@@ -1189,7 +1189,7 @@ int verilate() {
                             else if (rom1) actual_phys_bank = 0xFE;
                             else if (rom2) actual_phys_bank = 0xFF;
                         }
-                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        int actual_is_slow = VERTOPINTERN->emu__DOT__iigs__DOT__clk_div_inst__DOT__slowMem ? 1 : 0;
                         int is_io = ((bank == 0x00 || bank == 0x01 || bank == 0xE0 || bank == 0xE1) &&
                                      (addr16 >= 0xC000 && addr16 <= 0xC0FF)) ? 1 : 0;
                         if (is_io) {
@@ -1229,7 +1229,7 @@ int verilate() {
                             else if (rom12) actual_phys_bank = 0xFE;
                             else if (rom22) actual_phys_bank = 0xFF;
                         }
-                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        int actual_is_slow = VERTOPINTERN->emu__DOT__iigs__DOT__clk_div_inst__DOT__slowMem ? 1 : 0;
                         int is_io2 = ((bank == 0x00 || bank == 0x01 || bank == 0xE0 || bank == 0xE1) &&
                                       (addr16 >= 0xC000 && addr16 <= 0xC0FF)) ? 1 : 0;
                         if (is_io2) {
@@ -1279,8 +1279,8 @@ int verilate() {
                             else if (rom12) actual_phys_bank = 0xFE;
                             else if (rom22) actual_phys_bank = 0xFF;
                         }
-                        // Infer fast/slow from phys bank
-                        int actual_is_slow = (actual_phys_bank == 0xE0 || actual_phys_bank == 0xE1) ? 1 : 0;
+                        // Use actual slowMem signal from hardware
+                        int actual_is_slow = VERTOPINTERN->emu__DOT__iigs__DOT__clk_div_inst__DOT__slowMem ? 1 : 0;
                         int actual_is_fast = (!actual_is_rom && !actual_is_slow) ? 1 : 0;
 
                         // Shadow compare access mapping with Clemens-derived expectation

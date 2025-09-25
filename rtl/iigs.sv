@@ -462,6 +462,32 @@ module iigs
   // ROM write-through for language card
   assign rom_writethrough = (bank_bef == 8'h00 && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE);
 
+  // Debug: C034 RTC access tracing (to catch address bus corruption)
+  always @(posedge CLK_14M) begin
+    // Monitor ALL C034 accesses to catch address bus corruption
+    if (addr_bef == 16'hC034) begin
+      $display("C034_ACCESS: cpu_addr=%06x bank_bef=%02x addr_bef=%04x we=%b IO=%b data=%02x",
+               cpu_addr, bank_bef, addr_bef, we, IO, we ? cpu_dout : cpu_din);
+      $display("C034_ADDR_BUS: addr_bus=%06x fastram_addr=%06x", addr_bus, fastram_addr_bus);
+    end
+
+    // Monitor any writes that might be going to wrong addresses
+    if (we && (cpu_addr[15:0] == 16'hC034)) begin
+      $display("C034_WRITE: cpu_addr_raw=%06x calculated_addr_bus=%06x data=%02x",
+               cpu_addr, addr_bus, cpu_dout);
+      if (cpu_addr != addr_bus) begin
+        $display("C034_ADDR_MISMATCH: cpu_addr=%06x != addr_bus=%06x (CORRUPTION!)",
+                 cpu_addr, addr_bus);
+      end
+    end
+
+    // Monitor Bank E1 operations for timing issues
+    if ((bank_bef == 8'hE1) && (we || ~we)) begin
+      $display("BANK_E1_OP: addr=%04x we=%b data=%02x addr_bus=%06x",
+               addr_bef, we, we ? cpu_dout : cpu_din, addr_bus);
+    end
+  end
+
   // Debug: Clean memory controller verification
   always @(posedge CLK_14M) begin
     // Monitor critical $6200 and $0600 range accesses for testing

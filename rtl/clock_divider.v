@@ -20,7 +20,7 @@ module clock_divider (
     // Clock states for debugging/interfacing
     output reg         ph0_state,      // Current PH0 level
     output reg         slow,             // Slow mode indicator
-    output reg         slowMem             // Slow mode indicator
+    output reg         slowMem/*verilator public_flat*/             // Slow mode indicator
 );
 
 // Clock divider counters
@@ -48,6 +48,7 @@ reg [3:0] ph0_counter_next;     // Next cycle ph0_counter value (for enable calc
 reg       slow_prev;            // Previous cycle slow state (to avoid assignment conflicts)  
 reg       ph2_sync_pulse;       // Debug signal to show sync pulses in VCD
 reg       ph2_en_prev;          // Proper variable to track ph2_en changes
+reg       we_reg;              // Registered version of we signal to avoid timing races
 
 
 
@@ -150,6 +151,7 @@ always @(posedge clk_14M) begin
         ph0_state_prev <= 1'b0;
         ph2_sync_pulse <= 1'b0;
         ph2_en_prev <= 1'b0;
+        we_reg <= 1'b0;
 `ifdef SIMULATION
         prev_slow <= 1'b0;
         prev_slowMem <= 1'b0;
@@ -173,6 +175,9 @@ always @(posedge clk_14M) begin
         // --- Refactored Logic ---
         slow <= slow_request;
 
+        // Register write enable to avoid timing races
+        we_reg <= we;
+
         // 4. Determine slowMem (unconditionally)
         slowMem <= 1'b0;
         if ( (bank == 8'hE0 || bank == 8'hE1) ||
@@ -183,7 +188,7 @@ always @(posedge clk_14M) begin
                  (addr >= 16'hC071 && addr <= 16'hC07F)
                )
              ) ||
-             (we && (bank == 8'h00 || bank == 8'h01) &&
+             (we_reg && (bank == 8'h00 || bank == 8'h01) &&
                 (
                     (addr >= 16'h0400 && addr <= 16'h07FF && shadow[0]) ||
                     (addr >= 16'h0800 && addr <= 16'h0BFF && shadow[5]) ||
