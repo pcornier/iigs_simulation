@@ -287,8 +287,9 @@ module iigs
 // from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
 //assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
-  assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  
-               ((bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1) & cpu_addr[15:8] == 8'hC0);
+  assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 &
+               ((bank == 8'h00 | bank == 8'h01 | bank == 8'he0 | bank == 8'he1) |  // Full I/O access
+                ((bank == 8'hfc | bank == 8'hfd | bank == 8'hfe | bank == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
   // Use combinational logic but add debug to detect timing issues
   assign { bank_bef, addr_bef } = cpu_addr;
@@ -388,7 +389,7 @@ module iigs
   always_comb begin
     fastram_ce_int = 0;
     slowram_ce_int = 0;
-    
+
     if (IO) begin
       // I/O space - no RAM access
       fastram_ce_int = 0;
@@ -680,7 +681,17 @@ module iigs
     // interrupt_clear_pulse is managed in IO section to avoid race condition
 
     // Default pass-through for unhandled IO: feed external bus data
-    io_dout <= din;
+    // BUT: Don't override SCC, ADB, or other peripheral responses
+    // NOTE: Only do this when actually handling I/O, not every cycle
+    // NEVER use default for SCC address range C038-C03B
+    if (IO && ~(scc_cs & cpu_we_n) && ~(adb_strobe & cpu_we_n) && ~(snd_strobe & cpu_we_n) &&
+        ~((addr[11:8] == 4'h0) && (addr[7:2] == 6'h0e))) begin // Exclude C038-C03B
+      io_dout <= din;
+      // DEBUG: Warn when CPU receives default 0x80 value from unhandled I/O
+      if (din == 8'h80 && cpu_we_n) begin
+        $display("WARNING_DEFAULT_IO: CPU reading default 0x80 from unhandled I/O addr=C%03X bank=%02X", addr[11:0], bank);
+      end
+    end
     paddle_trigger <= 1'b0;  // Default: no paddle trigger
     adb_strobe <= 1'b0;
     if (adb_strobe & cpu_we_n) begin
@@ -704,10 +715,12 @@ module iigs
     end
 
     // Handle SCC read response (same cycle pattern like other peripherals)
-    scc_cs <= 1'b0;
     if (scc_cs & cpu_we_n) begin
       io_dout <= scc_dout;
+      $display("SCC_READ_RESPONSE: data=%02X scc_cs=%b cpu_we_n=%b addr=C%03X",
+               scc_dout, scc_cs, cpu_we_n, addr[11:0]);
     end
+    scc_cs <= 1'b0;
     if (IO) begin
       // interrupt_clear_pulse is now auto-cleared after use, no need to clear here
       
@@ -797,13 +810,14 @@ module iigs
               shadow <= cpu_dout;
             end
             12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
-            // SCC (Serial Communications Controller) - Zilog 8530 
+            // SCC (Serial Communications Controller) - Zilog 8530
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
 	      if (phi2) begin
               scc_cs <= 1'b1;
               scc_we <= 1'b1;
               scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
               scc_din <= cpu_dout;
+              $display("SCC_WRITE: addr=C%03X rs=%b data=%02X bank=%02X", addr[11:0], addr[1:0], cpu_dout, bank);
 		end
             end
             12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
@@ -1068,6 +1082,7 @@ module iigs
               scc_we <= 1'b0;
               scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
               // io_dout will be set in next cycle when scc_dout is valid
+              $display("SCC_READ: addr=C%03X rs=%b bank=%02X", addr[11:0], addr[1:0], bank);
 		end
             end
 
@@ -1264,6 +1279,12 @@ module iigs
             12'h0dc,12'h0dd,12'h0de,12'h0df: begin
               // no-op: external SmartPort handles this range
             end
+            // SCC (Serial Communications Controller) - Zilog 8530
+            12'h038, 12'h039, 12'h03a, 12'h03b: begin
+              // SCC read response handled by separate logic in always block above
+              // This case prevents falling through to default case
+            end
+
             default:
               $display("** IO_RD %x ",addr[11:0]);
           endcase
@@ -1577,6 +1598,22 @@ wire [7:0] din =
 wire [7:0] HDD_DO;
 
   wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
+
+  // Debug: Detect when CPU receives default 0x80 value (potential unhandled I/O)
+  always @(posedge CLK_14M) begin
+    if (cpu_we_n && cpu_din == 8'h80 && cpu_addr[15:8] == 8'hC0) begin
+      $display("ALERT_DEFAULT_READ: CPU received default 0x80 from addr=%04X bank=%02X IO=%b din=%02X io_dout=%02X",
+               cpu_addr, bank, IO, din, io_dout);
+    end
+  end
+
+  // Debug: Show what CPU actually receives from SCC registers
+  always @(posedge CLK_14M) begin
+    if (cpu_we_n && addr >= 16'hC038 && addr <= 16'hC03B) begin
+      $display("SCC_CPU_READ: addr=C%03X cpu_din=%02X io_dout=%02X IO=%b EXTERNAL_IO=%b din=%02X fastram_ce=%b slowram_ce=%b",
+               addr[11:0], cpu_din, io_dout, IO, EXTERNAL_IO, din, fastram_ce, slowram_ce);
+    end
+  end
 wire ready_out;
 
   P65C816 cpu(

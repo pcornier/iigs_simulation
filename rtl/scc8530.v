@@ -113,6 +113,10 @@ module scc
 	reg		cts_latch_a;
 	reg		dcd_latch_a;
 	reg		dcd_latch_b;
+
+	/* EOM (End of Message/Tx Underrun) latches - Z85C30 reset default is 0 */
+	reg		eom_latch_a;
+	reg		eom_latch_b;
 	wire		cts_ip_a;
 	wire		dcd_ip_a;
 	wire		dcd_ip_b;
@@ -495,7 +499,7 @@ end
 */
 	/* RR0 */
 	assign rr0_a = { 1'b0, /* Break */
-			 1'b1, /* Tx Underrun/EOM */
+			 eom_latch_a, /* Tx Underrun/EOM - use latch instead of hardcoded 1 */
 			 wr15_a[5] ? cts_latch_a : cts_a, /* CTS */
 			 1'b0, /* Sync/Hunt */
 			 wr15_a[3] ? dcd_latch_a : dcd_a, /* DCD */
@@ -505,7 +509,7 @@ end
 			 rx_wr_a_latch  /* Rx Available */
 			 };
 	assign rr0_b = { 1'b0, /* Break */
-			 1'b1, /* Tx Underrun/EOM */
+			 eom_latch_b, /* Tx Underrun/EOM - use latch instead of hardcoded 1 */
 			 1'b0, /* CTS */
 			 1'b0, /* Sync/Hunt */
 			 wr15_b[3] ? dcd_latch_b : dcd_b, /* DCD */
@@ -796,12 +800,35 @@ end
 	end
 	always@(posedge clk or posedge reset) begin
 		if (reset) begin
-			dcd_latch_b <= 0;			
+			dcd_latch_b <= 0;
 			/* cts ... */
 		end else if(cep) begin
 			if (do_latch_b)
 			  dcd_latch_b <= dcd_b;
 			/* cts ... */
+		end
+	end
+
+	/* EOM (End of Message/Tx Underrun) latches
+	 * Reset: Z85C30 spec - reset default value is 0 (not 1)
+	 * WR0 command: bits 7:6 = 11 → "Reset Tx Underrun/EOM Latch" → clear to 0
+	 */
+	always@(posedge clk or posedge reset) begin
+		if (reset) begin
+			eom_latch_a <= 1'b0;  // Reset default: 0 per Z85C30 datasheet
+			eom_latch_b <= 1'b0;
+		end else if(cep) begin
+			// WR0 command: Reset Tx Underrun/EOM Latch (bits 7:6 = 11)
+			if (wreg_a && rindex == 0 && wdata[7:6] == 2'b11) begin
+				eom_latch_a <= 1'b0;  // Clear EOM latch
+			end
+			if (wreg_b && rindex == 0 && wdata[7:6] == 2'b11) begin
+				eom_latch_b <= 1'b0;  // Clear EOM latch
+			end
+
+			// Future enhancement: Set EOM on actual transmit underrun
+			// if (tx_underrun_detected_a) eom_latch_a <= 1'b1;
+			// if (tx_underrun_detected_b) eom_latch_b <= 1'b1;
 		end
 	end
 	
