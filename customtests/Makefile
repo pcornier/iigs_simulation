@@ -24,6 +24,21 @@ scc_test: SCCAUTO.SYSTEM
 	$(CP2) sa $(SCC_DISK) type=SYS "SCCAUTO.SYSTEM"
 	@echo "SCC test disk ready: $(SCC_DISK)"
 
+# IO Auto-run Test - boots directly into IODEBUG auto program
+io_autorun_test: SCCAUTO_AUTO.SYSTEM io_autorun_test.2mg
+
+SCCAUTO_AUTO.SYSTEM: IODEBUG.AUTO.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+io_autorun_test.2mg: SCCAUTO_AUTO.SYSTEM
+	@echo "Creating IO auto-run disk..."
+	@cp blank.2mg io_autorun_test.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing io_autorun_test.2mg"
+	$(CP2) rm io_autorun_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm io_autorun_test.2mg "SCCAUTO.SYSTEM" 2>/dev/null || true
+	$(CP2) add io_autorun_test.2mg "SCCAUTO.SYSTEM"
+	$(CP2) sa io_autorun_test.2mg type=SYS "SCCAUTO.SYSTEM"
+	@echo "IO auto-run disk ready: io_autorun_test.2mg"
+
 # Timing Race Test - builds a bootable disk with the Y register corruption test
 timing_test: YRACE.SYSTEM
 	@echo "Creating timing race test disk..."
@@ -80,8 +95,23 @@ serial_selftest.2mg: SERIAL.SYSTEM
 	$(CP2) sa serial_selftest.2mg type=SYS "SERIAL.SYSTEM"
 	@echo "Serial selftest disk ready: serial_selftest.2mg"
 
+# C034 Bank Register Test - tests C034 register bank switching behavior
+c034_test: C034TEST.SYSTEM c034_test.2mg
+
+C034TEST.SYSTEM: C034_TIMING_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+c034_test.2mg: C034TEST.SYSTEM
+	@echo "Creating C034 bank register test disk..."
+	@cp blank.2mg c034_test.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing c034_test.2mg"
+	$(CP2) rm c034_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm c034_test.2mg "C034TEST.SYSTEM" 2>/dev/null || true
+	$(CP2) add c034_test.2mg "C034TEST.SYSTEM"
+	$(CP2) sa c034_test.2mg type=SYS "C034TEST.SYSTEM"
+	@echo "C034 test disk ready: c034_test.2mg"
+
 # Phony targets are not actual files
-.PHONY: all all_tests clean scc_test timing_test plb_test scc_phantom_test dbr_corruption_test serial_selftest
+.PHONY: all all_tests clean scc_test timing_test plb_test scc_phantom_test dbr_corruption_test serial_selftest c034_test
 
 
 
@@ -126,3 +156,19 @@ dbr_corruption_test.2mg: DBRTEST.SYSTEM
 	$(CP2) add dbr_corruption_test.2mg "DBRTEST.SYSTEM"
 	$(CP2) sa dbr_corruption_test.2mg type=SYS "DBRTEST.SYSTEM"
 	@echo "DBR corruption test disk ready: dbr_corruption_test.2mg"
+
+# IO Debug Test - prints banner and does immediate C0xx reads
+io_debug_test: IODEBUG.SYSTEM io_debug_test.2mg
+
+IODEBUG.SYSTEM: IODEBUG.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+io_debug_test.2mg: IODEBUG.SYSTEM
+	@echo "Creating IO debug test disk..."
+	@cp blank.2mg io_debug_test.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing io_debug_test.2mg"
+	$(CP2) rm io_debug_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm io_debug_test.2mg "IODEBUG.SYSTEM" 2>/dev/null || true
+	@cp IODEBUG.SYSTEM BASIC.SYSTEM
+	$(CP2) add io_debug_test.2mg "BASIC.SYSTEM"
+	$(CP2) sa io_debug_test.2mg type=SYS "BASIC.SYSTEM"
+	@echo "IO debug test disk ready: io_debug_test.2mg"
