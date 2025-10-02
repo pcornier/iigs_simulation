@@ -418,11 +418,18 @@ module iigs
           if (shgr_dual_write) begin
             fastram_ce_int = 1;  // Write to both Bank 01 (FASTRAM) and Bank E1 (SLOWRAM)
             slowram_ce_int = 1;  // Dual write to E1 shadow bank
-          end else if (!aux_disable && (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow)) begin
-            // Shadowed regions: READS from Bank 01, WRITES to both Bank 01 AND Bank E1
-            fastram_ce_int = 1;   // Always access Bank 01 (for reads, and writes to original location)
+          end else if (txt1_shadow || txt2_shadow) begin
+            // Text pages ALWAYS shadow in bank 01 (ignore aux_disable per documentation)
+            // Bit 4 only affects "auxiliary Hi-Res graphics pages", not text pages
+            fastram_ce_int = 1;
             if (we) begin
-              slowram_ce_int = 1; // WRITES also go to shadow Bank E1
+              slowram_ce_int = 1;
+            end
+          end else if (!aux_disable && (hgr1_shadow || hgr2_shadow)) begin
+            // Hi-Res pages shadow only when aux_disable=0 (bit 4 controls this)
+            fastram_ce_int = 1;
+            if (we) begin
+              slowram_ce_int = 1;
             end
           end else if (lc_shadow) begin
             // Language card: READS from Bank 01, WRITES to both Bank 01 AND Bank E1
