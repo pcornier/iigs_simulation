@@ -280,16 +280,22 @@ module iigs
 
 
 
-  assign EXTERNAL_IO =    ((bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc090 && addr < 'hc100 && ~is_internal_io);
+  assign EXTERNAL_IO =    ((bank_bef == 8'h0 || bank_bef == 8'h1 || bank_bef == 8'he0 || bank_bef == 8'he1) && cpu_addr[15:0] >= 'hc090 && cpu_addr[15:0] < 'hc100 && ~is_internal_io);
 
-  assign inhibit_cxxx = lcram2_sel | ((bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1) & shadow[6]);
+  assign inhibit_cxxx = lcram2_sel | ((bank_bef == 8'h0 | bank_bef == 8'h1 | bank_bef == 8'he0 | bank_bef == 8'he1) & shadow[6]);
 
-// from c000 to c0ff only, c100 to cfff are slots or ROM based on $C02D
+// I/O space ($C000-$C0FF) mapping per Apple IIgs Hardware Reference:
+// - Banks E0/E1: I/O always accessible (no shadow register check)
+// - Banks 00/01: I/O accessible only when shadow[6]=0 (must be enabled for correct operation)
+// - ROM banks: Writes go to I/O, reads come from ROM
+// IMPORTANT: Use bank_bef (raw CPU view) not bank (translated), to match cpu_addr usage
+//
+// Old incorrect implementations:
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
 //assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
-  assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 &
-               ((bank == 8'h00 | bank == 8'h01 | bank == 8'he0 | bank == 8'he1) |  // Full I/O access
-                ((bank == 8'hfc | bank == 8'hfd | bank == 8'hfe | bank == 8'hff) & ~cpu_we_n)); // ROM: only writes
+  assign IO =  ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 &
+               ((bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1) |  // Banks 00/01/E0/E1: always (NOTE: ignoring shadow[6] - see investigation notes)
+                ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
   // Use combinational logic but add debug to detect timing issues
   assign { bank_bef, addr_bef } = cpu_addr;
