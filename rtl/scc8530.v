@@ -146,7 +146,14 @@ module scc
 
 	// make sure rindex changes after the cpu cycle has ended so
 	// read data is still stable while cpu advances
-	always@(posedge clk) if(~cs) rindex <= rindex_latch;
+	always@(posedge clk) begin
+		if(~cs) begin
+			rindex <= rindex_latch;
+			if (rindex != rindex_latch) begin
+				$display("SCC_RINDEX_UPDATE: rindex %x -> %x", rindex, rindex_latch);
+			end
+		end
+	end
 
 	/* Register index is set by a write to WR0 and reset
 	 * after any subsequent write. We ignore the side
@@ -173,22 +180,35 @@ module scc
 			rx_wr_a_latch<=0;
 			wr_data_a<=0;
 			rx_first_a<=1;
-		end else if (cen && cs) begin
-			if (!rs[1]) begin
-				/* Default, reset index */
-				rindex_latch <= 0;
+		end else begin
+			// Debug: Check when cs is asserted
+			if (cs) begin
+				$display("SCC_CS_ASSERTED: cen=%b cs=%b we=%b rs=%b wdata=%02x", cen, cs, we, rs, wdata);
+			end
 
+			if (cen && cs) begin
+			if (!rs[1]) begin
+				$display("SCC_CTRL_ACCESS: ch=%s we=%b cen=%b cs=%b wdata=%02x", rs[0] ? "A" : "B", we, cen, cs, wdata);
 				/* Write to WR0 */
-				if (we && rindex == 0) begin
+				if (we) begin
+					/* Reset index first, then set new value */
+					rindex_latch <= 0;
+
 					/* Get low index bits */
 					rindex_latch[2:0] <= wdata[2:0];
-				  
+
 					/* Add point high */
 					rindex_latch[3] <= (wdata[5:3] == 3'b001);
+
+					$display("SCC_WR0_WRITE: ch=%s wdata=%02x rindex_latch_new=%x point_high=%b cmd=%x",
+						rs[0] ? "A" : "B", wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
+						(wdata[5:3] == 3'b001), wdata[5:3]);
+
 					/* enable int on next rx char */
 					if (wdata[5:3] == 3'b100)
 						rx_first_a<=1;
 				end
+				/* Note: Reads from control register should NOT reset rindex */
 			end else begin
 				if (we) begin
 					if (rs[0]) begin 
@@ -213,8 +233,9 @@ module scc
 					end
 				end
 			end
-		end
-	end
+			end  // end if (cen && cs)
+		end  // end else (not reset)
+	end  // end always@(posedge clk)
 
 	/* Reset logic (write to WR9 cmd)
 	 *
@@ -455,8 +476,9 @@ module scc
 		end
 	end
 	
-	/* Read data mux */	
-	assign rdata = rs[1] && rs[0]       ? data_a :
+	/* Read data mux */
+	wire [7:0] rdata_mux;
+	assign rdata_mux = rs[1] && rs[0]       ? data_a :
 		       rs[1]                ? data_b :
 		       rindex ==  0 && rs[0] ? rr0_a :
 		       rindex ==  0          ? rr0_b :
@@ -491,12 +513,16 @@ module scc
 		       rindex == 14          ? rr10_b :
 		       rindex == 15 && rs[0] ? rr15_a :
 		       rindex == 15          ? rr15_b : 8'hff;
-/*
-always@(posedge clk) begin
-if (cs)
- $display("SCC rindex == %x rs %x rr0_a %x rr3_a %x ",rindex,rs,rr0_a,rr3_a);
-end
-*/
+
+	assign rdata = rdata_mux;
+
+	// Debug: Log control register reads
+	always@(posedge clk) begin
+		if (cs && ~we && ~rs[1]) begin
+			$display("SCC_CTRL_READ: ch=%s rindex=%x data=%02x (RR%d) rr0=%02x",
+				rs[0] ? "A" : "B", rindex, rdata_mux, rindex, rs[0] ? rr0_a : rr0_b);
+		end
+	end
 	/* RR0 */
 	assign rr0_a = { 1'b0, /* Break */
 			 eom_latch_a, /* Tx Underrun/EOM - use latch instead of hardcoded 1 */

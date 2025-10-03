@@ -100,11 +100,16 @@ end
 
 wire scc_out;
 
+// Generate enable signal - use cs directly since it's already registered
+// and indicates when an SCC access is active
+// The SCC module expects cen to be high when an access is happening
+wire scc_en = cs;  // Use cs as enable - it's high for one cycle during access
+
 // Instantiate existing SCC with adapted clocking
 scc scc_inst (
     .clk(clk_14m),                      // Master clock
-    .cep( ph2_en),                   // Positive edge enable - CPU timing
-    .cen( ph2_en),                  // Negative edge enable - CPU timing
+    .cep( scc_en),                      // Positive edge enable - active during access
+    .cen( scc_en),                      // Negative edge enable - active during access
     .reset_hw(reset),
     
     // Bus interface
