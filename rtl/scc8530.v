@@ -188,25 +188,34 @@ module scc
 
 			if (cen && cs) begin
 			if (!rs[1]) begin
-				$display("SCC_CTRL_ACCESS: ch=%s we=%b cen=%b cs=%b wdata=%02x", rs[0] ? "A" : "B", we, cen, cs, wdata);
-				/* Write to WR0 */
+				$display("SCC_CTRL_ACCESS: ch=%s we=%b cen=%b cs=%b wdata=%02x rindex=%x", rs[0] ? "A" : "B", we, cen, cs, wdata, rindex);
+				/* Write to control register */
 				if (we) begin
-					/* Reset index first, then set new value */
-					rindex_latch <= 0;
+					/* Only update pointer if current rindex is 0 (writing to WR0) */
+					/* Otherwise, write goes to the selected register */
+					if (rindex == 0) begin
+						/* Reset index first, then set new value */
+						rindex_latch <= 0;
 
-					/* Get low index bits */
-					rindex_latch[2:0] <= wdata[2:0];
+						/* Get low index bits */
+						rindex_latch[2:0] <= wdata[2:0];
 
-					/* Add point high */
-					rindex_latch[3] <= (wdata[5:3] == 3'b001);
+						/* Add point high */
+						rindex_latch[3] <= (wdata[5:3] == 3'b001);
 
-					$display("SCC_WR0_WRITE: ch=%s wdata=%02x rindex_latch_new=%x point_high=%b cmd=%x",
-						rs[0] ? "A" : "B", wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
-						(wdata[5:3] == 3'b001), wdata[5:3]);
+						$display("SCC_WR0_WRITE: ch=%s wdata=%02x rindex_latch_new=%x point_high=%b cmd=%x",
+							rs[0] ? "A" : "B", wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
+							(wdata[5:3] == 3'b001), wdata[5:3]);
 
-					/* enable int on next rx char */
-					if (wdata[5:3] == 3'b100)
-						rx_first_a<=1;
+						/* enable int on next rx char */
+						if (wdata[5:3] == 3'b100)
+							rx_first_a<=1;
+					end else begin
+						$display("SCC_WR_SELECTED: ch=%s rindex=%x wdata=%02x (WR%d)",
+							rs[0] ? "A" : "B", rindex, wdata, rindex);
+						/* Write to selected register - pointer automatically resets to 0 after */
+						rindex_latch <= 0;
+					end
 				end
 				/* Note: Reads from control register should NOT reset rindex */
 			end else begin
