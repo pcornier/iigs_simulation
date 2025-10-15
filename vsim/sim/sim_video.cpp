@@ -39,6 +39,7 @@ GLuint tex;
 #endif
 ImTextureID texture_id;
 ImGuiIO io;
+extern bool headless; // from sim_main.cpp
 
 ImVec4 clear_color = ImVec4(0.25f, 0.35f, 0.40f, 0.80f);
 
@@ -229,43 +230,49 @@ int SimVideo::Initialise(const char* windowTitle) {
 	UpdateWindow(hwnd);
 #else
 	// Setup SDL
-	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0)
+	if (!headless && SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_GAMECONTROLLER) != 0)
 	{
 		printf("Error: %s\n", SDL_GetError());
 		return -1;
 	}
 
-	// Setup window
-	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
-	SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
-	window = SDL_CreateWindow("Dear ImGui SDL2+OpenGL example", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, window_flags);
-	gl_context = SDL_GL_CreateContext(window);
-	SDL_GL_MakeCurrent(window, gl_context);
-	SDL_GL_SetSwapInterval(0);
+	// Setup window (skip when headless)
+	if (!headless) {
+		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+		SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+		SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+		window = SDL_CreateWindow("Apple IIgs Simulator", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, window_flags);
+		gl_context = SDL_GL_CreateContext(window);
+		SDL_GL_MakeCurrent(window, gl_context);
+		SDL_GL_SetSwapInterval(0);
+	}
 #endif
 
 
-	// Setup Dear ImGui context
-	IMGUI_CHECKVERSION();
-	ImGui::CreateContext();
-	io = ImGui::GetIO();
-	(void)io;
-
-	// Setup Dear ImGui style
-	ImGui::StyleColorsDark();
+	// Setup Dear ImGui context (skip when headless)
+	if (!headless) {
+		IMGUI_CHECKVERSION();
+		ImGui::CreateContext();
+		io = ImGui::GetIO();
+		(void)io;
+		ImGui::StyleColorsDark();
+	}
 
 #ifdef WIN32
 	// Setup Platform/Renderer bindings
-	ImGui_ImplWin32_Init(hwnd);
-	ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+	if (!headless) {
+		ImGui_ImplWin32_Init(hwnd);
+		ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+	}
 #else
 	// Setup Platform/Renderer bindings
-	ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
-	ImGui_ImplOpenGL2_Init();
+	if (!headless) {
+		ImGui_ImplSDL2_InitForOpenGL(window, gl_context);
+		ImGui_ImplOpenGL2_Init();
+	}
 
 #endif
 
@@ -322,13 +329,15 @@ int SimVideo::Initialise(const char* windowTitle) {
 	}
 #else
 	// the texture should match the GPU so it doesn't have to copy
-	glGenTextures(1, &tex);
-	glBindTexture(GL_TEXTURE_2D, tex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, output_width, output_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, output_ptr);
-	texture_id = (ImTextureID)tex;
+	if (!headless) {
+		glGenTextures(1, &tex);
+		glBindTexture(GL_TEXTURE_2D, tex);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, output_width, output_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, output_ptr);
+		texture_id = (ImTextureID)tex;
+	}
 #endif
 	return 0;
 }
@@ -352,14 +361,15 @@ void SimVideo::UpdateTexture() {
 	if (frame_ready) {
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, output_width, output_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, output_ptr);
 	}
-	// Rendering
-	ImGui::Render();
-	glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-	glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
-	glClear(GL_COLOR_BUFFER_BIT);
-	//glUseProgram(0); // You may want this if using this code in an OpenGL 3+ context where shaders may be bound
-	ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
-	SDL_GL_SwapWindow(window);
+	if (!headless) {
+		// Rendering
+		ImGui::Render();
+		glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+		glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
+		glClear(GL_COLOR_BUFFER_BIT);
+		ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
+		SDL_GL_SwapWindow(window);
+	}
 #endif
 
 	frame_ready = 0;
@@ -369,22 +379,25 @@ void SimVideo::UpdateTexture() {
 void SimVideo::CleanUp() {
 #ifdef WIN32
 	// Close imgui stuff properly...
-	ImGui_ImplDX11_Shutdown();
-	ImGui_ImplWin32_Shutdown();
-	ImGui::DestroyContext();
+	if (!headless) {
+		ImGui_ImplDX11_Shutdown();
+		ImGui_ImplWin32_Shutdown();
+		ImGui::DestroyContext();
+	}
 
 	CleanupDeviceD3D();
 	DestroyWindow(hwnd);
 	UnregisterClass(wc.lpszClassName, wc.hInstance);
 #else
 	// Cleanup
-	ImGui_ImplOpenGL2_Shutdown();
-	ImGui_ImplSDL2_Shutdown();
-	ImGui::DestroyContext();
-
-	SDL_GL_DeleteContext(gl_context);
-	SDL_DestroyWindow(window);
-	SDL_Quit();
+	if (!headless) {
+		ImGui_ImplOpenGL2_Shutdown();
+		ImGui_ImplSDL2_Shutdown();
+		ImGui::DestroyContext();
+		SDL_GL_DeleteContext(gl_context);
+		SDL_DestroyWindow(window);
+		SDL_Quit();
+	}
 #endif
 }
 
@@ -394,8 +407,10 @@ void SimVideo::StartFrame() {
 	ImGui_ImplDX11_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 #else
-	ImGui_ImplOpenGL2_NewFrame();
-	ImGui_ImplSDL2_NewFrame(window);
+	if (!headless) {
+		ImGui_ImplOpenGL2_NewFrame();
+		ImGui_ImplSDL2_NewFrame(window);
+	}
 #endif
 }
 

@@ -22,7 +22,7 @@ TIMING_DISK = timing_race_test.2mg
 all: scc_test scc_regtest scc_selftest scc_regptr_test sccauto_test \
      scc_phantom_test serial_selftest plb_test dbr_corruption_test \
      dbr_plb_stage_test dbr_e0_scan_test c034_test timing_test \
-     io_debug_test io_autorun_test
+io_debug_test io_autorun_test
 
 # ============================================================================
 # SCC Tests
@@ -87,6 +87,53 @@ scc_selftest.2mg: SCCSLF.SYSTEM
 	$(CP2) add scc_selftest.2mg "SCCSLF.SYSTEM"
 	$(CP2) sa scc_selftest.2mg type=SYS "SCCSLF.SYSTEM"
 	@echo "SCC selftest replica disk ready: scc_selftest.2mg"
+
+# SCC Transmit Buffer Test - tests Tx Buffer Empty bit behavior
+scc_txbuf: SCCTXBF.SYSTEM scc_txbuf.2mg
+
+SCCTXBF.SYSTEM: SCC_TXBUF_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_txbuf.2mg: SCCTXBF.SYSTEM
+	@echo "Creating SCC transmit buffer test disk..."
+	@cp blank.2mg scc_txbuf.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_txbuf.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_txbuf.2mg "SCCTXBF.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_txbuf.2mg "SCCTXBF.SYSTEM"
+	$(CP2) sa scc_txbuf.2mg type=SYS "SCCTXBF.SYSTEM"
+	@echo "SCC transmit buffer test disk ready: scc_txbuf.2mg"
+
+# SCC Simple Reset Test - minimal test of RR0 after hardware reset
+scc_reset: SCCRST.SYSTEM scc_reset.2mg
+
+SCCRST.SYSTEM: SCC_RESET_SIMPLE.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_reset.2mg: SCCRST.SYSTEM
+	@echo "Creating SCC reset test disk..."
+	@cp blank.2mg scc_reset.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_reset.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_reset.2mg "SCCRST.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_reset.2mg "SCCRST.SYSTEM"
+	$(CP2) sa scc_reset.2mg type=SYS "SCCRST.SYSTEM"
+	@echo "SCC reset test disk ready: scc_reset.2mg"
+
+# SCC Both Channels Test - tests both channel A and B
+scc_wr2: SCCWR2.SYSTEM scc_wr2.2mg
+
+scc_both: SCCBOTH.SYSTEM scc_both.2mg
+
+SCCBOTH.SYSTEM: SCC_BOTH_CHANNELS.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_both.2mg: SCCBOTH.SYSTEM
+	@echo "Creating SCC both channels test disk..."
+	@cp blank.2mg scc_both.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_both.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_both.2mg "SCCBOTH.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_both.2mg "SCCBOTH.SYSTEM"
+	$(CP2) sa scc_both.2mg type=SYS "SCCBOTH.SYSTEM"
+	@echo "SCC both channels test disk ready: scc_both.2mg"
 
 # SCC Auto Test - builds a bootable disk with the auto SCC test
 sccauto_test: SCCAUTO.SYSTEM sccauto_test.2mg
@@ -277,3 +324,89 @@ clean:
 	rm -f *_Symbols.txt
 	rm -f _FileInformation.txt
 	@echo "Clean complete - removed all generated files (preserved blank.2mg)"
+
+# SCC WR2 Test - reproduces Test 06-01 failure
+SCCWR2.SYSTEM: SCC_WR2_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_wr2.2mg: SCCWR2.SYSTEM
+	@cp blank.2mg scc_wr2.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_wr2.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_wr2.2mg "SCCWR2.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_wr2.2mg "SCCWR2.SYSTEM"
+	$(CP2) sa scc_wr2.2mg type=SYS "SCCWR2.SYSTEM"
+	@echo "SCC WR2 test disk ready: scc_wr2.2mg"
+
+# SCC IRQ test
+.PHONY: scc_irq
+scc_irq: SCCIRQ.SYSTEM scc_irq.2mg
+
+SCCIRQ.SYSTEM: SCC_IRQ_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ SCC_IRQ_TEST.S
+	@echo "Built SCCIRQ.SYSTEM"
+
+scc_irq.2mg: SCCIRQ.SYSTEM
+	@cp blank.2mg scc_irq.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_irq.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_irq.2mg "SCCIRQ.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_irq.2mg "SCCIRQ.SYSTEM"
+	$(CP2) sa scc_irq.2mg type=SYS "SCCIRQ.SYSTEM"
+	@echo "SCC IRQ test disk ready: scc_irq.2mg"
+# SCC TXEMPTY status test
+.PHONY: scc_txempty
+scc_txempty: SCCTXE.SYSTEM scc_txempty.2mg
+
+SCCTXE.SYSTEM: SCC_TXEMPTY_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_txempty.2mg: SCCTXE.SYSTEM
+	@cp blank.2mg scc_txempty.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_txempty.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_txempty.2mg "SCCTXE.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_txempty.2mg "SCCTXE.SYSTEM"
+	$(CP2) sa scc_txempty.2mg type=SYS "SCCTXE.SYSTEM"
+	@echo "SCC TXEMPTY test disk ready: scc_txempty.2mg"
+# SCC Vector + TX pending test
+.PHONY: scc_vtx
+scc_vtx: SCCVTX.SYSTEM scc_vtx.2mg
+
+SCCVTX.SYSTEM: SCC_VECTOR_TX_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_vtx.2mg: SCCVTX.SYSTEM
+	@cp blank.2mg scc_vtx.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_vtx.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_vtx.2mg "SCCVTX.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_vtx.2mg "SCCVTX.SYSTEM"
+	$(CP2) sa scc_vtx.2mg type=SYS "SCCVTX.SYSTEM"
+	@echo "SCC Vector TX test disk ready: scc_vtx.2mg"
+
+# SCC Self Test 06 - reproduces ROM self-test failure
+.PHONY: scc_selftest06
+scc_selftest06: SCC06.SYSTEM scc_selftest06.2mg
+
+SCC06.SYSTEM: SCC_SELFTEST_06.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_selftest06.2mg: SCC06.SYSTEM
+	@cp blank.2mg scc_selftest06.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_selftest06.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_selftest06.2mg "SCC06.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_selftest06.2mg "SCC06.SYSTEM"
+	$(CP2) sa scc_selftest06.2mg type=SYS "SCC06.SYSTEM"
+	@echo "SCC Self Test 06 disk ready: scc_selftest06.2mg"
+
+# Comprehensive SCC Test - covers all ROM selftest checks
+.PHONY: scc_full
+scc_full: SCCFULL.SYSTEM scc_full.2mg
+
+SCCFULL.SYSTEM: SCC_FULL_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_full.2mg: SCCFULL.SYSTEM
+	@cp blank.2mg scc_full.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_full.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_full.2mg "SCCFULL.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_full.2mg "SCCFULL.SYSTEM"
+	$(CP2) sa scc_full.2mg type=SYS "SCCFULL.SYSTEM"
+	@echo "Comprehensive SCC test disk ready: scc_full.2mg"

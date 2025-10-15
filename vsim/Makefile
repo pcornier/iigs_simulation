@@ -17,7 +17,7 @@ V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../s
 	-I..
 #V_DEFINE += --converge-limit 2000 -Wno-WIDTH -Wno-IMPLICIT -Wno-MODDUP -Wno-UNSIGNED -Wno-CASEINCOMPLETE -Wno-CASEX -Wno-SYMRSVDWORD -Wno-COMBDLY -Wno-INITIALDLY -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-SELRANGE -Wno-CMPCONST -Wno-CASEOVERLAP -Wno-PINMISSING -Wno-MULTIDRIVEN
 #V_DEFINE += --threads 8  # this slows it way down
-V_DEFINE += --trace-fst
+#V_DEFINE += --trace-fst
 # Sound implementation switch:
 #   make SOUND=stub   -> builds with +define+SOUND_STUB
 #   make SOUND=doc    -> builds full ES5503 path (default)

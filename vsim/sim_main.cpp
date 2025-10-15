@@ -1714,6 +1714,7 @@ void show_help() {
 	printf("Usage: ./Vemu [options]\n\n");
 	printf("Options:\n");
 	printf("  -h, --help                    Show this help message\n");
+	printf("  --headless, --no-gui          Run without SDL/ImGui (CI/headless)\n");
 	printf("  --screenshot <frames>         Take screenshots at specified frame numbers\n");
 	printf("                                (comma-separated list, e.g., 100,200,300)\n");
 	printf("  -screenshot <frames>          Legacy form of --screenshot (deprecated)\n");
@@ -1861,6 +1862,9 @@ int main(int argc, char** argv, char** env) {
 		if ((strcmp(argv[i], "-h") == 0) || (strcmp(argv[i], "--help") == 0)) {
 			show_help();
 			return 0;
+        } else if ((strcmp(argv[i], "--headless") == 0) || (strcmp(argv[i], "--no-gui") == 0)) {
+            headless = true;
+	   debug_6502 = false;
 		} else if ((strcmp(argv[i], "-screenshot") == 0 || strcmp(argv[i], "--screenshot") == 0) && i + 1 < argc) {
 			screenshot_mode = true;
 			std::string frames_str = argv[i + 1];
@@ -1952,11 +1956,15 @@ int main(int argc, char** argv, char** env) {
 
 
 #ifndef DISABLE_AUDIO
-	audio.Initialise();
+    if (!headless) {
+	    audio.Initialise();
+    }
 #endif
 
-	// Set up input module
-	input.Initialise();
+    // Set up input module (skip in headless)
+    if (!headless) {
+        input.Initialise();
+    }
 #ifdef WIN32
 	input.SetMapping(input_up, DIK_UP);
 	input.SetMapping(input_right, DIK_RIGHT);
@@ -1987,7 +1995,7 @@ int main(int argc, char** argv, char** env) {
 	input.SetMapping(input_select, SDL_SCANCODE_2);
 	input.SetMapping(input_menu, SDL_SCANCODE_M);
 #endif
-    // Setup video output
+    // Setup video output (in headless, SimVideo will be initialized lazily)
     if (!headless) {
         if (video.Initialise(windowTitle) == 1) { return 1; }
     }
@@ -1997,15 +2005,51 @@ int main(int argc, char** argv, char** env) {
     // Mount HDD image into slot 7 backend (using specified disk image)
    blockdevice.MountDisk(disk_image.c_str(), 1);
 
-   // In headless mode, run a limited simulation loop without UI and exit
+   // In headless mode, run a continuous simulation honoring stop/screenshot flags
    if (headless) {
-       printf("Headless mode enabled. Running limited simulation...\n");
-       run_state = RunState::Running;
-       for (int i = 0; i < 500; ++i) {
-           RunBatch(1024);
+       printf("Headless mode enabled.\n");
+       // Ensure output buffer is allocated for screenshots
+       if (output_ptr == nullptr) {
+           output_width = VGA_WIDTH;
+           output_height = VGA_HEIGHT;
+           size_t fb_bytes = (size_t)output_width * (size_t)output_height * 4u;
+           output_ptr = (uint32_t*)malloc(fb_bytes);
+           if (!output_ptr) {
+               fprintf(stderr, "Failed to allocate framebuffer for headless mode.\n");
+               return 2;
+           }
+           memset(output_ptr, 0, fb_bytes);
        }
-       printf("Headless simulation finished: frames=%d time=%lu\n", video.count_frame, (unsigned long)main_time);
-       return 0;
+       run_state = RunState::Running;
+       int last_logged_frame = -1;
+       while (1) {
+           RunBatch(4096);
+           if (video.count_frame != last_logged_frame) {
+               printf("Frame: %d\n", video.count_frame);
+               last_logged_frame = video.count_frame;
+               // Handle screenshots
+               if (screenshot_mode) {
+                   auto it = std::find(screenshot_frames.begin(), screenshot_frames.end(), video.count_frame);
+                   if (it != screenshot_frames.end()) {
+                       save_screenshot(video.count_frame);
+                       screenshot_frames.erase(it);
+                   }
+               }
+               // Handle memory dumps
+               if (memory_dump_mode) {
+                   auto it2 = std::find(memory_dump_frames.begin(), memory_dump_frames.end(), video.count_frame);
+                   if (it2 != memory_dump_frames.end()) {
+                       save_memory_dump(video.count_frame);
+                       memory_dump_frames.erase(it2);
+                   }
+               }
+               // Stop at frame
+               if (stop_at_frame_enabled && video.count_frame >= stop_at_frame) {
+                   printf("Reached stop frame %d, exiting...\n", stop_at_frame);
+                   return 0;
+               }
+           }
+       }
    }
 
        // iwm_init();

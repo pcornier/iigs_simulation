@@ -6,6 +6,7 @@
 
 #ifndef _MSC_VER
 #include <SDL2/SDL.h>
+extern bool headless; // defined in sim_main.cpp
 int m_keyboardStateCount;
 const Uint8* m_keyboardState;
 Uint8* m_keyboardState_last = NULL;
@@ -535,6 +536,11 @@ bool ReadKeyboard()
 		else { return false; }
 	}
 #else
+	if (headless) {
+		m_keyboardStateCount = 0;
+		m_keyboardState = nullptr;
+		return true;
+	}
 	m_keyboardState = SDL_GetKeyboardState(&m_keyboardStateCount);
 	if (!m_keyboardState_last) m_keyboardState_last = (Uint8*)calloc(m_keyboardStateCount, sizeof(Uint8));
 	////fprintf(stderr,"count: %d\n",m_keyboardStateCount);
@@ -574,7 +580,7 @@ void SimInput::Read() {
 #ifdef WIN32
 		inputs[i] = m_keyboardState[mappings[i]] & 0x80;
 #else
-		inputs[i] = m_keyboardState[mappings[i]];
+		inputs[i] = headless ? 0 : m_keyboardState[mappings[i]];
 #endif
 	}
 
@@ -590,13 +596,15 @@ void SimInput::Read() {
 		m_keyboardState_last[k] = m_keyboardState[k];
 	}
 #else
-	for (int k = 0; k < m_keyboardStateCount; k++) {
-		if (m_keyboardState_last[k] != m_keyboardState[k]) {
-			bool ext = 0;
-			SimInput_PS2KeyEvent evt = SimInput_PS2KeyEvent(k, m_keyboardState[k], ext, ev2ps2[k]);
-			keyEvents.push(evt);
+	if (!headless) {
+		for (int k = 0; k < m_keyboardStateCount; k++) {
+			if (m_keyboardState_last[k] != m_keyboardState[k]) {
+				bool ext = 0;
+				SimInput_PS2KeyEvent evt = SimInput_PS2KeyEvent(k, m_keyboardState[k], ext, ev2ps2[k]);
+				keyEvents.push(evt);
+			}
+			m_keyboardState_last[k] = m_keyboardState[k];
 		}
-		m_keyboardState_last[k] = m_keyboardState[k];
 	}
 #endif
 
@@ -663,4 +671,3 @@ SimInput::~SimInput()
 {
 
 }
-

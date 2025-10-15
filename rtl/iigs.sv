@@ -197,6 +197,7 @@ module iigs
   logic               scc_we;
   logic [1:0]         scc_rs;
   logic               scc_irq_n;
+  logic               scc_rd_active; // one-shot read strobe helper
 
   logic               aux;
 
@@ -635,6 +636,10 @@ module iigs
 
   // driver for io_dout and fake registers
   always_ff @(posedge CLK_14M) begin
+    // Track active read cycle for SCC to one-shot cs
+    if (!(IO && cpu_we_n && (addr[11:0] >= 12'h038) && (addr[11:0] <= 12'h03b))) begin
+      scc_rd_active <= 1'b0;
+    end
     if (addr == 16'hC036) begin
         $display("C036_DEBUG: IO=%b, we=%b, dout=%h", IO, ~cpu_we_n, cpu_dout);
     end
@@ -730,9 +735,10 @@ module iigs
     // Handle SCC read response (same cycle pattern like other peripherals)
     if (scc_cs & cpu_we_n) begin
       io_dout <= scc_dout;
-      $display("SCC_READ_RESPONSE: data=%02X scc_cs=%b cpu_we_n=%b addr=C%03X",
-               scc_dout, scc_cs, cpu_we_n, addr[11:0]);
+      $display("SCC_READ_RESPONSE: data=%02X scc_cs=%b cpu_we_n=%b addr=C%03X io_dout<=%02X cpu_addr=%06X",
+               scc_dout, scc_cs, cpu_we_n, addr[11:0], scc_dout, cpu_addr);
     end
+
     scc_cs <= 1'b0;
     if (IO) begin
       // interrupt_clear_pulse is now auto-cleared after use, no need to clear here
@@ -1089,14 +1095,16 @@ module iigs
             12'h037: io_dout <= 'h0; // from gsplus
 
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
-              if (phi2)
-		begin
-              scc_cs <= 1'b1;
-              scc_we <= 1'b0;
-              scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
-              // io_dout will be set in next cycle when scc_dout is valid
-              $display("SCC_READ: addr=C%03X rs=%b bank=%02X", addr[11:0], addr[1:0], bank);
-		end
+              // One-shot SCC read strobe: assert cs exactly once when the CPU
+              // first presents the address, ensuring data is ready in time
+              // without re-triggering on subsequent CLK_14M ticks.
+              if (!scc_rd_active) begin
+                scc_cs <= 1'b1;
+                scc_we <= 1'b0;
+                scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
+                scc_rd_active <= 1'b1;
+                $display("SCC_READ: addr=C%03X rs=%b bank=%02X phi2=%b", addr[11:0], addr[1:0], bank, phi2);
+              end
             end
 
             12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
@@ -1625,6 +1633,9 @@ wire [7:0] HDD_DO;
     if (cpu_we_n && addr >= 16'hC038 && addr <= 16'hC03B) begin
       $display("SCC_CPU_READ: addr=C%03X cpu_din=%02X io_dout=%02X IO=%b EXTERNAL_IO=%b din=%02X fastram_ce=%b slowram_ce=%b",
                addr[11:0], cpu_din, io_dout, IO, EXTERNAL_IO, din, fastram_ce, slowram_ce);
+      $display("  IO_DEBUG: cpu_addr=%06X bank_bef=%02X addr_check=%b bank_check=%b",
+               cpu_addr, bank_bef, (cpu_addr[15:8] == 8'hC0),
+               (bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1));
     end
   end
 wire ready_out;
@@ -1731,8 +1742,9 @@ wire ready_out;
         irq_pending[2] <= 1'b0;
       end
       
-      // Sound interrupt (direct from sound module)
-      irq_pending[7] <= snd_irq;
+      // SCC interrupt (bit 7) - level driven from SCC core (not gated by INTEN)
+      // Note: cleared by SCC register ops; C047 does not affect this bit
+      irq_pending[7] <= (~scc_irq_n);
       
       // Interrupt clearing (C047 write)
       if (interrupt_clear_pulse) begin

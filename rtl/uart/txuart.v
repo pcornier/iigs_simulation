@@ -161,27 +161,34 @@ module txuart(i_clk, i_reset, i_setup, i_break, i_wr, i_data,
 	// Default to using hardware flow control (uart_setup[30]==0 to use it).
 	// Set this high order bit off if you do not wish to use it.
 	reg	q_cts_n, qq_cts_n, ck_cts;
-	// While we might wish to give initial values to q_rts and ck_cts,
-	// 1) it's not required since the transmitter starts in a long wait
-	// state, and 2) doing so will prevent the synthesizer from optimizing
-	// this pin in the case it is hard set to 1'b1 external to this
-	// peripheral.
+	// Initialize flow control signals to allow transmission
+	// Since we changed the transmitter to start not busy (r_busy=0),
+	// we need to initialize these properly to prevent r_busy from being
+	// set incorrectly by the idle state logic.
 	//
-	// initial	q_cts_n  = 1'b1;
-	// initial	qq_cts_n = 1'b1;
-	// initial	ck_cts   = 1'b0;
-	always	@(posedge i_clk)
+	initial	q_cts_n  = 1'b0;  // Initialize as if CTS is asserted
+	initial	qq_cts_n = 1'b0;
+	initial	ck_cts   = 1'b1;  // Flow control allows transmission
+
+	// Flow control synchronizer and logic
+	always @(posedge i_clk)
+	if (i_reset)
+	begin
+		q_cts_n <= 1'b0;  // Reset: CTS asserted (active low)
+		qq_cts_n <= 1'b0;
+		ck_cts <= 1'b1;   // Flow control allows transmission
+	end else begin
 		{ qq_cts_n, q_cts_n } <= { q_cts_n, i_cts_n };
-	always	@(posedge i_clk)
 		ck_cts <= (!qq_cts_n)||(!hw_flow_control);
+	end
 
 	initial	o_uart_tx = 1'b1;
-	initial	r_busy = 1'b1;
+	initial	r_busy = 1'b0;  // Start not busy (buffer empty)
 	initial	state  = TXU_IDLE;
 	always @(posedge i_clk)
 	if (i_reset)
 	begin
-		r_busy <= 1'b1;
+		r_busy <= 1'b0;  // After reset, not busy (buffer empty)
 		state <= TXU_IDLE;
 	end else if (i_break)
 	begin
