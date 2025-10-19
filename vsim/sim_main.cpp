@@ -202,6 +202,7 @@ Vemu* top = NULL;
 static FILE* g_vsim_trace_csv = nullptr;
 static unsigned long long g_vsim_seq = 0ULL;
 static bool g_vsim_trace_active = false;
+int dump_csv_after_frame = -1;
 static void vsim_trace_open_fresh() {
     if (g_vsim_trace_csv) { fclose(g_vsim_trace_csv); g_vsim_trace_csv = nullptr; }
     g_vsim_trace_csv = fopen("vsim_trace.csv", "w");
@@ -217,6 +218,7 @@ static void vsim_trace_log(char phase, char type,
                            unsigned a_bank, unsigned a_adr, unsigned data,
                            unsigned phys_bank, int is_rom, int is_slow, int is_io) {
     if (!g_vsim_trace_active) return;
+    if (dump_csv_after_frame != -1 && video.count_frame < dump_csv_after_frame) return;
     if (!g_vsim_trace_csv) vsim_trace_open_fresh();
     // Build Clemens-like memory map (mmap) flags from current iigs signals
     // Bits map to clemens_iigs/clem_mmio_defs.h where feasible
@@ -1723,7 +1725,8 @@ void show_help() {
 	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
-	printf("  --disk <filename>             Use specified disk image (default: hd.hdv)\n\n");
+	printf("  --disk <filename>             Use specified disk image (default: hd.hdv)\n");
+	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
 	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
@@ -1889,6 +1892,10 @@ int main(int argc, char** argv, char** env) {
 			stop_at_frame_enabled = true;
 			stop_at_frame = std::stoi(argv[i + 1]);
 			printf("Will stop simulation at frame %d\n", stop_at_frame);
+			i++; // Skip the next argument since it's the frame number
+		} else if (strcmp(argv[i], "--dump-csv-after") == 0 && i + 1 < argc) {
+			dump_csv_after_frame = std::stoi(argv[i + 1]);
+			printf("Will start dumping CSV at frame %d\n", dump_csv_after_frame);
 			i++; // Skip the next argument since it's the frame number
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
