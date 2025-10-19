@@ -96,6 +96,19 @@ Each bit in the Shadow register is active high, which means that the shadowing o
 The Speed register, located at `$C036`, contains bits that control the speed of operation and that determine whether a specific area within a bank is shadowed. The Speed register is cleared on reset or power up, except for bit 6, which on power up is set. Figure 2-6 shows the format of the Speed register. Table 2-2 contains a description of the bits.
 
 > ▲ A Warning Be careful when changing bits within this register. Use only a read-modify-write instruction sequence when manipulating bits. See the warning in the preface. ▲
+> 
+### Figure 2-6 Speed register at $C036
+
+| Bit | Name |
+| :-- | :--- |
+| 7 | Central processor speed  |
+| 6 | Power-on status  |
+| 5 | Reserved; do not modify  |
+| 4 | Shadowing enable, all RAM banks  |
+| 3 | Slot 7 disk motor-on detect  |
+| 2 | Slot 6 disk motor-on detect  |
+| 1 | Slot 5 disk motor-on detect  |
+| 0 | Slot 4 disk motor-on detect  |
 
 **Table 2-2 Bits in the Speed register** 
 | Bit | Value | Description |
