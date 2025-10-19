@@ -249,7 +249,6 @@ The State register is a read/write register containing eight commonly used stand
 | 1 | ROMBANK  |
 | 0 | INTCXROM  |
 
-AJS -- TO HERE
 
 ### Table 3-2 Bits in the State register 
 
@@ -268,105 +267,173 @@ AJS -- TO HERE
 | 2 | 1 | **LCBNK2**: language-card RAM bank 1 is selected. |
 | | 0 | language-card RAM bank 2 is selected. |
 | 1 | | **ROMBANK**: The ROM bank select switch must always be 0. Do not modify this bit. |
-| 0 | 1 | **INTCXROM**: the internal ROM at $Cx00 is selected. |
-| | 0 | the peripheral-card ROM at $Cx00 is selected. |
+| 0 | 1 | **INTCXROM**: the internal ROM at `$Cx00` is selected. |
+| | 0 | the peripheral-card ROM at `$Cx00` is selected. |
 
 
 ## Bank $01 (auxiliary memory) 
 
-> **Apple II note**: The following sections describe the operation of the auxiliary memory (bank $01) as it applies to programs originally written for the Apple IIc or for 128K versions of the Apple IIe.
+> ♦ *Apple II note:* The following sections describe the operation of the auxiliary memory (bank `$01`) as it applies to programs originally written for the Apple IIc or for 128K versions of the Apple IIe. Programs written specifically for the Apple IlGS don't normally use bank `$01` in this fashion, but use the Memory Manager to obtain whatever memory space they need, without specifying whether it is in bank `$00`, bank `$01`, or expansion memory in higher banks.
 
-When display shadowing is on, some of the display modes use memory in bank $01.
 
-> **Warning**
-> Do not attempt to switch in the auxiliary memory from a BASIC program.
+> **▲ Warning** 
+> Do not attempt to switch in the auxiliary memory from a BASIC program. The BASIC interpreter uses several areas in main RAM, including the stack and the direct page. If you switch to alternate memory in these areas, the BASIC interpreter fails and you must reset the system and start over. ▲
 
-Auxiliary memory is divided into two large sections and one small one.
+As you can see by studying the memory map in Figure 3-6, the auxiliary memory is divided into two large sections and one small one. The largest section is switched into the memory address space from 512 to 49151 (`$0200` through `$BFFF`). This space includes the display buffer pages: Space in auxiliary memory is used for one-half of the 80-column text display and the Double Hi-Res graphics display. You can switch to the auxiliary memory for this entire memory space, or you can switch just the display pages: See the section "Bank Switching for Auxiliary Memory," later in this chapter.
 
-### Bank switching for auxiliary memory 
+>**▲ Important**
+> A program that uses auxiliary memory only for the 80-column display can write into the display page in auxiliary memory by using the `SET80COL` and `TXTPAGE2` soft switches described in the section "Display Mode Switching" in Chapter 4. 
 
-Switching the 48K section of memory is done by two soft switches: `RDMAINRAM` and `RDCARDRAM` select main or auxiliary memory for reading, and `WRMAINRAM` and `WRCARDRAM` select it for writing.
+ The other large section of auxiliary memory is the language-card space, which is switched into the memory address space from 52K to 64K (`$D000` through `$FFFF`). This memory space and the switches that control it are described eariier in this chapter in the section "Language-Card Memory Space." The language-card soft switches have the same effect on the auxiliary RAM that they do on the main RAM: The language-card bank switching is independent of the auxiliary RAM switching.
 
-> **Warning**
-> Do not use these switches without careful planning.
+Figure 3-6 Memory map of main and auxiliary memory
+
+this figure shows the memory map diagram
+
+♦ *Note:* The soft switches for the language-card memory, described in the previous section, do not change when you switch to auxiliary RAM. In particular, if ROM is enabled in the language-card space before you switch to auxiliary memory, the ROM will still be enabled after you switch. Any time you switch the language-card section of auxiliary memory in and out, you must also make sure that the bank switches are set properly.
+
+When you switch in the auxiliary RAM in the language-card space, you also switch in the first two pages, from 0 to 511 (`$0000` through `$01FF`). This part of memory contains the direct page and the 65C816 stack when running in 6502 emulation mode. The stack and direct page are switched this way so that standard Apple II **system software** running in the language-card space can maintain its own stack and direct page while it manipulates the 48K address space (from `$0200` to `$BFFF`) in either main memory or auxiliary memory.
+
+
+## Bank switching for auxiliary memory 
+
+Switching the 48K section of memory is performed by two soft switches: The switches named `RDMAINRAM` and `RDCARDRAM` select main or auxiliary memory for reading, and the switches named `WRMAINRAM` and `WRCARDRAM` select main or auxiliary memory for writing. As shown in Table 3-3, there are two switches for each function: one to select main memory, and the other to select auxiliary memory. Enabling the read and write functions independently makes it possible for a program whose instructions are being fetched from one memory space to store data into the other memory space.
+
+>▲ **Warning** 
+>Do not use these switches without careful planning. Careless switching between main and auxiliary memories is almost certain to have catastrophic effects on the operation of your program, ▲
+
+
+Writing to the soft switch at location `$C003` turns `RDCARDRAM` on and enables auxiliary memory for reading; writing to location `$C002` turns `RDMAINRAM` on and enables main memory for reading. Writing to the soft switch at location `$C005` turns `WRCARDRAM` on and enables the auxiliary memory for writing; writing to location `$C004` turns `WRMAINRAM` on and enables main memory for writing. By setting these switches independently, you can use any of the four combinations of reading and writing in main or auxiliary memory.
+
+You can use auxiliary memory corresponding to text Page 1 and Hi-Res graphics Page 1 as part of the address space from `$0200` to `$BFFF` by using RAM read and RAM write soft switches as described above. You can also control these areas in auxiliary RAM separately by using the switches named `SET80COL`, `TXTPAGE2`, and `HIRES`.
+
+
 
 ### Table 3-3 Auxiliary-memory select switches 
 
 | Name | Function | Location (Dec) | Location (Hex) | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| RDCARDRAM | Read auxiliary memory | 49155 | $C003 | Write |
-| RDMAINRAM | Read main memory | 49154 | $C002 | Write |
-| RDRAMRD | Read switch status | 49171 | $C013 | Read and test bit 7 (1=auxiliary, 0=main) |
-| WRCARDRAM | Write auxiliary memory | 49157 | $C005 | Write |
-| WRMAINRAM | Write main memory | 49156 | $C004 | Write |
-| RDRAMWRT | Read switch status | 49172 | $C014 | Read and test bit 7 (1=auxiliary, 0=main) |
-| SET80COL | Access display page | 49153 | $C001 | Write |
-| CLR80COL | Use RAM switches | 49152 | $C000 | Write |
-| RD80COL | Read switch status | 49176 | $C018 | Read and test bit 7 (1=80-column on, 0=off) |
-| TXTPAGE2 | Text Page 2 on (auxiliary) | 49237 | $C055 | Read or write |
-| TXTPAGE1 | Text Page 1 on (main) | 49236 | $C054 | Read or write |
-| RDPAGE2 | Read switch status | 49180 | $C01C | Read and test bit 7 (1=Page 2, 0=Page 1) |
-| HIRES | Access Hi-Res pages | 49239 | $C057 | Read or write |
-| LORES | Use RAM switches | 49238 | $C056 | Read or write |
-| RDHIRES | Read switch status | 49181 | $C01D | Read and test bit 7 (1=HIRES on, 0=off) |
-| SETALTZP | Auxiliary stack and direct page | 49161 | $C009 | Write |
-| SETSTDZP | Main stack and direct page | 49160 | $C008 | Write |
-| RDALTZP | Read switch status | 49174 | $C016 | Read and test bit 7 (1=auxiliary, 0=main) |
+| RDCARDRAM | Read auxiliary memory | 49155 | `$C003` | Write |
+| RDMAINRAM | Read main memory | 49154 | `$C002` | Write |
+| RDRAMRD | Read switch status | 49171 | `$C013` | Read and test bit 7 (1=auxiliary, 0=main) |
+| WRCARDRAM | Write auxiliary memory | 49157 | `$C005` | Write |
+| WRMAINRAM | Write main memory | 49156 | `$C004` | Write |
+| RDRAMWRT | Read switch status | 49172 | `$C014` | Read and test bit 7 (1=auxiliary, 0=main) |
+| SET80COL | Access display page | 49153 | `$C001` | Write |
+| CLR80COL | Use RAM switches | 49152 | `$C000` | Write |
+| RD80COL | Read switch status | 49176 | `$C018` | Read and test bit 7 (1=80-column on, 0=off) |
+| TXTPAGE2 | Text Page 2 on (auxiliary memory)\* | 49237 | `$C055` | Read or write |
+| TXTPAGE1 | Text Page 1 on (main memory)\* | 49236 | `$C054` | Read or write |
+| RDPAGE2 | Read switch status | 49180 | `$C01C` | Read and test bit 7 (1=Page 2, 0=Page 1) |
+| HIRES | Access Hi-Res pages †| 49239 | `$C057` | Read or write |
+| LORES | Use RAM switches ($C002-5,13,14) †| 49238 | `$C056` | Read or write |
+| RDHIRES | Read switch status | 49181 | `$C01D` | Read and test bit 7 (1=HIRES on, 0=off) |
+| SETALTZP | Auxiliary stack and direct page | 49161 | `$C009` | Write |
+| SETSTDZP | Main stack and direct page | 49160 | `$C008` | Write |
+| RDALTZP | Read switch status | 49174 | `$C016` | Read and test bit 7 (1=auxiliary, 0=main) |
 
 
-When `SET80COL` is enabled, `TXTPAGE2` and `TXTPAGE1` select main or auxiliary display memory.
+\* When `SET80COL` is enabled, `TXTPAGE2` and `TXTPAGE1` select main or auxiliary display memory.
 
-A single soft switch named `ALTZP` switches the bank-switched memory and the associated stack and direct-page area between main and auxiliary memory.
+† When `SET80COL` is enabled, `HIRES` and `LORES` enable you to use `TXTPAGE2` and `TXTPAGE1` to switch between the Hi-Res Page 1 area in main memory or auxiliary memory.
+
+As shown in Table 3-3, the `SET80COL` switch functions as an enabling switch: With it on, you can select main memory or auxiliary memory by writing to either `TXTPAGE1` or `TXTPAGE2`. With the `HIRES` switch off, the memory space switched by `TXTPAGE2` is text Page 1 (`$0400` to `$07FF`); with `HIRES` on, `TXTPAGE2` switches both text Page 1 and Hi-Res graphics Page 1 (`$2000` to `$3FFF`).
+
+If you are using both the auxiliary RAM control switches (`SET80COL`, `CLR80COL`, `TXTPAGE1`, `TXTPAGE2`, and `HIRES`) and the auxiliary display page control switches (`RDMAINRAM`, `RDCARDRAM`, `WRMAINRAM`, and `WRCARDRAM`), the display page control switches take priority. That is, if `CLR80COL` is on, the RAM read and write switches toggle the entire auxiliary and main memory space from `$0200` to `$BFFF`.
+
+If `SET80COL` is on, the RAM switches have no effect on the display page; if `SET80COL` is on and `LORES` is on, the `TXTPAGE1` and `TXTPAGE2` switches control text Page 1, regardless of the settings of the RAM read and write switches. Likewise, if `SET80COL` and `HIRES` are both on, `TXTPAGE1` and `TXTPAGE2` control both text Page 1 and Hi-Res graphics Page 1, again regardless of the RAM read and RAM write switches.
+
+A single soft switch named `ALTZP` (for alternate zero page) switches the bank-switched memory and the associated stack and direct-page area between main and auxiliary memory. As shown in Table 3-3, writing to location `$C009` turns `ALTZP` on and selects auxiliary memory stack and direct page; writing to the soft switch at location `$C008` turns `ALTZP` off and selects main memory stack and direct page for both reading and writing.
+
+There is a third soft switch (`RDRAMRD` and `RDRAMWRT`) associated with each pair of auxiliary memory switches listed above. The **high-order** bits of the byte you read at this location tell you the setting of the associated soft switches. For example, the byte you read at location `$C013` has its high bit set to 1 if the auxiliary memory is read-enabled, or to 0 if the 48K block of main memory is read-enabled.
+
+♦ *Sharing memory*: In order to have enough memory locations for all the soft switches and to remain compatible with the Apple II and Apple II Plus, the soft switches listed in Table 3-3 share their memory locations with the keyboard functions listed in Table 6-2. The read or other operations shown in Table 3-3 for controlling the auxiliary memory are just the ones that are not used for reading the keyboard and clearing the strobe.
+
+
+
 
 ## Banks $E0 and $E1 
 
-Banks $E0 and $E1 are controlled by the Mega II.
+Banks $E0 and $E1 are the memory banks controlled by the Mega II. These banks have special characteristics that make it appropriate to use them in special ways. First, they contain the display buffers, so they have to run at the standard 1.024-MHz speed. Second, because these banks are broken up by the special allocations shown in Figure 3-7, they are the logical place for working storage used by the toolbox and other firmware programs. Using banks `$E0` and `$E1` for such purposes leaves all the higher-speed memory in the low-numbered banks for application programs and data.
 
-### The display buffers 
+♦ *Note*: In banks `$E0` and `$E1`, language-card mapping, I/O space, and display buffers are always active.
 
-The display buffers are permanently assigned to locations in banks $E0 and $E1 because they are tied directly to the Mega II IC that generates the display signals.
+Figure 3-7 Memory map of banks $E0 and $E1
 
-  * **Text/Lo-Res**: The primary text and Lo-Res graphics display buffers occupy memory locations $0400 through $07FF in banks $E0 and $E1.
-  * **Text Page 2**: The alternate text buffer, occupies locations $0800 through $0BFF.
-  * **Hi-Res**: There are two Hi-Res graphics buffers, each 8K.
-  * **Double Hi-Res**: These buffers require 16384 bytes each.
-  * **Super Hi-Res**: This buffer occupies 32K of memory at locations $2000 through $9FFF in bank $E1.
 
-Programs should call on the Memory Manager to allocate space for data storage, as it keeps track of available display spaces.
+## The display buffers 
 
-### Firmware workspace 
+The display buffers are permanently assigned to locations in banks `$E0` and `$E1` because they are tied directly to the hardware — the Mega II IC— that reads the data stored there and generates the display signals. Display-memory shadowing makes it possible to run oldstyle Apple II programs that store display data in banks `$00` and `$01`, as described earlier in this chapter in the section "Shadowed Display Spaces," and in Chapter 2.
 
-Banks $E0 and $E1 are the logical place for working storage used by the toolbox and other system programs because they are always broken up by display buffers.
+The primary text and Lo-Res graphics display buffers occupy memory locations `$0400` through `$07FF` in banks `$E0` and `$E1`. The 1024-byte area in bank `$E0` is text Page 1, the display buffer for 40-column text mode. The 80-column text display uses text Page 1 locations in both bank `$E0` and bank `$E1`. The Control Panel and other firmware programs use these display buffers, so applications must not use them for program or data storage.
 
-> **Warning**
-> To avoid conflicts with built-in programs that use RAM areas in banks $E0 and $E1, applications must not use these areas and should instead request memory from the Memory Manager.
+Text Page 2, the alternate text and Lo-Res graphics display buffer, occupies memory locations `$0800` through `$OBFF`. Most programs do not use text Page 2 for displays, and the original Apple IIGS doesn't shadow it. The 1 MB Apple IIGS has a bit in the Shadow register that allows you to enable shadowing of text Page 2.
+
+There are two Hi-Res graphics buffers, each of which requires 8192 bytes (8K) of memory. Hi-Res graphics Page 1 occupies memory locations `$2000` through `$3FFF` in bank `$E0`. HiRes graphics Page 2 occupies memory locations `$4000` through `$5FFF` in bank `$E0`.
+
+The Double Hi-Res graphics buffers require a total of 16384 bytes each, 8192 in each bank. Double Hi-Res graphics Page 1 occupies memory locations `$2000` through `$3FFF` in banks `$E0` and `$E1`. Double Hi-Res graphics Page 2 occupies memory locations `$4000` through `$5FFF` in banks `$E0` and `$E1`.
+
+The Super Hi-Res graphics display buffer, with its associated palette and scan-line control data storage, occupies 32K of memory at locations `$2000` through `$9FFF` in bank `$E1`. Note that, unlike the other Hi-Res graphics displays, it doesn't use any space in bank `$E0`.
+
+In principle, programs that don't use specific displays can use the corresponding display buffers for data storage. In practice, programs call on the Memory Manager to allocate space for data storage, and the Memory Manager keeps track of which display spaces are available. If you try to load your programs and data directly into display memory in banks `$E0` and `$E1`, you risk interference from **desk accessories** or other programs that may be resident in memory along with your programs.
+
+
+
+## Firmware workspace 
+
+As described in the previous section, banks `$E0` and `$E1` are always broken up by display buffers, so they are the logical place for working storage used by the toolbox and other system programs. Figure 3-7 shows the memory areas reserved for those programs.
+
+Several different system programs use RAM space in banks `$E0` and `$E1`, including
+
+* the Monitor program
+* desk accessories
+* the Memory Manager
+* the Tool Locator
+* the Apple Desktop Bus **tool set**
+* the AppleTalk driver
+
+In addition, portions of banks `$E0` and `$E1` are reserved for future use. For specific uses of these programs and utilities, refer to the *Apple IIGS Firmware Reference*.
+
+> ▲ **Warning**
+> Several of the built-in programs use RAM areas in banks `$E0` and `$E1`. To avoid conflicts with those programs, applications must not use these areas; instead, applications should request memory from the Memory Manager. Refer to the *Apple IIGS Toolbox Reference* for information about the Memory Manager. ▲
 
 ## Apple II program memory use 
 
-For programs written for earlier Apple II models to run on an Apple IIGS, all of the Apple II features must be present in banks $00 and $01, which correspond to main and auxiliary memory. These features include:
+Eadier models of the Apple II use a microprocessor, the 6502, that can address only 65536 bytes (64K) of memory. The Apple He and the Apple lie double this, to 128K, by switching to an auxiliary 64K bank. In order for programs written for these machines to run on an Apple IlGS, all of the Apple II features must be present in the part of memory that corresponds to main and auxiliary memory— banks `$00` and `$01`. This section describes those features.
 
-  * direct (zero) page, from $0000 to $00FF of bank $00 
-  * stack, from $0100 to $01FF of bank $00 
-  * text Page 1, from $0400 to $07FF of both banks 
-  * text Page 2, from $0800 to $0BFF of both banks (available in the 1 MB Apple IIGS only) 
-  * Hi-Res graphics Page 1, from $2000 to $3FFF of bank $00 
-  * Hi-Res graphics Page 2, from $4000 to $5FFF of bank $00 
-  * Double Hi-Res graphics Page 1, from $2000 to $3FFF of both banks 
-  * Double Hi-Res graphics Page 2, from $4000 to $5FFF of both banks 
-  * I/O space, from $C000 to $CFFF of either bank 
-  * language-card space, from $D000 to $FFFF of both banks 
+### Banks $00 and $01
+
+For standard Apple II programs, banks `$00` and `$01` take on the features of the main and auxiliary banks. With the 65C816 microprocessor nunning in emulation mode and shadowing set appropriately, all of the standard features are present, including
+
+* direct (zero) page, from `$0000` to `$OOFF` of bank `$00`
+* stack, from `$0100` to `$01FF` of bank `$OO`
+* text Page 1, from `$0400` to `$07FF` of both banks
+* text Page 2, from `$0800` to `$OBFF` of both banks (available in the 1 MB Apple IlGS only)
+* Hi-Res graphics Page 1, from `$2000` to `$3FFF` of bank `$00`
+* Hi-Res graphics Page 2, from `$4000` to `$5FFF` of bank `$00`
+* Double Hi-Res graphics Page 1, from `$2000` to `$3FFF` of both banks
+* Double Hi-Res graphics Page 2, from `$4000` to `$5FFF` of both banks
+* I/O space, from `$C000` to `$CFFF` of either bank
+* language-card space, from `$D000` to `$FFFF` of both banks
+
+Figure 3-3 is a memory map of banks $00 and $01 showing these features.
+
+
 
 ## Shadowing 
 
-The Apple IIGS display buffers are in banks $E0 and $E1.
+The display buffers in tfie Apple IIGS are located in banks `$E0` and `$E1`, as described eariier in this chapter. For compatibility with standard Apple II programs, shadowing must be switched on for the display buffers needed by those programs. For more information about shadowing, refer to Chapter 2 and to the section "Shadowed Display Spaces" eariier in this chapter.
 
-### Screen holes 
 
-When shadowing is on for text Page 1, programs and peripheral cards that use the text Page 1 locations known as screen holes run normally.
+## Screen holes 
+
+When shadowing is on for text Page 1, programs and peripheral cards that use the text Page 1 locations known as the screen holes run normally. For more information about the screen holes, refer to the section "Peripheral-Card RAM Space" in Chapter 8.
+
 
 ## Memory expansion 
 
-The original Apple IIGS has 256K of RAM and 128K of ROM built in, while the 1 MB model has 1 MB RAM and 256K of ROM.
+The original Apple IlGS has 256K of RAM and 128K of ROM built in, and the 1 MB Apple IlGS has 1 MB RAM and 256K of ROM. This memory can be expanded to a total of 5 MB of RAM (4 MB RAM on a memory expansion card), and 1 MB total ROM (768K ROM on a memory expansion card). Memory expansion up to 8 MB of RAM is possible by using the memory expansion slot, but complications requiring memory support logic keep this expansion from being practical. The hardware and firmware in the Apple IIGS are designed to support only a 5 MB maximum memory space. Addresses above 8 MB are not available to applications programs.
+
 
 ### The memory expansion slot 
 
@@ -374,7 +441,8 @@ The memory expansion slot allows for adding a memory card with up to 4 MB of RAM
 
 ### Memory expansion signals 
 
-The memory expansion slot provides signals to support dynamic RAM and additional signals for ROM decoding.
+The extended memory-card slot enables you to expand the niemoiy of your Apple IlGS by adding a memory card holding up to 4 MB of RAM and 786K of ROM memory. The slot supports additional memory only and is not to be used for any other purpose. RAM cards of 1 MB or 4 MB can be constructed by using 256K rows or 1 MB rows of RAM ICs.
+
 
 ### Table 3-4 Memory-card interface signals 
 
