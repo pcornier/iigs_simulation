@@ -254,15 +254,37 @@ module txuart(i_clk, i_reset, i_setup, i_break, i_wr, i_data,
 
 	// r_setup
 	//
+`ifdef SCC_TX_DEBUG
+// Log setup sampling and key events for TX UART
+reg [30:0] r_setup_prev;
+reg        o_busy_prev;
+always @(posedge i_clk) begin
+    o_busy_prev <= o_busy;
+    if (i_reset)
+        $display("TXUART: reset time=%0t", $time);
+    if (!o_busy && r_setup != i_setup)
+        $display("TXUART: sample setup i_setup=%08x time=%0t", i_setup, $time);
+    if ((i_wr)&&(!r_busy) && (state==TXU_IDLE))
+        $display("TXUART: START data=%02x clocks_per_baud=%0d time=%0t", i_data, clocks_per_baud, $time);
+    if (o_busy_prev != o_busy)
+        $display("TXUART: BUSY %b->%b time=%0t", o_busy_prev, o_busy, $time);
+end
+`endif
 	// Our setup register.  Accept changes between any pair of transmitted
 	// words.  The register itself has many fields to it.  These are
 	// broken out up top, and indicate what 1) our baud rate is, 2) our
 	// number of stop bits, 3) what type of parity we are using, and 4)
 	// the size of our data word.
+	//
+	// MODIFICATION: Also sample on reset to allow configuration changes
+	// to take effect immediately when hardware issues a reset pulse,
+	// matching the behavior of the Zilog SCC chip where control register
+	// writes take effect immediately.
 	initial	r_setup = INITIAL_SETUP;
 	always @(posedge i_clk)
-	if (!o_busy)
+	if (i_reset || !o_busy) begin
 		r_setup <= i_setup;
+	end
 
 	// lcl_data
 	//
@@ -370,12 +392,17 @@ module txuart(i_clk, i_reset, i_setup, i_break, i_wr, i_data,
 	// The logic is a bit twisted here, in that it will only check for the
 	// above condition when zero_baud_counter is false--so as to make
 	// certain the STOP bit is complete.
-	initial	zero_baud_counter = 1'b0;
-	initial	baud_counter = 28'h05;
+	initial	zero_baud_counter = 1'b1;  // Start ready
+	initial	baud_counter = 28'h0;       // Start at zero for IDLE
 	always @(posedge i_clk)
 	begin
 		zero_baud_counter <= (baud_counter == 28'h01);
-		if ((i_reset)||(i_break))
+		if (i_reset)
+		begin
+			// On reset, go immediately to IDLE ready state
+			baud_counter <= 28'h0;
+			zero_baud_counter <= 1'b1;
+		end else if (i_break)
 		begin
 			// Give ourselves 16 bauds before being ready
 			baud_counter <= break_condition;
@@ -1142,4 +1169,3 @@ module txuart(i_clk, i_reset, i_setup, i_break, i_wr, i_data,
 
 `endif	// FORMAL
 endmodule
-
