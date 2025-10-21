@@ -3,8 +3,8 @@
 # ============================================================================
 # Variables
 # ============================================================================
-ASM = ./Merlin32_v1.2_b2/Linux/Merlin32
-CP2 = ./cp2_1.1.0_linux-x64_sc/cp2
+ASM = ./Merlin32_v1.2_b2/MacOS/Merlin32
+CP2 = ./cp2_1.1.1_osx-x64_sc/cp2
 SCC_DISK = scc_test.2mg
 TIMING_DISK = timing_race_test.2mg
 
@@ -14,7 +14,8 @@ TIMING_DISK = timing_race_test.2mg
 .PHONY: all all_tests clean scc_test timing_test plb_test scc_phantom_test \
         dbr_corruption_test serial_selftest c034_test scc_regtest \
         scc_regptr_test scc_selftest sccauto_test io_autorun_test \
-        io_debug_test dbr_plb_stage_test dbr_e0_scan_test
+        io_debug_test dbr_plb_stage_test dbr_e0_scan_test scc_loopback scc_romseq \
+        scc_rxenable scc_exact scc_repro scc_postloop scc_fifo_test
 
 # ============================================================================
 # Default Target
@@ -102,6 +103,111 @@ scc_txbuf.2mg: SCCTXBF.SYSTEM
 	$(CP2) add scc_txbuf.2mg "SCCTXBF.SYSTEM"
 	$(CP2) sa scc_txbuf.2mg type=SYS "SCCTXBF.SYSTEM"
 	@echo "SCC transmit buffer test disk ready: scc_txbuf.2mg"
+
+# SCC Loopback Test - tests internal loopback mode (WR14 bit 4)
+scc_loopback: SCCLOOP.SYSTEM scc_loopback.2mg
+
+SCCLOOP.SYSTEM: SCC_LOOPBACK_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_loopback.2mg: SCCLOOP.SYSTEM
+	@echo "Creating SCC loopback test disk..."
+	@cp blank.2mg scc_loopback.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_loopback.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_loopback.2mg "SCCLOOP.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_loopback.2mg "SCCLOOP.SYSTEM"
+	$(CP2) sa scc_loopback.2mg type=SYS "SCCLOOP.SYSTEM"
+	@echo "SCC loopback test disk ready: scc_loopback.2mg"
+
+# SCC ROM Sequence Test - replicates exact ROM selftest sequence
+scc_romseq: SCCROM.SYSTEM scc_romseq.2mg
+
+SCCROM.SYSTEM: SCC_ROM_SEQUENCE_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_romseq.2mg: SCCROM.SYSTEM
+	@echo "Creating SCC ROM sequence test disk..."
+	@cp blank.2mg scc_romseq.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_romseq.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_romseq.2mg "SCCROM.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_romseq.2mg "SCCROM.SYSTEM"
+	$(CP2) sa scc_romseq.2mg type=SYS "SCCROM.SYSTEM"
+	@echo "SCC ROM sequence test disk ready: scc_romseq.2mg"
+
+# SCC RX Enable Test - tests that WR3[0] gates reception
+scc_rxenable: SCCRXEN.SYSTEM scc_rxenable.2mg
+
+SCCRXEN.SYSTEM: SCC_RX_ENABLE_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_rxenable.2mg: SCCRXEN.SYSTEM
+	@echo "Creating SCC RX enable test disk..."
+	@cp blank.2mg scc_rxenable.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_rxenable.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_rxenable.2mg "SCCRXEN.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_rxenable.2mg "SCCRXEN.SYSTEM"
+	$(CP2) sa scc_rxenable.2mg type=SYS "SCCRXEN.SYSTEM"
+	@echo "SCC RX enable test disk ready: scc_rxenable.2mg"
+
+# SCC Exact ROM Test - EXACT ROM selftest sequence
+scc_exact: SCCEXACT.SYSTEM scc_exact.2mg
+
+SCCEXACT.SYSTEM: SCC_EXACT_ROM_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_exact.2mg: SCCEXACT.SYSTEM
+	@echo "Creating SCC exact ROM test disk..."
+	@cp blank.2mg scc_exact.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_exact.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_exact.2mg "SCCEXACT.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_exact.2mg "SCCEXACT.SYSTEM"
+	$(CP2) sa scc_exact.2mg type=SYS "SCCEXACT.SYSTEM"
+	@echo "SCC exact ROM test disk ready: scc_exact.2mg"
+
+# SCC ROM Fail Reproducer - preconditions WR14 then runs ROM sequence
+scc_repro: SCCREPRO.SYSTEM scc_repro.2mg
+
+SCCREPRO.SYSTEM: SCC_ROM_FAIL_REPRO.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_repro.2mg: SCCREPRO.SYSTEM
+	@echo "Creating SCC reproducer disk..."
+	@cp blank.2mg scc_repro.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_repro.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_repro.2mg "SCCREPRO.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_repro.2mg "SCCREPRO.SYSTEM"
+	$(CP2) sa scc_repro.2mg type=SYS "SCCREPRO.SYSTEM"
+	@echo "SCC reproducer disk ready: scc_repro.2mg"
+
+# SCC Post-Loopback TX Test - disable loopback and send bytes B0,B6,B7,8D,8A
+scc_postloop: SCCPOST.SYSTEM scc_postloop.2mg
+
+SCCPOST.SYSTEM: SCC_POST_LOOPBACK_TX.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_postloop.2mg: SCCPOST.SYSTEM
+	@echo "Creating SCC post-loopback TX test disk..."
+	@cp blank.2mg scc_postloop.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_postloop.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_postloop.2mg "SCCPOST.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_postloop.2mg "SCCPOST.SYSTEM"
+	$(CP2) sa scc_postloop.2mg type=SYS "SCCPOST.SYSTEM"
+	@echo "SCC post-loopback TX test disk ready: scc_postloop.2mg"
+
+# SCC FIFO Test - tests 3-byte RX FIFO with rapid loopback transmission
+scc_fifo_test: SCCFIFO.SYSTEM scc_fifo_test.2mg
+
+SCCFIFO.SYSTEM: SCC_FIFO_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_fifo_test.2mg: SCCFIFO.SYSTEM
+	@echo "Creating SCC FIFO test disk..."
+	@cp blank.2mg scc_fifo_test.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_fifo_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_fifo_test.2mg "SCCFIFO.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_fifo_test.2mg "SCCFIFO.SYSTEM"
+	$(CP2) sa scc_fifo_test.2mg type=SYS "SCCFIFO.SYSTEM"
+	@echo "SCC FIFO test disk ready: scc_fifo_test.2mg"
 
 # SCC Simple Reset Test - minimal test of RR0 after hardware reset
 scc_reset: SCCRST.SYSTEM scc_reset.2mg
@@ -410,3 +516,33 @@ scc_full.2mg: SCCFULL.SYSTEM
 	$(CP2) add scc_full.2mg "SCCFULL.SYSTEM"
 	$(CP2) sa scc_full.2mg type=SYS "SCCFULL.SYSTEM"
 	@echo "Comprehensive SCC test disk ready: scc_full.2mg"
+
+# SCC WR15 Test - tests WR15/RR15 register access bug
+.PHONY: scc_wr15
+scc_wr15: SCCWR15.SYSTEM scc_wr15.2mg
+
+SCCWR15.SYSTEM: SCC_WR15_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_wr15.2mg: SCCWR15.SYSTEM
+	@cp blank.2mg scc_wr15.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_wr15.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_wr15.2mg "SCCWR15.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_wr15.2mg "SCCWR15.SYSTEM"
+	$(CP2) sa scc_wr15.2mg type=SYS "SCCWR15.SYSTEM"
+	@echo "SCC WR15 test disk ready: scc_wr15.2mg"
+
+# SCC Baud Rate Generator Test
+.PHONY: scc_baud_test
+scc_baud_test: SCCBAUD.SYSTEM scc_baud_test.2mg
+
+SCCBAUD.SYSTEM: SCC_BAUD_TEST.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+scc_baud_test.2mg: SCCBAUD.SYSTEM
+	@cp blank.2mg scc_baud_test.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_baud_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_baud_test.2mg "SCCBAUD.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_baud_test.2mg "SCCBAUD.SYSTEM"
+	$(CP2) sa scc_baud_test.2mg type=SYS "SCCBAUD.SYSTEM"
+	@echo "SCC Baud Rate test disk ready: scc_baud_test.2mg"
