@@ -1,0 +1,1006 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
+"http://www.w3.org/TR/html4/strict.dtd">
+<html>
+ <head>
+  <title>Inside the IIGS ADB Controller</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+  <meta http-equiv="Content-Style-Type" content="text/css">
+  <style type="text/css"><!--
+body {color: #000; background: #FFF}
+
+h1, h2, h3, p, li {font-family: sans-serif}
+h1, .center {text-align: center}
+  --></style>
+ </head>
+ <body>
+  <p><a href="http://www.llx.com/">LLX</a> &gt;
+   <a href="/~nparker/">Neil Parker</a> &gt;
+   <a href="index.html">Apple II</a> &gt; ADB</p>
+  <h1>Inside the Apple IIGS <span title="Apple Desktop Bus">ADB</span>
+    Controller</h1>
+  <h2>Contents</h2>
+  <ul>
+   <li><a href="#intro">Introduction</a></li>
+   <li><a href="#mem">Memory</a></li>
+   <li><a href="#int">Interrupts</a></li>
+   <li><a href="#timers">Timers</a></li>
+   <li><a href="#builtin">Built-In I/O Ports</a></li>
+   <li><a href="#external">External I/O Ports</a></li>
+   <li><a href="#gluregs">ADB GLU Registers</a></li>
+   <li><a href="#instr">Instruction Set</a>
+    <ul>
+     <li><a href="#regs">Registers</a></li>
+     <li><a href="#modes">Addressing Modes</a></li>
+     <li><a href="#instructions">Instructions</a></li>
+     <li><a href="#notes">Notes</a></li>
+     <li><a href="#table">Instruction Table</a></li>
+    </ul>
+   </li>
+   <li><a href="#disasm">Disassembler</a></li>
+  </ul>
+  <h2><a name="intro">Introduction</a></h2>
+  <p>On the Apple IIGS, the Apple Desktop Bus (ADB) hardware is not controlled
+   directly by the CPU, but by the <em>ADB microcontroller</em>, a separate
+   microprocessor running independently of the main processor.
+   Communication between the ADB microcontroller and the main processor is
+   handled by a custom chip called the ADB <span
+   title="General Logic Unit">GLU</span>.</p>
+  <p>The ADB microcrontroller in ROM 0 and ROM 1 machines is the Mitsubishi
+   M50740 single-chip 8-bit <span
+   title="Complementary Metal Oxide Semiconductor">CMOS</span> microcomputer.
+   ROM 3 machines use the Mitsubishi M50741, which differs from M50740 only
+   in the amount of internal ROM.</p>
+  <p>The M50740 and M50741 are "all-in-one" devices intended for embedded
+   controller applications.  A single chip contains the processor itself,
+   3K or 4K of <span title="Read-Only Memory">ROM</span>, 96 bytes of <span
+   title="Random-Access Memory">RAM</span>, three interval timers, four
+   external 8-bit <span title="Input/Output">I/O</span> ports, and sixteen 4-bit
+   I/O ports.<p>
+  <p>The information that follows is taken from the Mitsubishi data book
+   and the <cite>Apple IIGS Hardware Reference</cite>, from my own
+   disassemblies of the microcontroller ROM code, and from information
+   generously contributed by readers of this page.  Note that I can't
+   guarantee that everything below is 100% correct.</p>
+  <h2><a name="mem">Memory</a></h2>
+  <p>The memory map of the ADB microcontroller looks like this (all
+   addresses are in hexadecimal):</p>
+  <blockquote>
+   <pre>$0000-$005F: RAM (96 bytes)
+$0060-$00CF: not implemented
+$00D0-$00DF: 4-bit I/O ports
+$00E0:       Port P0 (8-bit I/O port)
+$00E1:       Port P0 data direction register
+$00E2:       Port P1 (8-bit I/O port)
+$00E3:       Port P1 data direction register
+$00E4:       Port P2 (8-bit I/O port)
+$00E5:       Port P2 data direction register
+$00E6-$00E7: not implemented
+$00E8:       Port P3 (8-bit I/O port)
+$00E9:       Port P3 data direction register
+$00EA-$00F8: not implemented
+$00F9:       Timer 1 &amp; 2 Prescaler
+$00FA:       Timer 1
+$00FB:       Timer 2
+$00FC:       Timer X Prescaler
+$00FD:       Timer X
+$00FE:       Interrupt Control Register
+$00FF:       Timer Control Register
+$0100-$0FFF: not implemented
+$1000-$13FF: not implemented on M50740 (ROM 0 &amp 1), ROM on M50741 (ROM 3)
+$1400-$1FFF: ROM</pre>
+  </blockquote>
+  <p>The highest addressable memory location is $1FFF.  If memory locations
+   above $1FFF are accessed, they are apparently reflected back into the 
+   $0000-$1FFF range by ignoring the upper three bits of the address (a
+   correspondent reports that the ADB code in ROM 3 machines depends on this
+   feature).</p>
+  <p>Memory locations 0 through $FF are called "page zero", and memory
+   locations $1F00 through $1FFF are called the "special page".</p>
+  <p>ROM locations $1FF4 through $1FFF are reserved for reset and interrupt
+   vectors:</p>
+  <blockquote>
+   <pre>$1FF4-$1FF5: /INT interrupt (wired to IIGS /VBL signal)
+$1FF6-$1FF7: Timer 2 interrupt
+$1FF8-$1FF9: Timer 1 interrupt
+$1FFA-$1FFB: Timer X interrupt
+$1FFC-$1FFD: /CNTR interrupt (wired to ADB data line)
+$1FFE-$1FFF: /RESET</pre>
+  </blockquote>
+  <p>Each vector is the two-byte address (low byte first, then high byte)
+   of the subroutine to be executed when the interrupt occurs.</p>
+  <h2><a name="int">Interrupts</a></h2>
+  <p>As indicated above, there are six interrupt sources available:  /RESET,
+   /CNTR, Timer X, Timer 1, Timer 2, and /INT.  /RESET, /CNTR, and /INT
+   are external pins on the chip, and the timer interrupts are internal,
+   generated by the built-in interval timers.</p>
+  <p>Each interrupt has a priority--if two interrupts occur
+   simultaneously, the one with the higher priority is recognized first.
+   The priority order is the same as the interrupt vector order--/RESET
+   has the highest priority, and /INT has the lowest.</p>
+  <p>All interrupts except /RESET can be enabled or disabled through the
+   Interrupt Control Register at $FE and the Timer Control Register at $FF
+   (discussed below).  Additionally, the CPU contains an interrupt disable
+   bit which disables all interrupts except /RESET.  /RESET cannot be
+   disabled.</p>
+  <p>Interrupts work just like on the 6502:  If an interrupt occurs and
+   interrupts are not disabled, the current program counter and processor
+   flags are saved on the stack, the interrupt disable bit is set, and
+   execution continues at the address pointed to by the appropriate
+   interrupt vector.</p>
+  <p>On the Apple IIGS, the /INT interrupt is connected to the
+   motherboard's <span title="Vertical Blanking">/VBL</span> signal, so it
+   generates 60 interrupts every second.  The /CNTR interrupt is connected
+   to the ADB data line, so it interrupts whenever an ADB device forces
+   the data line to the low state.  /RESET is connected to the 5-volt
+   supply by an RC circuit--thus the controller is reset only when the
+   computer is powered on.</p>
+  <h2><a name="timers">Timers</a></h2>
+  <p>Three built-in timers are available, Timer 1, Timer 2, and Timer X.
+   Timer 1 and Timer 2 count the system clock divided by 16, and Timer X
+   can count either the system clock or pulses on the /CNTR line.</p>
+  <p>The Mitsubishi manual is somewhat unclear on the the precise
+   operation of the timers, but it seems to work like this:</p>
+  <p>Each timer has a timer latch, a timer value, a prescaler latch, and a
+   prescaler value.  At the start, the timer value and prescaler value are
+   loaded from the corresponding latches.  Then, whenever a pulse occurs
+   on the timer input (either clock/16 or /CNTR), the prescaler value is
+   decreased by one.  When the prescaler reaches 0, the timer value is
+   decreased by one, and the prescaler value is reloaded from the
+   prescaler latch.  When the timer value reaches 0, the timer generates
+   an interrupt (if the interrupt is enabled), and the timer value is
+   reloaded from the timer latch.</p>
+  <p>Timer 1 and Timer 2 share a single prescaler value and latch.  Timer
+   X has its own prescaler value and latch.</p>
+  <p>It takes two input cycles to reload the values from the latches, so
+   the count rate is 1/(<i>n</i>+2), where <i>n</i> is the latch
+   value.</p>
+  <p>Timer 1 and Timer 2 are limited to counting the clock.  Timer X has
+   four modes of operation, selectable with the Timer Control Register at
+   $FF (discussed below):</p>
+  <ol>
+   <li><em>Timer mode</em>:  Timer X behaves like Timer 1 and Timer 2,
+    counting clock/16.</li>
+   <li><em>Pulse output mode</em>:  Like Timer mode, but every time Timer
+    X reaches 0, the polarity on the CNTR pin reverses.</li>
+   <li><em>Event counter mode</em>:  Timer X counts pulses on the /CNTR
+    pin.</li>
+   <li><em>Pulse width measurement mode</em>:  Timer X counts clock/16
+    when the /CNTR pin is low.  When /CNTR is high, counting is
+    suspended.</li>
+  </ol>
+  <p>On the IIGS, the controller is clocked by the CREF signal (3.579545
+   MHz), so the counter input rate is 223.7215625 KHz.</p>
+  <p>Timer 1 and Timer 2 are not used on the IIGS.  Timer X is used as a
+   watchdog timer to reset the controller if it gets stuck in an endless
+   loop.</p>
+  <h2><a name="builtin">Built-In I/O Ports</a></h2>
+  <p>Memory locations $F9 through $FF are reserved for controlling the
+   interval timer, interrupt sources, and chip configuration.  Memory
+   location $FE is the interrupt control register--each bit has a separate
+   function, as follows:</p>
+  <blockquote>
+   <pre>Bit  Function
+---  --------
+ 7   /CNTR interrupt request
+ 6   /CNTR interrupt enable
+ 5   Timer 1 interrupt request
+ 4   Timer 1 interrupt enable
+ 3   Timer 2 interrupt request
+ 2   Timer 2 interrupt enable
+ 1   /INT interrupt request
+ 0   /INT interrupt enable</pre>
+  </blockquote>
+  <p>(where bit 7 is the high-order bit, and bit 0 is the low-order
+   bit).  For each interrupt, the interrupt request bit is set to one when
+   the interrupt occurs, and the program code can clear the interrupt by
+   setting the request bit to 0.  The interrupt does not actually
+   interrupt the processor unless its enable bit is set to 1.</p>
+  <p>Memory location $FF is the timer control register, which contains the
+   following bits:</p>
+  <blockquote>
+   <pre>Bit  Function
+---  --------
+ 7   Timer X interrupt request
+ 6   Timer X interrupt enable
+ 5   Timer X count stop (0 = Timer X runs normally; 1 = Timer X is stopped)
+ 4   not used
+3-2  Timer X mode (00 = Timer mode; 01 = Pulse output mode; 10 = Event counter
+     mode; 11 = pulse width measurement mode)
+1-0  Processor mode (see below)</pre>
+  </blockquote>
+  <p>Memory locations $F9 through $FD hold the timer values and
+   prescalers:</p>
+  <blockquote>
+   <pre>$00F9: Timer 1 &amp; 2 Prescaler
+$00FA: Timer 1
+$00FB: Timer 2
+$00FC: Timer X Prescaler
+$00FD: Timer X</pre>
+  </blockquote>
+  <p>Writing to one of the above registers stores the written value into
+   the corresponding latch, and reading retrieves the current value of the
+   timer or prescalar.  The timer values and prescalers should not be set
+   to 0 (but the Mitsubishi data book doesn't say what goes wrong if this
+   advice is not heeded).</p>
+  <p>When /RESET occurs (only at power-on on the IIGS), the interrupt
+   control register and timer control register are initialized to 0, the
+   Timer X prescaler is initialized to $FF, and the Timer X value is
+   initialized to 1.
+  <p>The processor mode bits (mentioned above in the description of the
+   timer control register) allow the processor to access external memory.
+   No such external memory is connected on the IIGS, so the processor mode
+   bits are always set to 0, but for the sake of completeness here are the
+   possible values:</p>
+  <ul>
+   <li>00 = <em>Single chip mode</em>:  Only internal memory can be
+    accessed.  Ports P0 through P2 function exclusively as I/O ports.</li>
+   <li>01 = <em>Memory expanding mode</em>:  Memory locations $0060-$00CF
+    and $0100-$13FF ($0100-$0FFF for the M50741) can come from external
+    sources.  Ports P0-P2 are multiplexed, functioning as I/O ports when
+    the processor clock is low, and address and data lines when the
+    processor clock is high.</li>
+   <li>10 = <em>Microprocessor mode</em>:  Like memory expanding mode,
+    except that port P0-P2 are always address/data lines, never I/O ports.
+    All memory above $0100 comes from external sources, and since ports P0-P2
+    are unavailable, external memory can be mapped into $E0-$E7.</li>
+   <li>11 = <em>EVA chip mode</em>:  Like memory expanding mode, except that
+    all memory above $0100 comes from external sources.</li>
+  </ul>
+  <p>The processor normally powers on in single chip mode.  It can be
+   wired to power on in EVA chip mode, but this is not done on the
+   IIGS.</p>
+  <h2><a name="external">External I/O Ports</a></h2>
+  <p>There are sixteen four-bit I/O ports available, known collectively as
+   <em>Port R</em>, and four eight-bit I/O ports, known as <em>P0</em>
+   through <em>P3</em>.</p>
+  <p>Port R occupies memory locations $D0-$DF.  Externally, there are four
+   Port R pins, which are multiplexed--when the processor clock is high,
+   the Port R pins contain the four low-order bits of the address
+   referenced, and when the processor clock is low, they contain the data
+   read or written.  The Mitsubishi data book does not indicate how the
+   four data bits map to the eight bits available at each Port R memory
+   location.  In the Apple IIGS, Port R is not used (except maybe for its
+   effect on timing--the clock cycle when the access occurs is stretched to
+   twice its usual length), and the Port R pins are not connected to
+   anything.</p>
+  <p>The eight-bit I/O ports, P0 through P3, each have their own set of
+   eight external pins.  Internally, each port has a data register and a
+   data direction register.  Each bit in the data direction register
+   controls whether the corresponding data register bit is used for input
+   or output:  0 indicates an input bit, and 1 indicates an output
+   bit.  Writing to an output bit also writes to an internal latch, so
+   that reading an output bit always returns the value last written to
+   that bit, regardless of the signal on the external pin.</p>
+  <p>When the processor is in microprocessor mode, only port P3 is still
+   useable as an I/O port.  Since the IIGS never puts the processor into
+   microprocessor mode, this usually isn't an issue.</p>
+  <p>In the Apple IIGS, communication with the ADB hardware, the ADB GLU,
+   and (on ROM 0 and ROM 1 machines) the Apple IIE keyboard connector, is
+   done through ports P0-P3.  Here's how the ports are connected:</p>
+  <blockquote>
+   <pre>Port P0 (data register at $E0, direction register at $E1):
+Bit  Function
+---  --------
+7-0  Data to/from ADB GLU
+
+Port P1 (data register at $E2, direction register at $E3):
+Bit  Function
+---  --------
+ 7   IIE keyboard X7 line (ROM 0/1) or always 0 (ROM 3)
+ 6   IIE keyboard X6 line (ROM 0/1) or not connected (ROM 3)
+ 5   IIE keyboard X5 line (ROM 0/1) or not connected (ROM 3)
+ 4   IIE keyboard X4 line (ROM 0/1) or not connected (ROM 3)
+ 3   IIE keyboard X3 line (ROM 0/1) or not connected (ROM 3)
+ 2   IIE keyboard X2 line (ROM 0/1) or always 1 (ROM 3)
+ 1   IIE keyboard X1 line (ROM 0/1) or always 1 (ROM 3)
+ 0   IIE keyboard X0 line (ROM 0/1) or always 0 (ROM 3)
+
+Port P2 (data register at $E4, direction register at $E5):
+Bit  Function
+---  --------
+ 7   ADB data line (input)
+ 6   IIE keyboard /KRESET line (ROM 0/1) or always 0 (ROM 3)
+ 5   IIGS /RESET line
+ 4   ADB GLU STB line
+3-0  ADB GLU address lines (SEL3-SEL0)
+
+Port P3 (data register at $E8, direction register at $E9):
+Bit  Function
+---  --------
+ 7   IIE keyboard KSW0 line (ROM 0/1) or always 0 (ROM 3)
+ 6   IIE keyboard KSW1 line (ROM 0/1) or control panel disable jumper (ROM 3)
+ 5   IIGS button 0 / open-apple / command line
+ 4   IIGS button 1 / solid-apple / option line
+ 3   ADB data line (output)
+ 2   IIE keyboard CAPLOCK line (ROM 0/1) or always 0 (ROM 3)
+ 1   IIE keyboard CNTRL line (ROM 0/1) or always 0 (ROM 3)
+ 0   IIE keyboard SHIFT line (ROM 0/1) or always 0 (ROM 3)</pre>
+  </blockquote>
+  <h2><a name="gluregs">ADB GLU Registers</a></h2>
+  <p>The ADB microcontroller can access sixteen internal registers in the
+   ADB GLU.  Some of these registers are used to communicate with the main
+   CPU, and others seem to be for the private use of the ADB
+   microcontroller.</p>
+  <p>The protocol for reading an ADB GLU register is as follows:</p>
+  <ol>
+   <li>Put the register number of the ADB GLU register in port P2 bits 0-3.</li>
+   <li>Clear bit 4 of port P2, read the data from P0, and set bit 4 of P0.</li>
+  </ol>
+  <p>The protocol for writing a GLU register is similar:</p>
+  <ol>
+   <li>Write the register number to port P2 bits 0-3.</li>
+   <li>Write the data to port P0.</li>
+   <li>Configure port P0 for output by writing $FF to $E1.</li>
+   <li>Clear bit 4 of P2, and immediately set it again.</li>
+   <li>Configure port P0 for input by writing 0 to $E1.</li>
+  </ol>
+  <p>Both of these procedures depend on the fact that port P0 is normally
+   kept configured for input, and bits 0-4 of P2 are normally configured
+   for output.  When writing the register number to bits 0-3 of P2, bit 4
+   should always be written as 1.</p>
+  <p>Here are the ADB GLU register functions known to me so far:</p>
+  <blockquote>
+   <pre>Register 0: keyboard data (visible to main CPU at $C000)
+
+Register 1: ADB command register (visible to main CPU at $C026)
+
+Register 2: mouse X register (visible to main CPU at $C024)
+
+Register 3: mouse Y register (visible to main CPU at $C024)
+
+Register 4: GLU status register (not visible to main CPU)
+Bit  Function
+---  --------
+ 7   1 = mouse X-axis register full
+ 6   1 = command register full
+ 5   1 = data register full
+ 4   1 = keyboard strobe set
+3-1  always 0
+ 0   1 = any key down
+
+Register 5: any key down register (visible to main CPU at $C010)
+
+Register 6: keyboard modifier register (visible to main CPU at $C025)
+
+Register 7: ADB data register (visible to main CPU at $C026)</pre>
+  </blockquote>
+  <p>The IIGS wiring diagram shows that 16 GLU registers ought to be
+   addressable, but the ROM only accesses the eight listed above.  What
+   registers 8-15 might do, or whether they even exist at all, is not known.</p>
+  <p>Note that the mapping between the main CPU keyboard/mouse/ADB I/O
+   locations and the GLU registers is not quite direct or one-to-one.  Clearly
+   some of the behaviour of the main CPU's keyboard/mouse/ADB I/O locations is
+   implemented by the GLU hardware.</p>
+  <h2><a name="instr">Instruction Set</a></h2>
+  <p>The ADB microcontroller instruction set is a superset of the 6502
+   instruction set, with a few additional instructions borrowed from the
+   Rockwell version of the 65C02 (but not always assigned to the same
+   opcode bytes), and a few more instructions not found on any other
+   6502-based processor.</p>
+  <h3><a name="regs">Registers</a></h3>
+  <p>The processor has the same registers as the 6502:</p>
+  <ul>
+   <li>The accumulator (A):  holds one operand of most two-operand operations,
+    and the result of most operations</li>
+   <li>The index registers (X and Y):  useful for indexing small data
+    tables, or for temporary data storage</li>
+   <li>The processor status register (P):  holds the processor status bits
+    (see below)</li>
+   <li>The stack pointer (S):  points to the top of the stack (see
+    below)</li>
+   <li>The program counter (PC):  holds the memory location of the
+    instruction currently being executed</li>
+  </ul>
+  <p>The PC is 13 bits wide, and all other registers are eight bits
+   wide.</p>
+  <p>The status register is like that of the 6502, but has one additional
+   status bit.  From high-order to low-order:</p>
+  <ul>
+   <li>The negative bit (N):  whenever an operation leaves a value in A, X,
+    or Y, the high bit of the value is copied to the N bit.</li>
+   <li>The overflow bit (V):  set or cleared by ADC and SBC depending on
+    whether or not the result overflowed the the range of a signed
+    (twos-complement) number.  Also affected by BIT.</li>
+   <li>The index mode bit (T):  if this bit is set, some instructions
+    that normally use the accumulator instead use the zero-page memory
+    location pointed to by the X register.  Affects ADC, AND, CMP, EOR,
+    LDA, ORA, and SBC. </li>
+   <li>The break bit (B):  set by the BRK instruction when pushing the P
+    register on the stack, so that BRK can be distinguished from the /INT
+    interrupt.  Other interrupts leave the B bit clear.</li>
+   <li>The decimal bit (D):  if this bit is set, ADC and SBC operate on
+    binary-coded-decimal (BCD) values instead of binary values.</li>
+   <li>The interrupt disable bit (I):  if this bit is set, no interrupts
+    (except /RESET) are recognized.</li>
+   <li>The zero bit (Z):  whenever an operation leaves a value in A, X, or
+    Y, the Z bit is set or cleared depending on whether or not the result
+    was 0.</li>
+   <li>The carry bit (C):  used by ADC and SBC to indicate whether or not
+    there was a carry.  Also used by the shift and rotate
+    instructions.</li>
+  </ul>
+  <p>The stack pointer works just like it does on the 6502, except that
+   the stack is on page 0 rather than page 1.  The stack grows downward,
+   and the S register points to the first unused location (i.e. the last
+   value pushed is at memory location S+1).</p>
+  <h3><a name="modes">Addressing modes</a></h3>
+  <p>The addressing modes include all those of the 6502, and a few
+   extras.</p>
+  <ul>
+   <li><em>Implied</em>:  No operand is specified.</li>
+   <li><em>Accumulator (A)</em>:  The accumulator is the operand.</li>
+   <li><em>Immediate (#)</em>:  The operand is the byte following the
+    instruction.</li>
+   <li><em>Absolute (abs)</em>:  The operand is in the memory location
+    whose address is given by the two bytes following the
+    instruction (low byte first, then high byte).</li>
+   <li><em>Absolute,X (abs,X)</em>:  The operand is in the memory location
+    found by adding the X register to the address given in the two
+    following bytes.</li>
+   <li><em>Absolute,Y (abs,Y)</em>:  Like absolute,X, but with the Y
+    reigster instead.</li>
+   <li><em>Zero page (zp)</em>:  The operand is in the memory location
+    whose address is given by the single byte following the instruction
+    (the high-order byte of the address is 0).</li>
+   <li><em>Zero page,X (zp,X)</em>:  The operand is in the memory location
+    found by adding the X register to the following byte (the high-order
+    byte of the address is 0).</li>
+   <li><em>Zero page,Y (zp,Y)</em>:  Like zero page,X, but with the Y
+    register instead.</li>
+   <li><em>X indirect ((zp,X))</em>:  The X register is added to the
+    following byte to obtain a memory location ("M") in page 0.  The
+    operand is in the memory location whose address is found at location M
+    (low byte) and M+1 (high byte).</li>
+   <li><em>Indirect,Y ((zp),Y)</em>:  The following byte is the address of
+    a memory location ("M") in page 0.  The operand is in the memory location
+    whose address is found by adding the Y register to the 13-bit value
+    found in location M (low byte) and M+1 (high byte).</li>
+   <li><em>Relative (rel)</em>:  The operand is the memory location found by a
+    <em>signed</em> addition of the following byte to the address of the
+    next instruction.</li>
+   <li><em>Absolute indirect ((abs))</em>:  The following two bytes are the
+    address of a memory location ("M").  The operand is the memory location
+    whose address is in M (low byte) and M+1 (high byte).</li>
+   <li><em>Zero page indirect ((zp))</em>:  The following byte is the address
+    of a memory location ("M") in page 0.  The operand is the memory location
+    whose address is in M (low byte) and M+1 (high byte).</li>
+   <li><em>Special page (\sp)</em>:  The operand is the memory location
+    whose low byte is the following byte, and whose high byte is $1F.</li>
+   <li><em>Bit, accumulator (bbb,A)</em>:  The operand is the single bit
+    given by "bbb" (0-7, coded in the instruction itself) in the
+    accumulator.</li>
+   <li><em>Bit, zero page (bbb,zp)</em>:  The operand is the single bit
+    given by "bbb" (coded in the instruction itself) in the memory
+    location (in page 0) given by the following byte.</li>
+  </ul>
+  <p>Many instruction have two operands, but most of them implicitly use
+   the accumulator as the second operand.  A few, however, require a
+   second operand to be specified explicitly.  Here are the combinations
+   that can occur:</p>
+  <ul>
+   <li><em>Immediate, zero page (#,zp)</em>:  The immediate byte is stored
+    first, followed by a pointer to a zero page memory location.</li>
+   <li><em>Bit, accumulator, relative (bbb,A,rel)</em>:  The bit is coded
+    in the instruction itself, and the relative address follows in the
+    next byte.</li>
+   <li><em>Bit, zero page, relative (bbb,zp,rel)</em>:  The bit is coded
+    in the instruction itself.  The zero page address is the next byte,
+    and the relative offset comes after it.</li>
+  </ul>
+  <h3><a name="instructions">Instructions</a></h3>
+  <p>The <em>Instruction</em> column lists each instruction and describes its
+   function.  The notation "M(foo)" means the contents of memory location
+   "foo".</p>
+  <p>The <em>NVZC</em> column shows the instruction's effects on the flag
+   bits.  <strong>0</strong> means the bit is cleared; <strong>1</strong>
+   means the bit is set, <strong>-</strong> means the bit is unchanged,
+   and <strong>X</strong> means the bit's value depends on the
+   operands.</p>
+  <p>The <em>Addressing Mode</em> column shows the available addressing
+   modes for the instruction.</p>
+  <p>The <em>Opcode</em> column shows the instruction byte in hexadecimal,
+   except for BBC, BBS, CLB, and SEB, where the byte is shown in
+   binary.</p>
+  <p>The <em>Cycles</em> column indicates how long the instruction takes
+   to execute.  The notations "+t", "+2t", and "+3t" indicate that the
+   instruction takes (respectively) one, two, or three extra cycles if the
+   T bit is set.  The notation "+2b" indicates that the instruction takes
+   two extra cycles if a branch is taken.  One instruction cycle is four
+   input clock cycles; on the IIGS this works out to 894866.25 cycles per
+   second.</p>
+  <pre>Instruction                             NVZC  Addressing  Opcode    Cycles
+                                              Mode
+-----------                             ----  ----------  ------    ------
+ADC: ADd with Carry                     XXXX  (zp,X)      61        6+3t
+If T=0: A = A+Operand+C                       zp          65        3+3t
+If T=1: M(X) = M(X)+Operand+C                 #           69        2+3t
+There is no "add without carry"--             abs         6D        4+3t
+make sure C=0 before starting an              (zp),Y      71        6+3t
+addition.                                     zp,X        75        4+3t
+Addition is BCD if D=1.                       abs,Y       79        5+3t
+                                              abs,X       7D        5+3t
+
+AND: bitwise AND                        X-X-  (zp,X)      21        6+3t
+If T=0: A = A AND Operand                     zp          25        3+3t
+If T=1: M(X) = M(X) AND Operand               #           29        2+3t
+                                              abs         2D        4+3t
+                                              (zp),Y      31        6+3t
+                                              zp,X        35        4+3t
+                                              abs,Y       39        5+3t
+                                              abs,X       3D        5+3t
+
+ASL: Arithmetic Shift Left              X-XX  zp          06        5
+The operand is shifted left one bit.          A           0A        2
+0 is shifted into the low-order bit.          abs         0E        6
+The high-order bit is shifted into C.         zp,X        16        6
+                                              abs,X       1E        7
+
+BBC: Branch if Bit Clear                ----  bbb,A,rel   bbb10011  4+2b
+PC = PC+Operand if the indicated bit          bbb,zp,rel  bbb10111  5+2b
+is 0
+
+BBS: Branch if Bit Set                  ----  bbb,A,rel   bbb00011  4+2b
+PC = PC+Operand if the indicated bit          bbb,zp,rel  bbb00111  5+2b
+is 1
+
+BCC: Branch if Carry Clear              ----  rel         90        2+2b
+PC = PC+Operand if C=0
+
+BCS: Branch if Carry Set                ----  rel         B0        2+2b
+PC = PC+Operand if C=1 
+
+BEQ: Branch if EQual                    ----  rel         F0        2+2b
+PC = PC+Operand if Z=1
+
+BIT: BITwise and, discarding result     XXX-  zp          24        3
+A AND Operand; discard result                 abs         2C        4 
+Z = 1 if result=0, else Z = 0
+N = Operand bit 7
+V = Operand bit 6
+
+BMI: Branch if MInus                    ----  rel         30        2+2b
+PC = PC+Operand if N=1
+
+BNE: Branch if Not Equal                ----  rel         D0        2+2b
+PC = PC+Operand if Z=0
+
+BPL: Branch if PLus                     ----  rel         10        2+2b
+PC = PC+Operand if N=0
+
+BRA: BRanch Always                      ----  rel         80        4
+PC = PC+Operand          
+
+BRK: BReaK                              ----              00        7
+Simulates /INT interrupt.
+M(S) = PCH
+S = S-1
+M(S) = PCL
+S = S-1
+M(S) = P (with B = 1)
+S = S-1
+I = 1
+PCL = M($1FF4)
+PCH = M($1FF5)
+Works even if I=1.  PC on the stack
+is address of BRK plus 2.
+
+BVC: Branch if oVerflow Clear           ----  rel         50        2+2b
+PC = PC+Operand if V=0
+
+BVS: Branch if oVerflow Set             ----  rel         70        2+2b
+PC = PC+Operand if V=1
+
+CLB: CLear Bit                          ----  bbb,A       bbb11011  2
+Operand bit bbb = 0                           bbb,zp      bbb11111  5
+
+CLC: CLear Carry                        ---0              18        2
+C = 0
+
+CLD: CLear Decimal mode                 ----              D8        2
+D = 0
+
+CLI: CLear Interrupt disable            ----              58        2
+I = 0
+
+CLT: Clear T bit                        ----              12        2
+T = 0
+
+CLV: Clear oVerflow                     -0--              B8        2
+V = 0
+
+CMP: CoMPare                            X-XX  (zp,X)      C1        6+t
+If T=0, A-Operand, discard result             zp          C5        3+t
+If T=1, M(X)-Operand, discard result          #           C9        2+t
+Sets N, Z, and C according to result.         abs         CD        4+t
+                                              (zp),Y      D1        6+t
+                                              zp,X        D5        4+t
+                                              abs,Y       D9        5+t
+                                              abs,X       DD        5+t
+
+COM: COMplement                         X-X-  zp          44        5
+Operand = NOT Operand
+(bitwise NOT)
+
+CPX: ComPare X                          X-XX  #           E0        2
+X-Operand, discard result                     zp          E4        3
+Sets N, Z, and C according to result.         abs         EC        4
+
+CPY: ComPare Y                          X-XX  #           C0        2
+Y-Operand, discard result                     zp          C4        3
+Sets N, Z, and C according to result.         abs         CC        4
+
+DEC: DECrement                          X-X-  A           1A        2
+Operand = Operand-1                           zp          C6        5
+                                              abs         CE        6
+                                              zp,X        D6        6
+                                              abs,X       DE        7
+
+DEX: DEcrement X                        X-X-              CA        2
+X = X-1
+
+DEY: DEcrement Y                        X-X-              88        2
+Y = Y-1
+
+EOR: bitwise Exclusive OR               X-X-  (zp,X)      41        6+3t
+If T=0: A = A XOR Operand                     zp          45        3+3t
+If T=1: M(X) = M(X) XOR Operand               #           49        2+3t
+                                              abs         4D        4+3t
+                                              (zp),Y      51        6+3t
+                                              zp,X        55        4+3t
+                                              abs,Y       59        5+3t
+                                              abs,X       5D        5+3t
+
+FST: FaST                               ----              E2        2
+Use fast oscillator circuit.
+Has no effect on IIGS.
+
+INC: INCrement                          X-X-  A           3A        2
+Operand = Operand+1                           zp          E6        5
+                                              abs         EE        6
+                                              zp,X        F6        6
+                                              abs,X       FE        7
+
+INX: INcrement X                        X-X-              E8        2
+X = X+1
+
+INY: INcrement Y                        X-X-              C8        2
+Y = Y+1
+
+JMP: JuMP to new address                ----  abs         4C        3
+PC = address of operand                       (abs)       6C        5
+                                              (zp)        B2        4
+
+JSR: Jump to SubRoutine                 ----  (zp)        02        7
+M(S) = PCH                                    abs         20        6
+S = S-1                                       \sp         22        5
+M(S) = PCL
+S = S-1
+PC = address of operand
+
+LDA: LoaD Accumulator                   X-X-  (zp,X)      A1        6+2t
+If T=0: A = Operand                           zp          A5        3+2t
+If T=1: M(X) = Operand                        #           A9        2+2t
+                                              abs         AD        4+2t
+                                              (zp),Y      B1        6+2t
+                                              zp,X        B5        4+2t
+                                              abs,Y       B9        5+2t
+                                              abs,X       BD        5+2t
+
+LDM: LoaD Memory                        ----  #,zp        3C        4
+Operand2 = Operand1
+
+LDX: LoaD X                             X-X-  #           A2        2
+X = Operand                                   zp          A6        3
+                                              abs         AE        4
+                                              zp,Y        B6        4
+                                              abs,Y       BE        5
+
+LDY: LoaD Y                             X-X-  #           A0        2
+Y = Operand                                   zp          A4        3
+                                              abs         AC        4
+                                              zp,X        B4        4
+                                              abs,X       BC        5
+
+LSR: Logical Shift Right                X-XX  zp          46        5
+The operand is shifted right 1 bit.           A           4A        2
+0 is shifted into the high bit.               abs         4E        6
+The low bit is shifted into C.                zp,X        56        6
+                                              abs,X       5E        7
+
+NOP: No OPeration                       ----              EA        2
+The CPU does nothing for 2 cycles.
+
+ORA: bitwise OR Accumulator             X-X-  (zp,X)      01        6+3t
+If T=0: A = A OR Operand                      zp          05        3+3t
+If T=1: M(X) = M(X) OR Operand                #           09        2+3t
+                                              abs         0D        4+3t
+                                              (zp),Y      11        6+3t
+                                              zp,X        15        4+3t
+                                              abs,Y       19        5+3t
+                                              abs,X       1D        5+3t
+
+PHA: PusH Accumulator                   ----              48        3
+M(S) = A
+S = S-1
+
+PHP: PusH P register                    ----              08        3
+M(S) = P
+S = S-1
+
+PLA: PuLl Accumulator                   X-X-              68        4
+S = S+1
+A = M(S)
+
+PLP: PuLl P register                    XXXX              28        4
+S = S+1
+P = M(S)
+
+ROL: ROtate Left                        X-XX  zp          26        5
+The operand is shifted left 1 bit.            A           2A        2
+C is shifted into the low bit.                abs         2E        6
+The high bit is shifted into C.               zp,X        36        6
+                                              abs,X       3E        7
+
+ROR: ROtate Right                       X-XX  zp          66        5
+The operand is shifted right 1 bit.           A           6A        2
+C is shifted into the high bit.               abs         6E        6
+The low bit is shifted into C.                zp,X        76        6
+                                              abs,X       7E        7
+
+RRF: Rotate Right by Four bits          ----  zp          82        8
+The high 4 bits of the operand are
+swapped with the low 4 bits.
+
+RTI: ReTurn from Interrupt              XXXX              40        6
+S = S+1
+P = M(S)
+S = S+1
+PCL = M(S)
+S = S+1
+PCH = M(S)
+
+RTS: ReTurn from Subroutine             ----              60        6
+S = S+1
+PCL = M(S)
+S = S+1
+PCH = M(S)
+
+SBC: SuBtract with Carry                XXXX  (zp,X)      E1        6+3t
+If T=0: A = A-Operand-(NOT C)                 zp          E5        3+3t
+If T=1: M(X) = M(X)-Operand-(NOT C)           #           E9        2+3t
+There is no "subtract without carry"--        abs         ED        4+3t
+make sure C=1 before starting a               (zp),Y      F1        6+3t
+subtraction.                                  zp,X        F5        4+3t
+Subtraction is BCD if D=1.                    abs,Y       F9        5+3t
+                                              abs,X       FD        5+3t
+
+SEB: SEt Bit                            ----  bbb,A       bbb01011  2
+Operand bit bbb = 1                           bbb,zp      bbb01111  5
+
+SEC: SEt Carry                          ---1              38        2
+C = 1
+
+SED: SEt Decimal mode                   ----              F8        2
+D = 1
+
+SEI: SEt Interrupt disable              ----              78        2
+I = 1
+
+SET: SEt T bit                          ----              32        2
+T = 1
+
+SLW: SLoW                               ----              C2        2
+Use slow oscillator circuit.
+Has no effect on IIGS.
+
+STA: STore Accumulator                  ----  (zp,X)      81        7
+Operand = A                                   zp          85        4
+                                              abs         8D        5
+                                              (zp),Y      91        7
+                                              zp,X        95        5
+                                              abs,Y       99        6
+                                              abs,X       9D        6
+
+STP: SToP the processor                 ----              42        2
+Stops the processor.  Only /RESET can
+resume execution.
+
+STX: STore X                            ----  zp          86        4
+Operand = X                                   abs         8E        5
+                                              zp,Y        96        5
+
+STY: STore Y                            ----  zp          84        4
+Operand = Y                                   abs         8C        5
+                                              zp,X        94        5
+
+TAX: Transfer A to X                    X-X-              AA        2
+X = A
+
+TAY: Transfer A to Y                    X-X-              A8        2
+Y = A
+
+TST: TeST for zero                      X-X-  zp          64        3
+Z = 1 if Operand=0, else Z = 0
+
+TSX: Transfer S to X                    X-X-              BA        2
+X = S
+
+TXA: Transfer X to A                    X-X-              8A        2
+A = X
+
+TXS: Transfer X to S                    ----              9A        2
+S = X
+
+TYA: Transfer Y to A                    X-X-              98        2
+A = Y</pre>
+  <h3><a name="notes">Notes</a></h3>
+  <ul>
+   <li>The Mitsubishi data book doesn't indicate whether the processor
+    suffers from the 6502 decimal mode bug (N and Z may be wrong after a
+    decimal ADC or SBC) or the 6502 indirect jump bug (JMP (xxFF) fetches
+    the high byte of the target address from the wrong memory location).
+    The JMP instruction description implies, but does not directly state,
+    that the processor may have the indirect JMP bug.</li>
+   <li>The Mitsubishi data book describes the action of SBC as "A = A - M
+    - C".  If that is true, it would be a bizarre departure from
+    traditional 6502 behavior.  In the above list, I've corrected the
+    description to match traditional 6502 behavior, but I'm not entirely
+    sure I was right to do so.</li>
+   <li>If JSR and RTS match their traditional 6502 behavior, then the
+    address saved on the stack is one less than the address of the next
+    instruction.  The Mitsubishi data book has nothing to say about the
+    issue.</li>
+   <li>After modifying the interrupt request bits at $FE or $FF, there is
+    a lag before the modified bit can be read back correctly.  A NOP
+    instruction should be inserted between the instruction that modifies
+    the bit and an instruction that tests the bit.</li>
+   <li>From the Mitsubishi data book:  "Read out of timer and prescaler
+    should be executed when an input to prescaler is not being
+    changed." (sic)</li>
+   <li>Also from the data book:  "Set decimal mode flag D to '1' when
+    decimal operation is executed, and execute instructions ADC or SBC.  In
+    this case, instructions SEC, CLC, SED, or CLD should be executed two
+    instructions after the SBC or ADC instructions."  I'm sure there's
+    something useful hidden in that, but I can't quite figure out what it
+    is.</li>
+   <li>Before executing STP, the Timer X value and prescaler should be set
+    to $FF.</li>
+   <li>The M50740/M50741 has pins for connecting a dual-speed clock
+    circuit, and the SLW and FST instructions select between the two
+    speeds.  On the IIGS, these pins are not connected, so SLW and FST
+    have no effect.</li>
+   <li>As is visible in the table below, there are several bytes that have
+    no instructions assigned to them.  The effect of executing these bytes
+    as instructions is not known.</li>
+  </ul>
+  <h3><a name="table">Instruction Table</a></h3>
+   <pre>    $x0 $x1 $x2 $x3 $x4 $x5 $x6 $x7 $x8 $x9 $xA $xB $xC $xD $xE $xF
+$0x BRK ORA JSR BBS  -  ORA ASL BBS PHP ORA ASL SEB  -  ORA ASL SEB
+        (X) (z) 0Ar      z   z  0zr      #   A  0,A     abs abs 0,z
+$1x BPL ORA CLT BBC  -  ORA ASL BBC CLC ORA DEC CLB  -  ORA ASL CLB
+     r  ()Y     0Ar     z,X z,X 0zr     a,Y  A  0,A     a,X a,X 0,z
+$2x JSR AND JSR BBS BIT AND ROL BBS PLP AND ROL SEB BIT AND ROL SEB
+    abs (X) \sp 1Ar  z   z   z  1zr      #   A  1,A abs abs abs 1,z
+$3x BMI AND SET BBC  -  AND ROL BBC SEC AND INC CLB LDM AND ROL CLB
+     r  ()Y     1Ar     z,X z,X 1zr     a,Y  A  1,A #,z a,X a,X 1,z
+$4x RTI EOR STP BBS COM EOR LSR BBS PHA EOR LSR SEB JMP EOR LSR SEB
+        (X)     2Ar  z   z   z  2zr      #   A  2,A abs abs abs 2,z
+$5x BVC EOR  -  BBC  -  EOR LSR BBC CLI EOR  -  CLB  -  EOR LSR CLB
+     r  ()Y     2Ar     z,X z,X 2zr     a,Y     2,A     a,X a,X 2,z
+$6x RTS ADC  -  BBS TST ADC ROR BBS PLA ADC ROR SEB JMP ADC ROR SEB
+        (X)     3Ar  z   z   z  3zr      #   A  3,A (a) abs abs 3,z
+$7x BVS ADC  -  BBC  -  ADC ROR BBC SEI ADC  -  CLB  -  ADC ROR CLB
+     r  ()Y     3Ar     z,X z,X 3zr     a,Y     3,A     a,X a,X 3,z
+$8x BRA STA RRF BBS STY STA STX BBS DEY  -  TXA SEB STY STA STX SEB
+     r  (X)  z  4Ar  z   z   z  4zr             4,A abs abs abs 4,z
+$9x BCC STA  -  BBC STY STA STX BBC TYA STA TXS CLB  -  STA  -  CLB
+     r  ()Y     4Ar z,X z,X z,Y 4zr     a,Y     4,A     a,X     4,z
+$Ax LDY LDA LDX BBS LDY LDA LDX BBS TAY LDA TAX SEB LDY LDA LDX SEB
+     #  (X)  #  5Ar  z   z   z  5zr      #      5,A abs abs abs 5,z
+$Bx BCS LDA JMP BBC LDY LDA LDX BBC CLV LDA TSX CLB LDY LDA LDX CLB
+     r  ()Y (z) 5Ar z,X z,X z,Y 5zr     a,Y     5,A a,X a,X a,Y 5,z
+$Cx CPY CMP SLW BBS CPY CMP DEC BBS INY CMP DEX SEB CPY CMP DEC SEB
+     #  (X)     6Ar  z   z   z  6zr      #      6,A abs abs abs 6,z
+$Dx BNE CMP  -  BBC  -  CMP DEC BBC CLD CMP  -  CLB  -  CMP DEC CLB
+     r  ()Y     6Ar     z,X z,X 6zr     a,Y     6,A     a,X a,X 6,z
+$Ex CPX SBC FST BBS CPX SBC INC BBS INX SBC NOP SEB CPX SBC INC SEB
+     #  (X)     7Ar  z   z   z  7zr      #      7,A abs abs abs 7,z
+$Fx BEQ SBC  -  BBC  -  SBC INC BBC SED SBC  -  CLB  -  SBC INC CLB
+     r  ()Y     7Ar     z,X z,X 7zr     a,Y     7,A     a,X a,X 7,z</pre>
+  <h2><a name="disasm">Disassembler</a></h2>
+  <p>For those who want to explore the ADB ROM code, a disassembler is
+   available.  Pick your favorite format:</p>
+  <ul>
+   <li><img src="gifs/shk.gif" width="16" height="16" alt=""> <a
+    href="adb.disasm.shk">adb.disasm.shk</a> (Shrinkit archive, 16769
+    bytes)</li>
+   <li><img src="gifs/arch_arch.gif" width="20" height="20" alt=""> <a
+    href="adb.disasm.zip">adb.disasm.zip</a> (ZIP archive, 13196 bytes)--zipped
+    5.25-inch ProDOS disk image</li>
+  </ul>
+  <p>Here's the README file from the archive:</p>
+  <blockquote>
+   <pre>================================================
+ADB Microcontroller (M50740/M50741) Disassembler
+
+by Neil Parker
+================================================
+
+Contents:
+     README: this file
+     ADB.DISASM: the disassembler
+     ADB.DISASM.LSF: source code (for LISA816 4.0 assembler)
+     ADB.DISASM.TXT: source code in text form
+
+Requirements: Loading the microcontroller code into main memory requires an
+Apple IIGS.  The disassembler itself should run on any Apple II.
+
+Usage:
+     ]BRUN ADB.DISASM
+     (wait a few seconds)
+     ]CALL-151
+     *1400(control-Y)
+
+If you're on an Apple IIGS, "BRUN ADB.DISASM" loads the microcontroller ROM
+contents into main memory (be patient--this takes several seconds) and
+installs the disassembler.  On any other Apple II, it just beeps and returns
+to the BASIC prompt.
+
+Once the microcontroller code is in main memory, you can say (for example)
+
+     BSAVE ADB.DISASM.ROM1,A$C03,L$13FD
+
+to save the disassembler and the ROM code in a disk file.  You can then take
+the disk to any other Apple II (even if it's not a IIGS) and
+BRUN ADB.DISASM.ROM1 to install both the saved ROM image and the disassembler.
+(Use any file name you want, but the ",A$C03,L$13FD" is vital.)
+
+The disassembler installs itself into the Monitor control-Y vector.  It works
+just like the Monitor's "L" command, except that to disassemble M50740/M50741
+code, you type control-Y instead of "L".  For example, to disassemble 20 lines
+of code starting at $1400, type "1400(control-Y)" at the Monitor prompt.  If
+control-Y is typed without an address before it, disassembly continues from
+wherever the previous control-Y command left off.
+
+The operand formats used in the disassembly differ slightly from the formats
+recommended in the Mitsubishi documentation.  Mitsubishi recommends that
+accumulator addressing mode be indicated by the letter "A" in the operand
+column, but the disassembler always omits the "A".
+
+     Mitsubishi format     Disassembler format
+     -----------------     -------------------
+     ASL A                 ASL
+     ROL A                 ROL
+     LSR A                 LSR
+     ROR A                 ROR
+     CLB 0,A               CLB 0
+     SEB 1,A               SEB 1
+     BBC 2,A,$1234         BBC 2,1234
+     BBS 3,A,$1234         BBS 3,1234
+
+This means you'll have to watch carefully for how many operands CLB, SEB, BBC,
+and BBS have.  For CLB and SEB, one operand means accumulator mode, and two
+operands means zero page mode.  Similarly, for BBC and BBS, two operands means
+accumulator mode, and three means zero page mode.
+
+All operands are printed in hexadecimal.  No dollar signs are printed.
+
+On an ROM 0 or ROM 1 Apple IIGS, the microcontroller code loads into main
+memory locations $1400 through $1FFF.  On ROM 3, memory locations $1000
+through $1FFF are used.  This means the ROM image is at the same address in
+main memory that it occupies in the microcontroller memory, which should
+minimize confusion about where you are while you're disassembling.
+
+If you have the disassembler and ROM image loaded into memory, but the
+control-Y vector is somehow disconnected, it can be reconnected by typing
+"CALL 3075" at the BASIC prompt, or "C03G" at the Monitor prompt.</pre>
+  </blockquote>
+  <p><a href="http://www.llx.com/">LLX</a> &gt;
+   <a href="/~nparker/">Neil Parker</a> &gt;
+   <a href="index.html">Apple II</a> &gt; ADB</p>
+  <p><small>Original: August 25, 2004<br>
+   Modified: April 4, 2018--Replaced BinSCII file with zipped disk image<br>
+   Modified: January 5, 2020--Added a bunch of new information, most of it
+   generously supplied by Ian Brumby</small></p>
+ <script type="text/javascript" src="/_Incapsula_Resource?SWJIYLWA=719d34d31c8e3a6e6fffd425f7e032f3&ns=2&cb=936856046" async></script></body>
+</html>
