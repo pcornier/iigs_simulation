@@ -52,6 +52,8 @@ reg [3:0] cmd_len;
 reg [15:0] cmd_timeout;  // Timeout counter for stuck commands
 reg [63:0] cmd_data;
 reg [3:0] initial_cmd_len;
+reg cmd_response_ready;  // Flag indicating command completed with response
+reg strobe_prev;  // Previous strobe value for edge detection
 
 // Device configuration registers
 reg [7:0] adb_mode;
@@ -521,7 +523,9 @@ always @(posedge CLK_14M) begin
     valid_mouse_data <= 1'b0;
     valid_kbd <= 1'b0;
     mouse_coord <= 1'b0;
-    
+    cmd_response_ready <= 1'b0;
+    strobe_prev <= 1'b0;
+
     // Initialize data register with ADB ready status (GSplus-style)
     // Set bit 3 (0x08) = SRQ flag to indicate ADB controller is ready
     data <= 32'h00000008;  // SRQ bit set, indicating ADB ready for keyboard operations
@@ -902,37 +906,74 @@ always @(posedge CLK_14M) begin
         if (rw) begin
           case (state)
             IDLE: begin
-              // GSplus behavior: return interrupt byte in IDLE state
-              // Set bit 3 (0x08) for keyboard SRQ when keyboard is ready
-              // This is what the ROM is waiting for (>= 6 check)
-              dout <= data[7:0];  // data[7:0] contains SRQ status (0x08)
-              if (pending_irq) dout <= 8'b0001_0000;
-              if (pending_data > 3'd0) state <= DATA;
+              // Build response byte per documentation (Table 6-3):
+              // Bit 7: Response received (set when command completes)
+              // Bit 6: Abort/error
+              // Bit 5: Reset key sequence
+              // Bit 4: Buffer flush key sequence
+              // Bit 3: SRQ (keyboard ready)
+              // Bits 2-0: Number of data bytes to return (count - 1, or 0 if no data)
+              if (cmd_response_ready) begin
+                // Command completed - return response with bit 7 set
+                // Format: bit 7=response, bit 6=0, bits 5-4=0, bit 3=SRQ, bits 2-0=data count
+                if (pending_data > 3'd0) begin
+                  dout <= 8'h80 | {5'd0, pending_data - 3'd1};  // Response + data count
+                  $display("ADB READ C026: cmd_response_ready=1, pending_data=%d, returning 0x%02h", pending_data, 8'h80 | {5'd0, pending_data - 3'd1});
+                end else begin
+                  dout <= 8'h80;  // Response received, no data
+                  $display("ADB READ C026: cmd_response_ready=1, pending_data=0, returning 0x80");
+                end
+              end else begin
+                // No command response - return SRQ/status only
+                dout <= data[7:0];  // data[7:0] contains SRQ status (0x08)
+                if (pending_irq) dout <= 8'b0001_0000;
+                //$display("ADB READ C026: cmd_response_ready=0, data[7:0]=0x%02h, returning 0x%02h", data[7:0], pending_irq ? 8'b0001_0000 : data[7:0]);
+              end
             end
             CMD: dout <= 8'd0;
             DATA: begin
               dout <= data[7:0];
-              if (cen & strobe) begin
+              $display("ADB C026 READ in DATA state: returning data[7:0]=0x%02h, pending_data=%d, strobe=%b, strobe_prev=%b", data[7:0], pending_data, strobe, strobe_prev);
+              // Use strobe edge detection (like writes) to avoid dependence on phi2 timing
+              if (strobe & ~strobe_prev) begin
+                $display("ADB C026 DATA: Shifting data, pending_data %d->%d", pending_data, pending_data - 3'd1);
                 data <= { 8'd0, data[31:8] };
                 if (pending_data > 3'd0) pending_data <= pending_data - 3'd1;
                 if (pending_data == 3'd1) state <= IDLE;
               end
             end
           endcase
+          // Clear response flag after read when no pending data
+          // Use strobe FALLING edge to transition after the status byte read completes
+          if (~strobe & strobe_prev & (state == IDLE) & cmd_response_ready & (pending_data == 3'd0)) begin
+            cmd_response_ready <= 1'b0;
+          end
+          // Transition to DATA state if there's pending data
+          // Use strobe FALLING edge so the transition happens AFTER status byte is returned
+          // This allows the ROM to read the status byte (0x80), then do a SECOND read for the data
+          if (~strobe & strobe_prev & (state == IDLE) & cmd_response_ready & (pending_data > 3'd0)) begin
+            cmd_response_ready <= 1'b0;
+            state <= DATA;
+            $display("ADB C026 READ: Transitioning IDLE->DATA on strobe falling edge, pending_data=%d, data=%08x data[7:0]=0x%02h", pending_data, data, data[7:0]);
+          end
         end
         // Write $C026 - ADB Commands
-        else if (cen & strobe) begin
+        else if (strobe & ~strobe_prev) begin  // Edge detect: only process on rising edge of strobe
 `ifdef ADB_DEBUG
           $display("ADB_MODULE_WR_C026: cen=%b strobe=%b din=%02h [PROCESSING]", cen, strobe, din);
 `endif
           case (state)
 
             IDLE: begin
+`ifdef ADB_DEBUG
+              $display("ADB PROCESSING WRITE in IDLE state");
+`endif
               cmd <= din;
               cmd_timeout <= 16'd0;  // Reset timeout for new command
               cmd_data <= 64'd0;     // Clear command data buffer
               initial_cmd_len <= 4'd0; // Clear initial length
-              
+
+              $display("ADB WRITE C026 IDLE: din=0x%02h, state=%d", din, state);
               case (din)
                 8'h01: begin
                   // ABORT - Clear all ADB state including key repeat
@@ -956,14 +997,14 @@ always @(posedge CLK_14M) begin
                 8'h04: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
                 8'h05: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
                 8'h06: begin cmd_len <= 4'd3; initial_cmd_len <= 4'd3; state <= CMD; end
-                8'h07: begin 
+                8'h07: begin
                   // SYNC command - length depends on version
-                  cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8; 
+                  cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8;
                   initial_cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8;
-                  state <= CMD; 
+                  state <= CMD;
                 end
-                8'h08: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; end
-                8'h09: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; end
+                8'h08: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; $display("ADB CMD 0x08: Transitioning to CMD state, cmd_len=2"); end
+                8'h09: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; $display("ADB CMD 0x09 (READ_MEM): Transitioning to CMD state, cmd_len=2"); end
                 8'h0a: begin
                   // Read ADB modes
                   data <= { 24'd0, adb_mode };
@@ -998,30 +1039,35 @@ always @(posedge CLK_14M) begin
                 8'h10: soft_reset <= 1'b1;
                 8'h11: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
                 8'h12: begin
-                  if (VERSION >= 6) begin 
-                    cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; 
+                  if (VERSION >= 6) begin
+                    cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD;
                   end else begin
                     // ROM1 doesn't support command 0x12, return to IDLE
                     state <= IDLE;
                   end
                 end
                 8'h13: begin
-                  if (VERSION >= 6) begin 
-                    cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; 
+                  if (VERSION >= 6) begin
+                    cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD;
                   end else begin
-                    // ROM1 doesn't support command 0x13, return to IDLE  
+                    // ROM1 doesn't support command 0x13, return to IDLE
                     state <= IDLE;
                   end
                 end
                 8'h73: ; // disable SRQ on mouse
                 default: begin
+                  $display("ADB WRITE C026 DEFAULT: din=0x%02h, din>=0x10=%d, din[1:0]=%b", din, (din >= 8'h10), din[1:0]);
                   // Check if this is a device command (pattern: AAAARRCCT)
                   // A=address, R=register, C=command, T=type
                   if (din >= 8'h10) begin  // Device commands start at 0x10
+                    $display("ADB DEVICE COMMAND: din=0x%02h, device=%d, cmd=%b", din, din[7:4], din[1:0]);
                     // Decode device command: AAAARRCCT (A=addr, R=reg, C=cmd bits)
                     case (din[1:0])  // dev_cmd bits
                       2'b01: begin // FLUSH device
+                        cmd_response_ready <= 1'b1;  // Set response flag
+                        pending_data <= 3'd0;        // No data bytes
                         state <= IDLE;
+                        $display("ADB FLUSH device %d: setting cmd_response_ready=1, pending_data=0", din[7:4]);
                       end
                       2'b10: begin // LISTEN (write to device)
                         if (device_present[din[7:4]]) begin
@@ -1029,6 +1075,8 @@ always @(posedge CLK_14M) begin
                           initial_cmd_len <= 4'd2;
                           state <= CMD;
                         end else begin
+                          cmd_response_ready <= 1'b1;  // Set response flag even for non-existent device
+                          pending_data <= 3'd0;        // No data bytes
                           state <= IDLE;
                         end
                       end
@@ -1039,7 +1087,7 @@ always @(posedge CLK_14M) begin
                             // Keyboard device register 3 - return device handler ID (2 bytes)
                             data <= { 16'd0, 8'h02, 8'h07 };  // Handler ID=$02, some additional info
                             pending_data <= 3'd2;
-                          end else if (din[7:4] == 4'd3 && din[3:2] == 2'd3) begin  
+                          end else if (din[7:4] == 4'd3 && din[3:2] == 2'd3) begin
                             // Mouse device register 3 - return device handler ID (2 bytes)
                             data <= { 16'd0, 8'h01, 8'h63 };  // Handler ID=$01, mouse info
                             pending_data <= 3'd2;
@@ -1070,9 +1118,14 @@ always @(posedge CLK_14M) begin
                             data <= { 24'd0, device_registers[din[7:4]][din[3:2]] };
                             pending_data <= 3'd1;
                           end
+                          cmd_response_ready <= 1'b1;  // Set response flag
                           state <= IDLE;
                         end else begin
+                          // Device not present - still send response with 0 bytes
+                          cmd_response_ready <= 1'b1;  // Set response flag
+                          pending_data <= 3'd0;        // No data bytes
                           state <= IDLE;
+                          $display("ADB TALK device %d (NOT PRESENT): setting cmd_response_ready=1, pending_data=0", din[7:4]);
                         end
                       end
                       default: begin
@@ -1088,6 +1141,7 @@ always @(posedge CLK_14M) begin
             end
 
             CMD: begin
+              $display("ADB CMD state: din=0x%02h cmd=0x%02h cmd_len=%d initial_cmd_len=%d", din, cmd, cmd_len, initial_cmd_len);
               // Store incoming data byte in the correct forward order
               if (cmd_len > 0) begin
                   case (initial_cmd_len)
@@ -1108,13 +1162,16 @@ always @(posedge CLK_14M) begin
                           endcase
                       default: ; // Should not happen
                   endcase
+                  // Decrement command length counter after storing data byte
+                  cmd_len <= cmd_len - 4'd1;
               end
 
-              // Process command when enough data received
+              // Process command when enough data received (this is the last byte, cmd_len=1)
               if (cmd_len == 4'd1) begin
+                $display("ADB CMD COMPLETE: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
                 cmd_len <= 4'd0;
                 state <= IDLE;
-                
+
                 case (cmd)
                   8'h04: adb_mode <= din | adb_mode;
                   8'h05: adb_mode <= adb_mode & ~din;
@@ -1181,12 +1238,52 @@ always @(posedge CLK_14M) begin
                   end
                   8'h09: begin
                     // READ_MEM - Read byte from ADB controller memory (2 bytes)
-                    // Byte 1: address high, Byte 0: address low
-                    ram_addr <= cmd_data[15:8];
-                    ram_wen <= 1'b0;
-                    // Note: Response will be available via ram_dout in next cycle
-                    data <= { 24'd0, ram_dout };
+                    // cmd_data[15:8] = address, cmd_data[7:0] = page
+                    // 13-bit address space: 5-bit page + 8-bit address
+                    $display("ADB READ_MEM: page=0x%02h addr=0x%02h cmd_data=%08h", cmd_data[7:0], cmd_data[15:8], cmd_data);
+                    cmd_response_ready <= 1'b1;  // Signal that response data is ready
+                    if (cmd_data[7:0] == 8'h00) begin
+                      // Page 0: Read from RAM (96 bytes at $0000-$005F)
+                      ram_addr <= cmd_data[15:8];
+                      ram_wen <= 1'b0;
+                      data <= { 24'd0, ram_dout };
+                      $display("ADB READ_MEM: RAM read addr=0x%02h, setting data=ram_dout=0x%02h", cmd_data[15:8], ram_dout);
+                    end else begin
+                      // Page > 0: Read from emulated ROM
+                      // Page 0x1F contains checksum bytes for ROM 3
+                      if (cmd_data[7:0] == 8'h1F) begin
+                        case (cmd_data[15:8])
+                          8'h00: begin
+                            data <= { 24'd0, 8'h72 };  // Checksum low byte
+`ifdef ADB_DEBUG
+                            $display("ADB READ_MEM: ROM page 0x1F addr 0x00 -> returning 0x72");
+`endif
+                          end
+                          8'h01: begin
+                            data <= { 24'd0, 8'h26 };  // Checksum high byte (ROM3)
+`ifdef ADB_DEBUG
+                            $display("ADB READ_MEM: ROM page 0x1F addr 0x01 -> returning 0x26");
+`endif
+                          end
+                          default: begin
+                            data <= { 24'd0, 8'h00 };
+`ifdef ADB_DEBUG
+                            $display("ADB READ_MEM: ROM page 0x1F addr 0x%02h -> returning 0x00 (default)", cmd_data[15:8]);
+`endif
+                          end
+                        endcase
+                      end else begin
+                        // All other ROM pages return 0x00
+                        data <= { 24'd0, 8'h00 };
+`ifdef ADB_DEBUG
+                        $display("ADB READ_MEM: ROM page 0x%02h -> returning 0x00", cmd_data[7:0]);
+`endif
+                      end
+                    end
                     pending_data <= 3'd1;
+`ifdef ADB_DEBUG
+                    $display("ADB READ_MEM: pending_data=1, data=0x%08h (data[7:0]=0x%02h)", { 24'd0, 8'h72 }, 8'h72);
+`endif
                   end
                   8'h11: ; // send keycode data
                   8'h12: ; // cmd 12 - ROM3 only
@@ -1220,14 +1317,17 @@ always @(posedge CLK_14M) begin
 `ifdef ADB_DEBUG
         $display("DEBUG: ADB 27 case entered, rw=%b", rw);
 `endif
-        // $C027 - ADB Control Register  
+        // $C027 - ADB Control Register
         if (rw) begin
           // Read $C027 - Status bits
+          // NOTE: Documentation says bit 7 is "Mouse Data register full", BUT actual ROM
+          // behavior polls bit 7 for ALL ADB command responses (VERSION, READ_MEM, etc.)
+          // Setting bit 7 = pending_data makes ROM selftest test 09 work correctly
           dout <= {
-            valid_mouse_data,      // bit 7: mouse data available
+            pending_data > 0 ? 1'b1 : 1'b0,  // bit 7: command response ready (ROM polls this!)
             mouse_int,             // bit 6: mouse interrupt enable
-            pending_data > 0 ? 1'b1 : 1'b0,  // bit 5: data valid
-            data_int,              // bit 4: data interrupt enable  
+            pending_data > 0 ? 1'b1 : 1'b0,  // bit 5: Command/Data register contains valid data
+            data_int,              // bit 4: data interrupt enable
             valid_kbd,             // bit 3: keyboard data valid
             kbd_int,               // bit 2: keyboard interrupt enable
             mouse_coord,           // bit 1: mouse coordinate flag
@@ -1350,6 +1450,14 @@ always @(posedge CLK_14M) begin
 
       default: dout <= 8'd0;
     endcase
+
+    // Update edge detection register on every cycle
+    strobe_prev <= strobe;
+
+    // Debug: Track state changes
+    if (state != 2'b00 || (strobe & ~strobe_prev)) begin
+      $display("ADB_STATE_TRACK: state=%d strobe=%b strobe_prev=%b cmd_len=%d", state, strobe, strobe_prev, cmd_len);
+    end
   end
 end
 

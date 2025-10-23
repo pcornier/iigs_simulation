@@ -711,26 +711,30 @@ module iigs
       end
     end
     paddle_trigger <= 1'b0;  // Default: no paddle trigger
-    adb_strobe <= 1'b0;
+    // Check adb_strobe BEFORE resetting it (otherwise we'd check the new value of 0)
     if (adb_strobe & cpu_we_n) begin
       io_dout <= adb_dout;
     end
+    adb_strobe <= 1'b0;
 
-    prtc_strobe <= 1'b0;
+    // Check prtc_strobe BEFORE resetting it
     if (prtc_strobe & cpu_we_n) begin
       io_dout <= prtc_dout;
     end
+    prtc_strobe <= 1'b0;
 
-    iwm_strobe <= 1'b0;
+    // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & cpu_we_n & phi2) begin
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
       io_dout <= iwm_dout;
     end
+    iwm_strobe <= 1'b0;
 
-    snd_strobe <= 1'b0;
+    // Check snd_strobe BEFORE resetting it
     if (snd_strobe & cpu_we_n) begin
       io_dout <= snd_dout;
     end
+    snd_strobe <= 1'b0;
 
     // Handle SCC read response (same cycle pattern like other peripherals)
     if (scc_cs & cpu_we_n) begin
@@ -1010,7 +1014,7 @@ module iigs
               adb_rw <= 1'b1;
               $display("ADB RD %03h", addr[11:0]);
               // Let ADB module handle all its addresses - remove hardcoded overrides
-              if (addr[11:0] == 12'h070) begin  
+              if (addr[11:0] == 12'h070) begin
                 paddle_trigger <= 1'b1;  // Trigger paddle timers on read too
                 $display("PADDLE TRIGGER (READ)");
               end

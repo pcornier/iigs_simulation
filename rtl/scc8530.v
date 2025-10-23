@@ -214,6 +214,8 @@ module scc
 
 		wr_data_a<=0;
 		wr_data_b<=0;
+		uart_tx_wr_a <= 0;
+		uart_tx_wr_b <= 0;
 		if (reset) begin
 			rindex_a <= 0;
 			rindex_b <= 0;
@@ -364,6 +366,23 @@ module scc
 				end
 			end
 			end  // end if (cen && cs)
+
+		// TX Buffer transfer logic: Transfer from buffer to UART when buffer has data and UART is ready
+		// Channel A: Transfer buffer to UART when buffer full and UART not busy
+		if (tx_buffer_full_a && !tx_busy_a) begin
+			uart_tx_data_a <= tx_data_a;
+			uart_tx_wr_a <= 1;
+			tx_buffer_full_a <= 0;  // Buffer now empty
+			$display("SCC_TX_BUFFER_TRANSFER: ch=A data=%02x buffer->uart", tx_data_a);
+		end
+
+		// Channel B: Transfer buffer to UART when buffer full and UART not busy
+		if (tx_buffer_full_b && !tx_busy_b) begin
+			uart_tx_data_b <= tx_data_b;
+			uart_tx_wr_b <= 1;
+			tx_buffer_full_b <= 0;  // Buffer now empty
+			$display("SCC_TX_BUFFER_TRANSFER: ch=B data=%02x buffer->uart", tx_data_b);
+		end
 		end  // end else (not reset)
 	end  // end always@(posedge clk)
 
@@ -1403,35 +1422,11 @@ always @(posedge clk) begin
     end
 end
 
-// TX Buffer transfer logic: Transfer from buffer to UART when buffer has data and UART is ready
-// This implements the Z8530 architecture: CPU writes to WR8 buffer, buffer transfers to shift register
+// TX Buffer transfer signals (driven by main always block)
 reg uart_tx_wr_a;     // Strobe to write to UART
 reg uart_tx_wr_b;
 reg [7:0] uart_tx_data_a;  // Data to write to UART
 reg [7:0] uart_tx_data_b;
-
-always @(posedge clk) begin
-	uart_tx_wr_a <= 0;
-	uart_tx_wr_b <= 0;
-
-	if (!reset) begin
-		// Channel A: Transfer buffer to UART when buffer full and UART not busy
-		if (tx_buffer_full_a && !tx_busy_a) begin
-			uart_tx_data_a <= tx_data_a;
-			uart_tx_wr_a <= 1;
-			tx_buffer_full_a <= 0;  // Buffer now empty
-			$display("SCC_TX_BUFFER_TRANSFER: ch=A data=%02x buffer->uart", tx_data_a);
-		end
-
-		// Channel B: Transfer buffer to UART when buffer full and UART not busy
-		if (tx_buffer_full_b && !tx_busy_b) begin
-			uart_tx_data_b <= tx_data_b;
-			uart_tx_wr_b <= 1;
-			tx_buffer_full_b <= 0;  // Buffer now empty
-			$display("SCC_TX_BUFFER_TRANSFER: ch=B data=%02x buffer->uart", tx_data_b);
-		end
-	end
-end
 
 // Connect transfer signals to UART inputs
 // Immediate transfers (from CPU write) OR deferred transfers (from transfer block)
