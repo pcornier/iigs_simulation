@@ -15,7 +15,10 @@ TIMING_DISK = timing_race_test.2mg
         dbr_corruption_test serial_selftest c034_test scc_regtest \
         scc_regptr_test scc_selftest sccauto_test io_autorun_test \
         io_debug_test dbr_plb_stage_test dbr_e0_scan_test scc_loopback scc_romseq \
-        scc_rxenable scc_exact scc_repro scc_postloop scc_fifo_test
+        scc_rxenable scc_exact scc_repro scc_postloop scc_fifo_test adb_device_enum \
+        adb_rom_test09 adb_rom_checksum selftest01 selftest02 selftest03 \
+        selftest04 selftest05 selftest06 selftest07 selftest08 selftest09 \
+        selftest0a selftest0b selftest0c
 
 # ============================================================================
 # Default Target
@@ -291,6 +294,254 @@ serial_selftest.2mg: SERIAL.SYSTEM
 	@echo "Serial selftest disk ready: serial_selftest.2mg"
 
 # ============================================================================
+# ADB Tests
+# ============================================================================
+
+# ADB Device Enumeration Test - tests response to device 5 (reserved) commands
+adb_device_enum: ADBENUM.SYSTEM adb_device_enum.2mg
+
+ADBENUM.SYSTEM: ADB_DEVICE_ENUM.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+adb_device_enum.2mg: ADBENUM.SYSTEM
+	@echo "Creating ADB device enumeration test disk..."
+	@cp blank.2mg adb_device_enum.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing adb_device_enum.2mg"
+	$(CP2) rm adb_device_enum.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm adb_device_enum.2mg "ADBENUM.SYSTEM" 2>/dev/null || true
+	$(CP2) add adb_device_enum.2mg "ADBENUM.SYSTEM"
+	$(CP2) sa adb_device_enum.2mg type=SYS "ADBENUM.SYSTEM"
+	@echo "ADB device enumeration test disk ready: adb_device_enum.2mg"
+
+# ADB ROM Test 09 Reproduction - replicates ROM selftest test 09 (SYNC, VERSION, READ_MEM)
+adb_rom_test09: ADBROM09.SYSTEM adb_rom_test09.2mg
+
+ADBROM09.SYSTEM: ADB_ROM_TEST09.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+adb_rom_test09.2mg: ADBROM09.SYSTEM
+	@echo "Creating ADB ROM test 09 disk..."
+	@cp blank.2mg adb_rom_test09.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing adb_rom_test09.2mg"
+	$(CP2) rm adb_rom_test09.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm adb_rom_test09.2mg "ADBROM09.SYSTEM" 2>/dev/null || true
+	$(CP2) add adb_rom_test09.2mg "ADBROM09.SYSTEM"
+	$(CP2) sa adb_rom_test09.2mg type=SYS "ADBROM09.SYSTEM"
+	@echo "ADB ROM test 09 disk ready: adb_rom_test09.2mg"
+
+# ADB ROM Checksum Test - tests READ_MEM with ROM page 0x1F (checksum bytes)
+adb_rom_checksum: ADBROMCK.SYSTEM adb_rom_checksum.2mg
+
+ADBROMCK.SYSTEM: ADB_ROM_CHECKSUM.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+adb_rom_checksum.2mg: ADBROMCK.SYSTEM
+	@echo "Creating ADB ROM checksum test disk..."
+	@cp blank.2mg adb_rom_checksum.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing adb_rom_checksum.2mg"
+	$(CP2) rm adb_rom_checksum.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm adb_rom_checksum.2mg "ADBROMCK.SYSTEM" 2>/dev/null || true
+	$(CP2) add adb_rom_checksum.2mg "ADBROMCK.SYSTEM"
+	$(CP2) sa adb_rom_checksum.2mg type=SYS "ADBROMCK.SYSTEM"
+	@echo "ADB ROM checksum test disk ready: adb_rom_checksum.2mg"
+
+# ADB ROM Simple Test - simple READ_MEM test without protocol checks
+adb_rom_simple: ADBSIMPL.SYSTEM adb_rom_simple.2mg
+
+ADBSIMPL.SYSTEM: ADB_ROM_SIMPLE.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+adb_rom_simple.2mg: ADBSIMPL.SYSTEM
+	@echo "Creating simple ADB ROM test disk..."
+	@cp blank.2mg adb_rom_simple.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing adb_rom_simple.2mg"
+	$(CP2) rm adb_rom_simple.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm adb_rom_simple.2mg "ADBSIMPL.SYSTEM" 2>/dev/null || true
+	$(CP2) add adb_rom_simple.2mg "ADBSIMPL.SYSTEM"
+	$(CP2) sa adb_rom_simple.2mg type=SYS "ADBSIMPL.SYSTEM"
+	@echo "Simple ADB ROM test disk ready: adb_rom_simple.2mg"
+
+# ============================================================================
+# ROM Selftest Direct Launchers (Tests 00-09)
+# ============================================================================
+
+# Selftest 01 Direct Launcher - jumps directly to ROM selftest test 01 (ROM Checksum)
+selftest01: TEST01.SYSTEM selftest01.2mg
+
+TEST01.SYSTEM: SELFTEST01.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest01.2mg: TEST01.SYSTEM
+	@echo "Creating SELFTEST01 direct launcher disk..."
+	@cp blank.2mg selftest01.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest01.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest01.2mg "TEST01.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest01.2mg "TEST01.SYSTEM"
+	$(CP2) sa selftest01.2mg type=SYS "TEST01.SYSTEM"
+	@echo "SELFTEST01 direct launcher disk ready: selftest01.2mg"
+
+# Selftest 02 Direct Launcher - jumps directly to ROM selftest test 02
+selftest02: TEST02.SYSTEM selftest02.2mg
+
+TEST02.SYSTEM: SELFTEST02.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest02.2mg: TEST02.SYSTEM
+	@echo "Creating SELFTEST02 direct launcher disk..."
+	@cp blank.2mg selftest02.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest02.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest02.2mg "TEST02.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest02.2mg "TEST02.SYSTEM"
+	$(CP2) sa selftest02.2mg type=SYS "TEST02.SYSTEM"
+	@echo "SELFTEST02 direct launcher disk ready: selftest02.2mg"
+
+# Selftest 03 Direct Launcher - jumps directly to ROM selftest test 03
+selftest03: TEST03.SYSTEM selftest03.2mg
+
+TEST03.SYSTEM: SELFTEST03.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest03.2mg: TEST03.SYSTEM
+	@echo "Creating SELFTEST03 direct launcher disk..."
+	@cp blank.2mg selftest03.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest03.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest03.2mg "TEST03.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest03.2mg "TEST03.SYSTEM"
+	$(CP2) sa selftest03.2mg type=SYS "TEST03.SYSTEM"
+	@echo "SELFTEST03 direct launcher disk ready: selftest03.2mg"
+
+# Selftest 04 Direct Launcher - jumps directly to ROM selftest test 04
+selftest04: TEST04.SYSTEM selftest04.2mg
+
+TEST04.SYSTEM: SELFTEST04.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest04.2mg: TEST04.SYSTEM
+	@echo "Creating SELFTEST04 direct launcher disk..."
+	@cp blank.2mg selftest04.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest04.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest04.2mg "TEST04.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest04.2mg "TEST04.SYSTEM"
+	$(CP2) sa selftest04.2mg type=SYS "TEST04.SYSTEM"
+	@echo "SELFTEST04 direct launcher disk ready: selftest04.2mg"
+
+# Selftest 05 Direct Launcher - jumps directly to ROM selftest test 05
+selftest05: TEST05.SYSTEM selftest05.2mg
+
+TEST05.SYSTEM: SELFTEST05.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest05.2mg: TEST05.SYSTEM
+	@echo "Creating SELFTEST05 direct launcher disk..."
+	@cp blank.2mg selftest05.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest05.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest05.2mg "TEST05.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest05.2mg "TEST05.SYSTEM"
+	$(CP2) sa selftest05.2mg type=SYS "TEST05.SYSTEM"
+	@echo "SELFTEST05 direct launcher disk ready: selftest05.2mg"
+
+# Selftest 06 Direct Launcher - jumps directly to ROM selftest test 06 (SCC)
+selftest06: TEST06.SYSTEM selftest06.2mg
+
+TEST06.SYSTEM: SELFTEST06.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest06.2mg: TEST06.SYSTEM
+	@echo "Creating SELFTEST06 direct launcher disk..."
+	@cp blank.2mg selftest06.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest06.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest06.2mg "TEST06.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest06.2mg "TEST06.SYSTEM"
+	$(CP2) sa selftest06.2mg type=SYS "TEST06.SYSTEM"
+	@echo "SELFTEST06 direct launcher disk ready: selftest06.2mg"
+
+# Selftest 07 Direct Launcher - jumps directly to ROM selftest test 07
+selftest07: TEST07.SYSTEM selftest07.2mg
+
+TEST07.SYSTEM: SELFTEST07.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest07.2mg: TEST07.SYSTEM
+	@echo "Creating SELFTEST07 direct launcher disk..."
+	@cp blank.2mg selftest07.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest07.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest07.2mg "TEST07.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest07.2mg "TEST07.SYSTEM"
+	$(CP2) sa selftest07.2mg type=SYS "TEST07.SYSTEM"
+	@echo "SELFTEST07 direct launcher disk ready: selftest07.2mg"
+
+# Selftest 08 Direct Launcher - jumps directly to ROM selftest test 08
+selftest08: TEST08.SYSTEM selftest08.2mg
+
+TEST08.SYSTEM: SELFTEST08.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest08.2mg: TEST08.SYSTEM
+	@echo "Creating SELFTEST08 direct launcher disk..."
+	@cp blank.2mg selftest08.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest08.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest08.2mg "TEST08.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest08.2mg "TEST08.SYSTEM"
+	$(CP2) sa selftest08.2mg type=SYS "TEST08.SYSTEM"
+	@echo "SELFTEST08 direct launcher disk ready: selftest08.2mg"
+
+# Selftest 09 Direct Launcher - jumps directly to ROM selftest test 09 (ADB)
+selftest09: TEST09.SYSTEM selftest09.2mg
+
+TEST09.SYSTEM: SELFTEST09.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest09.2mg: TEST09.SYSTEM
+	@echo "Creating SELFTEST09 direct launcher disk..."
+	@cp blank.2mg selftest09.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest09.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest09.2mg "TEST09.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest09.2mg "TEST09.SYSTEM"
+	$(CP2) sa selftest09.2mg type=SYS "TEST09.SYSTEM"
+	@echo "SELFTEST09 direct launcher disk ready: selftest09.2mg"
+
+# Selftest 0A Direct Launcher - jumps directly to ROM selftest test A (Shadow Register)
+selftest0a: TEST0A.SYSTEM selftest0a.2mg
+
+TEST0A.SYSTEM: SELFTEST0A.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest0a.2mg: TEST0A.SYSTEM
+	@echo "Creating SELFTEST0A direct launcher disk..."
+	@cp blank.2mg selftest0a.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest0a.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest0a.2mg "TEST0A.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest0a.2mg "TEST0A.SYSTEM"
+	$(CP2) sa selftest0a.2mg type=SYS "TEST0A.SYSTEM"
+	@echo "SELFTEST0A direct launcher disk ready: selftest0a.2mg"
+
+# Selftest 0B Direct Launcher - jumps directly to ROM selftest test B (Interrupts)
+selftest0b: TEST0B.SYSTEM selftest0b.2mg
+
+TEST0B.SYSTEM: SELFTEST0B.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest0b.2mg: TEST0B.SYSTEM
+	@echo "Creating SELFTEST0B direct launcher disk..."
+	@cp blank.2mg selftest0b.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest0b.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest0b.2mg "TEST0B.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest0b.2mg "TEST0B.SYSTEM"
+	$(CP2) sa selftest0b.2mg type=SYS "TEST0B.SYSTEM"
+	@echo "SELFTEST0B direct launcher disk ready: selftest0b.2mg"
+
+# Selftest 0C Direct Launcher - jumps directly to ROM selftest test C (Sound Test - Ensoniq)
+selftest0c: TEST0C.SYSTEM selftest0c.2mg
+
+TEST0C.SYSTEM: SELFTEST0C.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+selftest0c.2mg: TEST0C.SYSTEM
+	@echo "Creating SELFTEST0C direct launcher disk..."
+	@cp blank.2mg selftest0c.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm selftest0c.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm selftest0c.2mg "TEST0C.SYSTEM" 2>/dev/null || true
+	$(CP2) add selftest0c.2mg "TEST0C.SYSTEM"
+	$(CP2) sa selftest0c.2mg type=SYS "TEST0C.SYSTEM"
+	@echo "SELFTEST0C direct launcher disk ready: selftest0c.2mg"
+
+# ============================================================================
 # DBR Tests
 # ============================================================================
 
@@ -424,7 +675,7 @@ clean:
 	rm -f scc_test.2mg timing_race_test.2mg io_autorun_test.2mg io_debug_test.2mg
 	rm -f scc_phantom_test.2mg serial_selftest.2mg c034_test.2mg scc_regtest.2mg
 	rm -f scc_regptr_test.2mg scc_selftest.2mg plb_test.2mg dbr_corruption_test.2mg
-	rm -f dbr_plb_stage_test.2mg dbr_e0_scan_test.2mg sccauto_test.2mg
+	rm -f dbr_plb_stage_test.2mg dbr_e0_scan_test.2mg sccauto_test.2mg adb_device_enum.2mg
 	rm -f *.SYSTEM
 	rm -f *_S01_Segment1_Output*.txt
 	rm -f *_Symbols.txt
