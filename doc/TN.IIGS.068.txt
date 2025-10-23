@@ -1,0 +1,322 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#68:    Tips for I/O Expansion Slot Card Design
+
+Written by:    Rob Moore & Jim Luther                          September 1989
+
+This Technical Note points out several potential problem areas developers 
+should know about when designing I/O expansion slot cards for the Apple IIGS.
+_____________________________________________________________________________
+
+This Note is written for experienced design engineers.  It is not intended to 
+be a tutorial on Apple IIGS I/O expansion card design techniques, but rather 
+to point out possible problem areas and pitfalls to help developers produce 
+successful and reliable expansion cards.
+
+
+The 65C816 PH2 Clock versus the Expansion Slot PH0 Clock
+
+It is important to understand the timing of the 65C816 Phase 2 clock (PH2) on 
+the IIGS, because several of the expansion slot signals are actually related 
+to the PH2 clock timing, rather than the 1 MHz Phase 0 clock (PH0) available 
+at the expansion slots.  Unlike the Apple IIe, the PH2 clock at the CPU is not 
+the same as the PH0 clock found at the expansion slots.  The PH2 clock runs at 
+a variety of periods, depending on whether the CPU is doing a normal 350 
+nanosecond 2.8 MHz cycle, a extended 700 nanosecond RAM refresh cycle, an 
+isolated slow cycle, or consecutive 980 nanosecond 1.024 MHz slow cycles.  
+During isolated slow cycles, or the first of a series of consecutive slow 
+cycles, the fast side of the system must wait to synchronize with the 1 MHz 
+side of the system.  This synchronization results in an average cycle time of 
+about 1.5 microseconds.
+
+    Cycle Type                Low           High               Period
+    _____________________________________________________________________
+    Normal 2.8-MHz cycle      140ns         210ns              350ns
+    Refresh extended cycle    140ns         560ns              700ns
+    Isolated 1-MHz cycle      140ns typ.    1.33 msecs avg.    Å1.5 msecs
+    Consecutive 1-MHz cycles  140ns         840(980)ns         980ns
+    _____________________________________________________________________
+
+                           Table 1-PH2 Clock Times
+
+
+The Mega II Select Signal
+
+On the Apple IIGS, the Mega II select signal (/M2SEL) is used as the enable to 
+the slower, 1 MHz side of the system.  It goes active (low) whenever the 1 MHz 
+side RAM or I/O areas are accessed.  Accesses that cause /M2SEL to be asserted 
+include shadowed video writes, any accesses to internal I/O or expansion card 
+slots, and accesses to banks $E0 and $E1.  Accesses to any expansion card ROM 
+areas that are set to Internal ROM with the Slot register do not assert the 
+/M2SEL signal and run at the 2.8 MHz speed rather than the normal 1 MHz 
+expansion card speed.  Also, accesses to the Shadow register ($C035), CYA 
+register ($C036), or DMA bank register ($C037), and reads from the Slot 
+register ($C02D) or State Register ($C068) run at full speed since they are 
+done wholly on the fast side of the system.
+
+/M2SEL can be viewed as an extension of the address bus on the expansion 
+slots.  When it is active, it indicates that the CPU is running synchronized 
+with the 1 MHz side of the system and the address on the address lines is a 
+valid Apple II address in the 128K main or auxiliary memory space.
+
+
+The Mega II Bank 0 Signal
+
+The Mega II bank 0 signal (M2B0) provides the least significant bit of the CPU 
+or DMA bank address to the 1 MHz side of the system.  It is normally tri-
+stated and goes active for 140 nanoseconds, starting 140 nanoseconds after the 
+PH0 clock falls.  During the 140 nanosecond active period, M2B0 will be high 
+whenever the CPU is accessing bank $E1 (with the exceptions noted previously) 
+or doing a shadowed video write or I/O access in bank $01.  Note that M2B0 
+does not reflect the state of the RAMRD, RAMWRT, ALTZP, 80STORE, or PAGE2 soft 
+switches that allow access to the auxiliary 64K through bank $00.  It only 
+indicates accesses to bank $E1 or shadowed accesses through bank $01.
+
+It is generally safe to latch the state of M2B0 by using the falling edge of 
+the Q3 clock.  Even though M2B0 will be tri-stated at the about the same time 
+as Q3 falls, the turn-off and float time on M2B0 will generally provide 
+sufficient hold time provided that there is not more than 1 LS TTL load on 
+M2B0.
+
+           ____                          ________________________
+    PH0        \________________________/                        \______
+
+                           
+                _______________|         _______________          ______
+    Q3     ____/               |________/               \________/
+                               |
+                               |
+                         ______|_
+    M2B0   _____________/      | \______________________________________
+                        \______|_/
+                               |
+                               |<- Latch state of M2B0 here
+
+                    Figure 1-When to Latch State of M2B0
+
+The Apple Video Overlay card uses M2B0 to detect writes to main and auxiliary 
+RAM so that it can capture writes to the Apple IIGS video display buffers into 
+its on-card display buffer.  M2B0 is designed for this sort of thing and isn't 
+of much use in most other applications.  Note that M2B0 is only available on 
+slot 3.
+
+
+Using the Ready Signal
+
+The Ready (RDY) input to the 65C816 is used to prevent a CPU cycle from 
+completing until the expansion card has accepted the data output or has its 
+input data available.
+
+When the RDY input to a 65C02 or 6502 is held low, the processor continues to 
+output the same address until RDY is released and the CPU completes the 
+current cycle.
+
+In the Apple IIGS, the 65C816 samples the RDY input when the PH2 clock goes 
+low, and if RDY is low, the current CPU cycle does not complete and the 
+address continues to be emitted.  However, the bank address is not emitted 
+while the clock is low if RDY is held low.  To deal with this situation, the 
+FPI (Fast Processor Interface) custom IC in the Apple IIGS uses a transparent 
+latch to capture the bank address from the CPU.  The latch is transparent 
+while the PH2 clock is low and holds the bank address while the PH2 clock is 
+high.  If RDY is low, the CPU emits an invalid bank address, so the FPI holds 
+the latch closed while RDY is low.  This action is normally completely 
+transparent to cards in the Apple IIGS expansion slots, but if an expansion 
+card asserts RDY while the PH2 clock is low, it is likely to cause the FPI to 
+latch an invalid bank address, because the latch could close before the bank 
+address from the CPU is available on the data lines.
+
+To avoid unpredictable results, RDY should only be asserted or deasserted when 
+/M2SEL is low and when PH0 is high, or when /DEVSEL, /IOSEL or /IOSTRB are 
+active.  When /M2SEL, /DEVSEL, /IOSEL or /IOSTRB are active, you are 
+guaranteed that the 65C816 is running at 1 MHz and is properly synchronized to 
+the 1 MHz side of the system.  RDY should be stable at least 60 nanoseconds 
+before the falling edge of PH0 to allow for about a 25 nanosecond skew between 
+the PH0 slot clock and the PH2 CPU clock.  Figure 2 shows where it is safe to 
+assert or deassert RDY.  Limiting changes to RDY to the time when PH0 is high 
+guarantees that it does not change while the CPU is outputting the bank 
+address.
+
+The RDY line should be driven with an open-collector driver.
+
+                                                      ->|   |<- 35ns min
+       ____       ______________________________________|___|
+PH2        \_____/                                      |   |________
+                                                        |   |
+                                                        | ->||<- 25ns min
+       ____                         |___________________|____|
+PH0        \________________________|                   |    |_______
+                                    |                   |    |
+       _____________                |                   |    |  _____
+/M2SEL              \_______________|___________________|____|_/
+                                    |                   |    |
+                                    |<----------------->|    |
+                                        Safe to assert  |    |
+                                         or deassert    |    |
+/NMI,  ________________________________________________ |____|_______
+/IRQ,                                                  \|    |
+/RST,  ________________________________________________/|____|_______
+RDY                                                     |    |
+                                                      ->|    |<- 60ns min
+
+                     Figure 2-Control Signal Setup Time
+
+
+Interrupt Request, Non-Maskable Interrupt, and Reset
+
+The Interrupt Request (/IRQ), the Non-Maskable Interrupt (/NMI) and the Reset 
+(/RST) signals are all interrupt lines that are sampled by the CPU when the 
+PH2 clock falls.  If they are valid 30 nanoseconds before the PH2 clock falls, 
+they are recognized on the following cycle.  If this setup time is not met, 
+they may not be recognized until the second following cycle .  Since there can 
+be up to a 25 nanosecond skew between the PH0 and PH2 clocks, these signals 
+should be valid 60 nanoseconds before PH0 falls if they are to be recognized 
+on the following cycle.  Figure 2 shows the correct setup time for these 
+signals.
+
+All three signals are all active-low and must be driven with open-collector 
+drivers.
+
+Note:  Interrupt vectors are always pulled from ROM regardless of 
+       whether or not the language card soft-switches have ROM enabled, 
+       providing that the I/O shadowing for banks $00/01 is enabled--which 
+       it always is when running Apple IIGS or Apple II system software.
+
+
+Direct Memory Access
+
+The Direct Memory Access (/DMA) signal is used to temporarily halt the CPU and 
+allow expansion cards direct access to the system RAM to transfer data at high 
+speeds.  Since the 65C816 is fully static while the PH2 clock is high (unlike 
+the 6502), /DMA may be asserted for as long as necessary on the Apple IIGS.
+
+The /DMA signal should be asserted and deasserted within the 100 nanosecond 
+period after PH0 falls, and the DMA address should be emitted by the expansion 
+card about 30 nanoseconds later.  In any case, the address should be stable on 
+the address bus no later than 120 nanoseconds after PH0 falls.  This 
+guarantees that there is enough time for the address to be decoded and for 
+/M2SEL and M2B0 to be asserted by the FPI chip if the DMA transfer is to the 1 
+MHz side of the system.  The bank address must be stored in the DMA bank 
+register at location $C037 before using DMA.
+
+/DMA is a active-low signal and should be driven with an open-collector 
+driver.  The Apple IIGS provides a pullup for /DMA, but since the pullup is a 
+fairly high value, it is a good idea for an expansion card that has asserted 
+/DMA to momentarily pull it high for a few nanoseconds when deasserting it.
+
+Note that there is a minor hardware bug in the Apple IIGS that could cause 
+problems for developers who are unaware of it.  If the CPU is currently 
+pulling an interrupt vector when the /DMA signal is asserted, and if the DMA 
+address is accessing the language card ($D000-$FFFF) space in a bank of memory 
+where I/O and language card emulation is enabled (normally banks $00, $01, $E0 
+and $E1), DMA reads access ROM rather than RAM.  This happens because the 
+CPU's Vector Pull (VP) signal is active while the DMA cycle is active.  Since 
+most expansion cards that use DMA are also associated with some corresponding 
+firmware or software driver, it's a good idea to disable interrupts prior to 
+doing the DMA transfer, then re-enable interrupts as soon as possible after 
+the transfer is complete.  If interrupts are off too long, AppleTalk shuts 
+down any connections to file servers because the system does not respond to 
+AppleTalk "tickle" transactions while interrupts are disabled.
+
+We recommend that the DMA be done with the Apple IIGS running at 1 MHz.  If 
+DMA is started during a 1 MHz cycle (/M2SEL asserted), the system continues to 
+run slow while the /DMA signal is active.
+
+
+Avoiding "Bus Fights"
+
+The data bus on the Apple IIGS (and Apple IIe) expansion slots is a 
+multiplexed bus that is used to carry both CPU and video display data.  While 
+PH0 is low, the bus is used to transfer data from the system RAM to the video 
+display circuitry.  When PH0 is high, the bus is available for CPU data 
+transfers.  To avoid potential (or actual) bus fights, it is helpful to avoid 
+driving read data from an expansion card onto the bus immediately after PH0 
+rises.  Since the video read data is driven out onto the expansion slots, and 
+expansion card read data is driven in from the slots, it takes a finite period 
+of time for the bus buffers to turn around.  If a card drives data onto the 
+expansion slot data bus immediately after PH0 rises, there may be a bus fight 
+between the expansion card trying to drive the bus, and the Apple IIGS (or 
+Apple IIe) bus buffers, which may not have turned around yet.  A similar 
+problem can occur if an expansion card leaves its read data on the bus too 
+long after PH0 falls.
+
+On the Apple IIGS, the data buffers turn around in 30 nanoseconds or less from 
+the PH0 edges.  Developers can avoid bus fights by simply using 74LS or 74HCT 
+series parts and relying upon typical delay stackups to delay driving the data 
+bus for approximately 30 nanoseconds.  A more solid technique is using the 
+first rising edge of the 7M clock, after PH0 rises.  This method may require 
+an additional flip-flop, but it guarantees the desired delay.  On the other 
+hand, expansion card read data buffers should be turned off as soon as 
+possible when PH0 falls to avoid a fight when the data buffers turn back out 
+again.  Figure 3 shows the recommended data transfer timing for the data bus.
+
+       __                            |___________________________|
+PH0      \___________________________|                           |_______
+                                     |                           |
+          ___     ___     ___     ___|   |___     ___     ___    |___
+7M     __/   \___/   \___/   \___/   |___|   \___/   \___/   \___|   \___
+                                     |   |                       |
+                 Recommended Delay ->|   |<-                     |
+       __  __________________________|_  |_______________________|| _____
+D7-D0    \/        Video Data        | \_|  Data from I/O Card   ||/
+       __/\__________________________|_/ |_______________________||\_____
+                                     |   |                       ||
+                              0 to 30ns (as short as possible) ->||<-
+
+                Figure 3-Recommended Data Transfer Timing
+
+
+Ground Noise
+
+Since the Apple II expansion slots were designed with only one ground pin, 
+complex expansion cards sometimes have problems with excessive ground noise--
+especially in the IIGS, where the signals typically have faster rise and fall 
+times.  To reduce ground noise as much as possible, it is helpful to bypass 
+all four supply voltages (+5 volt, +12 volt, -5 volt, -12 volt) to ground with 
+electrolytic or solid tantalum capacitors, even if all the available voltages 
+are not used on the expansion card.  This additional bypassing has the effect 
+of providing an improved ground by providing additional AC ground paths 
+through the various supply pins.
+
+To maintain a consistent ground quality over the board area on two-layer 
+boards, it is important to properly grid the Vcc and ground traces and to fill 
+in unused areas with ground plane.
+
+
+Expansion Card Power Consumption
+
+The Apple IIe and Apple IIGS expansion slot specifications indicate a total of 
+500 mA of +5 volt, 250 mA of +12 volt, 200 mA of -5 volt, and 200 mA of -12 
+volt power is available to all the expansion slots.  With design improvements, 
+the power required by disk drives has been reduced.  Also, the Apple IIGS 
+power supply is conservatively designed so there is somewhat more power 
+available than indicated on the original specification.  However, there is not 
+unlimited power available, and expansion card developers should minimize power 
+consumption as much as possible.  Minimization can be accomplished by using 
+CMOS wherever possible, using ROMs or RAMs with "power-down" mode when they 
+are not enabled, and generally being careful to minimize parts count.
+
+Since the Apple IIGS was released, several "super" expansion cards have become 
+available.  These cards typically provide a lot of performance and 
+functionality, but in most cases, the power consumed by one card is more than 
+the specified power available to all the expansion slots.  Generally these 
+cards work without problems.  However, when several "super" cards are 
+installed in a IIGS system, the total power drawn can exceed the available 
+power supply capacity.  This increase in power dissipation within the IIGS 
+case can cause excessive heating and other associated problems when the 
+internal case temperatures exceed the design specifications.  This could 
+conceivably damage the IIGS power supply.  Please minimize the power 
+requirements of expansion card designs wherever possible to avoid these 
+problems.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIGS Hardware Reference
+  o  Apple IIGS Firmware Reference
+  o  Apple IIGS Technical Note #28, Interface Card Design Guidelines
+  o  Apple IIGS Technical Note #32, /INH Line Anomaly
