@@ -968,12 +968,11 @@ always @(posedge CLK_14M) begin
 `ifdef ADB_DEBUG
               $display("ADB PROCESSING WRITE in IDLE state");
 `endif
+              $display("ADB WRITE C026 IDLE: din=0x%02h, prev_cmd=0x%02h, state=%d, cmd_len=%d", din, cmd, state, cmd_len);
               cmd <= din;
               cmd_timeout <= 16'd0;  // Reset timeout for new command
               cmd_data <= 64'd0;     // Clear command data buffer
               initial_cmd_len <= 4'd0; // Clear initial length
-
-              $display("ADB WRITE C026 IDLE: din=0x%02h, state=%d", din, state);
               case (din)
                 8'h01: begin
                   // ABORT - Clear all ADB state including key repeat
@@ -1056,7 +1055,7 @@ always @(posedge CLK_14M) begin
                 end
                 8'h73: ; // disable SRQ on mouse
                 default: begin
-                  $display("ADB WRITE C026 DEFAULT: din=0x%02h, din>=0x10=%d, din[1:0]=%b", din, (din >= 8'h10), din[1:0]);
+                  $display("ADB WRITE C026 DEFAULT: din=0x%02h, cmd=0x%02h, din>=0x10=%d, din[1:0]=%b, state=%d", din, cmd, (din >= 8'h10), din[1:0], state);
                   // Check if this is a device command (pattern: AAAARRCCT)
                   // A=address, R=register, C=command, T=type
                   if (din >= 8'h10) begin  // Device commands start at 0x10
@@ -1142,35 +1141,44 @@ always @(posedge CLK_14M) begin
 
             CMD: begin
               $display("ADB CMD state: din=0x%02h cmd=0x%02h cmd_len=%d initial_cmd_len=%d", din, cmd, cmd_len, initial_cmd_len);
-              // Store incoming data byte in the correct forward order
-              if (cmd_len > 0) begin
-                  case (initial_cmd_len)
-                      4'd1: cmd_data[7:0] <= din;
-                      4'd2: if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
-                      4'd3: if (cmd_len == 3) cmd_data[23:16] <= din; else if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
-                      4'd4: if (cmd_len == 4) cmd_data[31:24] <= din; else if (cmd_len == 3) cmd_data[23:16] <= din; else if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
-                      4'd8:
-                          case(cmd_len)
-                              4'd8: cmd_data[63:56] <= din;
-                              4'd7: cmd_data[55:48] <= din;
-                              4'd6: cmd_data[47:40] <= din;
-                              4'd5: cmd_data[39:32] <= din;
-                              4'd4: cmd_data[31:24] <= din;
-                              4'd3: cmd_data[23:16] <= din;
-                              4'd2: cmd_data[15:8] <= din;
-                              4'd1: cmd_data[7:0] <= din;
-                          endcase
-                      default: ; // Should not happen
-                  endcase
-                  // Decrement command length counter after storing data byte
-                  cmd_len <= cmd_len - 4'd1;
-              end
 
-              // Process command when enough data received (this is the last byte, cmd_len=1)
-              if (cmd_len == 4'd1) begin
+              // First,store incoming data byte and decrement counter (if cmd_len > 0)
+              // This must happen BEFORE we try to execute any command
+              if (cmd_len > 4'd0) begin
+                // Store incoming data byte based on position
+                case (initial_cmd_len)
+                    4'd1: cmd_data[7:0] <= din;
+                    4'd2: if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
+                    4'd3: if (cmd_len == 3) cmd_data[23:16] <= din; else if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
+                    4'd4: if (cmd_len == 4) cmd_data[31:24] <= din; else if (cmd_len == 3) cmd_data[23:16] <= din; else if (cmd_len == 2) cmd_data[15:8] <= din; else cmd_data[7:0] <= din;
+                    4'd8:
+                        case(cmd_len)
+                            4'd8: cmd_data[63:56] <= din;
+                            4'd7: cmd_data[55:48] <= din;
+                            4'd6: cmd_data[47:40] <= din;
+                            4'd5: cmd_data[39:32] <= din;
+                            4'd4: cmd_data[31:24] <= din;
+                            4'd3: cmd_data[23:16] <= din;
+                            4'd2: cmd_data[15:8] <= din;
+                            4'd1: cmd_data[7:0] <= din;
+                        endcase
+                    default: ; // Should not happen
+                endcase
+
+                // Decrement counter
+                cmd_len <= cmd_len - 4'd1;
+
+                // If this was the last byte (cmd_len==1), we'll execute the command next cycle
+                if (cmd_len == 4'd1) begin
+                  $display("ADB CMD: Stored final byte din=0x%02h, will execute next cycle", din);
+                end
+              end
+              // If cmd_len is 0, this means we stored all bytes last cycle
+              // Now execute the completed command
+              else begin
                 $display("ADB CMD COMPLETE: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
-                cmd_len <= 4'd0;
                 state <= IDLE;
+                cmd <= 8'h00;  // Clear cmd for next command
 
                 case (cmd)
                   8'h04: adb_mode <= din | adb_mode;
@@ -1232,58 +1240,99 @@ always @(posedge CLK_14M) begin
                     end
                   end
                   8'h08: begin
-                    ram_addr <= cmd_data[15:8];
-                    ram_din <= din;
-                    ram_wen <= 1'b1;
+                    // WRITE_MEM - Write byte to ADB controller memory (2 bytes)
+                    // cmd_data[15:8] = address (single byte, 0-255)
+                    // din = value to write
+                    // Based on gsplus: only addresses < 0x100 are writable (RAM)
+                    $display("ADB WRITE_MEM: addr=0x%02h value=0x%02h", cmd_data[15:8], din);
+                    if (cmd_data[15:8] < 8'h60) begin  // Only first 96 bytes are actual RAM
+                      ram_addr <= cmd_data[15:8];
+                      ram_din <= din;
+                      ram_wen <= 1'b1;
+                    end else begin
+                      $display("ADB WRITE_MEM: addr 0x%02h out of range, ignoring", cmd_data[15:8]);
+                    end
                   end
                   8'h09: begin
                     // READ_MEM - Read byte from ADB controller memory (2 bytes)
-                    // cmd_data[15:8] = address, cmd_data[7:0] = page
-                    // 13-bit address space: 5-bit page + 8-bit address
-                    $display("ADB READ_MEM: page=0x%02h addr=0x%02h cmd_data=%08h", cmd_data[7:0], cmd_data[15:8], cmd_data);
+                    // cmd_data[15:8] = address LOW byte (first byte sent)
+                    // cmd_data[7:0] = address HIGH byte (second byte sent)
+                    // Full 16-bit address = (cmd_data[7:0] << 8) | cmd_data[15:8]
+                    // Based on gsplus implementation
+
+                    $display("ADB READ_MEM: addr=0x%04h (bytes: low=0x%02h high=0x%02h)", {cmd_data[7:0], cmd_data[15:8]}, cmd_data[15:8], cmd_data[7:0]);
                     cmd_response_ready <= 1'b1;  // Signal that response data is ready
-                    if (cmd_data[7:0] == 8'h00) begin
-                      // Page 0: Read from RAM (96 bytes at $0000-$005F)
-                      ram_addr <= cmd_data[15:8];
+
+                    if ({cmd_data[7:0], cmd_data[15:8]} < 16'h0100) begin
+                      // RAM area (0x00-0xFF): Read from RAM
+                      ram_addr <= cmd_data[15:8];  // Only low byte matters for RAM
                       ram_wen <= 1'b0;
-                      data <= { 24'd0, ram_dout };
-                      $display("ADB READ_MEM: RAM read addr=0x%02h, setting data=ram_dout=0x%02h", cmd_data[15:8], ram_dout);
+
+                      // Special handling for specific addresses (from gsplus)
+                      case (cmd_data[15:8])
+                        8'h01: begin
+                          // ROM checksum low byte - computed by ADB microcontroller firmware
+                          // ROM 01 checksum = 0xF772, ROM 03 checksum = 0x2672
+                          data <= { 24'd0, 8'h72 };
+                          $display("ADB READ_MEM: Special addr 0x01 -> 0x72 (ROM checksum low)");
+                        end
+                        8'h03: begin
+                          // ROM checksum high byte for ROM3
+                          data <= { 24'd0, 8'h26 };
+                          $display("ADB READ_MEM: Special addr 0x03 -> 0x26 (ROM checksum high ROM3)");
+                        end
+                        8'h0B: begin
+                          // Special key state byte for Out of This World (ROM 1)
+                          // For now just return 0
+                          data <= { 24'd0, 8'h00 };
+                          $display("ADB READ_MEM: Special addr 0x0B -> 0x00");
+                        end
+                        8'h0C: begin
+                          // Special key state byte for Out of This World (ROM 3)
+                          // For now just return 0
+                          data <= { 24'd0, 8'h00 };
+                          $display("ADB READ_MEM: Special addr 0x0C -> 0x00");
+                        end
+                        8'hE2: begin
+                          // No Apple IIe keyboard support (bits 1 and 2 = 1)
+                          data <= { 24'd0, 8'h06 };
+                          $display("ADB READ_MEM: Special addr 0xE2 -> 0x06 (no IIe keyboard)");
+                        end
+                        8'hE8: begin
+                          // Apple/Option key state - for now return 0 (no keys pressed)
+                          data <= { 24'd0, 8'h00 };
+                          $display("ADB READ_MEM: Special addr 0xE8 -> 0x00 (no Apple/Option keys)");
+                        end
+                        default: begin
+                          // Normal RAM read
+                          data <= { 24'd0, ram_dout };
+                          $display("ADB READ_MEM: RAM addr=0x%02h data=0x%02h", cmd_data[15:8], ram_dout);
+                        end
+                      endcase
+                    end else if ({cmd_data[7:0], cmd_data[15:8]} >= 16'h1000 && {cmd_data[7:0], cmd_data[15:8]} < 16'h2000) begin
+                      // ROM area (0x1000-0x1FFF): ROM self-test checksum
+                      // Based on gsplus: ROM checksum at 0x1400/0x1401
+                      // ROM 01 checksum = 0xF772, ROM 03 checksum = 0x2672
+                      case ({cmd_data[7:0], cmd_data[15:8]})
+                        16'h1400: begin
+                          data <= { 24'd0, 8'h72 };  // ROM checksum low byte
+                          $display("ADB READ_MEM: ROM addr 0x1400 -> 0x72 (checksum low)");
+                        end
+                        16'h1401: begin
+                          data <= { 24'd0, 8'h26 };  // ROM checksum high byte for ROM3
+                          $display("ADB READ_MEM: ROM addr 0x1401 -> 0x26 (checksum high ROM3)");
+                        end
+                        default: begin
+                          data <= { 24'd0, 8'h00 };  // Rest of ROM returns 0
+                          $display("ADB READ_MEM: ROM addr 0x%04h -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
+                        end
+                      endcase
                     end else begin
-                      // Page > 0: Read from emulated ROM
-                      // Page 0x1F contains checksum bytes for ROM 3
-                      if (cmd_data[7:0] == 8'h1F) begin
-                        case (cmd_data[15:8])
-                          8'h00: begin
-                            data <= { 24'd0, 8'h72 };  // Checksum low byte
-`ifdef ADB_DEBUG
-                            $display("ADB READ_MEM: ROM page 0x1F addr 0x00 -> returning 0x72");
-`endif
-                          end
-                          8'h01: begin
-                            data <= { 24'd0, 8'h26 };  // Checksum high byte (ROM3)
-`ifdef ADB_DEBUG
-                            $display("ADB READ_MEM: ROM page 0x1F addr 0x01 -> returning 0x26");
-`endif
-                          end
-                          default: begin
-                            data <= { 24'd0, 8'h00 };
-`ifdef ADB_DEBUG
-                            $display("ADB READ_MEM: ROM page 0x1F addr 0x%02h -> returning 0x00 (default)", cmd_data[15:8]);
-`endif
-                          end
-                        endcase
-                      end else begin
-                        // All other ROM pages return 0x00
-                        data <= { 24'd0, 8'h00 };
-`ifdef ADB_DEBUG
-                        $display("ADB READ_MEM: ROM page 0x%02h -> returning 0x00", cmd_data[7:0]);
-`endif
-                      end
+                      // Out of range
+                      data <= { 24'd0, 8'h00 };
+                      $display("ADB READ_MEM: addr 0x%04h out of range -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
                     end
                     pending_data <= 3'd1;
-`ifdef ADB_DEBUG
-                    $display("ADB READ_MEM: pending_data=1, data=0x%08h (data[7:0]=0x%02h)", { 24'd0, 8'h72 }, 8'h72);
-`endif
                   end
                   8'h11: ; // send keycode data
                   8'h12: ; // cmd 12 - ROM3 only
@@ -1300,9 +1349,6 @@ always @(posedge CLK_14M) begin
                     end
                   end
                 endcase
-              end
-              else begin
-                cmd_len <= cmd_len - 4'd1;
               end
             end
           endcase
