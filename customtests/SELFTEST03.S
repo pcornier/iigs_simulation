@@ -84,9 +84,15 @@ SETUP
 CALLTST JSL $FF0000     ; Address will be patched above
 
 RETURN
-        ; Test returned - display result
-        ; According to selftest.md, accumulator contains result
-        ; Store result for display
+        ; Test returned - restore data bank (ROM tests leave it in unknown state)
+        PHK
+        PLB
+
+        ; Check carry flag for pass/fail per Apple IIGS Diagnostics documentation
+        ; Carry clear = pass, carry set = fail
+        BCS FAIL_BRANCH
+        LDA #$00
+FAIL_BRANCH
         STA RESULT
 
         ; Display "RESULT:" message
