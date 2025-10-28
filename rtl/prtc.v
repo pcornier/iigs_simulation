@@ -336,22 +336,27 @@ if (clock_data==0)
 
 
 
-`ifndef SIMULATION
-	clock_counter<=clock_counter+1;
-	clock_counter2<=clock_counter2+1;
-	if (clock_counter=='d14318181)
-	begin
-		clock_counter<=0;
-		onesecond_irq<=1;
-		clock_data<=clock_data+1;
-
-	end
-	if (clock_counter2=='d3818186)
-	begin
-		clock_counter2<=0;
-		qtrsecond_irq<=1;
-	end
+// Use real hardware timing for both FPGA and simulation
+// Modern computers are fast enough to handle this
+clock_counter<=clock_counter+1;
+clock_counter2<=clock_counter2+1;
+if (clock_counter=='d14318181)
+begin
+	clock_counter<=0;
+	onesecond_irq<=1;
+	clock_data<=clock_data+1;
+`ifdef SIMULATION
+	$display("PRTC: One-second interrupt fired");
 `endif
+end
+if (clock_counter2=='d3818186)
+begin
+	clock_counter2<=0;
+	qtrsecond_irq<=1;
+`ifdef SIMULATION
+	$display("PRTC: Quarter-second interrupt fired");
+`endif
+end
 
 
   case (checksum_state)
