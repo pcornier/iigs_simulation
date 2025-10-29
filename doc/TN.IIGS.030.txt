@@ -1,0 +1,391 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#30:    Apple IIgs Hardware Reference Updates
+
+Revised by:    Jim Luther                                      September 1990
+Written by:    Rilla Reynolds & Jim Luther                       October 1987
+
+This Technical Note includes updates to the Apple IIgs Hardware Reference, 
+published by Addison-Wesley.  Please contact Apple II Developer Technical 
+Support at the address listed in Apple II Technical Note #0 if you have 
+additional corrections or suggestions for these manuals.
+Changes since July 1990:  Changed the description in "Signals at the Serial 
+Ports and the Serial Communications Controller" to correctly note that the SCC 
+can support a maximum asynchronous transmission rate of 57,600 bits per second 
+(bps) in X16 clock mode.
+_____________________________________________________________________________
+
+There are two editions of the Apple IIgs Hardware Reference, the first edition 
+(July 1987) which covers the original Apple IIgs only, and the second edition 
+(1989) which covers both original Apple IIgs and the 1 MB Apple IIgs.  Because 
+page numbers have changed between the two editions and because an update to 
+one edition may not be needed in both editions, this Note organizes 
+corrections by chapter, always noting corrections to the Second Edition 
+followed by corrections to the First Edition.
+
+
+Chapter 3:  Memory
+
+Second Edition--Page 40, Table 3-2, Bits in the State register
+First Edition--Page 36, Table 3-2, Bits in the State register
+
+Switch the given values and descriptions for bits 7 and 2 as follows:
+
+    Bit  Value  Description
+    _________________________________________________________________________
+    7    1      ALTZP: If this bit is 1, then bank-switched memory, stack, 
+                and direct page are in auxiliary memory.
+         0      If this bit is 0, then bank-switched memory, stack, and 
+                direct page are in main memory.
+    2    1      LCBNK2:  If this bit is 1, language-card RAM bank 2 is 
+                selected.
+         0      If this bit is 0, language-card RAM bank 1 is selected.
+    _________________________________________________________________________
+
+
+Chapter 6:  The Apple Desktop Bus
+
+Second Edition--Page 148, after final paragraph
+
+Add a new heading and description:
+
+  Control Panel Control Jumper
+
+  The ADB microcontroller provided with the 1 MB Apple IIgs includes an 
+  input that disables the text Control Panel (normally available via the 
+  Classic Desk Accessory menu).  This feature allows the system parameters 
+  to be set and then protected from changes made via the text Control 
+  Panel.  A jumper across the pins of connector S1 removes the text Control 
+  Panel from the Classic Desk Accessory menu.  All other installed classic 
+  desk accessories are still available in the Classic Desk Accessory menu 
+  when the S1 jumper is installed.  The S1 connector is located near the 
+  ADB microcontroller at motherboard location F12.
+
+  Note:  The S1 jumper does not prevent the system parameters from being 
+         changed with the graphic Control Panel (a new desk accessory 
+         normally available from the Apple menu of the Finder or of any 
+         other application that includes the Apple menu).
+
+First Edition--Page 130, Table 6-9, Command byte syntax
+
+The first row in the table should read:
+
+    x    x    x    x    0    0    0    0    Send Reset
+
+and not
+
+    A3   A2   A1   A0   0    0    0    0    Device Reset
+
+First Edition--Page 131, Device Reset
+
+  Replace "Device Reset" with "Send Reset."  The paragraph should be:  "When 
+  a device receives a Send Reset command, it will clear all pending 
+  operations and data, and will initialize to the power-on state.  The Send 
+  Reset command is not device-specific; it is sent to all devices 
+  simultaneously."
+
+First Edition--Pages 138-139, Collision detection
+
+  The fourth sentence in the last paragraph should be:  "By using the Listen 
+  register 3 command, the host can move the device with the activator 
+  pressed."
+
+
+Chapter 7:  Built-In I/O Ports and Clock
+
+Second Edition--Page 154, Table 7-3, Disk-port soft switches
+First Edition--Page 146, Table 7-3, Disk-port soft switches
+
+    $C0E8    Drive disabled
+    $C0E9    Drive enabled
+    $C0EA    Drive 1 select
+    $C0EB    Drive 2 select
+
+In addition to the corrections listed for Table 7-3, the reference to "spindle 
+motor switches" in the paragraph following the table should be replaced with 
+"drive enable switches."
+
+Second Edition--Page 155, Table 7-4, IWM states
+First Edition--Page 146, Table 7-4, IWM states
+
+Change the table to the following:
+
+    Q7    Q6    Drive     Operation
+    _________________________________________________________________________
+    0     0     enabled   Read Data register
+    0     1     -         Read Status register
+    1     0     -         Read Handshake register
+    1     1     disabled  Write Mode register
+    1     1     enabled   Write Data register
+    _________________________________________________________________________
+
+    1 = asserted state    0 = negated state    - = do not care
+
+First Edition--Page 146, after Table 7-4, IWM states
+
+The following text and table should also be added:
+
+  "The drive enable switches and the drive select switches control the state 
+  of the disk port signals DR1 and DR2.  The following table shows the 
+  relationship between these."
+
+              Soft Switches           |  Disk Port Signals
+    $C0E8    $C0E9    $C0EA    $C0EB  |  DR1    DR2
+    __________________________________|_______________________________________
+      1        -        -        -    |    0      0
+      -        1        1        -    |    1      0
+      -        1        -        1    |    0      1
+    __________________________________|_______________________________________
+
+    1 = asserted state    0 = negated state    - = do not care
+
+First Edition--Page 147, The Mode register
+
+  The IWM Mode register is a write-only register, so disregard the advice to 
+  use only a read-modify-write instruction sequence when manipulating bits.
+
+Second Edition--Pages 156-7, Table 7-5, Bits in the Mode register
+First Edition--Pages 147-8, Table 7-5, Bits in the Mode register
+
+For Second Edition, change the description for bit 2, value 0 as shown.  For 
+First Edition, switch the given values and descriptions for bits 1, 2, and 4 
+as shown.
+
+    Bit  Value  Description
+    _________________________________________________________________________
+    4    1      8-MHz read-clock speed selected.
+         0      7-MHz read-clock speed selected.  Set to 0 for all Apple IIgs 
+                disk accesses.
+    2    1      1-second timer is not selected.
+         0      1-second timer selected.  When the current disk drive is 
+                deselected, the drive will remain enabled for 1 second if 
+                this bit is clear.
+    1    1      Asynchronous handshake protocol selected; for all except 
+                5.25-inch Apple disk drives.
+         0      Synchronous handshake protocol selected; for 5.25-inch Apple 
+                disk drives.
+    _________________________________________________________________________
+
+Second Edition--Page 159, The serial ports
+First Edition--Page 150, The serial ports
+
+  The first sentence should read:  "The Apple IIgs has two serial ports 
+  located at the back of the computer, which may provide synchronous and 
+  asynchronous serial communications."
+
+Second Edition--Page 160, Table 7-9, Pins on a serial-port connector
+First Edition--Page 151, Table 7-8, Pins on a serial-port connector
+
+Replace the table title and table with this table title, table and note:
+
+    Table 7-x    Signal assignments for the mini 8-pin serial port connectors
+
+    Pin Number  Signal name  Signal Description
+    1           HSKo         Handshake output.  Driven uninverted from the 
+                             SCC's /DTR output.
+                             Voh = 3.6V; Vol = -3.6V; Rl - 450 ohms
+    2           HSKi         Handshake input or external clock.  Received 
+                             inverted at SCC's /CTS and /TRxC inputs.
+                             Vih = 0.2V; Vil = -0.2V; Ri = 12K ohms
+    3           TxD-         Transmit data (inverted).  Driven inverted 
+                             from SCC's TxD output; tri-stated when SCC's 
+                             /RTS is not asserted.
+                             Voh = 3.6V; Vol = -3.6V; Rl = 450 ohms
+    4           GND          Signal ground.  Connected to logic and 
+                             chassis ground.
+    5           RxD-         Receive data (inverted).  Received inverted 
+                             at SCC's RxD input.
+                             Vih = 0.2V; Vil = -0.2V; Ri = 12K ohms
+    6           TxD+         Transmit data.  Driven uninverted from SCC's 
+                             TxD output; tri-stated when SCC's /RTS is not 
+                             asserted.
+                             Voh = 3.6V; Vol = -3.6V; Rl = 450 ohms
+    7           GPi          General-purpose input.  Received inverted at 
+                             SCC's /DCD inputs.
+                             Vih = 0.2V; Vil = -0.2V; Ri = 12K ohms
+    8           RxD+         Receive data.  Received uninverted at SCC's 
+                             RxD input.
+                             Vih = 0.2V; Vil = -0.2V; Ri = 12K ohms
+
+    Note:  Absolute values of specified voltages are minimums; 
+           Ri is a minimum, Rl is a maximum.
+
+Second Edition--Page 164, after Figure 7-9
+First Edition--Page 155, after Figure 7-9
+
+Add a new heading and description:
+
+  Signals at the Serial Ports and the Serial Communications Controller 
+
+  The Apple IIgs has two serial ports which are compatible with most RS-232-C 
+  devices.  This section describes the input and output signals provided at 
+  the serial ports.  This section also discusses some input signals to the 
+  8530 Serial Communications Controller (SCC) chip that are not described in 
+  the Apple IIgs Hardware Reference.
+
+  The transmit-data and receive-data lines of the Apple IIgs serial interface 
+  conform to the EIA standard RS-422, which differs from the more commonly 
+  used RS-232-C standard in that, whereas an RS-232-C transmitter modulates a 
+  signal with respect to a common ground, an RS-422 transmitter modulates the 
+  signal against an inverted copy of the same signal (to generate a 
+  differential signal).  The RS-232-C receiver senses whether the received 
+  signal is sufficiently negative with respect to ground to be logical 1, 
+  whereas the RS-422 receiver simply senses which line is more negative than 
+  the other.  An RS-422 signal is therefore more immune to noise and 
+  interference, and degrades less over distance, than an RS-232-C signal.  If 
+  you ground the positive side of each RS-422 receiver and leave unconnected 
+  the positive side of each transmitter, you have essentially converted to 
+  EIA standard RS-423, which can be used to communicate with most RS-232-C 
+  devices over distances up to fifty feet, as illustrated in Figures 7-x1 
+  and 7-x2.
+
+  ................................................
+  .    8530   26LS32 Receivers  IIGS Mini 8-pin  .      RS-232-C DTE Device
+  .    SCC    & 26LS30 Drivers  Serial Connector .        DB-25 Connector
+  .  _______                                     .         ____________ 
+  . |       |        /|             ______       .        |            |
+  . |       |       / |            |  8   |      .        |            |
+  . |       |      / +|____________| RxD+ |________       |            |
+  . |   RxD |_____/   |            |______|      . |      |            |
+  . |       |     \   |            |  5   |      . |      |            |
+  . |       |      \ -|____________| RxD- |________|______| TxD pin 2  |
+  . |       |   |\  \ |            |______|      . |      |            |
+  . |       |   | \  \|            |  6   |      . |      |            |
+  . |       |   |  \_______________| TxD+ |________|_ NC  |            |
+  . |   TxD |___|   \              |______|      . |      |            |
+  . |       |   |   /              |  3   |      . |      |            |
+  . |       |   |  /O______________| TxD- |________|______| RxD pin 3  |
+  . |       |   | /  /|            |______|      . |      |            |
+  . |       |   |/  / |            |  4   |      . |      |            |
+  . |       |      / +|_______o____| GND  |________o______| GND pin 7  |
+  . |  /CTS |__o__/   |       |    |______|      .        |            |
+  . |       |  |  \   |       |    |  2   |      .        |            |
+  . | /TRxC |__|   \ -|_______|____| HSKi |_______________| DTR pin 20 |
+  . |       |   |\  \ |       |    |______|      .        |            |
+  . |       |   | \  \|       |    |  1   |      .        |            |
+  . |       |   |  \__________|____| HSKo |_______________| DSR pin 6  |
+  . |  /DTR |___|   \         |    |______|      .        |            |
+  . |       |   |   /         |    |  7   |      .        |            |
+  . |       |   |  /O      ___|____| GPi  |____________o__| RTS pin 4  |
+  . |       |   | /  /|   |   |    |______|      .     |  |            |
+  . |       |   |/  / |   |   |                  .     |  |            |
+  . |       |      / +|___|___o                  .     |__| CTS pin 5  |
+  . |  /DCD |_____/   |   |   |                  .        |            |
+  . |       |     \   |   |   |                  .        |            |
+  . |       |      \ -|___|   |                  .        |            |
+  . |       |       \ |     signal               .        |            |
+  . |_______|        \|     ground               .        |____________|
+  ................................................
+
+  Figure 7-x1-Apple IIgs Connection to an RS-232-C DTE Device
+
+
+  ................................................
+  .    8530   26LS32 Receivers  IIGS Mini 8-pin  .      RS-232-C DCE Device
+  .    SCC    & 26LS30 Drivers  Serial Connector .        DB-25 Connector
+  .  _______                                     .         ____________ 
+  . |       |        /|             ______       .        |            |
+  . |       |       / |            |  8   |      .        |            |
+  . |       |      / +|____________| RxD+ |________       |            |
+  . |   RxD |_____/   |            |______|      . |      |            |
+  . |       |     \   |            |  5   |      . |      |            |
+  . |       |      \ -|____________| RxD- |________|______| RxD pin 3  |
+  . |       |   |\  \ |            |______|      . |      |            |
+  . |       |   | \  \|            |  6   |      . |      |            |
+  . |       |   |  \_______________| TxD+ |________|_ NC  |            |
+  . |   TxD |___|   \              |______|      . |      |            |
+  . |       |   |   /              |  3   |      . |      |            |
+  . |       |   |  /O______________| TxD- |________|______| TxD pin 2  |
+  . |       |   | /  /|            |______|      . |      |            |
+  . |       |   |/  / |            |  4   |      . |      |            |
+  . |       |      / +|_______o____| GND  |________o______| GND pin 7  |
+  . |  /CTS |__o__/   |       |    |______|      .        |            |
+  . |       |  |  \   |       |    |  2   |      .        |            |
+  . | /TRxC |__|   \ -|_______|____| HSKi |_______________| DSR pin 6  |
+  . |       |   |\  \ |       |    |______|      .        |            |
+  . |       |   | \  \|       |    |  1   |      .        |            |
+  . |       |   |  \__________|____| HSKo |_______________| DTR pin 20 |
+  . |  /DTR |___|   \         |    |______|      .        |            |
+  . |       |   |   /         |    |  7   |      .        |            |
+  . |       |   |  /O      ___|____| GPi  |_______________| DCD pin 8  |
+  . |       |   | /  /|   |   |    |______|      .        |            |
+  . |       |   |/  / |   |   |                  .        |            |
+  . |       |      / +|___|___o                  .        |            |
+  . |  /DCD |_____/   |   |   |                  .        |            |
+  . |       |     \   |   |   |                  .        |            |
+  . |       |      \ -|___|   |                  .        |            |
+  . |       |       \ |     signal               .        |            |
+  . |_______|        \|     ground               .        |____________|
+  ................................................
+
+  Figure 7-x2-Apple IIgs Connection to an RS-232-C DCE Device
+
+  The serial inputs and outputs of the SCC are connected to the external 
+  connectors through differential line drivers (26LS30) and receivers 
+  (26LS32).  The output line drivers are tri-state devices and can be put in 
+  the high-impedance mode between transmissions to allow other devices (i.e., 
+  AppleTalk devices) to transmit over those lines.  A line driver is 
+  activated by lowering the SCC's Request To Send (/RTS) output for that 
+  port.
+
+  The Handshake Output signal (HSKo, pin 1) for each Apple IIgs serial port 
+  originates at the SCC's /DTR output for that port and is driven uninverted 
+  by an RS-422 line driver (26LS30).  Each port's Handshake Input signal 
+  (HSKi, pin 2) is received and inverted through a differential receiver 
+  (26LS32).  The output of the differential receiver is connected to the 
+  SCC's Clear To Send (/CTS) and Transmit/Receive Clock (/TRxC) inputs for 
+  that port.  HSKi is designed to accept an external device's Data Terminal 
+  Ready (DTR) handshake signal through the /CTS input.  The /CTS input to the 
+  SCC can be polled by software or can be used to generate an interrupt.  The 
+  HSKi line is connected to the SCC's Transmit/Receive Clock (/TRxC) input 
+  for that port, so that an external device can perform high-speed 
+  synchronous data exchange.  Note that you can't use the HSKi line for 
+  receiving DTR if you're using it to receive a high-speed data clock.
+
+  Each port's General-Purpose input (GPi, pin 7) is received and inverted 
+  through a differential receiver (26LS32).  The output of the differential 
+  receiver is connected to the SCC's Data Carrier Detect (/DCD) input for 
+  that port.  This input can be used to provide a handshake signal from an 
+  external device to the computer.  The /DCD input to the SCC can be polled 
+  by software or can be used to generate an interrupt.
+
+  Note:  Because a 26LS32 differential receiver is used for the external 
+         handshake or clock signals to the SCC, the signals must be 
+         bipolar, alternating between a positive voltage and a negative 
+         voltage with respect to the internally grounded input.  If a 
+         device uses ground (0 volts) as one of its handshake logic 
+         levels, the receiver interprets that level as an indeterminate 
+         state, with unpredictable results.
+
+  The SCC's Receive/Transmit Clock (/RTxC) inputs for both ports are driven 
+  by a single crystal oscillator circuit.  This is accomplished by connecting 
+  a 3.6864 MHz crystal between the /RTxC and Synchronization (/SYNC) input of 
+  port A.  Port B's /RTxC pin is connected to port A's /SYNC pin to drive 
+  port B's clocks from port A's oscillator circuit.  Because of this single 
+  circuit, Write Register 11 (WR11) bit 7 must be set to 1 for SCC port A and 
+  must be set to 0 for SCC port B.  The SCC itself is clocked at 3.58 MHz by 
+  the Apple IIgs' Color-Reference clock (CREF) at the SCC's PCLK clock input.  
+  The maximum asynchronous transmission rate supported by the SCC is 57,600 
+  bits per second (bps) in X16 clock mode (WR4=01xxxxxx).
+
+  The SCC's Interrupt Enable In (IEI) and Interrupt Acknowledge (/INTACK) 
+  inputs are both tied to logical high in the Apple IIgs.  Keeping the SCC's 
+  IEI input high enables the SCC to always generate interrupts if interrupt 
+  modes are enabled through software.  Keeping the SCC's /INTACK input high 
+  leaves the SCC in Interrupt Without Acknowledge interrupt mode.
+
+
+Chapter 8:  I/O Expansion Slots
+
+First Edition--Page 167, Direct memory access
+
+DMA bank register location is $C037.
+
+
+Further Reference:
+_____________________________________________________________________________
+  o  Apple IIgs Hardware Reference, both editions

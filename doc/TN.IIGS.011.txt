@@ -1,0 +1,152 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#11:    Ensoniq DOC Swap-Mode Anomaly
+
+Revised by:    Jim Mensch                                       November 1988
+Written by:    Jim Merritt                                         April 1987
+
+Under certain conditions, the IIGS Ensoniq Digital Oscillator Chip (DOC) 
+inserts a spurious zero-crossing byte into the output sample stream.  The 
+output sample waveform may mask the anomaly, but if it does not, the user may 
+hear intermittent clicks or even a more pervasive "static."  This Technical 
+Note discusses the situations in which the DOC produces this spurious zero 
+crossing, as well as strategies to avoid or mask this undesirable behavior.
+_____________________________________________________________________________
+
+
+Background
+
+The Ensoniq DOC in the Apple IIGS is actually a microprocessor dedicated to 
+producing sound.  Like a time-sharing computer, the DOC continually scans 
+through its array of sound oscillators, proceeding from lower-numbered 
+oscillators to higher-numbered ones, and updates the signal output level of 
+each active one to match that indicated by the oscillator's current sample 
+byte.
+
+An oscillator can operate in any one of several functional modes, as described 
+in the Apple IIGS Hardware Reference.  Here, however, we are concerned only 
+with swap mode, where two consecutive oscillators are considered as a single 
+generator.  The low-numbered oscillator in the pair is always even.  For 
+example, the pairs of oscillators 0 & 1, 2 & 3, ... , 12 & 13, and 14 & 15 
+constitute generators.  The IIGS Sound Tool Set - the FFStartSound call in 
+particular - configures the oscillators it uses to operate in swap mode.  In 
+swap mode, the even-numbered oscillator plays its waveform first, halts its 
+own playback, then starts its partner which also plays its waveform, halts its 
+own playback upon exhausting its waveform, and restarts the even-numbered 
+oscillator.  At any time between the start of any particular FFStartSound call 
+and the time the oscillator finishes playing a wave, the Sound Tool Set 
+interrupt handler may be busy transferring waveform information from the IIGS 
+main RAM to the dormant oscillator's buffer in DOC RAM.  Since one oscillator 
+is producing sound while the Sound Tool Set interrupt handler is transferring 
+waveform information to the other oscillator, you can use a generator pair to 
+produce continuous sound of arbitrary length, and you are limited only by the 
+amount of memory you can devote to the waveform in the main RAM.
+
+Each oscillator draws its output samples from a dedicated buffer in DOC RAM, 
+the size and location of which are specified by parameters to the FFStartSound 
+call.  The maximum size for an oscillator buffer is 32K, but since buffers may 
+neither coincide nor overlap, the practical maximum may be lower when more 
+than one generator is active.  For instance, if four generators (eight paired 
+oscillators) are active simultaneously, the maximum buffer size is 8K, since 
+eight non-overlapping buffers of 8K each would occupy the entire 64K available 
+in the DOC RAM.
+
+
+The Problem
+
+Whenever a swap occurs from a higher-numbered oscillator to a lower-numbered 
+one, the output signal from the corresponding generator temporarily falls to 
+the zero-crossing level (silence); this anomaly does not occur during swaps 
+from lower-numbered oscillators to higher-numbered ones.  The spurious level 
+change lasts no longer than a single sample period, at which time the 
+interrupted waveform resumes.  However, even this tiny glitch in the output 
+can be audible as a pop or click;  the further away the waveform is from the 
+zero crossing when the swap interrupts it, the louder the ear will perceive 
+the pop or click.  When high-to-low swaps occur with great frequency, the pops 
+and clicks happen so often that they are perceived as gentle, but pervasive, 
+static.
+
+
+Several Workarounds
+
+There is no ideal solution to the problem of signal interruption in swap mode.  
+This problem is an anomaly of the DOC design, which may or may not be 
+addressed in later versions of the chip.  However, we have found three general 
+strategies for mitigating the audible damage to the output waveform caused by 
+the chip's undesirable behavior.
+
+Minimize Oscillator Swaps per Unit Time
+
+The more often swaps from high-numbered oscillators to low-numbered ones 
+occur, the more obtrusive the brief signal interruptions will seem.  To 
+minimize the interruptions, you must make the oscillators play for a longer 
+period of time before swapping to their partners.  This means that they must 
+play at slower output sample rates, use larger buffers in DOC RAM, or use the 
+two in tandem.  Commensurate with the number of active generators you wish to 
+use and the level of output signal fidelity that you desire, always specify 
+the largest DOC buffer size and the lowest output sample rate that you 
+possibly can.  Remember that a large number of active generators implies a 
+very small maximum buffer size for any particular oscillator, so you should 
+always try to minimize the number of generators that are active at any one 
+time.  As a rough benchmark, the clicks of signal interruption begin to blend 
+into highly audible static when you specify buffers smaller than 8K for use at 
+the maximum-fidelity output sample rate of about 26 kHz.  (Note:  The DOC 
+supports greater sample rates, but these rates are limited by the output 
+filtering on the IIGS which permits no greater signal fidelity than that 
+possible using the 26 kHz rate.)  Our figures suggest that output fidelity 
+must suffer, or signal noise must increase, when more than four generators 
+(eight oscillators in swap mode) are operating simultaneously.
+
+Avoid Silent or Quiet Passages
+
+The signal content of your waveform can hide the additional noise caused by 
+the "swap-mode anomaly."  The more complex and louder a waveform, the less 
+your ear will perceive the brief interruption that occurs whenever a higher-
+numbered oscillator swaps to a lower-numbered one; pop and rock music is far 
+less susceptible to this problem than classical, folk, or jazz pieces, which 
+typically include many quiet passages.  In addition, a signal that naturally 
+contains a large amount of "pink noise," such as recordings of rainstorms or 
+the surf at the beach, can mask the anomalous noise altogether.
+
+Arrange for Swaps to Occur at or Near Zero Crossings
+
+If the high-to-low swap occurs at a time when the normal output signal level 
+sits at or near the zero crossing, the swap will cause little or no audible 
+damage to the waveform.  When reproducing arbitrary sampled sound, it is 
+almost impossible to insure that the output signal level is near the zero 
+crossing.  However, when constructing long waveforms for playback, you may be 
+able to sidestep the chip's anomalous behavior by ensuring that the waveform 
+values lie at or near $80 at the end of every waveform segment, where a 
+waveform segment spans twice the length of one oscillator buffer.  For 
+example, if you specify a buffer size of 4K, make sure that your constructed 
+waveform crosses the baseline after every 8,192 samples, and for 16K buffers, 
+make sure that the waveform makes a zero crossing after every 32K.
+
+The length of the waveform segment should be twice the buffer length only if 
+you are going to reproduce the waveform exactly once per FFStartSound call.  
+It may be necessary to shorten the length of the waveform segment to exactly 
+the specified DOC buffer length if you use the nextwave_start parameter in the 
+FFStartSound parameter block to invoke automatic looping of the waveform.  In 
+other words, you may need to arrange for twice as many zero crossings in your 
+constructed waveform in the looping case as you would under normal 
+circumstances since subsequent repetitions of the waveform during the single 
+FFStartSound call may begin with either the even or odd oscillator, depending 
+upon which member of the pair was active when the previous repetition ended.  
+If the playback of a waveform starts with the odd oscillator, then the odd-to-
+even swaps will occur at different points in the waveform than they would when 
+the playback starts with the even oscillator.
+
+Also note that the use of larger buffers causes a progressively longer 
+disabling of interrupts while the Sound Tool Set moves the waveform into the 
+DOC RAM.
+
+
+Further Reference
+o    Apple IIGS Toolbox Reference, Volume 2
+o    Apple IIGS Hardware Reference
+

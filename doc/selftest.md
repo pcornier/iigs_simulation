@@ -296,6 +296,57 @@ This error code should only occur when running burn in diagnostics (ie when pins
 
 ## Calling rom tests using Test Pointer Table: 
 
+The test pointer table resides at DIAGNOSTICS+2. Currently the diagnostics begin at
+$FF7400 (this is not expected to change) so the table begins at $FF7402. The fist byte is
+the size of the table followed by the 2 byte pointers themselves. All tests pointed to are
+in bank $FF. For Alpha 2.0 the pointer table starts at $FF7430. For Beta 1.0 and later it's
+at $FF7402.
+To call a diagnostic routine simply JSL to the address pointed to by the table. On return
+the carry flag is clear if the test passes or set if it fails. For a fail, the error status
+stored in the 5 TST.STATUS registers - see source code for location ( currently at $000315
+and is not expected to change ). The error codes are the same as those in self test. You
+should clear these registers before calling the test routine. Enter with Data Bank = $00,
+Native mode and 8 bit data and index. Return will be in Native mode with the M, X and data
+bank in unknown states. Note that the main ram tests are destructive above $0400 in all
+banks! Outside of the ram tests all other tests use memory in bank $00 from $0000
+$1FFF.
+
+```
+SKP 2
+******************************************************
+* Test pointer table
+* Points to tests in Bank $FF
+* Tests must return with RTL instruction
+* This allows disk s/w to look up the pointer table and
+* call the tests from any bank).
+******************************************************
+SKP 2
+TST.TAB DFB TST.TAB.E-*-3;Number of pointers times 2
+SKP 1
+DW ROM.CHECKSUM ;Test 1 128K гom
+DW MOVIRAM ;Test 2 Ram: Moving Inversions
+DW SOFT.SW ;Test 2 Mega // & Statereg softswitch test
+DW RAM.ADDR ;TEST 4 Ram: Addressing
+DW FPI.SPEED ;Test 5 Foi fast/slow mode check
+DW SER.TST ;Test 6 Serial Chip
+DW CLOCK ;Test 7 Real Time Clock
+DW BAT.RAM ;Test 8 Battery ram
+DW FDB ; Test 9 Front Desk Bus
+DW SHADOW.TST ;Test OA Shadow
+DO SEG.DEBUG ;Do following 'test' for debug only
+DW TEST1 ;Fails if a key is pressed
+FIN
+DW CUSTOM.IRQ ;Test 0B Interrupts
+SKP 1
+TST.TAB.E EQU * ;End of test pointer table
+DW EXT.SEQ ;Pointer for Disk s/w
+SKP 1
+BI.MASK EQU %1111111111111111 ;Tests to run if in BI and BTN0 = 1
+SELF.MASK EQU %1111111111111111 ;Tests to run in self test
+BI.SELF.MASK EQU %11111111001111111 ;Tests to run in BI and BTNO =0
+SKP 1
+```
+
 The test pointer table resides at `DIAGNOSTICS+2`. 
 
 To call a diagnostic routine simply JSL to the address pointed to by the table. 

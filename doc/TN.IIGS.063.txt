@@ -1,0 +1,119 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIgs
+#63:         Master Color Values
+
+Revised by:  Dave Lyons                                              May 1991
+Written by:  Jim Luther                                             July 1989
+
+This Technical Note documents master color values used for the Apple IIgs 
+text, text background, and border colors.
+
+Changes since July 1989:  Added information on the standard QuickDraw II 
+640-mode color table and provided a 320-mode color table that produces 
+similar colors.
+_____________________________________________________________________________
+
+
+Border Color Values
+
+There are times when you may want to make parts of the IIgs Super Hi-Res 
+screen the same color as the text, text background, and border colors.  This 
+is particularly useful when using the Apple II Video Overlay Card.  Table 1 
+lists each color using the names from the Control Panel CDA, the color 
+register values used for that color by the color registers, and the master 
+color value used for that color by the Super Hi-Res screen.
+
+                  Color    Color Register    Master Color
+                  Name         Value            Value
+                  ---------------------------------------
+                  Black         $0              $0000
+                  Deep Red      $1              $0D03
+                  Dark Blue     $2              $0009
+                  Purple        $3              $0D2D
+                  Dark Green    $4              $0072
+                  Dark Gray     $5              $0555
+                  Medium Blue   $6              $022F
+                  Light Blue    $7              $06AF
+                  Brown         $8              $0850
+                  Orange        $9              $0F60
+                  Light Gray    $A              $0AAA
+                  Pink          $B              $0F98
+                  Light Green   $C              $01D0
+                  Yellow        $D              $0FF0
+                  Aquamarine    $E              $04F9
+                  White         $F              $0FFF
+                  ---------------------------------------
+
+                       Table 1-Master Color Values
+
+The Apple IIgs Hardware Reference documents the color registers at $C022 and 
+$C034, and the Apple IIgs Toolbox Reference, Volume 2 documents the master 
+color values.
+
+
+Standard 640-mode Color Table
+
+The description of dithering on pages 16-35 and 16-36 of Apple IIgs Toolbox 
+Reference, Volume 2 is correct, but some of the color values in Table 16-5 
+are incorrect.  Table 2 lists the standard QuickDraw II 640-mode color table:
+
+                  Color Table    Color      Master Color
+                    Offset       Name          Value 
+                  ---------------------------------------
+                      $0         Black         $0000
+                      $1         Red           $0F00
+                      $2         Green         $00F0
+                      $3         White         $0FFF
+                      $4         Black         $0000
+                      $5         Blue          $000F
+                      $6         Yellow-green  $0FF0
+                      $7         White         $0FFF
+                      $8         Black         $0000
+                      $9         Red           $0F00
+                      $A         Green         $00F0
+                      $B         White         $0FFF
+                      $C         Black         $0000
+                      $D         Blue          $000F
+                      $E         Yellow-green  $0FF0
+                      $F         White         $0FFF
+                  ---------------------------------------
+                     
+                   Table 2-Standard 640-mode Color Table
+
+Table 3 shows Master Color values you can use in 320-mode to get close 
+approximations of the sixteen standard 640-mode "solid" (really dithered) 
+640-mode colors.
+
+                   Color Table  Color        Master Color
+                     Offset     Name            Value 
+                   -------------------------------------
+                       $0       Black           $0000
+                       $1       Deep Blue       $0008  
+                       $2       Yellow-brown    $0880
+                       $3       Gray            $0888
+                       $4       Red             $0800 
+                       $5       Purple          $0808 
+                       $6       Orange          $0F80 
+                       $7       Pink            $0F88 
+                       $8       Dark Green      $0080
+                       $9       Aqua            $0088
+                       $A       Bright Green    $08F0
+                       $B       Pale Green      $08F8
+                       $C       Gray            $0888 
+                       $D       Periwinkle Blue $088F
+                       $E       Yellow          $0FF8
+                       $F       White           $0FFF
+                   -------------------------------------
+            
+                   Table 3-Standard 640-mode Color Table
+
+Further Reference
+_____________________________________________________________________________
+  o   Apple IIgs Hardware Reference, pp. 58, 76-78
+  o   Apple IIgs Toolbox Reference, Volume 2, p. 16-31
+//
