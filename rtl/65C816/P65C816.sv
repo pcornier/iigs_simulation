@@ -61,7 +61,6 @@ module P65C816
   logic          WAIExec;
   logic          STPExec;
   logic          NMI_SYNC;
-  logic          IRQ_SYNC;
   logic          NMI_ACTIVE;
   logic          IRQ_ACTIVE;
   logic          OLD_NMI_N;
@@ -156,7 +155,7 @@ end
             else
                NextState = 4'b0000;
          3'b101 :
-            if (DLNoZero == 1'b1 & EF == 1'b0)
+            if (DLNoZero == 1'b1)
                NextState = STATE + 1;
             else
                NextState = STATE + 2;
@@ -309,31 +308,45 @@ end
                3'b001 :
                   if (EF == 1'b0)
                      SP <= (SP + 1);
-                  else
+                  else begin
+                     SP[15:8] <= 8'h01;
                      SP[7:0] <= ((SP[7:0]) + 1);
+                  end
                3'b010 :
                   if (MC.BYTE_SEL[1] == 1'b0 & w16 == 1'b1)
                   begin
                      if (EF == 1'b0)
                         SP <= (SP + 1);
-                     else
+                     else begin
+                        SP[15:8] <= 8'h01;
                         SP[7:0] <= ((SP[7:0]) + 1);
+                     end
                   end
                3'b011 :
                   if (EF == 1'b0)
                      SP <= (SP - 1);
-                  else
+                  else begin
+                     SP[15:8] <= 8'h01;
                      SP[7:0] <= ((SP[7:0]) - 1);
+                  end
                3'b100 :
                   if (EF == 1'b0)
                      SP <= A;
-                  else
+                  else begin
+                     SP[15:8] <= 8'h01;
                      SP <= {8'h01, A[7:0]};
+                  end
                3'b101 :
                   if (EF == 1'b0)
                      SP <= X;
-                  else
+                  else begin
+                     SP[15:8] <= 8'h01;
                      SP <= {8'h01, X[7:0]};
+                  end
+               3'b110 :
+                     SP <= (SP + 1);
+               3'b111 :
+                     SP <= (SP - 1);
                default :
                   ;
             endcase
@@ -351,7 +364,7 @@ end
                3'b000 :
                   P <= P;
                3'b001 :
-                  if ((MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[0] == 1'b1 & (MF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[0] == 1'b1 & (XF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & (MF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[1] == 1'b1 & (XF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & w16 == 1'b1) | IR == 8'hEB | IR == 8'hAB)
+                  if ((MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[0] == 1'b1 & (MF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[0] == 1'b1 & (XF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & (MF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[1] == 1'b1 & (XF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & w16 == 1'b1) | IR == 8'hEB | IR == 8'hAB | IR == 8'h5B | IR == 8'hBA)
                   begin
                      P[1:0] <= {ZO, CO};
                      P[7:6] <= {SO, VO};
@@ -479,18 +492,16 @@ end
       begin
          OLD_NMI_N <= 1'b1;
          NMI_SYNC <= 1'b0;
-         IRQ_SYNC <= 1'b0;
       end
       else
       begin
-         if (CE == 1'b1 & IsResetInterrupt == 1'b0)
+         if (RDY_IN == 1'b1 && CE == 1'b1 & IsResetInterrupt == 1'b0)
          begin
             OLD_NMI_N <= NMI_N;
             if (NMI_N == 1'b0 & OLD_NMI_N == 1'b1 & NMI_SYNC == 1'b0)
                NMI_SYNC <= 1'b1;
-            else if (NMI_ACTIVE == 1'b1 & LAST_CYCLE == 1'b1 & EN == 1'b1)
+            else if (LAST_CYCLE == 1'b1 && NMI_SYNC == 1'b1 && EN == 1'b1)
                NMI_SYNC <= 1'b0;
-            IRQ_SYNC <= (~IRQ_N);
          end
       end
 
@@ -502,30 +513,21 @@ end
          IsNMIInterrupt <= 1'b0;
          IsIRQInterrupt <= 1'b0;
          GotInterrupt <= 1'b1;
-         NMI_ACTIVE <= 1'b0;
-         IRQ_ACTIVE <= 1'b0;
       end
       else
       begin
          if (RDY_IN == 1'b1 & CE == 1'b1)
          begin
-            NMI_ACTIVE <= NMI_SYNC;
-            IRQ_ACTIVE <= (~IRQ_N);
-
             if (LAST_CYCLE == 1'b1 & EN == 1'b1)
             begin
                if (GotInterrupt == 1'b0)
-               begin
-                  GotInterrupt <= (IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE;
-                  if (NMI_ACTIVE == 1'b1)
-                     NMI_ACTIVE <= 1'b0;
-               end
+                  GotInterrupt <= IRQ_ACTIVE | NMI_ACTIVE;
                else
                   GotInterrupt <= 1'b0;
 
                IsResetInterrupt <= 1'b0;
                IsNMIInterrupt <= NMI_ACTIVE;
-               IsIRQInterrupt <= IRQ_ACTIVE & (~P[2]);
+               IsIRQInterrupt <= IRQ_ACTIVE;
             end
          end
       end
@@ -547,18 +549,18 @@ end
       begin
          if (EN == 1'b1 & GotInterrupt == 1'b0)
          begin
-            if (STATE == 4'b0000)
+            if (STATE == 4'b0001)
             begin
-               if (D_IN == 8'hCB)
+               if (IR == 8'hCB)
                   WAIExec <= 1'b1;
-               else if (D_IN == 8'hDB)
+               else if (IR == 8'hDB)
                   STPExec <= 1'b1;
             end
          end
 
          if (RDY_IN == 1'b1 & CE == 1'b1)
          begin
-            if ((NMI_SYNC == 1'b1 | IRQ_SYNC == 1'b1 | ABORT_N == 1'b0) & WAIExec == 1'b1)
+            if ((NMI_SYNC == 1'b1 | IRQ_N == 1'b1 | ABORT_N == 1'b0) & WAIExec == 1'b1)
                WAIExec <= 1'b0;
          end
       end
@@ -569,18 +571,27 @@ end
       logic [15:0]     ADDR_INC;
       ADDR_INC = { 14'b0, MC.ADDR_INC[1:0] };
       case (MC.ADDR_BUS)
-         3'b000 :
-            ADDR_BUS[23:0] = {PBR, PC};
-         3'b001 :
-            ADDR_BUS[23:0] = (({DBR, 16'h0000}) + ({8'h00, (AA[15:0])}) + ({8'h00, ADDR_INC}));
-         3'b010 :
-            if (EF == 1'b0)
-               ADDR_BUS[23:0] = {8'h00, SP};
+         4'b0000 :
+            ADDR_BUS = {PBR, PC};
+         4'b0001 :
+            ADDR_BUS = (({DBR, 16'h0000}) + ({8'h00, (AA[15:0])}) + ({8'h00, ADDR_INC}));
+         4'b0101 :
+            ADDR_BUS = (({AB, 16'h0000}) + ({7'b0000000, AA}) + ({8'h00, ADDR_INC}));
+         4'b0010 :
+            ADDR_BUS = {PBR, ((AA[15:0]) + ADDR_INC)};
+         4'b0110 :
+            ADDR_BUS = {8'h00, ((AA[15:0]) + ADDR_INC)};
+         4'b0011, 4'b0111 :
+            if (EF == 1'b0 || MC.ADDR_BUS[2] == 1'b0)
+               ADDR_BUS = {8'h00, (DX + ADDR_INC)};
             else
-               ADDR_BUS[23:0] = {8'h00, 8'h01, SP[7:0]};
-         3'b011 :
-            ADDR_BUS[23:0] = {8'h00, (DX + ADDR_INC)};
-         3'b100 :
+               ADDR_BUS = {8'h00, DX[15:8], DX[7:0] + ADDR_INC[7:0]};
+         4'b1000, 4'b1100 :
+            if (EF == 1'b0 || MC.ADDR_BUS[2] == 1'b0)
+               ADDR_BUS = {8'h00, SP};
+            else
+               ADDR_BUS = {16'h0001, SP[7:0]};
+         4'b1111 :
             begin
                ADDR_BUS[23:4] = {8'h00, 11'b11111111111, EF};
                if (IsResetInterrupt == 1'b1)
@@ -596,14 +607,8 @@ end
                else
                   ADDR_BUS[3:0] = {EF, 2'b11, MC.ADDR_INC[0]};
             end
-         3'b101 :
-            ADDR_BUS[23:0] = (({AB, 16'h0000}) + ({7'b0000000, AA}) + ({8'h00, ADDR_INC}));
-         3'b110 :
-            ADDR_BUS[23:0] = {8'h00, ((AA[15:0]) + ADDR_INC)};
-         3'b111 :
-            ADDR_BUS[23:0] = {PBR, ((AA[15:0]) + ADDR_INC)};
          default :
-            ;
+            ADDR_BUS = 24'h000000;
       endcase
    end
 
@@ -620,12 +625,12 @@ end
       else
          rmw = 1'b0;
 
-      if (MC.ADDR_BUS == 3'b100)
+      if (MC.ADDR_BUS == 4'b1111)
          VPB = 1'b0;
       else
          VPB = 1'b1;
 
-      if ((MC.ADDR_BUS == 3'b001 | MC.ADDR_BUS == 3'b011) & rmw == 1'b1)
+      if ((MC.ADDR_BUS == 4'b0001 | MC.ADDR_BUS == 4'b0011 | MC.ADDR_BUS == 4'b0111) & rmw == 1'b1)
          MLB = 1'b0;
       else
          MLB = 1'b1;
@@ -641,7 +646,7 @@ end
          softInt = 1'b0;
 
       VDA = MC.VA[1];
-      VPA = MC.VA[0] | (twoCls & ((IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE)) | softInt;
+      VPA = MC.VA[0] | (twoCls & (IRQ_ACTIVE | NMI_ACTIVE)) | softInt;
    end
 
    assign RDY_OUT = EN;

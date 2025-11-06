@@ -151,9 +151,7 @@ module AddrGen
             NewAAH = {1'b0, DH};
    end
 
-   assign InnerDS = (ABSCtrl == 2'b11 & (AALCtrl[2] == 1'b1 | AAHCtrl[2] == 1'b1)) ? S :
-                    (e6502 == 1'b0) ? D :
-                    {D[15:8], 8'h00};
+   assign InnerDS = (ABSCtrl == 2'b11 & (AALCtrl[2] == 1'b1 | AAHCtrl[2] == 1'b1)) ? S : D;
 
    assign NewDL = (({1'b0, InnerDS[7:0]}) + ({1'b0, D_IN}));
    assign NewAAHWithCarry = (NewAAH + ({8'b00000000, SavedCarry}));
