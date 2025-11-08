@@ -97,6 +97,12 @@ always @(posedge CLK ) begin
 //	if (CE)
 //	$display("RDY_OUT: %x MF: %x ADDR: %x A: %x X %x Y %x D %x SP %x T %x PC %x PBR %x DBR %x D_OUT %x D_IN %x WE %x MCODE.outbus %x irq p flag: %x IR: %x LOAD_PC: %x GOTINTERRUPT %x",RDY_OUT,MF,A_OUT,A,X,Y,D,SP,T,PC,PBR,DBR,D_OUT,D_IN,WE,MC.OUT_BUS,~P[2],IR,MC.LOAD_PC,GotInterrupt);
 //if (~RST_N) $display("RESET");
+	// DEBUG: Print memory write operations
+	// Debug output for memory writes - commented out after debugging complete
+	// if (CE && WE == 1'b0 && RST_N == 1'b1) begin
+	// 	$display("WRITE: IR=%02x ADDR=%06x D_OUT=%02x PBR=%02x DBR=%02x OUT_BUS=%03b BUS_CTRL=%06b SB=%04x SP=%04x EF=%b",
+	// 		IR, A_OUT, D_OUT, PBR, DBR, MC.OUT_BUS, MC.BUS_CTRL, SB, SP, EF);
+	// end
 end
 
 
@@ -344,9 +350,19 @@ end
                      SP <= {8'h01, X[7:0]};
                   end
                3'b110 :
+                  if (EF == 1'b0)
                      SP <= (SP + 1);
+                  else begin
+                     SP[15:8] <= 8'h01;
+                     SP[7:0] <= ((SP[7:0]) + 1);
+                  end
                3'b111 :
+                  if (EF == 1'b0)
                      SP <= (SP - 1);
+                  else begin
+                     SP[15:8] <= 8'h01;
+                     SP[7:0] <= ((SP[7:0]) - 1);
+                  end
                default :
                   ;
             endcase
@@ -582,15 +598,16 @@ end
          4'b0110 :
             ADDR_BUS = {8'h00, ((AA[15:0]) + ADDR_INC)};
          4'b0011, 4'b0111 :
-            if (EF == 1'b0 || MC.ADDR_BUS[2] == 1'b0)
+            if (EF == 1'b0 || MC.ADDR_BUS[2] == 1'b0 || D[7:0] != 8'h00)
                ADDR_BUS = {8'h00, (DX + ADDR_INC)};
             else
+               // Emulation mode with DL=0: force page wrapping
                ADDR_BUS = {8'h00, DX[15:8], DX[7:0] + ADDR_INC[7:0]};
          4'b1000, 4'b1100 :
-            if (EF == 1'b0 || MC.ADDR_BUS[2] == 1'b0)
-               ADDR_BUS = {8'h00, SP};
+            if (EF == 1'b0)
+               ADDR_BUS = {8'h00, SP};  // Native mode - use full SP
             else
-               ADDR_BUS = {16'h0001, SP[7:0]};
+               ADDR_BUS = {16'h0001, SP[7:0]};  // Emulation mode - always force page 1
          4'b1111 :
             begin
                ADDR_BUS[23:4] = {8'h00, 11'b11111111111, EF};

@@ -17,6 +17,7 @@ module BCDAdder(A, B, CI, S, CO, VO, ADD, BCD);
    wire         BIN_CO;
    wire [3:0]   BCD_B;
    wire         BCD_CO;
+   wire         BCD_CORR_CO;  // Unused correction carry output
 
    assign B2 = B ^ {4{~ADD}};
 
@@ -27,7 +28,7 @@ module BCDAdder(A, B, CI, S, CO, VO, ADD, BCD);
    assign BCD_B = {(~ADD), ((BCD_CO & BCD) ^ (~ADD)), ((BCD_CO & BCD) ^ (~ADD)), (~ADD)};
 
 
-   adder4 bcd_corr_adder(.A(BIN_S), .B(BCD_B), .CI((~ADD)), .S(S));
+   adder4 bcd_corr_adder(.A(BIN_S), .B(BCD_B), .CI((~ADD)), .S(S), .CO(BCD_CORR_CO));
 
    assign CO = (BCD == 1'b0) ? BIN_CO :
                BCD_CO ^ (~ADD);

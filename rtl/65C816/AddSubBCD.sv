@@ -11,7 +11,9 @@ module AddSubBCD
    output        VO
    );
 
+   wire          VO0;  // Unused overflow output
    wire          VO1;
+   wire          VO2;  // Unused overflow output
    wire          VO3;
    wire          CO0;
    wire          CO1;
@@ -21,7 +23,7 @@ module AddSubBCD
 
 
 
-   BCDAdder add0(.A(A[3:0]), .B(B[3:0]), .CI(CI), .S(S[3:0]), .CO(CO0), .ADD(ADD), .BCD(BCD));
+   BCDAdder add0(.A(A[3:0]), .B(B[3:0]), .CI(CI), .S(S[3:0]), .CO(CO0), .VO(VO0), .ADD(ADD), .BCD(BCD));
 
 
 
@@ -31,7 +33,7 @@ module AddSubBCD
 
 
 
-   BCDAdder add2(.A(A[11:8]), .B(B[11:8]), .CI(CO1), .S(S[11:8]), .CO(CO2), .ADD(ADD), .BCD(BCD));
+   BCDAdder add2(.A(A[11:8]), .B(B[11:8]), .CI(CO1), .S(S[11:8]), .CO(CO2), .VO(VO2), .ADD(ADD), .BCD(BCD));
 
 
 

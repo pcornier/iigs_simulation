@@ -113,6 +113,8 @@ module ALU
     logic [7:0]     temp8;
     logic [15:0]    temp16;
     ZR = 1'b0;
+    temp8 = 8'h00;
+    temp16 = 16'h0000;
     case (CTRL.secOp)
       3'b000 :
         begin
@@ -163,6 +165,13 @@ module ALU
           if ((temp8 == 8'h00 & w16 == 1'b0) | (temp16 == 16'h0000 & w16 == 1'b1))
             ZR = 1'b1;
         end
+      default :
+        begin
+          // Default case for unused secOp values
+          CO = CR;
+          Result8 = 8'h00;
+          Result16 = 16'h0000;
+        end
     endcase
   end : xhdl0
 
@@ -194,6 +203,10 @@ module ALU
       3'b111 :
         if (CTRL.fc == 1'b1)
           VO = AddVO;
+      default :
+        begin
+          // Use default values already assigned (VO=VI, SO from Result)
+        end
     endcase
   end
 

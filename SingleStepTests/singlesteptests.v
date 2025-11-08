@@ -13,10 +13,10 @@ module singlesteptests
    output cpu_vpb
    );
 
-   initial begin
-      $dumpfile("singlesteptests.vcd");
-      $dumpvars(0);
-   end   
+//   initial begin
+//     $dumpfile("singlesteptests.vcd");
+//     $dumpvars(0);
+//   end   
 
 P65C816 cpu(
             .CLK(clk),
