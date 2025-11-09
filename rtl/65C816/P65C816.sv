@@ -313,8 +313,15 @@ end
                   if (EF == 1'b0)
                      SP <= (SP + 1);
                   else begin
-                     SP[15:8] <= 8'h01;
-                     SP[7:0] <= ((SP[7:0]) + 1);
+                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD
+                     // can increment beyond page 1 range during multi-byte operations
+                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
+                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B)
+                        SP <= (SP + 1);  // Allow overflow
+                     else begin
+                        SP[15:8] <= 8'h01;
+                        SP[7:0] <= ((SP[7:0]) + 1);
+                     end
                   end
                3'b010 :
                   if (MC.BYTE_SEL[1] == 1'b0 & w16 == 1'b1)
@@ -330,8 +337,14 @@ end
                   if (EF == 1'b0)
                      SP <= (SP - 1);
                   else begin
-                     SP[15:8] <= 8'h01;
-                     SP[7:0] <= ((SP[7:0]) - 1);
+                     // Per manual section 7.1: same instructions can decrement beyond range
+                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
+                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B)
+                        SP <= (SP - 1);  // Allow underflow
+                     else begin
+                        SP[15:8] <= 8'h01;
+                        SP[7:0] <= ((SP[7:0]) - 1);
+                     end
                   end
                3'b100 :
                   if (EF == 1'b0)
@@ -604,10 +617,9 @@ end
                // Emulation mode with DL=0: force page wrapping
                ADDR_BUS = {8'h00, DX[15:8], DX[7:0] + ADDR_INC[7:0]};
          4'b1000, 4'b1100 :
-            if (EF == 1'b0)
-               ADDR_BUS = {8'h00, SP};  // Native mode - use full SP
-            else
-               ADDR_BUS = {16'h0001, SP[7:0]};  // Emulation mode - always force page 1
+            // Stack addressing: SP register is constrained to page 1 in emulation mode,
+            // but address calculations with offsets can overflow (per manual section 7.1)
+            ADDR_BUS = {8'h00, SP + ADDR_INC};
          4'b1111 :
             begin
                ADDR_BUS[23:4] = {8'h00, 11'b11111111111, EF};
