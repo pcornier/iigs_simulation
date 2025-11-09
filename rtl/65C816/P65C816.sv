@@ -173,8 +173,6 @@ end
          3'b111 :
             if (EF == 1'b0)
                NextState = STATE + 1;
-            else if (EF == 1'b1 & IR == 8'h40)
-               NextState = 4'b0000;
             else
                NextState = STATE + 2;
          default :
@@ -470,6 +468,8 @@ end
                2'b10 :
                   if (IR == 8'h00 | IR == 8'h02)
                      PBR <= {8{1'b0}};
+                  else if (IR == 8'h40 & EF == 1'b1)
+                     PBR <= PBR;  // RTI in emulation mode: don't change PBR
                   else
                      PBR <= D_IN;
                2'b11 :
