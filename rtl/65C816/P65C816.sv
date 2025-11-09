@@ -250,7 +250,7 @@ end
       end
       else
       begin
-         if (IR == 8'hFB & P[0] == 1'b1 & MC.LOAD_P == 3'b101)
+         if (IR == 8'hFB & P[8] == 1'b1 & MC.LOAD_P == 3'b101)
          begin
             X[15:8] <= 8'h00;
             Y[15:8] <= 8'h00;

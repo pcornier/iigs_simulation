@@ -711,26 +711,30 @@ module iigs
       end
     end
     paddle_trigger <= 1'b0;  // Default: no paddle trigger
-    adb_strobe <= 1'b0;
+    // Check adb_strobe BEFORE resetting it (otherwise we'd check the new value of 0)
     if (adb_strobe & cpu_we_n) begin
       io_dout <= adb_dout;
     end
+    adb_strobe <= 1'b0;
 
-    prtc_strobe <= 1'b0;
+    // Check prtc_strobe BEFORE resetting it
     if (prtc_strobe & cpu_we_n) begin
       io_dout <= prtc_dout;
     end
+    prtc_strobe <= 1'b0;
 
-    iwm_strobe <= 1'b0;
+    // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & cpu_we_n & phi2) begin
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
       io_dout <= iwm_dout;
     end
+    iwm_strobe <= 1'b0;
 
-    snd_strobe <= 1'b0;
+    // Check snd_strobe BEFORE resetting it
     if (snd_strobe & cpu_we_n) begin
       io_dout <= snd_dout;
     end
+    snd_strobe <= 1'b0;
 
     // Handle SCC read response (same cycle pattern like other peripherals)
     if (scc_cs & cpu_we_n) begin
@@ -1010,7 +1014,7 @@ module iigs
               adb_rw <= 1'b1;
               $display("ADB RD %03h", addr[11:0]);
               // Let ADB module handle all its addresses - remove hardcoded overrides
-              if (addr[11:0] == 12'h070) begin  
+              if (addr[11:0] == 12'h070) begin
                 paddle_trigger <= 1'b1;  // Trigger paddle timers on read too
                 $display("PADDLE TRIGGER (READ)");
               end
@@ -1791,7 +1795,12 @@ wire ready_out;
   // Match Clemens/GSplus: Video IRQs are driven via the VGC path (C023/C032),
   // not by the Mega II VBL/QSEC (C041/C046) directly. Exclude bits 3 (VBL) and 4 (QSEC)
   // from the cpu_irq OR to avoid a persistent level-driven VBL from Mega II.
-  assign cpu_irq = |(irq_pending & 16'hFFE6);  // mask out bit0 (aggregator), bit3 (VBL), bit4 (QSEC)
+//  assign cpu_irq = |(irq_pending & 16'hFFE6);  // mask out bit0 (aggregator), bit3 (VBL), bit4 (QSEC)
+  assign cpu_irq = |(irq_pending[15:5])        |  // bits 15-5: other interrupts
+                              (irq_pending[4] & INTEN[4]) |  // bit 4: QSEC (gated by enable)
+                              (irq_pending[3] & INTEN[3]) |  // bit 3: VBL (gated by enable)
+                              |(irq_pending[2:1])        |  // bits 2-1: VGC interrupts (bit 0 is aggregator)
+                              snd_irq;                      // sound/DOC interrupt (not in C046 INTFLAG)
 
 
   always @(posedge CLK_14M)
