@@ -313,10 +313,10 @@ end
                   if (EF == 1'b0)
                      SP <= (SP + 1);
                   else begin
-                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD
+                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD, PLB
                      // can increment beyond page 1 range during multi-byte operations
                      if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
-                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B)
+                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B || IR == 8'hAB)
                         SP <= (SP + 1);  // Allow overflow
                      else begin
                         SP[15:8] <= 8'h01;
@@ -391,10 +391,30 @@ end
                3'b000 :
                   P <= P;
                3'b001 :
-                  if ((MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[0] == 1'b1 & (MF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[0] == 1'b1 & (XF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & (MF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[1] == 1'b1 & (XF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & w16 == 1'b1) | IR == 8'hEB | IR == 8'hAB | IR == 8'h5B | IR == 8'hBA)
                   begin
-                     P[1:0] <= {ZO, CO};
-                     P[7:6] <= {SO, VO};
+                     if (IR == 8'hAB)  // PLB - Set N and Z based on D_IN
+                     begin
+                        P[7] <= D_IN[7];  // N flag
+                        P[1] <= (D_IN == 8'h00);  // Z flag
+                     end
+                     else if (IR == 8'hBA)  // TSX - Set N and Z based on SP value transferred to X
+                     begin
+                        if (XF == 1'b1 | EF == 1'b1)  // 8-bit X
+                        begin
+                           P[7] <= SP[7];  // N flag from low byte
+                           P[1] <= (SP[7:0] == 8'h00);  // Z flag
+                        end
+                        else  // 16-bit X
+                        begin
+                           P[7] <= SP[15];  // N flag from high byte
+                           P[1] <= (SP == 16'h0000);  // Z flag
+                        end
+                     end
+                     else if ((MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[0] == 1'b1 & (MF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[0] == 1'b1 & (XF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & (MF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[1] == 1'b1 & (XF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & w16 == 1'b1) | IR == 8'hEB | IR == 8'h5B)
+                     begin
+                        P[1:0] <= {ZO, CO};
+                        P[7:6] <= {SO, VO};
+                     end
                   end
                3'b010 :
                   begin
@@ -486,7 +506,7 @@ end
                   else
                      PBR <= D_IN;
                2'b11 :
-                  if (IR == 8'h44 | IR == 8'h54)
+                  if (IR == 8'h44 | IR == 8'h54 | IR == 8'hAB)  // MVN, MVP, PLB
                      DBR <= D_IN;
                   else
                      DBR <= AluIntR[7:0];
