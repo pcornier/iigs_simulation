@@ -1,4 +1,5 @@
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) P65C816.sv ]
+set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) P65C816_pkg.sv ]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) AddrGen.sv ]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) BCDAdder.v ]
 set_global_assignment -name SYSTEMVERILOG_FILE [file join $::quartus(qip_path) AddSubBCD.sv ]

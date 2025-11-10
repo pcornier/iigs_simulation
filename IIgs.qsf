@@ -285,37 +285,6 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LED_*
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to BTN_*
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to BTN_*
 source files.qip
-set_global_assignment -name VERILOG_MACRO "ROM3=1"
-set_global_assignment -name QIP_FILE rtl/65C816vhdl/65C816.qip
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/adb.v
-set_global_assignment -name VERILOG_FILE rtl/fastram.v
-set_global_assignment -name VERILOG_FILE rtl/slowram.v
-set_global_assignment -name VERILOG_FILE rtl/video_timing.v
-set_global_assignment -name VERILOG_FILE rtl/prtc.v
-set_global_assignment -name VERILOG_FILE rtl/rom.v
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/vgc.v
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/iigs.sv
-set_global_assignment -name VERILOG_FILE rtl/soundglu.v
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/es5503.v
-set_global_assignment -name VERILOG_FILE rtl/keyboard.v
-set_global_assignment -name VERILOG_FILE rtl/syncram.v
-set_global_assignment -name VERILOG_FILE rtl/sound.v
-set_global_assignment -name VERILOG_FILE rtl/clock_divider.v
-set_global_assignment -name VERILOG_FILE rtl/iwm.v
-set_global_assignment -name VERILOG_FILE rtl/hdd.v
-set_global_assignment -name VERILOG_FILE rtl/iwm_controller.v
-set_global_assignment -name VERILOG_FILE rtl/iwm_core_ref.v
-set_global_assignment -name VERILOG_FILE rtl/paddle_timer.v
-set_global_assignment -name VERILOG_FILE rtl/apple_drive.v
-set_global_assignment -name VERILOG_FILE rtl/scc_iigs_wrapper.v
-set_global_assignment -name VERILOG_FILE rtl/scc8530.v
-set_global_assignment -name VERILOG_FILE rtl/uart/rxuart.v
-set_global_assignment -name VERILOG_FILE rtl/uart/txuart.v
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/floppy_track.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
-set_global_assignment -name VHDL_FILE rtl/dpram_bram.vhd
-set_global_assignment -name VHDL_FILE rtl/slowram_spram.vhd
 set_global_assignment -name SYSTEMVERILOG_FILE IIgs.sv
 set_global_assignment -name ENABLE_SIGNALTAP ON
 set_global_assignment -name USE_SIGNALTAP_FILE stp1.stp
