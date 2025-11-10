@@ -364,8 +364,15 @@ end
                   if (EF == 1'b0)
                      SP <= (SP + 1);
                   else begin
-                     SP[15:8] <= 8'h01;
-                     SP[7:0] <= ((SP[7:0]) + 1);
+                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD, PLB
+                     // can increment beyond page 1 range during multi-byte operations
+                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
+                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B || IR == 8'hAB)
+                        SP <= (SP + 1);  // Allow overflow
+                     else begin
+                        SP[15:8] <= 8'h01;
+                        SP[7:0] <= ((SP[7:0]) + 1);
+                     end
                   end
                3'b111 :
                   if (EF == 1'b0)
@@ -396,6 +403,11 @@ end
                      begin
                         P[7] <= D_IN[7];  // N flag
                         P[1] <= (D_IN == 8'h00);  // Z flag
+                     end
+                     else if (IR == 8'h2B)  // PLD - Set N and Z based on 16-bit value from stack
+                     begin
+                        P[7] <= D_IN[7];  // N flag from high byte
+                        P[1] <= ({D_IN, DR} == 16'h0000);  // Z flag
                      end
                      else if (IR == 8'hBA)  // TSX - Set N and Z based on SP value transferred to X
                      begin
@@ -497,7 +509,10 @@ end
 
             case (MC.LOAD_DKB)
                2'b01 :
-                  D <= AluIntR;
+                  if (IR == 8'h2B)  // PLD - Load D from stack
+                     D <= {D_IN, DR};  // High byte from D_IN, low byte from DR
+                  else
+                     D <= AluIntR;
                2'b10 :
                   if (IR == 8'h00 | IR == 8'h02)
                      PBR <= {8{1'b0}};
