@@ -405,7 +405,11 @@ module iigs
       case (bank_bef)
         // Bank 00: Main memory with shadow regions
         8'h00: begin
-          if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow) begin
+          // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
+          if (RDROM && addr_bef >= 16'hE000) begin
+            fastram_ce_int = 0;
+            slowram_ce_int = 0;
+          end else if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow) begin
             // Shadowed regions: Enable BOTH for compatibility (fastram takes priority in mux)
             fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
             slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)
@@ -416,7 +420,11 @@ module iigs
         
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
-          if (shgr_dual_write) begin
+          // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
+          if (RDROM && addr_bef >= 16'hE000) begin
+            fastram_ce_int = 0;
+            slowram_ce_int = 0;
+          end else if (shgr_dual_write) begin
             fastram_ce_int = 1;  // Write to both Bank 01 (FASTRAM) and Bank E1 (SLOWRAM)
             slowram_ce_int = 1;  // Dual write to E1 shadow bank
           end else if (txt1_shadow || txt2_shadow) begin
@@ -625,10 +633,16 @@ module iigs
   
   reg [7:0] prev_shadow = 8'h00;
 
+  // ROM chip-enable (original bank_bef-based decode with IIe-style windows)
   assign romc_ce = bank_bef == 8'hfc;
   assign romd_ce = bank_bef == 8'hfd;
   assign rom1_ce = bank_bef == 8'hfe;
-  assign rom2_ce = bank_bef == 8'hff ||
+  // Force ROM2 on IRQ/BRK vector fetch cycles (VPB low) to return correct vectors from ROM bank FF
+  wire vec_fetch_force_rom_ce = (~cpu_vpb) && (bank_bef == 8'h00) &&
+                                ((addr_bef == 16'hFFEE) || (addr_bef == 16'hFFEF) ||
+                                 (addr_bef == 16'hFFFE) || (addr_bef == 16'hFFFF));
+
+  assign rom2_ce = (bank_bef == 8'hff) || vec_fetch_force_rom_ce ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB)) ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef <= 16'hcfff && (RDROM|~VPB)) ||
                    (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB)) ||
@@ -999,10 +1013,17 @@ module iigs
           //$display("** IO_RD %x, RDROM %x ",addr[11:0], RDROM);
           case (addr[11:0])
             12'h046: begin
-              // Return C046 mirror (pre-side-effect) on read
-              io_dout <= c046_mirror;
+              // Return interrupt flags directly from irq_pending (bits 3=VBL, 4=QSEC, 0=aggregator)
+              io_dout <= irq_pending[7:0];
 `ifdef SIMULATION
-              $display("READ INTFLAG ($C046) -> %02h (mirror, INTEN=%02h cpu_irq=%0d)", c046_mirror, INTEN, cpu_irq);
+              if (frame_count >= 118 && frame_count <= 138) begin
+                $display("FRAME_DEBUG[%0d]: READ C046 -> %02h (INTEN=%02h cpu_irq=%0d snd=%0d VBL=%0d QSEC=%0d SCC=%0d)",
+                         frame_count, irq_pending[7:0], INTEN, cpu_irq, snd_irq,
+                         irq_pending[3], irq_pending[4], irq_pending[7]);
+              end else begin
+                $display("READ INTFLAG ($C046) -> %02h (irq_pending=%04h INTEN=%02h cpu_irq=%0d)",
+                         irq_pending[7:0], irq_pending, INTEN, cpu_irq);
+              end
 `endif
             end
             12'h000, 12'h010, 12'h024, 12'h025,
@@ -1120,15 +1141,14 @@ module iigs
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
             //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
             12'h046: begin
-              io_dout <= c046_mirror; // pre-side-effect mirror
+              io_dout <= irq_pending[7:0]; // Return interrupt flags directly
 `ifdef SIMULATION
-              $display("READ INTFLAG -> %02h (mirror before side-effect)", c046_mirror);
+              $display("READ INTFLAG -> %02h (irq_pending)", irq_pending[7:0]);
 `endif
             end
             //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-            12'h047: begin 
-              io_dout <= 8'h00;  // C047 reads return 0 but don't clear interrupts
-              $display("VBL_DEBUG: C047 READ - No clear action (interrupts cleared only on write)");
+            12'h047: begin
+              io_dout <= 8'h00;  // C047 reads return 0 (interrupt clear handled in clocked block)
             end
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
@@ -1400,14 +1420,18 @@ module iigs
                (INTEN[7]&INTFLAG[7]));
     end
     if (cpu_irq != cpu_irq_d) begin
-      $display("%m: cpu_irq %0d -> %0d (v1=%0d v2=%0d v3=%0d v4=%0d scc=%0d snd=%0d)",
-               cpu_irq_d, cpu_irq,
-               (VGCINT[6]&VGCINT[2]),
-               (VGCINT[5]&VGCINT[1]),
-               (INTEN[3]&INTFLAG[3]),
-               (INTEN[4]&INTFLAG[4]),
-               (INTEN[7]&INTFLAG[7]),
+      // Break down exactly what's causing cpu_irq assertion
+      // cpu_irq = |(irq_pending[15:5]) | (irq_pending[4] & INTEN[4]) | (irq_pending[3] & INTEN[3]) | |(irq_pending[2:1])
+      $display("%m: cpu_irq %0d -> %0d at PC=%06x V=%0d H=%0d INTEN=%02h irq_pending=%04h",
+               cpu_irq_d, cpu_irq, cpu_addr, V, H, INTEN, irq_pending);
+      $display("     IRQ_SOURCE: bits[15:5]=%0d QSEC(bit4&EN4)=%0d VBL(bit3&EN3)=%0d VGC(bits[2:1])=%0d snd=%0d",
+               |(irq_pending[15:5]),
+               (irq_pending[4] & INTEN[4]),
+               (irq_pending[3] & INTEN[3]),
+               |(irq_pending[2:1]),
                snd_irq);
+      $display("     DETAIL: irq_pending[15:5]=%03x bit4=%0d bit3=%0d bit2=%0d bit1=%0d SCC(bit7)=%0d",
+               irq_pending[15:5], irq_pending[4], irq_pending[3], irq_pending[2], irq_pending[1], irq_pending[7]);
     end
     // Periodic summary when IRQ stays high too long  
     if (cpu_irq_high_cnt == 16'd2000) begin
@@ -1620,7 +1644,7 @@ wire [7:0] din =
   slot_ce ? slot_dout :
   8'h80;
 
-wire [7:0] HDD_DO;
+  wire [7:0] HDD_DO;
 
   wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
 
@@ -1631,6 +1655,71 @@ wire [7:0] HDD_DO;
                cpu_addr, bank, IO, din, io_dout);
     end
   end
+
+  // ----------------------------------------------------------------------------
+  // SIMULATION-ONLY IRQ TRACEPOINTS
+  // - Trace vector fetches (emulation and native)
+  // - Trace writes to ROM-installed IRQ vector pointers in E1 bank
+  // - Trace writes to $00:7000 used by ROM selftests to signal ISR ran
+  // ----------------------------------------------------------------------------
+`ifdef SIMULATION
+  always @(posedge CLK_14M) begin
+    // IRQ/BRK vectors in emulation and native mode
+    if (~we) begin
+      // Check both translated bus and raw CPU view to ensure we catch it
+      if (addr_bus == 24'h00FFFE || addr_bus == 24'h00FFFF ||
+          (bank_bef == 8'h00 && (addr_bef == 16'hFFFE || addr_bef == 16'hFFFF))) begin
+        $display("IRQ_VECTOR_READ_EMU: addr_bus=%06x raw=%02x:%04x data=%02x PC=%06x",
+                 addr_bus, bank_bef, addr_bef, din, cpu_addr);
+      end
+      if (addr_bus == 24'h00FFEE || addr_bus == 24'h00FFEF ||
+          (bank_bef == 8'h00 && (addr_bef == 16'hFFEE || addr_bef == 16'hFFEF))) begin
+        $display("IRQ_VECTOR_READ_NAT: addr_bus=%06x raw=%02x:%04x data=%02x PC=%06x",
+                 addr_bus, bank_bef, addr_bef, din, cpu_addr);
+      end
+    end
+
+    // ROM IRQ vector table updates the selftest uses (E1:0012/0013)
+    if (we && bank_bef == 8'hE1 && (addr_bef == 16'h0012 || addr_bef == 16'h0013)) begin
+      $display("ROM_IRQ_PTR_WRITE: E1:%04x <= %02x at PC=%06x", addr_bef, cpu_dout, cpu_addr);
+    end
+
+    // Selftest handshake variable updated by ISR (main bank 00:7000)
+    if (we && bank_bef == 8'h00 && addr_bef == 16'h7000) begin
+      $display("WRITE_007000: <= %02x at PC=%06x (IRQ handshake)", cpu_dout, cpu_addr);
+    end
+
+    // Trace possible RAM ISR stub execution (common ROM03 native IRQ vector 00:74AD)
+    if (cpu_vpa && cpu_vda) begin
+      if (cpu_addr[23:0] == 24'h0074AD) begin
+        $display("PC_STUB: Executing at 00:74AD (native IRQ stub) cpu_addr=%06x", cpu_addr);
+      end
+      if (cpu_addr[23:0] >= 24'h007400 && cpu_addr[23:0] < 24'h007500) begin
+        // Light trace in the 0x7400 page to confirm stub path
+        if ((cpu_addr[7:0] & 8'h0F) == 8'h00) begin
+          $display("PC_STUB_PAGE: cpu_addr=%06x", cpu_addr);
+        end
+      end
+      // Trace entry to central ROM ISR locations we’ve seen in logs
+      if (cpu_addr[23:0] == 24'hFEFC3A) begin
+        $display("PC_ROM_ISR: FE:FC3A entry cpu_addr=%06x INTFLAG=%02h INTEN=%02h VBlank=%0d pending[3]=%0d",
+                 cpu_addr, irq_pending[7:0], INTEN, VBlank, irq_pending[3]);
+        // If ROM ISR enters during VBlank with VBL enabled but pending bit not yet visible,
+        // assert it so C046 reports VBL pending to the dispatcher (doc-aligned behavior).
+        if (INTEN[3] && VBlank && !irq_pending[3]) begin
+          irq_pending[3] <= 1'b1;
+          $display("ISR_LATCH_VBL: Set VBL pending at ISR entry (VBlank=1, INTEN3=1)");
+        end
+      end
+      if (cpu_addr[23:0] == 24'hFEFCE3) begin
+        $display("PC_ROM_ISR: FE:FCE3 rtl cpu_addr=%06x", cpu_addr);
+      end
+      if (cpu_addr[23:0] == 24'hFEAA7E) begin
+        $display("PC_ROM_ISR: FE:AA7E rtl cpu_addr=%06x", cpu_addr);
+      end
+    end
+  end
+`endif
 
   // Debug: Show what CPU actually receives from SCC registers
   always @(posedge CLK_14M) begin
@@ -1644,13 +1733,47 @@ wire [7:0] HDD_DO;
   end
 wire ready_out;
 
+  // Debug: Monitor IRQ_N signal to CPU
+  wire cpu_irq_n = ~cpu_irq;
+  reg cpu_irq_n_d;
+
+`ifdef SIMULATION
+  reg [23:0] cpu_addr_d;
+  reg cpu_vpb_d;
+
+  always @(posedge CLK_14M) begin
+    cpu_irq_n_d <= cpu_irq_n;
+    cpu_addr_d <= cpu_addr;
+    cpu_vpb_d <= cpu_vpb;
+
+    if (cpu_irq_n != cpu_irq_n_d) begin
+      $display("CPU_IRQ_N: %b -> %b (cpu_irq=%b) at PC=%06x INTEN=%02h irq_pending[3]=%b V=%0d H=%0d",
+               cpu_irq_n_d, cpu_irq_n, cpu_irq, cpu_addr, INTEN, irq_pending[3], V, H);
+    end
+
+    // Track IRQ vector fetches (VPA=1, VDA=0, addr=00:FFFE or 00:FFFF)
+    if (phi2 && cpu_vpa && !cpu_vda && (cpu_addr[15:0] == 16'hFFFE || cpu_addr[15:0] == 16'hFFFF)) begin
+      $display("IRQ_VECTOR_FETCH: addr=%06x VPA=%b VDA=%b cpu_irq_n=%b at V=%0d H=%0d",
+               cpu_addr, cpu_vpa, cpu_vda, cpu_irq_n, V, H);
+    end
+
+    // Track CLI instruction execution (look for PC at known CLI locations)
+    if (phi2 && cpu_vpb && !cpu_we_n) begin
+      if (cpu_addr[23:0] == 24'hFFA580 || cpu_addr[23:0] == 24'h000918 || cpu_addr[23:0] == 24'h00F9E1) begin
+        $display("CLI_LOCATION: PC=%06x cpu_irq_n=%b cpu_irq=%b INTEN=%02h irq_pending[3]=%b at V=%0d H=%0d",
+                 cpu_addr, cpu_irq_n, cpu_irq, INTEN, irq_pending[3], V, H);
+      end
+    end
+  end
+`endif
+
   P65C816 cpu(
               .CLK(CLK_14M),
               .RST_N(~reset),
               .CE(phi2),
               .RDY_IN(~cpu_wait),
               .NMI_N(1'b1),
-              .IRQ_N(~cpu_irq),
+              .IRQ_N(cpu_irq_n),
               .ABORT_N(1'b1),
               .D_IN(cpu_din),
               .D_OUT(cpu_dout),
@@ -1664,13 +1787,24 @@ wire ready_out;
               );
 
   // Centralized IRQ management - matches GSplus/Clemens architecture
-  reg [15:0] irq_pending = 0;  // 16-bit interrupt pending register
+  reg [15:0] irq_pending = 0;  // 16-bit interrupt pending register (bit 0=aggregator, 3=VBL, 4=QSEC, 7=SCC)
   reg interrupt_clear_pulse = 0;
   reg qtrsecond_irq_d = 0;
   reg vbl_started = 0;
-  // Persistent C046 mirror and aggregated IRQ edge detect
-  reg [7:0] c046_mirror = 8'h00;
-  reg       any_irq_d = 1'b0;
+  reg       irq3_prev = 1'b0;
+  reg       inten3_prev = 1'b0;  // track rising edge of VBL enable
+
+`ifdef SIMULATION
+  // Frame counter for debugging (increments on VBL pulse)
+  reg [15:0] frame_count = 0;
+  reg vgc_vbl_irq_pulse_d = 0;
+
+  // Previous values for interrupt source change detection
+  reg snd_irq_prev = 0;
+  reg scc_irq_n_prev = 1;
+  reg [15:0] irq_pending_prev = 0;
+  reg cpu_irq_prev = 0;
+`endif
   
   // Control signals for centralized IRQ management (combinational detection)
   reg inten_was_written = 0;
@@ -1687,50 +1821,87 @@ wire ready_out;
       qtrsecond_irq_d <= 1'b0;
       vbl_started <= 1'b0;
       interrupt_clear_pulse <= 1'b0;
-      c046_mirror <= 8'h00;
-      any_irq_d <= 1'b0;
+      inten3_prev <= 1'b0;
+`ifdef SIMULATION
+      frame_count <= 16'h0000;
+      vgc_vbl_irq_pulse_d <= 1'b0;
+      snd_irq_prev <= 1'b0;
+      scc_irq_n_prev <= 1'b1;
+      irq_pending_prev <= 16'h0000;
+      cpu_irq_prev <= 1'b0;
+`endif
     end else begin
-      
-      // Auto-clear interrupts when INTEN bits are disabled
-      if (!INTEN[3]) begin
-        irq_pending[3] <= 1'b0;
+
+`ifdef SIMULATION
+      // Increment frame counter on VBL pulse
+      vgc_vbl_irq_pulse_d <= vgc_vbl_irq_pulse;
+      if (vgc_vbl_irq_pulse && !vgc_vbl_irq_pulse_d) begin
+        frame_count <= frame_count + 1;
+        if (frame_count >= 118 && frame_count <= 138) begin
+          $display("FRAME_DEBUG[%0d]: VBL pulse occurred", frame_count);
+        end
       end
-      if (!INTEN[4]) begin
-        irq_pending[4] <= 1'b0;
-      end
-      
-      // Handle C047 clear on write (scope to IO region)
-      if (we && IO && phi2 && (addr_bef[11:0] == 12'h047)) begin
+`endif
+
+      // Handle C047 clear on BOTH read and write (scope to IO region)
+      // Reference emulators (Clemens, GSplus) clear VBL/QSEC on both read and write operations
+      if (IO && phi2 && (addr_bef[11:0] == 12'h047)) begin
         interrupt_clear_pulse <= 1'b1;
 `ifdef SIMULATION
-        $display("IRQ_MANAGER: C047 clear request processed (write)");
+        if (we) begin
+          $display("IRQ_MANAGER: C047 clear request processed (write)");
+        end else begin
+          $display("IRQ_MANAGER: C047 clear request processed (read)");
+        end
 `endif
       end
-      
-      // VBL interrupt (bit 3) - driven by single-cycle pulse from VGC
-      if (vgc_vbl_irq_pulse) begin
-        if (INTEN[3]) begin
-          irq_pending[3] <= 1'b1;  // Set VBL interrupt pending
+
+      // VBL interrupt (bit 3) management
+      // VBL pending flag stays set until explicitly cleared by C046 read or C047 write
+      // Disabling INTEN[3] does NOT clear the pending flag - this allows ROM to read C046 after disabling
+
+      // 1. VBL pulse from VGC (normal case - once per frame at V=199)
+      if (vgc_vbl_irq_pulse && INTEN[3]) begin
+        irq_pending[3] <= 1'b1;
 `ifdef SIMULATION
+        if (frame_count >= 118 && frame_count <= 138) begin
+          $display("FRAME_DEBUG[%0d]: VBL interrupt set (V=%0d, INTEN[3]=1)", frame_count, V);
+        end else begin
           $display("VBL_INTERRUPT: Pulse detected at V=%0d, INTEN[3]=%0d. IRQ pending.", V, INTEN[3]);
+        end
+`endif
+      end
+
+      // 2. Ensure ROM ISR sees VBL pending when entering dispatcher during VBlank
+      // This matches emulator behavior: with VBL enabled and currently in VBlank,
+      // the VBL cause is visible to the dispatcher even if the enable toggled mid-VBlank.
+      if (cpu_vpa && cpu_vda && (cpu_addr[23:0] == 24'hFEFC3A)) begin
+        if (INTEN[3] && VBlank && !irq_pending[3]) begin
+          irq_pending[3] <= 1'b1;
+`ifdef SIMULATION
+          $display("ISR_LATCH_VBL: Set VBL pending at ISR entry (VBlank=1, INTEN3=1)");
 `endif
         end
       end
-      
-      // Auto-clear VBL IRQ when disabled
-      if (!INTEN[3]) begin
-        irq_pending[3] <= 1'b0;
-      end
-      
+
+      // VBL interrupt is edge-triggered at scan line 192 per TN.IIGS.040.
+      // Enabling INTEN[3] during VBlank does NOT retroactively trigger the interrupt.
+      // This matches Clemens clem_vgc.c:255-259 and GSplus do_vbl_int() behavior.
+      // The vgc_vbl_irq_pulse above is the ONLY way VBL pending gets set.
+
       // Quarter-second interrupt (bit 4) - edge detection
+      // QSEC pending flag stays set until explicitly cleared by C046 read or C047 write
+      // Disabling INTEN[4] does NOT clear the pending flag - allows ROM to read C046 after disabling
       qtrsecond_irq_d <= qtrsecond_irq;
       if ((qtrsecond_irq & ~qtrsecond_irq_d) && INTEN[4]) begin
         irq_pending[4] <= 1'b1;  // Set quarter-second interrupt pending
 `ifdef SIMULATION
-        $display("QSEC_INTERRUPT: Set, INTEN[4]=%0d", INTEN[4]);
+        if (frame_count >= 118 && frame_count <= 138) begin
+          $display("FRAME_DEBUG[%0d]: QSEC interrupt set (INTEN[4]=1)", frame_count);
+        end else begin
+          $display("QSEC_INTERRUPT: Set, INTEN[4]=%0d", INTEN[4]);
+        end
 `endif
-      end else if (!INTEN[4]) begin
-        irq_pending[4] <= 1'b0;  // Auto-clear when disabled
       end
       
       // VGC interrupts (bits 1, 2)
@@ -1763,25 +1934,49 @@ wire ready_out;
 `endif
       end
       
-      // Central pending bit management (bit 0) - OR of all interrupt sources
+      // Set aggregator bit (bit 0) - OR of all interrupt sources
       irq_pending[0] <= |irq_pending[15:1];
 
-      // Maintain C046 mirror bits for VBL/QSEC
-      c046_mirror[3] <= irq_pending[3];
-      c046_mirror[4] <= irq_pending[4];
-      // Set aggregator (bit7) on rising edge of any IRQ pending
-      if ((|irq_pending[15:1]) & ~any_irq_d) begin
-        c046_mirror[7] <= 1'b1;
-      end
-      any_irq_d <= (|irq_pending[15:1]);
+      inten3_prev <= INTEN[3];
 
-      // Apply C046 read side-effect to the mirror after the read is observed
-      if (c046_read) begin
-        c046_mirror <= (c046_mirror & 8'hbf) | (c046_mirror[7] ? 8'h40 : 8'h00);
+      // Debug: track VBL pending transitions explicitly
 `ifdef SIMULATION
-        $display("C046_READ_SIDE_EFFECT: Applied bit manipulation to INTFLAG mirror (7->6, 7 cleared)");
-`endif
+      if (irq_pending[3] != irq3_prev) begin
+        $display("IRQ_DEBUG: VBL pending %0d -> %0d at V=%0d H=%0d INTEN=%02h", irq3_prev, irq_pending[3], V, H, INTEN);
+        irq3_prev <= irq_pending[3];
       end
+
+      // Comprehensive interrupt source tracking for GS/OS boot debug (frames 118-138)
+      if (frame_count >= 118 && frame_count <= 138) begin
+        // Track sound interrupt changes
+        if (snd_irq != snd_irq_prev) begin
+          $display("FRAME_DEBUG[%0d]: snd_irq changed %0d -> %0d", frame_count, snd_irq_prev, snd_irq);
+        end
+        snd_irq_prev <= snd_irq;
+
+        // Track SCC interrupt changes
+        if (scc_irq_n != scc_irq_n_prev) begin
+          $display("FRAME_DEBUG[%0d]: scc_irq_n changed %0d -> %0d (SCC IRQ active=%0d)",
+                   frame_count, scc_irq_n_prev, scc_irq_n, ~scc_irq_n);
+        end
+        scc_irq_n_prev <= scc_irq_n;
+
+        // Track irq_pending register changes (any bit)
+        if (irq_pending != irq_pending_prev) begin
+          $display("FRAME_DEBUG[%0d]: irq_pending changed %04h -> %04h (VBL=%0d QSEC=%0d SCC=%0d VGC1=%0d VGC2=%0d)",
+                   frame_count, irq_pending_prev, irq_pending,
+                   irq_pending[3], irq_pending[4], irq_pending[7], irq_pending[1], irq_pending[2]);
+        end
+        irq_pending_prev <= irq_pending;
+
+        // Track cpu_irq changes
+        if (cpu_irq != cpu_irq_prev) begin
+          $display("FRAME_DEBUG[%0d]: cpu_irq changed %0d -> %0d (INTEN=%02h INTFLAG=%02h snd=%0d)",
+                   frame_count, cpu_irq_prev, cpu_irq, INTEN, INTFLAG, snd_irq);
+        end
+        cpu_irq_prev <= cpu_irq;
+      end
+`endif
 
     end
   end
@@ -1795,7 +1990,13 @@ wire ready_out;
   // Match Clemens/GSplus: Video IRQs are driven via the VGC path (C023/C032),
   // not by the Mega II VBL/QSEC (C041/C046) directly. Exclude bits 3 (VBL) and 4 (QSEC)
   // from the cpu_irq OR to avoid a persistent level-driven VBL from Mega II.
-  assign cpu_irq = |(irq_pending & 16'hFFE6);  // mask out bit0 (aggregator), bit3 (VBL), bit4 (QSEC)
+  // Sound interrupts (snd_irq) go directly to CPU per Clemens emulator_mmio.c:580 and GSplus sound.c
+  //assign cpu_irq = |(irq_pending & 16'hFFE6);  // mask out bit0 (aggregator), bit3 (VBL), bit4 (QSEC)
+       assign cpu_irq = |(irq_pending[15:5])        |  // bits 15-5: other interrupts
+                             (irq_pending[4] & INTEN[4]) |  // bit 4: QSEC (gated by enable)
+                             (irq_pending[3] & INTEN[3]) |  // bit 3: VBL (gated by enable)
+                             |(irq_pending[2:1])        |  // bits 2-1: VGC interrupts (bit 0 is aggregator)
+                             snd_irq;                      // sound/DOC interrupt (not in C046 INTFLAG)
 
 
   always @(posedge CLK_14M)

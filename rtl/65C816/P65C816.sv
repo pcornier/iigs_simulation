@@ -39,7 +39,7 @@ module P65C816
   logic          oldXF;
   logic [15:0]   SB;
   logic [15:0]   DB;
-  logic          EN;
+  logic          EN/*verilator public_flat*/;
   MCode_r          MC;
   logic [7:0]    IR/*verilator public_flat*/;
   logic [7:0]    NextIR;
@@ -61,7 +61,6 @@ module P65C816
   logic          WAIExec;
   logic          STPExec;
   logic          NMI_SYNC;
-  logic          IRQ_SYNC;
   logic          NMI_ACTIVE;
   logic          IRQ_ACTIVE;
   logic          OLD_NMI_N;
@@ -98,6 +97,12 @@ always @(posedge CLK ) begin
 //	if (CE)
 //	$display("RDY_OUT: %x MF: %x ADDR: %x A: %x X %x Y %x D %x SP %x T %x PC %x PBR %x DBR %x D_OUT %x D_IN %x WE %x MCODE.outbus %x irq p flag: %x IR: %x LOAD_PC: %x GOTINTERRUPT %x",RDY_OUT,MF,A_OUT,A,X,Y,D,SP,T,PC,PBR,DBR,D_OUT,D_IN,WE,MC.OUT_BUS,~P[2],IR,MC.LOAD_PC,GotInterrupt);
 //if (~RST_N) $display("RESET");
+	// DEBUG: Print memory write operations
+	// Debug output for memory writes - commented out after debugging complete
+	// if (CE && WE == 1'b0 && RST_N == 1'b1) begin
+	// 	$display("WRITE: IR=%02x ADDR=%06x D_OUT=%02x PBR=%02x DBR=%02x OUT_BUS=%03b BUS_CTRL=%06b SB=%04x SP=%04x EF=%b",
+	// 		IR, A_OUT, D_OUT, PBR, DBR, MC.OUT_BUS, MC.BUS_CTRL, SB, SP, EF);
+	// end
 end
 
 
@@ -156,7 +161,7 @@ end
             else
                NextState = 4'b0000;
          3'b101 :
-            if (DLNoZero == 1'b1 & EF == 1'b0)
+            if (DLNoZero == 1'b1)
                NextState = STATE + 1;
             else
                NextState = STATE + 2;
@@ -168,8 +173,6 @@ end
          3'b111 :
             if (EF == 1'b0)
                NextState = STATE + 1;
-            else if (EF == 1'b1 & IR == 8'h40)
-               NextState = 4'b0000;
             else
                NextState = STATE + 2;
          default :
@@ -245,7 +248,7 @@ end
       end
       else
       begin
-         if (IR == 8'hFB & P[0] == 1'b1 & MC.LOAD_P == 3'b101)
+         if (IR == 8'hFB & P[8] == 1'b1 & MC.LOAD_P == 3'b101)
          begin
             X[15:8] <= 8'h00;
             Y[15:8] <= 8'h00;
@@ -309,31 +312,75 @@ end
                3'b001 :
                   if (EF == 1'b0)
                      SP <= (SP + 1);
-                  else
-                     SP[7:0] <= ((SP[7:0]) + 1);
+                  else begin
+                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD, PLB
+                     // can increment beyond page 1 range during multi-byte operations
+                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
+                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B || IR == 8'hAB)
+                        SP <= (SP + 1);  // Allow overflow
+                     else begin
+                        SP[15:8] <= 8'h01;
+                        SP[7:0] <= ((SP[7:0]) + 1);
+                     end
+                  end
                3'b010 :
                   if (MC.BYTE_SEL[1] == 1'b0 & w16 == 1'b1)
                   begin
                      if (EF == 1'b0)
                         SP <= (SP + 1);
-                     else
+                     else begin
+                        SP[15:8] <= 8'h01;
                         SP[7:0] <= ((SP[7:0]) + 1);
+                     end
                   end
                3'b011 :
                   if (EF == 1'b0)
                      SP <= (SP - 1);
-                  else
-                     SP[7:0] <= ((SP[7:0]) - 1);
+                  else begin
+                     // Per manual section 7.1: same instructions can decrement beyond range
+                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
+                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B)
+                        SP <= (SP - 1);  // Allow underflow
+                     else begin
+                        SP[15:8] <= 8'h01;
+                        SP[7:0] <= ((SP[7:0]) - 1);
+                     end
+                  end
                3'b100 :
                   if (EF == 1'b0)
                      SP <= A;
-                  else
+                  else begin
+                     SP[15:8] <= 8'h01;
                      SP <= {8'h01, A[7:0]};
+                  end
                3'b101 :
                   if (EF == 1'b0)
                      SP <= X;
-                  else
+                  else begin
+                     SP[15:8] <= 8'h01;
                      SP <= {8'h01, X[7:0]};
+                  end
+               3'b110 :
+                  if (EF == 1'b0)
+                     SP <= (SP + 1);
+                  else begin
+                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD, PLB
+                     // can increment beyond page 1 range during multi-byte operations
+                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
+                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B || IR == 8'hAB)
+                        SP <= (SP + 1);  // Allow overflow
+                     else begin
+                        SP[15:8] <= 8'h01;
+                        SP[7:0] <= ((SP[7:0]) + 1);
+                     end
+                  end
+               3'b111 :
+                  if (EF == 1'b0)
+                     SP <= (SP - 1);
+                  else begin
+                     SP[15:8] <= 8'h01;
+                     SP[7:0] <= ((SP[7:0]) - 1);
+                  end
                default :
                   ;
             endcase
@@ -351,10 +398,35 @@ end
                3'b000 :
                   P <= P;
                3'b001 :
-                  if ((MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[0] == 1'b1 & (MF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[0] == 1'b1 & (XF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & (MF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[1] == 1'b1 & (XF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & w16 == 1'b1) | IR == 8'hEB | IR == 8'hAB)
                   begin
-                     P[1:0] <= {ZO, CO};
-                     P[7:6] <= {SO, VO};
+                     if (IR == 8'hAB)  // PLB - Set N and Z based on D_IN
+                     begin
+                        P[7] <= D_IN[7];  // N flag
+                        P[1] <= (D_IN == 8'h00);  // Z flag
+                     end
+                     else if (IR == 8'h2B)  // PLD - Set N and Z based on 16-bit value from stack
+                     begin
+                        P[7] <= D_IN[7];  // N flag from high byte
+                        P[1] <= ({D_IN, DR} == 16'h0000);  // Z flag
+                     end
+                     else if (IR == 8'hBA)  // TSX - Set N and Z based on SP value transferred to X
+                     begin
+                        if (XF == 1'b1 | EF == 1'b1)  // 8-bit X
+                        begin
+                           P[7] <= SP[7];  // N flag from low byte
+                           P[1] <= (SP[7:0] == 8'h00);  // Z flag
+                        end
+                        else  // 16-bit X
+                        begin
+                           P[7] <= SP[15];  // N flag from high byte
+                           P[1] <= (SP == 16'h0000);  // Z flag
+                        end
+                     end
+                     else if ((MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[0] == 1'b1 & (MF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[0] == 1'b1 & (XF == 1'b1 | EF == 1'b1)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & (MF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b1 & MC.BYTE_SEL[1] == 1'b1 & (XF == 1'b0 & EF == 1'b0)) | (MC.LOAD_AXY[1] == 1'b0 & MC.BYTE_SEL[1] == 1'b1 & w16 == 1'b1) | IR == 8'hEB | IR == 8'h5B)
+                     begin
+                        P[1:0] <= {ZO, CO};
+                        P[7:6] <= {SO, VO};
+                     end
                   end
                3'b010 :
                   begin
@@ -437,14 +509,19 @@ end
 
             case (MC.LOAD_DKB)
                2'b01 :
-                  D <= AluIntR;
+                  if (IR == 8'h2B)  // PLD - Load D from stack
+                     D <= {D_IN, DR};  // High byte from D_IN, low byte from DR
+                  else
+                     D <= AluIntR;
                2'b10 :
                   if (IR == 8'h00 | IR == 8'h02)
                      PBR <= {8{1'b0}};
+                  else if (IR == 8'h40 & EF == 1'b1)
+                     PBR <= PBR;  // RTI in emulation mode: don't change PBR
                   else
                      PBR <= D_IN;
                2'b11 :
-                  if (IR == 8'h44 | IR == 8'h54)
+                  if (IR == 8'h44 | IR == 8'h54 | IR == 8'hAB)  // MVN, MVP, PLB
                      DBR <= D_IN;
                   else
                      DBR <= AluIntR[7:0];
@@ -479,18 +556,16 @@ end
       begin
          OLD_NMI_N <= 1'b1;
          NMI_SYNC <= 1'b0;
-         IRQ_SYNC <= 1'b0;
       end
       else
       begin
-         if (CE == 1'b1 & IsResetInterrupt == 1'b0)
+         if (RDY_IN == 1'b1 && CE == 1'b1 & IsResetInterrupt == 1'b0)
          begin
             OLD_NMI_N <= NMI_N;
             if (NMI_N == 1'b0 & OLD_NMI_N == 1'b1 & NMI_SYNC == 1'b0)
                NMI_SYNC <= 1'b1;
-            else if (NMI_ACTIVE == 1'b1 & LAST_CYCLE == 1'b1 & EN == 1'b1)
+            else if (LAST_CYCLE == 1'b1 && NMI_SYNC == 1'b1 && EN == 1'b1)
                NMI_SYNC <= 1'b0;
-            IRQ_SYNC <= (~IRQ_N);
          end
       end
 
@@ -502,30 +577,21 @@ end
          IsNMIInterrupt <= 1'b0;
          IsIRQInterrupt <= 1'b0;
          GotInterrupt <= 1'b1;
-         NMI_ACTIVE <= 1'b0;
-         IRQ_ACTIVE <= 1'b0;
       end
       else
       begin
          if (RDY_IN == 1'b1 & CE == 1'b1)
          begin
-            NMI_ACTIVE <= NMI_SYNC;
-            IRQ_ACTIVE <= (~IRQ_N);
-
             if (LAST_CYCLE == 1'b1 & EN == 1'b1)
             begin
                if (GotInterrupt == 1'b0)
-               begin
-                  GotInterrupt <= (IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE;
-                  if (NMI_ACTIVE == 1'b1)
-                     NMI_ACTIVE <= 1'b0;
-               end
+                  GotInterrupt <= IRQ_ACTIVE | NMI_ACTIVE;
                else
                   GotInterrupt <= 1'b0;
 
                IsResetInterrupt <= 1'b0;
                IsNMIInterrupt <= NMI_ACTIVE;
-               IsIRQInterrupt <= IRQ_ACTIVE & (~P[2]);
+               IsIRQInterrupt <= IRQ_ACTIVE;
             end
          end
       end
@@ -547,18 +613,18 @@ end
       begin
          if (EN == 1'b1 & GotInterrupt == 1'b0)
          begin
-            if (STATE == 4'b0000)
+            if (STATE == 4'b0001)
             begin
-               if (D_IN == 8'hCB)
+               if (IR == 8'hCB)
                   WAIExec <= 1'b1;
-               else if (D_IN == 8'hDB)
+               else if (IR == 8'hDB)
                   STPExec <= 1'b1;
             end
          end
 
          if (RDY_IN == 1'b1 & CE == 1'b1)
          begin
-            if ((NMI_SYNC == 1'b1 | IRQ_SYNC == 1'b1 | ABORT_N == 1'b0) & WAIExec == 1'b1)
+            if ((NMI_SYNC == 1'b1 | IRQ_N == 1'b1 | ABORT_N == 1'b0) & WAIExec == 1'b1)
                WAIExec <= 1'b0;
          end
       end
@@ -569,18 +635,27 @@ end
       logic [15:0]     ADDR_INC;
       ADDR_INC = { 14'b0, MC.ADDR_INC[1:0] };
       case (MC.ADDR_BUS)
-         3'b000 :
-            ADDR_BUS[23:0] = {PBR, PC};
-         3'b001 :
-            ADDR_BUS[23:0] = (({DBR, 16'h0000}) + ({8'h00, (AA[15:0])}) + ({8'h00, ADDR_INC}));
-         3'b010 :
-            if (EF == 1'b0)
-               ADDR_BUS[23:0] = {8'h00, SP};
+         4'b0000 :
+            ADDR_BUS = {PBR, PC};
+         4'b0001 :
+            ADDR_BUS = (({DBR, 16'h0000}) + ({8'h00, (AA[15:0])}) + ({8'h00, ADDR_INC}));
+         4'b0101 :
+            ADDR_BUS = (({AB, 16'h0000}) + ({7'b0000000, AA}) + ({8'h00, ADDR_INC}));
+         4'b0010 :
+            ADDR_BUS = {PBR, ((AA[15:0]) + ADDR_INC)};
+         4'b0110 :
+            ADDR_BUS = {8'h00, ((AA[15:0]) + ADDR_INC)};
+         4'b0011, 4'b0111 :
+            if (EF == 1'b0 || MC.ADDR_BUS[2] == 1'b0 || D[7:0] != 8'h00)
+               ADDR_BUS = {8'h00, (DX + ADDR_INC)};
             else
-               ADDR_BUS[23:0] = {8'h00, 8'h01, SP[7:0]};
-         3'b011 :
-            ADDR_BUS[23:0] = {8'h00, (DX + ADDR_INC)};
-         3'b100 :
+               // Emulation mode with DL=0: force page wrapping
+               ADDR_BUS = {8'h00, DX[15:8], DX[7:0] + ADDR_INC[7:0]};
+         4'b1000, 4'b1100 :
+            // Stack addressing: SP register is constrained to page 1 in emulation mode,
+            // but address calculations with offsets can overflow (per manual section 7.1)
+            ADDR_BUS = {8'h00, SP + ADDR_INC};
+         4'b1111 :
             begin
                ADDR_BUS[23:4] = {8'h00, 11'b11111111111, EF};
                if (IsResetInterrupt == 1'b1)
@@ -596,14 +671,8 @@ end
                else
                   ADDR_BUS[3:0] = {EF, 2'b11, MC.ADDR_INC[0]};
             end
-         3'b101 :
-            ADDR_BUS[23:0] = (({AB, 16'h0000}) + ({7'b0000000, AA}) + ({8'h00, ADDR_INC}));
-         3'b110 :
-            ADDR_BUS[23:0] = {8'h00, ((AA[15:0]) + ADDR_INC)};
-         3'b111 :
-            ADDR_BUS[23:0] = {PBR, ((AA[15:0]) + ADDR_INC)};
          default :
-            ;
+            ADDR_BUS = 24'h000000;
       endcase
    end
 
@@ -620,12 +689,12 @@ end
       else
          rmw = 1'b0;
 
-      if (MC.ADDR_BUS == 3'b100)
+      if (MC.ADDR_BUS == 4'b1111)
          VPB = 1'b0;
       else
          VPB = 1'b1;
 
-      if ((MC.ADDR_BUS == 3'b001 | MC.ADDR_BUS == 3'b011) & rmw == 1'b1)
+      if ((MC.ADDR_BUS == 4'b0001 | MC.ADDR_BUS == 4'b0011 | MC.ADDR_BUS == 4'b0111) & rmw == 1'b1)
          MLB = 1'b0;
       else
          MLB = 1'b1;
@@ -641,7 +710,7 @@ end
          softInt = 1'b0;
 
       VDA = MC.VA[1];
-      VPA = MC.VA[0] | (twoCls & ((IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE)) | softInt;
+      VPA = MC.VA[0] | (twoCls & (IRQ_ACTIVE | NMI_ACTIVE)) | softInt;
    end
 
    assign RDY_OUT = EN;

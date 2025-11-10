@@ -4,7 +4,7 @@
 package P65C816_pkg;
   typedef struct packed {
     logic [2:0]  stateCtrl;
-    logic [2:0]  addrBus;
+    logic [3:0]  addrBus;
     logic [1:0]  addrInc;
     logic [2:0]  loadP;
     logic [1:0]  loadT;
@@ -31,7 +31,7 @@ package P65C816_pkg;
   typedef struct packed {
     ALUCtrl_r    ALU_CTRL;
     logic [2:0]  STATE_CTRL;
-    logic [2:0]  ADDR_BUS;
+    logic [3:0]  ADDR_BUS;
     logic [1:0]  ADDR_INC;
     logic [1:0]  IND_CTRL;
     logic [7:0]  ADDR_CTRL;

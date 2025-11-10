@@ -881,8 +881,110 @@ always @(posedge CLK_14M) begin
     end
     
     // Key repeat moved back to $C000 reads - no background repeat generation
-    
-    // Address decoding and register access  
+
+    // CMD state machine: Execute command when all bytes have been received
+    // This runs every cycle, independent of strobe, to execute commands after the last byte is stored
+    // NOTE: Only READ_MEM (0x09) needs this - other commands are handled in the strobe-gated block
+    if (state == CMD && cmd_len == 4'd0 && cmd == 8'h09) begin
+      $display("ADB CMD EXEC: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
+      state <= IDLE;
+      cmd_response_ready <= 1'b1;  // Signal that command has been processed
+
+      case (cmd)
+        8'h09: begin
+          // READ_MEM - Read byte from ADB controller memory (2 bytes)
+          // cmd_data[15:8] = address LOW byte (first byte sent)
+          // cmd_data[7:0] = address HIGH byte (second byte sent)
+          // Full 16-bit address = (cmd_data[7:0] << 8) | cmd_data[15:8]
+
+          $display("ADB READ_MEM: addr=0x%04h (bytes: low=0x%02h high=0x%02h)", {cmd_data[7:0], cmd_data[15:8]}, cmd_data[15:8], cmd_data[7:0]);
+
+          if ({cmd_data[7:0], cmd_data[15:8]} < 16'h0100) begin
+            // RAM area (0x00-0xFF): Read from RAM
+            ram_addr <= cmd_data[15:8];  // Only low byte matters for RAM
+            ram_wen <= 1'b0;
+
+            // Special handling for specific addresses (from gsplus)
+            case (cmd_data[15:8])
+              8'h01: begin
+                // ROM checksum low byte
+                data <= { 24'd0, 8'h72 };
+                $display("ADB READ_MEM: Special addr 0x01 -> 0x72 (ROM checksum low)");
+              end
+              8'h03: begin
+                // ROM checksum high byte - ROM1=0xF7, ROM3=0x26
+                if (VERSION >= 6) begin
+                  data <= { 24'd0, 8'h26 };
+                  $display("ADB READ_MEM: Special addr 0x03 -> 0x26 (ROM checksum high ROM3)");
+                end else begin
+                  data <= { 24'd0, 8'hF7 };
+                  $display("ADB READ_MEM: Special addr 0x03 -> 0xF7 (ROM checksum high ROM1)");
+                end
+              end
+              8'h0B: begin
+                // Special key state byte for Out of This World (ROM 1)
+                data <= { 24'd0, 8'h00 };
+                $display("ADB READ_MEM: Special addr 0x0B -> 0x00");
+              end
+              8'h0C: begin
+                // Special key state byte for Out of This World (ROM 3)
+                data <= { 24'd0, 8'h00 };
+                $display("ADB READ_MEM: Special addr 0x0C -> 0x00");
+              end
+              8'hE2: begin
+                // No Apple IIe keyboard support (bits 1 and 2 = 1)
+                data <= { 24'd0, 8'h06 };
+                $display("ADB READ_MEM: Special addr 0xE2 -> 0x06 (no IIe keyboard)");
+              end
+              8'hE8: begin
+                // Apple/Option key state
+                data <= { 24'd0, 8'h00 };
+                $display("ADB READ_MEM: Special addr 0xE8 -> 0x00 (no Apple/Option keys)");
+              end
+              default: begin
+                // Normal RAM read
+                data <= { 24'd0, ram_dout };
+                $display("ADB READ_MEM: RAM addr=0x%02h data=0x%02h", cmd_data[15:8], ram_dout);
+              end
+            endcase
+          end else if ({cmd_data[7:0], cmd_data[15:8]} >= 16'h1000 && {cmd_data[7:0], cmd_data[15:8]} < 16'h2000) begin
+            // ROM area (0x1000-0x1FFF): ROM self-test checksum
+            case ({cmd_data[7:0], cmd_data[15:8]})
+              16'h1400: begin
+                data <= { 24'd0, 8'h72 };  // ROM checksum low byte
+                $display("ADB READ_MEM: ROM addr 0x1400 -> 0x72 (checksum low)");
+              end
+              16'h1401: begin
+                // ROM checksum high byte - ROM1=0xF7, ROM3=0x26
+                if (VERSION >= 6) begin
+                  data <= { 24'd0, 8'h26 };
+                  $display("ADB READ_MEM: ROM addr 0x1401 -> 0x26 (checksum high ROM3)");
+                end else begin
+                  data <= { 24'd0, 8'hF7 };
+                  $display("ADB READ_MEM: ROM addr 0x1401 -> 0xF7 (checksum high ROM1)");
+                end
+              end
+              default: begin
+                data <= { 24'd0, 8'h00 };  // Rest of ROM returns 0
+                $display("ADB READ_MEM: ROM addr 0x%04h -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
+              end
+            endcase
+          end else begin
+            // Out of range
+            data <= { 24'd0, 8'h00 };
+            $display("ADB READ_MEM: addr 0x%04h out of range -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
+          end
+          pending_data <= 3'd1;
+        end
+        // Add other commands that need execution here if needed in future
+        default: begin
+          // Unknown command or already handled inline
+          $display("ADB CMD EXEC: cmd=0x%02h not handled in exec block (may be handled inline)", cmd);
+        end
+      endcase
+    end
+
+    // Address decoding and register access
     if (strobe) begin
 `ifdef ADB_DEBUG
       $display("ADB MODULE: strobe=1, addr=0x%02h (%d), rw=%b", addr, addr, rw);
@@ -930,17 +1032,20 @@ always @(posedge CLK_14M) begin
                 //$display("ADB READ C026: cmd_response_ready=0, data[7:0]=0x%02h, returning 0x%02h", data[7:0], pending_irq ? 8'b0001_0000 : data[7:0]);
               end
             end
-            CMD: dout <= 8'd0;
+            CMD: begin
+              // Return status indicating ready for command bytes
+              // Return 0x80 to indicate "ready" (similar to command response status)
+              dout <= 8'h80;
+              $display("ADB C026 READ in CMD state: returning 0x80 (ready for cmd data), cmd_len=%d", cmd_len);
+            end
             DATA: begin
               dout <= data[7:0];
-              $display("ADB C026 READ in DATA state: returning data[7:0]=0x%02h, pending_data=%d, strobe=%b, strobe_prev=%b", data[7:0], pending_data, strobe, strobe_prev);
-              // Use strobe edge detection (like writes) to avoid dependence on phi2 timing
-              if (strobe & ~strobe_prev) begin
-                $display("ADB C026 DATA: Shifting data, pending_data %d->%d", pending_data, pending_data - 3'd1);
-                data <= { 8'd0, data[31:8] };
-                if (pending_data > 3'd0) pending_data <= pending_data - 3'd1;
-                if (pending_data == 3'd1) state <= IDLE;
-              end
+              $display("ADB C026 READ in DATA state: returning data[7:0]=0x%02h, pending_data=%d", data[7:0], pending_data);
+              // Shift data and decrement counter on each read
+              data <= { 8'd0, data[31:8] };
+              if (pending_data > 3'd0) pending_data <= pending_data - 3'd1;
+              if (pending_data == 3'd1) state <= IDLE;
+              $display("ADB C026 DATA: After read, pending_data will be %d, state will be %d", pending_data - 3'd1, (pending_data == 3'd1) ? 0 : 2);
             end
           endcase
           // Clear response flag after read when no pending data
@@ -1254,85 +1359,8 @@ always @(posedge CLK_14M) begin
                     end
                   end
                   8'h09: begin
-                    // READ_MEM - Read byte from ADB controller memory (2 bytes)
-                    // cmd_data[15:8] = address LOW byte (first byte sent)
-                    // cmd_data[7:0] = address HIGH byte (second byte sent)
-                    // Full 16-bit address = (cmd_data[7:0] << 8) | cmd_data[15:8]
-                    // Based on gsplus implementation
-
-                    $display("ADB READ_MEM: addr=0x%04h (bytes: low=0x%02h high=0x%02h)", {cmd_data[7:0], cmd_data[15:8]}, cmd_data[15:8], cmd_data[7:0]);
-                    cmd_response_ready <= 1'b1;  // Signal that response data is ready
-
-                    if ({cmd_data[7:0], cmd_data[15:8]} < 16'h0100) begin
-                      // RAM area (0x00-0xFF): Read from RAM
-                      ram_addr <= cmd_data[15:8];  // Only low byte matters for RAM
-                      ram_wen <= 1'b0;
-
-                      // Special handling for specific addresses (from gsplus)
-                      case (cmd_data[15:8])
-                        8'h01: begin
-                          // ROM checksum low byte - computed by ADB microcontroller firmware
-                          // ROM 01 checksum = 0xF772, ROM 03 checksum = 0x2672
-                          data <= { 24'd0, 8'h72 };
-                          $display("ADB READ_MEM: Special addr 0x01 -> 0x72 (ROM checksum low)");
-                        end
-                        8'h03: begin
-                          // ROM checksum high byte for ROM3
-                          data <= { 24'd0, 8'h26 };
-                          $display("ADB READ_MEM: Special addr 0x03 -> 0x26 (ROM checksum high ROM3)");
-                        end
-                        8'h0B: begin
-                          // Special key state byte for Out of This World (ROM 1)
-                          // For now just return 0
-                          data <= { 24'd0, 8'h00 };
-                          $display("ADB READ_MEM: Special addr 0x0B -> 0x00");
-                        end
-                        8'h0C: begin
-                          // Special key state byte for Out of This World (ROM 3)
-                          // For now just return 0
-                          data <= { 24'd0, 8'h00 };
-                          $display("ADB READ_MEM: Special addr 0x0C -> 0x00");
-                        end
-                        8'hE2: begin
-                          // No Apple IIe keyboard support (bits 1 and 2 = 1)
-                          data <= { 24'd0, 8'h06 };
-                          $display("ADB READ_MEM: Special addr 0xE2 -> 0x06 (no IIe keyboard)");
-                        end
-                        8'hE8: begin
-                          // Apple/Option key state - for now return 0 (no keys pressed)
-                          data <= { 24'd0, 8'h00 };
-                          $display("ADB READ_MEM: Special addr 0xE8 -> 0x00 (no Apple/Option keys)");
-                        end
-                        default: begin
-                          // Normal RAM read
-                          data <= { 24'd0, ram_dout };
-                          $display("ADB READ_MEM: RAM addr=0x%02h data=0x%02h", cmd_data[15:8], ram_dout);
-                        end
-                      endcase
-                    end else if ({cmd_data[7:0], cmd_data[15:8]} >= 16'h1000 && {cmd_data[7:0], cmd_data[15:8]} < 16'h2000) begin
-                      // ROM area (0x1000-0x1FFF): ROM self-test checksum
-                      // Based on gsplus: ROM checksum at 0x1400/0x1401
-                      // ROM 01 checksum = 0xF772, ROM 03 checksum = 0x2672
-                      case ({cmd_data[7:0], cmd_data[15:8]})
-                        16'h1400: begin
-                          data <= { 24'd0, 8'h72 };  // ROM checksum low byte
-                          $display("ADB READ_MEM: ROM addr 0x1400 -> 0x72 (checksum low)");
-                        end
-                        16'h1401: begin
-                          data <= { 24'd0, 8'h26 };  // ROM checksum high byte for ROM3
-                          $display("ADB READ_MEM: ROM addr 0x1401 -> 0x26 (checksum high ROM3)");
-                        end
-                        default: begin
-                          data <= { 24'd0, 8'h00 };  // Rest of ROM returns 0
-                          $display("ADB READ_MEM: ROM addr 0x%04h -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
-                        end
-                      endcase
-                    end else begin
-                      // Out of range
-                      data <= { 24'd0, 8'h00 };
-                      $display("ADB READ_MEM: addr 0x%04h out of range -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
-                    end
-                    pending_data <= 3'd1;
+                    // READ_MEM - Handled in CMD state execution block (runs when cmd_len==0)
+                    // This is just a placeholder to show the command exists
                   end
                   8'h11: ; // send keycode data
                   8'h12: ; // cmd 12 - ROM3 only

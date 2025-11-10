@@ -125,35 +125,34 @@ module AddrGen
             ;
       endcase
 
-      if (e6502 == 1'b0)
-         case (IND_CTRL)
-            2'b00 :
-               if (AAHCtrl[2] == 1'b0)
-                  NewAAH = (({1'b0, AAH}) + ({1'b0, X[15:8]}));
-               else
-                  NewAAH = (({1'b0, DH}) + ({1'b0, X[15:8]}) + ({8'b00000000, NewAAL[8]}));
-            2'b01 :
-               if (AAHCtrl[2] == 1'b0)
-                  NewAAH = (({1'b0, AAH}) + ({1'b0, Y[15:8]}));
-               else
-                  NewAAH = (({1'b0, DH}) + ({1'b0, Y[15:8]}) + ({8'b00000000, NewAAL[8]}));
-            2'b10 :
-               NewAAH = {1'b0, X[15:8]};
-            2'b11 :
-               NewAAH = {1'b0, Y[15:8]};
-            default :
-               ;
-         endcase
-      else
-         if (AAHCtrl[2] == 1'b0)
-            NewAAH = {1'b0, AAH};
-         else
-            NewAAH = {1'b0, DH};
+      case (IND_CTRL)
+         2'b00 :
+            if (AAHCtrl[2] == 1'b0)
+               NewAAH = (({1'b0, AAH}) + ({1'b0, X[15:8]}));
+            else if (e6502 == 1'b1 && D[7:0] == 8'h00)
+               // Emulation mode with DL=0: wrap at page boundary, no carry
+               NewAAH = (({1'b0, DH}) + ({1'b0, X[15:8]}));
+            else
+               NewAAH = (({1'b0, DH}) + ({1'b0, X[15:8]}) + ({8'b00000000, NewAAL[8]}));
+         2'b01 :
+            if (AAHCtrl[2] == 1'b0)
+               NewAAH = (({1'b0, AAH}) + ({1'b0, Y[15:8]}));
+            else if (e6502 == 1'b1 && D[7:0] == 8'h00)
+               // Emulation mode with DL=0: wrap at page boundary, no carry
+               NewAAH = (({1'b0, DH}) + ({1'b0, Y[15:8]}));
+            else
+               NewAAH = (({1'b0, DH}) + ({1'b0, Y[15:8]}) + ({8'b00000000, NewAAL[8]}));
+         2'b10 :
+            NewAAH = {1'b0, X[15:8]};
+         2'b11 :
+            NewAAH = {1'b0, Y[15:8]};
+         default :
+            ;
+      endcase
    end
 
-   assign InnerDS = (ABSCtrl == 2'b11 & (AALCtrl[2] == 1'b1 | AAHCtrl[2] == 1'b1)) ? S :
-                    (e6502 == 1'b0) ? D :
-                    {D[15:8], 8'h00};
+   assign InnerDS = (ABSCtrl == 2'b11 & (AALCtrl[2] == 1'b1 | AAHCtrl[2] == 1'b1)) ?
+                    (e6502 == 1'b1 ? {8'h01, S[7:0]} : S) : D;
 
    assign NewDL = (({1'b0, InnerDS[7:0]}) + ({1'b0, D_IN}));
    assign NewAAHWithCarry = (NewAAH + ({8'b00000000, SavedCarry}));

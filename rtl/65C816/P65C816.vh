@@ -28,7 +28,7 @@ typedef struct packed {
 typedef struct packed {
   ALUCtrl_r ALU_CTRL;
   logic [2:0] STATE_CTRL;
-  logic [2:0] ADDR_BUS;
+  logic [3:0] ADDR_BUS;
   logic [1:0] ADDR_INC;
   logic [1:0] IND_CTRL;
   logic [7:0] ADDR_CTRL;
