@@ -9,7 +9,7 @@ module mcode
    input [3:0] STATE,
    output MCode_r   M
    );
-parameter [52:0] M_TAB[0:2047] = '{
+localparam logic [52:0] M_TAB[0:2047] = '{
 // 00 BRK
 {3'b111, 4'b0000, 2'b00, 3'b000, 2'b00, 2'b00, 8'b00000000, 3'b001, 3'b000, 3'b000, 2'b00, 6'b000000, 5'b00000, 2'b00, 3'b000, 2'b00}, // ['PC++']
 {3'b000, 4'b1100, 2'b00, 3'b000, 2'b00, 2'b00, 8'b00000000, 3'b000, 3'b011, 3'b000, 2'b00, 6'b000000, 5'b00000, 2'b00, 3'b100, 2'b10}, // ['PBR->[00:SP--]']
@@ -2315,7 +2315,7 @@ parameter [52:0] M_TAB[0:2047] = '{
 {3'bXXX, 4'bXXXX, 2'bXX, 3'bXXX, 2'bXX, 2'bXX, 8'bXXXXXXXX, 3'bXXX, 3'bXXX, 3'bXXX, 2'bXX, 6'bXXXXXX, 5'bXXXXX, 2'bXX, 3'bXXX, 2'bXX},
 {3'bXXX, 4'bXXXX, 2'bXX, 3'bXXX, 2'bXX, 2'bXX, 8'bXXXXXXXX, 3'bXXX, 3'bXXX, 3'bXXX, 2'bXX, 6'bXXXXXX, 5'bXXXXX, 2'bXX, 3'bXXX, 2'bXX}};
 
-   parameter [7:0] ALU_TAB[0:16] = '{
+   localparam logic [7:0] ALU_TAB[0:16] = '{
       {3'b100, 3'b100, 1'b0, 1'b0},
       {3'b100, 3'b100, 1'b0, 1'b1},
       {3'b110, 3'b100, 1'b0, 1'b0},
