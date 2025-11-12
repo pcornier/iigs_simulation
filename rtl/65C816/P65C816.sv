@@ -100,8 +100,8 @@ always @(posedge CLK ) begin
 	// DEBUG: Print memory write operations
 	// Debug output for memory writes - commented out after debugging complete
 	// if (CE && WE == 1'b0 && RST_N == 1'b1) begin
-	// 	$display("WRITE: IR=%02x ADDR=%06x D_OUT=%02x PBR=%02x DBR=%02x OUT_BUS=%03b BUS_CTRL=%06b SB=%04x SP=%04x EF=%b",
-	// 		IR, A_OUT, D_OUT, PBR, DBR, MC.OUT_BUS, MC.BUS_CTRL, SB, SP, EF);
+	// 	$display("WRITE: IR=%02x ADDR=%06x D_OUT=%02x P=%03x OUT_BUS=%03b BUS_CTRL=%06b SB=%04x SP=%04x EF=%b",
+	// 		IR, A_OUT, D_OUT, P, MC.OUT_BUS, MC.BUS_CTRL, SB, SP, EF);
 	// end
 end
 
@@ -191,10 +191,36 @@ end
       end
       else
       begin
+         if (IR == 8'h28 && STATE == 3) begin
+            //$display("CYCLE_START: EN=%d STATE=%d NextState=%d PC=%02x:%04x ADDR_BUS=%06x D_IN=%02x", EN, STATE, NextState, PBR, {PC[15:8], PC[7:0]}, ADDR_BUS, D_IN);
+         end
+
          if (EN == 1'b1)
          begin
+            if (IR == 8'h28 && STATE == 3) begin
+              // $display("STATE_UPDATE: EN=1, assigning STATE<=%d (currently %d)", NextState, STATE);
+            end
             IR <= NextIR;
             STATE <= NextState;
+
+            // Debug: Track every instruction completion with P[2] value (after this cycle completes)
+            if (LAST_CYCLE && EN) begin
+               //if (MC.LOAD_P == 3'b011)
+                  //$display("INSTR_COMPLETE: %02x:%04x IR=%02x P[2]=%d (PLP will load %d from stack=%02x)", PBR, PC, IR, P[2], D_IN[2], D_IN);
+               //else
+                  //$display("INSTR_COMPLETE: %02x:%04x IR=%02x P[2]=%d", PBR, PC, IR, P[2]);
+            end
+
+            // Debug: Track MVN instruction state transitions
+            if (IR == 8'h54 && STATE != NextState) begin
+               //$display("MVN_STATE: %02x:%04x STATE %d -> %d (A=%04x P[2]=%d)", PBR, PC, STATE, NextState, A, P[2]);
+            end
+
+            // Debug: Track P[2] for every MVN instruction cycle
+            if (IR == 8'h54) begin
+               $display("MVN_P2_TRACK: %02x:%04x STATE=%d P[2]=%d IRQ_ACTIVE=%d LAST_CYCLE=%d",
+                        PBR, PC, STATE, P[2], IRQ_ACTIVE, LAST_CYCLE);
+            end
          end
       end
 
@@ -216,7 +242,7 @@ end
                (MC.BUS_CTRL[5:3] == 3'b010) ? Y :
                (MC.BUS_CTRL[5:3] == 3'b011) ? D :
                (MC.BUS_CTRL[5:3] == 3'b100) ? T :
-               (MC.BUS_CTRL[5:3] == 3'b101) ? SP :
+               (MC.BUS_CTRL[5:3] == 3'b101) ? (EF ? {8'h01, SP[7:0]} : SP) :
                (MC.BUS_CTRL[5:3] == 3'b110) ? {8'h00, PBR} :
                (MC.BUS_CTRL[5:3] == 3'b111) ? {8'h00, DBR} :
                16'h0000;
@@ -312,40 +338,23 @@ end
                3'b001 :
                   if (EF == 1'b0)
                      SP <= (SP + 1);
-                  else begin
-                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD, PLB
-                     // can increment beyond page 1 range during multi-byte operations
-                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
-                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B || IR == 8'hAB)
-                        SP <= (SP + 1);  // Allow overflow
-                     else begin
-                        SP[15:8] <= 8'h01;
-                        SP[7:0] <= ((SP[7:0]) + 1);
-                     end
-                  end
+                  else
+                     // Normalize then increment - allows wrapping to 0x0200
+                     SP <= ({8'h01, SP[7:0]} + 1);
                3'b010 :
                   if (MC.BYTE_SEL[1] == 1'b0 & w16 == 1'b1)
                   begin
                      if (EF == 1'b0)
                         SP <= (SP + 1);
-                     else begin
-                        SP[15:8] <= 8'h01;
-                        SP[7:0] <= ((SP[7:0]) + 1);
-                     end
+                     else
+                        SP <= ({8'h01, SP[7:0]} + 1);
                   end
                3'b011 :
                   if (EF == 1'b0)
                      SP <= (SP - 1);
-                  else begin
-                     // Per manual section 7.1: same instructions can decrement beyond range
-                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
-                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B)
-                        SP <= (SP - 1);  // Allow underflow
-                     else begin
-                        SP[15:8] <= 8'h01;
-                        SP[7:0] <= ((SP[7:0]) - 1);
-                     end
-                  end
+                  else
+                     // Normalize then decrement - allows wrapping to 0x00FF
+                     SP <= ({8'h01, SP[7:0]} - 1);
                3'b100 :
                   if (EF == 1'b0)
                      SP <= A;
@@ -363,24 +372,13 @@ end
                3'b110 :
                   if (EF == 1'b0)
                      SP <= (SP + 1);
-                  else begin
-                     // Per manual section 7.1: RTL, JSL, JSR(a,x), PEA, PEI, PER, PHD, PLD, PLB
-                     // can increment beyond page 1 range during multi-byte operations
-                     if (IR == 8'h6B || IR == 8'h22 || IR == 8'hFC || IR == 8'hF4 ||
-                         IR == 8'hD4 || IR == 8'h62 || IR == 8'h0B || IR == 8'h2B || IR == 8'hAB)
-                        SP <= (SP + 1);  // Allow overflow
-                     else begin
-                        SP[15:8] <= 8'h01;
-                        SP[7:0] <= ((SP[7:0]) + 1);
-                     end
-                  end
+                  else
+                     SP <= ({8'h01, SP[7:0]} + 1);
                3'b111 :
                   if (EF == 1'b0)
                      SP <= (SP - 1);
-                  else begin
-                     SP[15:8] <= 8'h01;
-                     SP[7:0] <= ((SP[7:0]) - 1);
-                  end
+                  else
+                     SP <= ({8'h01, SP[7:0]} - 1);
                default :
                   ;
             endcase
@@ -477,6 +475,21 @@ end
                default :
                   ;
             endcase
+
+            // Debug: Track I flag (P[2]) changes (only on the cycle where P actually changes)
+            if (MC.LOAD_P == 3'b010) begin
+               // SEI or CLD (sets I=1, D=0)
+               //$display("I_FLAG_DEBUG: %02x:%04x SEI/CLD executed, P[2]: 0 -> 1 (IR=%02x STATE=%d)", PBR, PC, IR, STATE);
+            end
+            else if (MC.LOAD_P == 3'b011) begin
+               // PLP - restore P from stack
+               //$display("I_FLAG_DEBUG: %02x:%04x IR=%02x STATE=%d NextState=%d STATE_CTRL=%03b LAST_CYCLE=%d EN=%d PLP loads P, P[2]: %d -> %d (from stack=%02x)", PBR, PC, IR, STATE, NextState, MC.STATE_CTRL, LAST_CYCLE, EN, P[2], D_IN[2], D_IN);
+            end
+            else if (MC.LOAD_P == 3'b100 && IR[7:6] == 2'b01) begin
+               // CLI or SEI (IR[5] = new value)
+               //if (P[2] != IR[5])
+               //   $display("I_FLAG_DEBUG: %02x:%04x CLI/SEI executed, P[2]: %d -> %d (IR=%02x STATE=%d)", PBR, PC, P[2], IR[5], IR, STATE);
+            end
       end
 
 
@@ -592,6 +605,15 @@ end
                if (GotInterrupt == 1'b0)
                begin
                   GotInterrupt <= (IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE;
+
+                  // Debug: Track interrupt decisions
+                  if ((IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE) begin
+                     //$display("INTERRUPT_CHECK: %02x:%04x LAST_CYCLE, setting GotInterrupt=1 (IRQ_ACTIVE=%d P[2]=%d NMI_ACTIVE=%d) IR=%02x STATE=%d", PBR, PC, IRQ_ACTIVE, P[2], NMI_ACTIVE, IR, STATE);
+                  end
+                  else if (IRQ_ACTIVE & P[2]) begin
+                     //$display("INTERRUPT_BLOCKED: %02x:%04x LAST_CYCLE, I flag blocks IRQ (IRQ_ACTIVE=%d P[2]=%d) IR=%02x STATE=%d", PBR, PC, IRQ_ACTIVE, P[2], IR, STATE);
+                  end
+
                   if (NMI_ACTIVE == 1'b1)
                      NMI_ACTIVE <= 1'b0;
                end
@@ -661,9 +683,18 @@ end
                // Emulation mode with DL=0: force page wrapping
                ADDR_BUS = {8'h00, DX[15:8], DX[7:0] + ADDR_INC[7:0]};
          4'b1000, 4'b1100 :
-            // Stack addressing: SP register is constrained to page 1 in emulation mode,
-            // but address calculations with offsets can overflow (per manual section 7.1)
-            ADDR_BUS = {8'h00, SP + ADDR_INC};
+            // Stack addressing: In emulation mode, SP should be in page 1 (0x01xx)
+            // Multi-byte operations can wrap down to page 0 (0x00xx) only
+            // Page 2 values are arbitrary initial SP and should be normalized
+            if (EF == 1'b1) begin
+               // Allow SP in page 0 (wrapped) or page 1 (normal)
+               // Normalize anything else (including page 2) to page 1
+               if (SP[15:8] == 8'h00 || SP[15:8] == 8'h01)
+                  ADDR_BUS = {8'h00, SP + ADDR_INC};
+               else
+                  ADDR_BUS = {8'h00, {8'h01, SP[7:0]} + ADDR_INC};
+            end else
+               ADDR_BUS = {8'h00, SP + ADDR_INC};
          4'b1111 :
             begin
                ADDR_BUS[23:4] = {8'h00, 11'b11111111111, EF};
