@@ -577,21 +577,30 @@ end
          IsNMIInterrupt <= 1'b0;
          IsIRQInterrupt <= 1'b0;
          GotInterrupt <= 1'b1;
+         NMI_ACTIVE <= 1'b0;
+         IRQ_ACTIVE <= 1'b0;
       end
       else
       begin
          if (RDY_IN == 1'b1 & CE == 1'b1)
          begin
+            NMI_ACTIVE <= NMI_SYNC;
+            IRQ_ACTIVE <= (~IRQ_N);
+
             if (LAST_CYCLE == 1'b1 & EN == 1'b1)
             begin
                if (GotInterrupt == 1'b0)
-                  GotInterrupt <= IRQ_ACTIVE | NMI_ACTIVE;
+               begin
+                  GotInterrupt <= (IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE;
+                  if (NMI_ACTIVE == 1'b1)
+                     NMI_ACTIVE <= 1'b0;
+               end
                else
                   GotInterrupt <= 1'b0;
 
                IsResetInterrupt <= 1'b0;
                IsNMIInterrupt <= NMI_ACTIVE;
-               IsIRQInterrupt <= IRQ_ACTIVE;
+               IsIRQInterrupt <= IRQ_ACTIVE & (~P[2]);
             end
          end
       end
@@ -710,7 +719,7 @@ end
          softInt = 1'b0;
 
       VDA = MC.VA[1];
-      VPA = MC.VA[0] | (twoCls & (IRQ_ACTIVE | NMI_ACTIVE)) | softInt;
+      VPA = MC.VA[0] | (twoCls & ((IRQ_ACTIVE & (~P[2])) | NMI_ACTIVE)) | softInt;
    end
 
    assign RDY_OUT = EN;
