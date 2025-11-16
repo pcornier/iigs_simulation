@@ -54,25 +54,25 @@ module soundglu
 	 if (wr && ph0_en) begin
 	    case (host_addr)
 	      0: begin // Sound Control
-		 $display("%m: %h => SNDCTL", host_data_in);
+		 //$display("%m: %h => SNDCTL", host_data_in);
 		 ram_access <= host_data_in[6];
 		 auto_increment <= host_data_in[5];
 		 volume <= host_data_in[3:0];
 	      end
 	      1: begin // Sound Data
-		 if (!ram_access)
-		   $display("%m: %h => SNDDATA", host_data_in);
+		 //if (!ram_access)
+		 //  $display("%m: %h => SNDDATA", host_data_in);
 		 sound_cycle_state <= ST_PENDING;
 		 sound_write_pending <= 1;
 		 sound_data_out <= host_data_in;
 	      end
 	      2: begin
 		 sound_addr[7:0] <= host_data_in;  // Address Pointer Low
-		 $display("%m: %h => SNDAPL", host_data_in);
+		 //$display("%m: %h => SNDAPL", host_data_in);
 	      end
 	      3: begin
 		 sound_addr[15:8] <= host_data_in; // Address Pointer High
-		 $display("%m: %h => SNDAPH", host_data_in);
+		 //$display("%m: %h => SNDAPH", host_data_in);
 	      end
 	    endcase // case (host_addr)
 	 end // if (wr && ph0_en)
