@@ -22,7 +22,6 @@ module soundglu
 
    reg		    auto_increment;
    reg [3:0]	    volume;
-   reg		    select_d;
    reg [3:0]	    clk_phase; // SWITCH TO 14
    reg [1:0]	    sound_cycle_state;
    reg		    sound_write_pending;
@@ -34,7 +33,6 @@ module soundglu
       doc_enable <= ph0_en;
       doc_wr <= 0;
       ram_wr <= 0;
-      select_d <= select;
 
       // doc_enable high means the DOC just executed its cycle, so it's
       // time to execute the pending host access
@@ -52,8 +50,8 @@ module soundglu
       end
 
       // CPU interface
-      if (!select_d && select) begin
-	 if (wr) begin
+      if (select) begin
+	 if (wr && ph0_en) begin
 	    case (host_addr)
 	      0: begin // Sound Control
 		 $display("%m: %h => SNDCTL", host_data_in);
@@ -77,21 +75,23 @@ module soundglu
 		 $display("%m: %h => SNDAPH", host_data_in);
 	      end
 	    endcase // case (host_addr)
-	 end // if (wr)
+	 end // if (wr && ph0_en)
 	 else begin
 	    case (host_addr)
 	      0: host_data_out <= {sound_cycle_state == ST_PENDING, ram_access, auto_increment, 1'b1, volume}; // Sound Control
 	      1: begin // Sound Data
-		 sound_cycle_state <= ST_PENDING;
-		 sound_write_pending <= 0;
 		 host_data_out <= read_data_reg; 
-		 read_data_reg <= sound_data_in;
+		 if (ph0_en) begin
+		    sound_cycle_state <= ST_PENDING;
+		    sound_write_pending <= 0;
+		    read_data_reg <= sound_data_in;
+		 end
 	      end
 	      2: host_data_out <= sound_addr[7:0];  // Address Pointer Low
 	      3: host_data_out <= sound_addr[15:8]; // Address Pointer High
 	    endcase
-	 end // else: !if(wr)
-      end // if (!select_d && select)
+	 end // else: !if(wr && ph0_en)
+      end // if (select)
 
       if (reset) begin
 	 clk_phase <= 0;
