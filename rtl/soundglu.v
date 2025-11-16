@@ -46,9 +46,6 @@ module soundglu
       else if (sound_cycle_state == ST_FINISHING) begin
 	 sound_write_pending <= 0;
 	 sound_cycle_state <= ST_IDLE;
-
-	 if (!sound_write_pending)
-	   read_data_reg <= sound_data_in;
 	 
 	 if (auto_increment)
 	   sound_addr <= sound_addr + 1;
