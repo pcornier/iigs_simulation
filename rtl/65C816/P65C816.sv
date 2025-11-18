@@ -120,34 +120,7 @@ module P65C816
                           1'b0;
 
 
-// Debug prints are disabled to keep tests fast and logs small
-always @(posedge CLK ) begin
-//	if (CE)
-//	$display("RDY_OUT: %x MF: %x ADDR: %x A: %x X %x Y %x D %x SP %x T %x PC %x PBR %x DBR %x D_OUT %x D_IN %x WE %x MCODE.outbus %x irq p flag: %x IR: %x LOAD_PC: %x GOTINTERRUPT %x",RDY_OUT,MF,A_OUT,A,X,Y,D,SP,T,PC,PBR,DBR,D_OUT,D_IN,WE,MC.OUT_BUS,~P[2],IR,MC.LOAD_PC,GotInterrupt);
-//if (~RST_N) $display("RESET");
-	// DEBUG: Print memory write operations
-    // Debug: show writes hitting the bus
-    // if (CE && WE == 1'b0 && RST_N == 1'b1) begin
-    //   $display("WRITE: IR=%02x ADDR=%06x D_OUT=%02x P=%03x OUT_BUS=%03b ADDR_BUS=%04b BYTE_SEL=%02b BUS_CTRL=%06b SB=%04x SP=%04x EF=%b",
-    //            IR, A_OUT, D_OUT, P, MC.OUT_BUS, MC.ADDR_BUS, MC.BYTE_SEL, MC.BUS_CTRL, SB, SP, EF);
-    // end
-
-    // Debug: PLD stack reads
-    if (IR == 8'h2B && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000) begin
-      $display("PLD_ACCESS: ADDR=%06x SP=%04x D_IN=%02x DR=%02x OUT_BUS=%03b BYTE_SEL=%02b LOAD_SP=%03b LOAD_DKB=%02b Z0=%b FFStart=%b", A_OUT, SP, D_IN, DR, MC.OUT_BUS, MC.BYTE_SEL, MC.LOAD_SP, MC.LOAD_DKB, EmuSPZeroAtStart, EmuSPFFAtStart);
-    end
-    if (IR == 8'h6B && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000 && MC.OUT_BUS == 3'b000) begin
-      $display("RTL_READ: STATE=%d ADDR=%06x SP=%04x SPW=%02x RTL_SPW0=%02x off=%0d D_IN=%02x DR=%02x BYTE_SEL=%02b LOAD_SP=%03b", STATE, A_OUT, SP, SPW[7:0], RTL_SPW0, RTL_SeqActive ? RTL_Offset : 0, D_IN, DR, MC.BYTE_SEL, MC.LOAD_SP);
-    end
-    if (IR == 8'hAB && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000) begin
-      $display("PLB_ACCESS: ADDR=%06x SP=%04x D_IN=%02x DR=%02x OUT_BUS=%03b BYTE_SEL=%02b LOAD_SP=%03b", A_OUT, SP, D_IN, DR, MC.OUT_BUS, MC.BYTE_SEL, MC.LOAD_SP);
-    end
-
-    // TEMP: trace JSR long emulation stack writes
-    if (IR == 8'h22 && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000 && MC.OUT_BUS != 3'b000) begin
-      $display("JSR22_WRITE: ADDR=%06x D_OUT=%02x SP=%04x OUT_BUS=%03b BYTE_SEL=%02b JSRL_SEQ=%b JSRL_WRAP=%b", A_OUT, D_OUT, SP, MC.OUT_BUS, MC.BYTE_SEL, JSRL_SeqActive, JSRL_WrapFF);
-    end
-end
+// Debug prints removed
 
 
    always_comb begin
