@@ -66,6 +66,33 @@ module P65C816
   logic          OLD_NMI_N;
   logic          OLD_NMI2_N;
   logic [23:0]   ADDR_BUS;
+  logic          EmuSPWrap; // deprecated heuristic (kept if needed)
+  logic          EmuStackSeqActive;
+  logic          EmuSPZeroAtStart;
+  logic          EmuSPFFAtStart;
+  // PLD-specific tracking (emulation mode): latch SP low at first stack read
+  logic          PLD_SeqActive;
+  logic  [7:0]   PLD_SP0;
+  logic  [7:0]   PLD_SPW0;
+  logic          PLD_Addr0_Valid;
+  logic [15:0]   PLD_Addr0;
+  logic          PLD_WrapFF_Latched;
+  logic  [7:0]   PLD_Low0;
+  logic          PLD_FirstCarry;
+  // PER/PEI (emulation) 16-bit stack push sequence tracking on 4'b0101 bus
+  logic          PERPEI_SeqActive;
+  logic          PERPEI_FirstDone;
+  // JSR long (22) emulation: track start of two PC-byte pushes and whether it started at SP low FF
+  logic          JSRL_SeqActive;
+  logic          JSRL_WrapFF;
+  // RTL (6B) emulation: track first stack read base to compute subsequent bytes
+  logic          RTL_SeqActive;
+  logic  [15:0]  RTL_BaseAddr;
+  logic  [1:0]   RTL_Offset;
+  logic          RTL_WrapFF;
+  logic  [7:0]   RTL_SPW0;
+  // Snapshot of SP for write address decisions within a cycle
+  logic [15:0]   SPW;
 
   logic [15:0]   AluR;
   logic [15:0]   AluIntR;
@@ -93,16 +120,33 @@ module P65C816
                           1'b0;
 
 
+// Debug prints are disabled to keep tests fast and logs small
 always @(posedge CLK ) begin
 //	if (CE)
 //	$display("RDY_OUT: %x MF: %x ADDR: %x A: %x X %x Y %x D %x SP %x T %x PC %x PBR %x DBR %x D_OUT %x D_IN %x WE %x MCODE.outbus %x irq p flag: %x IR: %x LOAD_PC: %x GOTINTERRUPT %x",RDY_OUT,MF,A_OUT,A,X,Y,D,SP,T,PC,PBR,DBR,D_OUT,D_IN,WE,MC.OUT_BUS,~P[2],IR,MC.LOAD_PC,GotInterrupt);
 //if (~RST_N) $display("RESET");
 	// DEBUG: Print memory write operations
-	// Debug output for memory writes - commented out after debugging complete
-	// if (CE && WE == 1'b0 && RST_N == 1'b1) begin
-	// 	$display("WRITE: IR=%02x ADDR=%06x D_OUT=%02x P=%03x OUT_BUS=%03b BUS_CTRL=%06b SB=%04x SP=%04x EF=%b",
-	// 		IR, A_OUT, D_OUT, P, MC.OUT_BUS, MC.BUS_CTRL, SB, SP, EF);
-	// end
+    // Debug: show writes hitting the bus
+    // if (CE && WE == 1'b0 && RST_N == 1'b1) begin
+    //   $display("WRITE: IR=%02x ADDR=%06x D_OUT=%02x P=%03x OUT_BUS=%03b ADDR_BUS=%04b BYTE_SEL=%02b BUS_CTRL=%06b SB=%04x SP=%04x EF=%b",
+    //            IR, A_OUT, D_OUT, P, MC.OUT_BUS, MC.ADDR_BUS, MC.BYTE_SEL, MC.BUS_CTRL, SB, SP, EF);
+    // end
+
+    // Debug: PLD stack reads
+    if (IR == 8'h2B && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000) begin
+      $display("PLD_ACCESS: ADDR=%06x SP=%04x D_IN=%02x DR=%02x OUT_BUS=%03b BYTE_SEL=%02b LOAD_SP=%03b LOAD_DKB=%02b Z0=%b FFStart=%b", A_OUT, SP, D_IN, DR, MC.OUT_BUS, MC.BYTE_SEL, MC.LOAD_SP, MC.LOAD_DKB, EmuSPZeroAtStart, EmuSPFFAtStart);
+    end
+    if (IR == 8'h6B && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000 && MC.OUT_BUS == 3'b000) begin
+      $display("RTL_READ: STATE=%d ADDR=%06x SP=%04x SPW=%02x RTL_SPW0=%02x off=%0d D_IN=%02x DR=%02x BYTE_SEL=%02b LOAD_SP=%03b", STATE, A_OUT, SP, SPW[7:0], RTL_SPW0, RTL_SeqActive ? RTL_Offset : 0, D_IN, DR, MC.BYTE_SEL, MC.LOAD_SP);
+    end
+    if (IR == 8'hAB && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000) begin
+      $display("PLB_ACCESS: ADDR=%06x SP=%04x D_IN=%02x DR=%02x OUT_BUS=%03b BYTE_SEL=%02b LOAD_SP=%03b", A_OUT, SP, D_IN, DR, MC.OUT_BUS, MC.BYTE_SEL, MC.LOAD_SP);
+    end
+
+    // TEMP: trace JSR long emulation stack writes
+    if (IR == 8'h22 && RST_N == 1'b1 && CE == 1'b1 && MC.ADDR_BUS == 4'b1000 && MC.OUT_BUS != 3'b000) begin
+      $display("JSR22_WRITE: ADDR=%06x D_OUT=%02x SP=%04x OUT_BUS=%03b BYTE_SEL=%02b JSRL_SEQ=%b JSRL_WRAP=%b", A_OUT, D_OUT, SP, MC.OUT_BUS, MC.BYTE_SEL, JSRL_SeqActive, JSRL_WrapFF);
+    end
 end
 
 
@@ -339,8 +383,8 @@ end
                   if (EF == 1'b0)
                      SP <= (SP + 1);
                   else
-                     // Normalize then increment - allows wrapping to 0x0200
-                     SP <= ({8'h01, SP[7:0]} + 1);
+                     // Emulation: maintain full 16-bit SP for arithmetic
+                     SP <= (SP + 1);
                3'b010 :
                   if (MC.BYTE_SEL[1] == 1'b0 & w16 == 1'b1)
                   begin
@@ -353,8 +397,7 @@ end
                   if (EF == 1'b0)
                      SP <= (SP - 1);
                   else
-                     // Normalize then decrement - allows wrapping to 0x00FF
-                     SP <= ({8'h01, SP[7:0]} - 1);
+                     SP <= (SP - 1);
                3'b100 :
                   if (EF == 1'b0)
                      SP <= A;
@@ -373,12 +416,12 @@ end
                   if (EF == 1'b0)
                      SP <= (SP + 1);
                   else
-                     SP <= ({8'h01, SP[7:0]} + 1);
+                     SP <= (SP + 1);
                3'b111 :
                   if (EF == 1'b0)
                      SP <= (SP - 1);
                   else
-                     SP <= ({8'h01, SP[7:0]} - 1);
+                     SP <= (SP - 1);
                default :
                   ;
             endcase
@@ -556,11 +599,110 @@ end
                   8'h00;
 
 
-   always @*
-   begin
+   // Write enable is active-low when OUT_BUS drives data onto the bus.
+   // Do not gate writes on reset/interrupt state here; microcode controls sequencing.
+   always @* begin
       WE = 1'b1;
-      if (MC.OUT_BUS != 3'b000 & IsResetInterrupt == 1'b0)
+      if (MC.OUT_BUS != 3'b000)
          WE = 1'b0;
+   end
+
+   // Track emulation-mode stack behavior for 4'b1000 addressing
+   always @(posedge CLK or negedge RST_N) begin
+      if (!RST_N) begin
+         EmuSPWrap <= 1'b0;
+         EmuStackSeqActive <= 1'b0;
+         EmuSPZeroAtStart <= 1'b0;
+         EmuSPFFAtStart <= 1'b0;
+         PLD_SeqActive <= 1'b0;
+         PLD_SP0 <= 8'h00;
+         PLD_Addr0_Valid <= 1'b0;
+         PLD_Addr0 <= 16'h0000;
+         PERPEI_SeqActive <= 1'b0;
+         PERPEI_FirstDone <= 1'b0;
+         JSRL_SeqActive <= 1'b0;
+         JSRL_WrapFF <= 1'b0;
+         RTL_SeqActive <= 1'b0;
+         RTL_BaseAddr <= 16'h0000;
+         RTL_Offset <= 2'b00;
+         RTL_WrapFF <= 1'b0;
+         RTL_SPW0 <= 8'h00;
+      end else if (EN == 1'b1) begin
+         if (LAST_CYCLE == 1'b1)
+            EmuSPWrap <= 1'b0; // clear at instruction end
+         else if (EF == 1'b1 && MC.ADDR_BUS == 4'b1000 && SP[7:0] == 8'hFF)
+            EmuSPWrap <= 1'b1;
+
+         // Start-of-sequence sampling (first 4'b1000 access in instruction)
+         if (LAST_CYCLE == 1'b1) begin
+            EmuStackSeqActive <= 1'b0;
+            EmuSPZeroAtStart <= 1'b0;
+            EmuSPFFAtStart <= 1'b0;
+            PLD_SeqActive <= 1'b0;
+            PLD_Addr0_Valid <= 1'b0;
+            PLD_Low0 <= 8'h00;
+            PLD_FirstCarry <= 1'b0;
+         PERPEI_SeqActive <= 1'b0;
+         PERPEI_FirstDone <= 1'b0;
+         RTL_SeqActive <= 1'b0;
+         RTL_BaseAddr <= 16'h0000;
+         RTL_Offset <= 2'b00;
+         PLD_WrapFF_Latched <= 1'b0;
+            JSRL_SeqActive <= 1'b0;
+            JSRL_WrapFF <= 1'b0;
+         end else if (EF == 1'b1 && MC.ADDR_BUS == 4'b1000 && EmuStackSeqActive == 1'b0) begin
+            EmuStackSeqActive <= 1'b1;
+            EmuSPZeroAtStart <= (SPW[7:0] == 8'h00);
+            EmuSPFFAtStart <= (SPW[7:0] == 8'hFF);
+            // For RTL (6B), capture original SP low for carry computation
+            if (IR == 8'h6B)
+              RTL_SPW0 <= SPW[7:0];
+         end
+
+         // Latch SP low at first PLD stack read in this instruction
+         if (EF == 1'b1 && IR == 8'h2B && MC.ADDR_BUS == 4'b1000 && MC.OUT_BUS == 3'b000 && PLD_SeqActive == 1'b0) begin
+            PLD_SeqActive <= 1'b1;
+            PLD_SP0 <= SP[7:0];
+            PLD_SPW0 <= SPW[7:0];
+            PLD_Low0 <= (SPW[7:0] + 8'h01);
+            PLD_FirstCarry <= (SPW[7:0] == 8'hFF);
+            PLD_Addr0_Valid <= 1'b1; // reuse as have low0
+            // If this cycle increments SP from 0xFF->0x00, second read should use page 0x02
+            PLD_WrapFF_Latched <= ((MC.LOAD_SP == 3'b110 || MC.LOAD_SP == 3'b111) && (SP[7:0] == 8'hFF));
+         end
+
+         // Track PER/PEI writes (two-byte push via 4'b0101) in emulation
+         if (EF == 1'b1 && (IR == 8'h62 || IR == 8'hD4) && MC.ADDR_BUS == 4'b0101 && MC.OUT_BUS != 3'b000) begin
+            if (PERPEI_SeqActive == 1'b0) begin
+               PERPEI_SeqActive <= 1'b1;
+               PERPEI_FirstDone <= 1'b0;
+            end else begin
+               PERPEI_FirstDone <= 1'b1;
+            end
+         end
+
+         // Track RTL (6B) stack reads (three-byte pull) in emulation
+         if (EF == 1'b1 && IR == 8'h6B && MC.ADDR_BUS == 4'b1000 && MC.OUT_BUS == 3'b000) begin
+            if (!RTL_SeqActive) begin
+               RTL_SeqActive <= 1'b1;
+               RTL_BaseAddr <= ((SP + {14'b0, MC.ADDR_INC}) & 16'h01FF);
+               RTL_Offset <= 2'b00;
+               RTL_WrapFF <= (SP[7:0] == 8'h00);
+               RTL_SPW0 <= SPW[7:0];
+            end else begin
+               if (RTL_Offset != 2'b10)
+                  RTL_Offset <= RTL_Offset + 2'b01;
+            end
+         end
+
+         // Track JSR long PC-byte pushes (IR=22) in emulation
+         if (EF == 1'b1 && IR == 8'h22 && MC.ADDR_BUS == 4'b1000 && MC.OUT_BUS == 3'b010 && MC.OUT_BUS != 3'b000) begin
+            if (!JSRL_SeqActive) begin
+               JSRL_SeqActive <= 1'b1;
+               JSRL_WrapFF <= (SP[7:0] == 8'hFF);
+            end
+         end
+      end
    end
 
 
@@ -574,6 +716,8 @@ end
       begin
          if (RDY_IN == 1'b1 && CE == 1'b1 & IsResetInterrupt == 1'b0)
          begin
+            // Snapshot SP at cycle boundary for stable write addressing decisions
+            SPW <= SP;
             OLD_NMI_N <= NMI_N;
             if (NMI_N == 1'b0 & OLD_NMI_N == 1'b1 & NMI_SYNC == 1'b0)
                NMI_SYNC <= 1'b1;
@@ -664,14 +808,37 @@ end
    always @*
    begin: xhdl0
       logic [15:0]     ADDR_INC;
+      logic [8:0]      sp_inc9;
+      logic [8:0]      sp9;
+      logic [8:0]      pld_inc9;
+      logic [8:0]      rtl_inc9;
+      // For RTL (6B) emulation stack read sequencing
+      logic [8:0]      rtl_base9;
+      logic [8:0]      rtl_addr9;
       ADDR_INC = { 14'b0, MC.ADDR_INC[1:0] };
+      sp_inc9 = ((SP + ADDR_INC) & 16'h01FF);
+      sp9 = (SP & 16'h01FF);
       case (MC.ADDR_BUS)
          4'b0000 :
             ADDR_BUS = {PBR, PC};
          4'b0001 :
             ADDR_BUS = (({DBR, 16'h0000}) + ({8'h00, (AA[15:0])}) + ({8'h00, ADDR_INC}));
          4'b0101 :
-            ADDR_BUS = (({AB, 16'h0000}) + ({7'b0000000, AA}) + ({8'h00, ADDR_INC}));
+            // Normal AB:AA addressing, except stack-push opcodes (PER/PEI) in emulation
+            if (EF == 1'b1 && (IR == 8'h62 || IR == 8'hD4)) begin // PER, PEI
+               if (PERPEI_SeqActive == 1'b0 || (PERPEI_SeqActive == 1'b1 && PERPEI_FirstDone == 1'b0))
+                  // High byte: force to page 0x01xx
+                  ADDR_BUS = {8'h00, {8'h01, SP[7:0]} + ADDR_INC};
+               else begin
+                  // Low byte: use raw SP page (can be 0x00 or 0x01)
+                  if (SP[15:8] == 8'h00 || SP[15:8] == 8'h01)
+                     ADDR_BUS = {8'h00, SP + ADDR_INC};
+                  else
+                     ADDR_BUS = {8'h00, {8'h01, SP[7:0]} + ADDR_INC};
+               end
+            end else begin
+               ADDR_BUS = (({AB, 16'h0000}) + ({7'b0000000, AA}) + ({8'h00, ADDR_INC}));
+            end
          4'b0010 :
             ADDR_BUS = {PBR, ((AA[15:0]) + ADDR_INC)};
          4'b0110 :
@@ -682,18 +849,86 @@ end
             else
                // Emulation mode with DL=0: force page wrapping
                ADDR_BUS = {8'h00, DX[15:8], DX[7:0] + ADDR_INC[7:0]};
-         4'b1000, 4'b1100 :
-            // Stack addressing: In emulation mode, SP should be in page 1 (0x01xx)
-            // Multi-byte operations can wrap down to page 0 (0x00xx) only
-            // Page 2 values are arbitrary initial SP and should be normalized
+         4'b1000 :
+            // Stack addressing variant A:
+            // - Emulation mode: allow raw SP page 0x00 or 0x01 (wrap behavior for some ops)
+            //   but normalize any other page to 0x01.
+            // - Native mode: use full 16-bit SP
             if (EF == 1'b1) begin
-               // Allow SP in page 0 (wrapped) or page 1 (normal)
-               // Normalize anything else (including page 2) to page 1
-               if (SP[15:8] == 8'h00 || SP[15:8] == 8'h01)
-                  ADDR_BUS = {8'h00, SP + ADDR_INC};
-               else
+               // Force page 0x01xx for BRK/COP pushes
+               if (IR == 8'h00 || IR == 8'h02) begin
                   ADDR_BUS = {8'h00, {8'h01, SP[7:0]} + ADDR_INC};
+               end else begin
+               // Heuristic per 65C816 emulation stack behavior:
+               // - Writes: special-case behavior
+               // - Reads: use full 16-bit SP (allows 0x0200 etc.)
+               if (MC.OUT_BUS == 3'b000) begin
+                  // Reads: for PLD, special handling; otherwise force stack page to 0x01xx in emulation
+                  if (IR == 8'h2B) begin
+                      // PLD reads: first read uses SP+inc; second read uses prev addr + 1
+                      if (PLD_Addr0_Valid == 1'b1)
+                        begin
+                          // Second byte: base on original SPW
+                          logic [8:0] sum2low;
+                          logic [8:0] sum2car;
+                          sum2low = {1'b0, PLD_Low0} + 9'd1;
+                          sum2car = {1'b0, PLD_SPW0} + 9'd2;
+                          ADDR_BUS = {8'h00, (8'h01 + {7'b0, sum2car[8]}), sum2low[7:0]};
+                        end
+                      else begin
+                          // First byte: low0 = (previous SP low + 1); page += 1 if previous SP low was 0xFF
+                          logic [8:0] sum1;
+                          sum1 = {1'b0, SPW[7:0]} + 9'd1;
+                          ADDR_BUS = {8'h00, (8'h01 + {7'b0, (SPW[7:0] == 8'hFF)}), sum1[7:0]};
+                      end
+                  end else if (IR == 8'h6B) begin
+                     // RTL reads: low byte from current SP (post-increment per microcode)
+                     // Page determined by carry of (SPW.low + 1 + offset)
+                     begin
+                       logic [1:0] off;
+                       logic [8:0] sum9;
+                       off = RTL_SeqActive ? (RTL_Offset + 2'b01) : 2'b00; // effective offsets: 0,1,2
+                       sum9 = {1'b0, (RTL_SeqActive ? RTL_SPW0 : SPW[7:0])} + 9'd1 + {7'b0, off};
+                       ADDR_BUS = {8'h00, (8'h01 + {7'b0, sum9[8]}), SP[7:0]};
+                     end
+                  end else if (IR == 8'hAB) begin
+                     // PLB read: use page 0x01 plus carry if SP crossed FF->00 prior to this read
+                     ADDR_BUS = {8'h00, (8'h01 + {7'b0, (SP[7:0] == 8'h00)}), SP[7:0]};
+                  end else begin
+                     // Default emulation stack read: 9-bit offset from base page 0x01
+                     ADDR_BUS = {8'h00, (8'h01 + {7'b0, sp_inc9[8]}), sp_inc9[7:0]};
+                  end
+               end else begin
+               // Emulation stack writes (push): use current SP; high byte to 0x01xx,
+               // low byte to 0x00FF only when SP low is 0xFF at that write cycle; else 0x01xx.
+               begin
+                  // Special-case JSR long (22) PC-byte pushes: if the pair started at SP low FF, both bytes go to page 0; else page 1
+                  if (IR == 8'h22 && MC.OUT_BUS == 3'b010) begin
+                     // First PC-byte push decides wrap (SP low==FF) and latches JSRL_WrapFF; second uses latched value
+                     logic useWrap;
+                     useWrap = (JSRL_WrapFF | (SP[7:0] == 8'hFF));
+                     ADDR_BUS = {8'h00, (useWrap ? 8'h00 : 8'h01), SP[7:0]};
+                  end else if (MC.OUT_BUS == 3'b100) begin
+                     ADDR_BUS = {8'h00, 8'h01, SP[7:0]};
+                  end else if (MC.BYTE_SEL[1] == 1'b1) begin
+                     // High byte
+                     ADDR_BUS = {8'h00, 8'h01, SP[7:0]};
+                  end else begin
+                     // Low byte with wrap to 0x00FF when SP low is 0xFF
+                     ADDR_BUS = {8'h00, (SP[7:0] == 8'hFF ? 8'h00 : 8'h01), SP[7:0]};
+                  end
+               end
+               end
+               end
             end else
+               ADDR_BUS = {8'h00, SP + ADDR_INC};
+         4'b1100 :
+            // Stack addressing variant B:
+            // - Emulation mode: force stack page 0x01xx always
+            // - Native mode: use full 16-bit SP
+            if (EF == 1'b1)
+               ADDR_BUS = {8'h00, {8'h01, SP[7:0]} + ADDR_INC};
+            else
                ADDR_BUS = {8'h00, SP + ADDR_INC};
          4'b1111 :
             begin
@@ -714,6 +949,15 @@ end
          default :
             ADDR_BUS = 24'h000000;
       endcase
+
+      // Final emulation-mode overrides for known stack-push opcodes
+      if (EF == 1'b1) begin
+         // BRK/COP: all push cycles go to page 0x01xx
+         if ((IR == 8'h00 || IR == 8'h02) && MC.OUT_BUS != 3'b000 && MC.ADDR_BUS != 4'b1111)
+            ADDR_BUS = {8'h00, {8'h01, SP[7:0]} + ADDR_INC};
+         // PHD handled above in 4'b1000 branch with wrap-aware low byte behavior
+         // PER and PEI handled above in 4'b0101 branch with proper byte-order handling
+      end
    end
 
    assign A_OUT = ADDR_BUS;

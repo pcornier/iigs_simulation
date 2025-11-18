@@ -145,7 +145,14 @@ int main(int argc, char** argv, char** env) {
 			run_cycle();
 		}
 
-		// Initialize CPU pre-execution state
+        // Initialize CPU pre-execution state
+        if (testname.find(":") != std::string::npos) {
+            // no-op, keep existing format
+        }
+        std::cout << "TEST: " << testname
+                  << " init_s=0x" << std::hex << std::setw(4) << std::setfill('0') << (unsigned int)t["initial"]["s"]
+                  << " init_e=" << std::dec << (int)t["initial"]["e"]
+                  << "\n";
 		VERTOPINTERN->singlesteptests__DOT__cpu__DOT__PC = t["initial"]["pc"];
 		VERTOPINTERN->singlesteptests__DOT__cpu__DOT__SP = t["initial"]["s"];
 		VERTOPINTERN->singlesteptests__DOT__cpu__DOT__P   = t["initial"]["p"];
@@ -199,9 +206,11 @@ int main(int argc, char** argv, char** env) {
 		pass &= check_result(testname, "PBR", VERTOPINTERN->singlesteptests__DOT__cpu__DOT__PBR, t["final"]["pbr"]);
 		pass &= check_result(testname, "E", ef, t["final"]["e"]);
 
-		for (auto& r : t["final"]["ram"]) {
-			pass &= check_result(testname, "RAM", ram[r[0]], r[1]);
-		}
+        for (auto& r : t["final"]["ram"]) {
+            std::ostringstream ram_field;
+            ram_field << "RAM[0x" << std::hex << std::setw(6) << std::setfill('0') << (unsigned int)r[0] << "]";
+            pass &= check_result(testname, ram_field.str(), ram[r[0]], r[1]);
+        }
 
 		if (pass) {
 			passcount++;
