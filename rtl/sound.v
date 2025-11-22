@@ -156,6 +156,7 @@ module sound
    wire [7:0]        glu_data_out;
    wire [7:0]        ram_data_out;
    wire [7:0]        doc_data_out;
+   wire              doc_host_en;
    wire              sound_wr;
    wire              ram_wr;
    wire              doc_wr;
@@ -193,7 +194,8 @@ module sound
       .sound_data_out(glu_data_out),
       .ram_wr(ram_wr),
       .doc_wr(doc_wr),
-      .doc_enable(osc_en));
+      .doc_enable(osc_en),
+      .doc_host_en(doc_host_en));
 
    syncram ram(
       .clk(CLK_14M),
@@ -207,6 +209,7 @@ module sound
       .osc_en(osc_en),
       .reset(reset),
       .wr(doc_wr),
+      .host_en(doc_host_en),
       .reg_addr(glu_addr_out[7:0]),
       .reg_data_in(glu_data_out),
       .sample_data_in(doc_sample),

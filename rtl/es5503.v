@@ -5,6 +5,7 @@ module es5503
     input	      osc_en,
     input	      reset,
     input	      wr,
+    input	      host_en,
     input [7:0]	      reg_addr,
     input [7:0]	      reg_data_in,
     input [7:0]	      sample_data_in,
@@ -90,7 +91,7 @@ module es5503
 			    r_table_size[current_osc][5:3],
 			    r_table_size[current_osc][2:0])};
 
-      if (wr) begin
+      if (wr && host_en) begin
 	 $display("%m: CPU write %h=%h", reg_addr, reg_data_in);
 	 case (reg_addr[7:5])
 	   0: begin
@@ -131,14 +132,12 @@ module es5503
 	   6: data_out <= r_table_size[reg_addr[4:0]];
 	   7: case (reg_addr[1:0])
 		0: begin // OIR
-		   if (irq_sp == 0) begin
-		      data_out <= {2'b01, irq_stack[0], 1'b1};
-		      //data_out <= {2'b11, irq_stack[0], 1'b1};
-		   end else begin
-		      data_out <= {2'b11, irq_stack[0], 1'b1};
-		      //data_out <= {2'b01, irq_stack[irq_sp - 1], 1'b1};
+		   if (irq && host_en) begin
+		      data_out <= {~irq, 1'b1, irq_stack[irq_sp - 1], 1'b1};
 		      irq_pending[irq_stack[irq_sp - 1]] <= 1'b0;
 		      irq_sp <= irq_sp - 1;
+		   end else begin
+		      data_out <= {~irq, 1'b1, irq_stack[0], 1'b1};
 		   end
 		end
 		1: data_out <= {2'b0, oscs_enabled, 1'b0};
@@ -199,7 +198,7 @@ module es5503
 	 for (i=0; i < 32; i=i+1) accumulator[i] <= 0;
 	 irq_pending <= 0;
 	 irq_sp <= 0;
-	 irq_stack[0] <= 8'hff;
+	 irq_stack[0] <= 5'h1f;
       end
    end // always @ (posedge clk)
 endmodule // es5503

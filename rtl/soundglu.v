@@ -12,8 +12,9 @@ module soundglu
    output reg [15:0] sound_addr,
    output reg [7:0]  sound_data_out,
    output reg	     ram_wr,
-   output reg        doc_wr,
-   output reg	     doc_enable
+   output reg	     doc_wr,
+   output reg	     doc_enable,
+   output reg	     doc_host_en
    );
 
    localparam	     ST_IDLE = 0;
@@ -38,10 +39,12 @@ module soundglu
       // time to execute the pending host access
       if (sound_cycle_state == ST_PENDING && doc_enable) begin
 	 sound_cycle_state <= ST_FINISHING;
+	 doc_host_en <= !ram_access;
 	 doc_wr <= !ram_access && sound_write_pending;
 	 ram_wr <= ram_access && sound_write_pending;
       end
       else if (sound_cycle_state == ST_FINISHING) begin
+	 doc_host_en <= 0;
 	 sound_write_pending <= 0;
 	 sound_cycle_state <= ST_IDLE;
 	 
@@ -96,6 +99,7 @@ module soundglu
       if (reset) begin
 	 clk_phase <= 0;
 	 sound_cycle_state <= ST_IDLE;
+	 doc_host_en <= 0;
 	 sound_write_pending <= 0;
       end
    end // always @ (posedge clk)
