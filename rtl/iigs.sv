@@ -381,7 +381,6 @@ module iigs
   wire hgr1_shadow  = ~shadow[1] && (page >= 4'h2 && page <= 4'h3);          // $2000-$3FFF
   wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
   wire shgr_shadow  = ~shadow[3] && (page >= 4'h6 && page <= 4'h9);          // $6000-$9FFF
-  wire lc_shadow    = ~shadow[6] && (page >= 4'hC);                          // $C000-$FFFF
   wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
   
   // Dual-write detection: Bank 01 SHGR writes also go to Bank E1
@@ -404,7 +403,7 @@ module iigs
           if (RDROM && addr_bef >= 16'hE000) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
-          end else if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow || lc_shadow) begin
+          end else if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow) begin
             // Shadowed regions: Enable BOTH for compatibility (fastram takes priority in mux)
             fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
             slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)
@@ -434,12 +433,6 @@ module iigs
             fastram_ce_int = 1;
             if (we) begin
               slowram_ce_int = 1;
-            end
-          end else if (lc_shadow) begin
-            // Language card: READS from Bank 01, WRITES to both Bank 01 AND Bank E1
-            fastram_ce_int = 1;   // Always access Bank 01
-            if (we) begin
-              slowram_ce_int = 1; // WRITES also go to shadow Bank E1
             end
           end else begin
             fastram_ce_int = 1;  // Normal Bank 01 RAM
