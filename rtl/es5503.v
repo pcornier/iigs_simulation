@@ -132,7 +132,7 @@ module es5503
 	   7: case (reg_addr[1:0])
 		0: begin // OIR
 		   if (irq_sp == 0) begin
-		      data_out <= {2'b01, irq_stack[irq_sp - 1], 1'b1};
+		      data_out <= {2'b01, irq_stack[0], 1'b1};
 		      //data_out <= {2'b11, irq_stack[0], 1'b1};
 		   end else begin
 		      data_out <= {2'b11, irq_stack[0], 1'b1};
@@ -199,7 +199,7 @@ module es5503
 	 for (i=0; i < 32; i=i+1) accumulator[i] <= 0;
 	 irq_pending <= 0;
 	 irq_sp <= 0;
-	 //irq_stack[0] <= 8'hff
+	 irq_stack[0] <= 8'hff;
       end
    end // always @ (posedge clk)
 endmodule // es5503
