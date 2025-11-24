@@ -293,7 +293,7 @@ module hdd(
 `endif
                                     if (D_IN == PRODOS_COMMAND_READ || D_IN == PRODOS_COMMAND_WRITE) begin
                                         reg_status <= 8'h80; // busy
-                                        sec_addr   <= 9'd0;
+                                        sec_addr   <= D_IN == PRODOS_COMMAND_WRITE ? 9'h1FF : 9'd0;
                                         // Arm prefetch for first NEXT BYTE on READ to cover BRAM latency
                                         prefetch_armed <= (D_IN == PRODOS_COMMAND_READ);
                                         prefetch_valid <= 1'b0;
