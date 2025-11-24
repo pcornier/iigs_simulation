@@ -397,7 +397,7 @@ module iigs
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow) begin
@@ -412,7 +412,7 @@ module iigs
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (shgr_shadow) begin
@@ -468,7 +468,7 @@ module iigs
   end
 
   // ROM write-through for language card
-  assign rom_writethrough = (bank_bef == 8'h00 && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE);
+  assign rom_writethrough = ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE && we);
 
   // Debug: C034 RTC access tracing (to catch address bus corruption)
   always @(posedge CLK_14M) begin
