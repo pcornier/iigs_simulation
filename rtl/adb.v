@@ -831,45 +831,10 @@ always @(posedge CLK_14M) begin
       end
     end
     
-    // Clemens approach: Check if held key should repeat - now using proper 60Hz timing!
-    if (ps2_key_held && repeat_timer_active && clk_60hz_enable && (hz60_count == repeat_vbl_target)) begin
-      // Time to repeat! Add the held key to the FIFO if there's space
-`ifdef SIMULATION
-      $display("ADB: REPEAT TRIGGER hz60=%0d target=%0d PS2=%03h fifo=%0d", hz60_count, repeat_vbl_target, held_ps2_key, kbd_fifo_count);
-`endif
-      if (kbd_fifo_count < MAX_KBD_BUF) begin
-        kbd_fifo[kbd_fifo_head] <= held_apple_key;
-        kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
-        kbd_fifo_count <= kbd_fifo_count + 1;
-        
-        // If this is the first key in FIFO, set strobe immediately
-        if (kbd_fifo_count == 0) begin
-          kbd_strobe <= 1'b1;
-        end
-        
-        valid_kbd <= 1'b1;
-        device_data_pending[2] <= 8'h01;
-        
-        // Key repeats should NOT update K register directly - they go through FIFO 
-        // The K register will be updated when the FIFO is processed by C010 reads
-      end
-      
-      // ALWAYS update the target, even if FIFO is full - this prevents infinite repeats
-      // Use fast repeat rate for specific keys if enabled
-      if (fast_repeat_enabled && is_fast_repeat_key(held_apple_key)) begin
-        // Fast repeat: use 2/3 of normal interval (1.5x faster) with minimum of 2 ticks
-        // This prevents extremely fast repeat rates while still being noticeably faster
-        repeat_vbl_target <= hz60_count + ((repeat_rate_vbl * 2) / 3 < 2 ? 2 : (repeat_rate_vbl * 2) / 3);
-`ifdef SIMULATION
-        $display("ADB: REPEAT scheduled FAST next at hz60=%0d (current=%0d)", hz60_count + ((repeat_rate_vbl * 2) / 3 < 2 ? 2 : (repeat_rate_vbl * 2) / 3), hz60_count);
-`endif
-      end else begin
-        repeat_vbl_target <= hz60_count + repeat_rate_vbl;
-`ifdef SIMULATION
-        $display("ADB: REPEAT scheduled NORMAL next at hz60=%0d (current=%0d)", hz60_count + repeat_rate_vbl, hz60_count);
-`endif
-      end
-    end
+    // Key repeat: disabled for now - was causing keyboard to hang
+    // TODO: Implement proper repeat that doesn't flood FIFO
+    // The issue is that repeat needs to be gated by whether the FIFO is being consumed,
+    // not just blindly adding characters on a timer
     
     // PS/2 mouse event processing
     // PS/2 format: [7:0]=status (bit0=lbtn, bit1=rbtn, bit2=mbtn, bit3=1, bit4=Xsign, bit5=Ysign)
@@ -1497,38 +1462,27 @@ always @(posedge CLK_14M) begin
           kbd_strobe <= 1'b0;  // Clear ADB strobe
           fifo_key_added <= 1'b0;      // Clear flag to allow next key to be added to FIFO
           
-          // Advance FIFO to next character  
+          // Advance FIFO to next character
           if (kbd_fifo_count > 0) begin
             kbd_fifo_tail <= (kbd_fifo_tail + 1) % MAX_KBD_BUF;
             kbd_fifo_count <= kbd_fifo_count - 1;
-            
-            // Load next character if available, with simple duplicate detection
+
+            // Load next character if available (kbd_fifo_count > 1 means there's another after this one)
             if (kbd_fifo_count > 1) begin
               // Convert next FIFO entry to Apple IIe ASCII
               reg [7:0] next_char;
               next_char = adb_to_apple_iie_ascii(
-                kbd_fifo[(kbd_fifo_tail + 1) % MAX_KBD_BUF][6:0], 
+                kbd_fifo[(kbd_fifo_tail + 1) % MAX_KBD_BUF][6:0],
                 shift_down, ctrl_down, caps_lock_state
               );
-              
-              // Check if next character is a duplicate and skip it
-              if (next_char[6:0] == K[6:0]) begin
-                $display("ADB C010: Next FIFO char is duplicate (%02h), skipping and clearing FIFO", next_char);
-                // Just clear the entire remaining FIFO to prevent any more duplicates
-                kbd_fifo_count <= 4'd0;
-                kbd_fifo_tail <= kbd_fifo_head;
-                akd <= 1'b0;
-                k_register_updated <= 1'b0;
-              end else begin
-                // Next character is different, load it normally
-                K <= {1'b1, next_char[6:0]};
-                kbd_strobe <= 1'b1;
-                $display("ADB C010: Loaded next FIFO char=%02h (different from current)", next_char);
-                // Keep k_register_updated = 1 since we just loaded another character
-              end
+
+              // Load next character - duplicates are allowed (e.g., "tt")
+              K <= {1'b1, next_char[6:0]};
+              kbd_strobe <= 1'b1;
+              $display("ADB C010: Loaded next FIFO char=%02h", next_char);
             end else begin
               akd <= 1'b0;  // Clear any key down status
-              k_register_updated <= 1'b0;  // Only clear flag when FIFO is empty
+              k_register_updated <= 1'b0;  // Clear flag when FIFO becomes empty
             end
           end else begin
             k_register_updated <= 1'b0;  // Clear flag when FIFO is completely empty
