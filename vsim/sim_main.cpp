@@ -1693,6 +1693,7 @@ signed char mouse_y = 0;
 // Real mouse tracking for Apple IIgs
 int prev_mouse_x = 0;
 int prev_mouse_y = 0;
+int prev_mouse_buttons = 0;  // Track previous button state to detect changes
 bool mouse_captured = false;  // True when mouse is captured for IIgs control
 
 char spinner_toggle = 0;
@@ -2094,7 +2095,7 @@ int main(int argc, char** argv, char** env) {
 			// Handle mouse motion when captured
 			if (event.type == SDL_MOUSEMOTION && mouse_captured) {
 				mouse_x += event.motion.xrel;
-				mouse_y += event.motion.yrel;  // RTL handles Y inversion for Apple IIgs
+				mouse_y += event.motion.yrel;  // RTL negates Y, so don't negate here
 			}
 			// Handle mouse buttons when captured
 			if (mouse_captured) {
@@ -2380,12 +2381,12 @@ int main(int argc, char** argv, char** env) {
 		}
 		// mouse_x, mouse_y, mouse_buttons already set from SDL events when captured
 
-		// Build PS/2 mouse packet:
-		// Byte 0 [7:0]: Button state + sign bits (bit 0=button, bit 4=X sign, bit 5=Y sign)
+		// Build PS/2 mouse packet (matching MiSTer hps_io format):
+		// Byte 0 [7:0]: YOvfl[7], XOvfl[6], Ysign[5], Xsign[4], 1[3], Mbtn[2], Rbtn[1], Lbtn[0]
 		// Byte 1 [15:8]: X delta (signed 8-bit)
-		// Byte 2 [23:16]: Y delta (signed 8-bit)
+		// Byte 2 [23:16]: Y delta (signed 8-bit, already negated by MiSTer)
 		// Bit 24: Toggle bit for event detection
-		unsigned char status_byte = mouse_buttons & 0x01;
+		unsigned char status_byte = (mouse_buttons & 0x07) | 0x08;  // Bit 3 always 1 per PS/2 spec
 		if (mouse_x < 0) status_byte |= 0x10;  // X sign bit
 		if (mouse_y < 0) status_byte |= 0x20;  // Y sign bit
 
@@ -2393,10 +2394,12 @@ int main(int argc, char** argv, char** env) {
 		mouse_temp |= ((unsigned char)mouse_x << 8);
 		mouse_temp |= ((unsigned char)mouse_y << 16);
 
-		// Only toggle clock when there's actual mouse data to report
-		if (mouse_x != 0 || mouse_y != 0 || mouse_buttons != 0) {
+		// Toggle clock when there's mouse movement OR button state changed
+		// Critical: must detect button releases (when mouse_buttons becomes 0)
+		if (mouse_x != 0 || mouse_y != 0 || mouse_buttons != prev_mouse_buttons) {
 			mouse_clock = !mouse_clock;
 		}
+		prev_mouse_buttons = mouse_buttons;
 		if (mouse_clock) { mouse_temp |= (1UL << 24); }
 
 		top->ps2_mouse = mouse_temp;

@@ -716,17 +716,11 @@ always @(posedge CLK_14M) begin
       clk_60hz_counter <= clk_60hz_counter + 1;
     end
     
-    // PS/2 keyboard event processing  
+    // PS/2 keyboard event processing
+    // MiSTer toggles bit 10 on every key press/release - if toggle changed, it's a valid new event
     if (ps2_key[10] != ps2_key_toggle_prev) begin
-      // PS/2 key event detected - using wire for combinational logic
 `ifdef SIMULATION
-      $display("ADB: PS2 EVENT TRIGGER toggle=%0d->%0d key=%03h down=%0d", ps2_key_toggle_prev, ps2_key[10], ps2_key[8:0], ps2_key[9]);
-`endif
-      
-      // Only process if the key scancode has actually changed OR it's a different up/down event
-      if ((ps2_key[8:0] != ps2_key_prev[8:0]) || (ps2_key[9] != ps2_key_prev[9])) begin
-`ifdef SIMULATION
-        $display("ADB: PS2 KEY DATA CHANGED: prev=%03h->%0d new=%03h->%0d", ps2_key_prev[8:0], ps2_key_prev[9], ps2_key[8:0], ps2_key[9]);
+      $display("ADB: PS2 KEY EVENT: key=%03h down=%0d", ps2_key[8:0], ps2_key[9]);
 `endif
       
       // Handle Caps Lock toggle
@@ -821,30 +815,28 @@ always @(posedge CLK_14M) begin
               end
             end
           end else begin
-            // Key released - stop repeat if this was the held PS/2 key
+            // Key released
 `ifdef SIMULATION
             $display("ADB: PS2 KEY UP: PS2=%03h (held=%03h held_flag=%0d)", ps2_key[8:0], held_ps2_key, ps2_key_held);
 `endif
+            // Always clear these flags on key release so next keypress works
+            k_register_updated <= 1'b0;
+            fifo_key_added <= 1'b0;
+
+            // Stop repeat if this was the held PS/2 key
             if (ps2_key_held && (ps2_key[8:0] == held_ps2_key)) begin
-              // This PS/2 key was released, stop repeating
               ps2_key_held <= 1'b0;
               repeat_timer_active <= 1'b0;
               held_ps2_key <= 9'd0;
               held_apple_key <= 8'd0;
               held_iie_char <= 8'd0;
               repeat_vbl_target <= 16'd0;
-              k_register_updated <= 1'b0;  // Clear the flag so next keypress can update K
-              fifo_key_added <= 1'b0;      // Clear the flag so next keypress can be added to FIFO
             end
-            
+
             akd <= 1'b0;  // Clear any key down
           end
         end
       end
-      
-      // Update previous key data to prevent reprocessing
-      ps2_key_prev <= ps2_key;
-      end  // End of ps2_key != ps2_key_prev check
     end
     
     // Clemens approach: Check if held key should repeat - now using proper 60Hz timing!
@@ -888,42 +880,39 @@ always @(posedge CLK_14M) begin
     end
     
     // PS/2 mouse event processing
-    // PS/2 format: [7:0]=status (bit0=button, bit4=Xsign, bit5=Ysign)
+    // PS/2 format: [7:0]=status (bit0=lbtn, bit1=rbtn, bit2=mbtn, bit3=1, bit4=Xsign, bit5=Ysign)
     //              [15:8]=X delta, [23:16]=Y delta, [24]=toggle
+    // MiSTer only toggles bit 24 when there's meaningful data (movement or button change)
     if (ps2_mouse[24] != ps2_mouse_toggle_prev) begin
-      // Check if there's any meaningful mouse data (movement or button)
-      if (ps2_mouse[15:8] != 8'h00 || ps2_mouse[23:16] != 8'h00 || ps2_mouse[0]) begin
-        // Build ADB mouse data format (2 bytes per Apple IIgs spec):
-        // Byte 0: bit7=~button, bits6:0=Y delta (clamped to 7-bit signed, -63 to +63)
-        // Byte 1: bit7=1, bits6:0=X delta (clamped to 7-bit signed, -63 to +63)
+      // Build ADB mouse data format (2 bytes per Apple IIgs spec):
+      // Byte 0: bit7=~button, bits6:0=Y delta (clamped to 7-bit signed, -63 to +63)
+      // Byte 1: bit7=1, bits6:0=X delta (clamped to 7-bit signed, -63 to +63)
 
-        // Clamp X delta from 8-bit signed to 7-bit signed range (-63 to +63)
-        // ps2_mouse[15:8] is 8-bit signed X delta
-        if ($signed(ps2_mouse[15:8]) > 63)
-          device_registers[3][1] <= {1'b1, 7'd63};      // Clamp to +63
-        else if ($signed(ps2_mouse[15:8]) < -63)
-          device_registers[3][1] <= {1'b1, 7'b1000001}; // Clamp to -63 (0x41 in 7-bit signed)
-        else
-          device_registers[3][1] <= {1'b1, ps2_mouse[14:8]};
+      // Clamp X delta from 8-bit signed to 7-bit signed range (-63 to +63)
+      // ps2_mouse[15:8] is 8-bit signed X delta
+      if ($signed(ps2_mouse[15:8]) > 63)
+        device_registers[3][1] <= {1'b1, 7'd63};      // Clamp to +63
+      else if ($signed(ps2_mouse[15:8]) < -63)
+        device_registers[3][1] <= {1'b1, 7'b1000001}; // Clamp to -63 (0x41 in 7-bit signed)
+      else
+        device_registers[3][1] <= {1'b1, ps2_mouse[14:8]};
 
-        // Clamp Y delta from 8-bit signed to 7-bit signed range (-63 to +63)
-        // ps2_mouse[23:16] is 8-bit signed Y delta
-        // Negate Y: PS/2 sends positive when moving up, but Apple IIgs expects
-        // positive Y to move cursor down (screen coordinates)
-        if ($signed(ps2_mouse[23:16]) > 63)
-          device_registers[3][0] <= {~ps2_mouse[0], 7'b1000001}; // Clamp to -63 (negated from +63)
-        else if ($signed(ps2_mouse[23:16]) < -63)
-          device_registers[3][0] <= {~ps2_mouse[0], 7'd63};      // Clamp to +63 (negated from -63)
-        else
-          device_registers[3][0] <= {~ps2_mouse[0], -ps2_mouse[22:16]};
+      // Clamp Y delta from 8-bit signed to 7-bit signed range (-63 to +63)
+      // ps2_mouse[23:16] is 8-bit signed Y delta
+      // Negate Y for Apple IIgs screen coordinates (positive Y = cursor moves down)
+      if ($signed(ps2_mouse[23:16]) > 63)
+        device_registers[3][0] <= {~ps2_mouse[0], 7'b1000001}; // Clamp to -63 (negated)
+      else if ($signed(ps2_mouse[23:16]) < -63)
+        device_registers[3][0] <= {~ps2_mouse[0], 7'd63};      // Clamp to +63 (negated)
+      else
+        device_registers[3][0] <= {~ps2_mouse[0], -ps2_mouse[22:16]};
 
-        valid_mouse_data <= 1'b1;
-        device_data_pending[3] <= 8'h02;  // 2 bytes available
+      valid_mouse_data <= 1'b1;
+      device_data_pending[3] <= 8'h02;  // 2 bytes available
 
-        $display("ADB MOUSE: X=%d Y=%d btn=%d -> reg0=0x%02h reg1=0x%02h",
-                 $signed(ps2_mouse[15:8]), $signed(ps2_mouse[23:16]), ps2_mouse[0],
-                 {~ps2_mouse[0], ps2_mouse[22:16]}, {1'b1, ps2_mouse[14:8]});
-      end
+      $display("ADB MOUSE: X=%d Y=%d btn=%d -> reg0=0x%02h reg1=0x%02h",
+               $signed(ps2_mouse[15:8]), $signed(ps2_mouse[23:16]), ps2_mouse[0],
+               {~ps2_mouse[0], ps2_mouse[22:16]}, {1'b1, ps2_mouse[14:8]});
     end
     
     // Timeout handling for stuck commands
