@@ -293,6 +293,21 @@ module iigs
                ((bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1) |  // Banks 00/01/E0/E1: always (NOTE: ignoring shadow[6] - see investigation notes)
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
+  // Combinational ADB read detection - bypasses io_dout timing issue for ADB reads
+  // ADB addresses: $C000, $C010, $C024, $C025, $C026, $C027, $C044, $C045, $C064-$C067, $C070
+  wire adb_read = IO & cpu_we_n & (
+    cpu_addr[7:0] == 8'h00 |  // $C000 - Keyboard data
+    cpu_addr[7:0] == 8'h10 |  // $C010 - Keyboard strobe
+    cpu_addr[7:0] == 8'h24 |  // $C024 - Mouse data
+    cpu_addr[7:0] == 8'h25 |  // $C025 - Modifier keys
+    cpu_addr[7:0] == 8'h26 |  // $C026 - ADB command/data
+    cpu_addr[7:0] == 8'h27 |  // $C027 - ADB status
+    cpu_addr[7:0] == 8'h44 |  // $C044 - Mouse X (alternate)
+    cpu_addr[7:0] == 8'h45 |  // $C045 - Mouse Y (alternate)
+    (cpu_addr[7:4] == 4'h6 & cpu_addr[3:2] == 2'b01) |  // $C064-$C067 - Paddle buttons
+    cpu_addr[7:0] == 8'h70    // $C070 - Paddle trigger
+  );
+
   // Use combinational logic but add debug to detect timing issues
   assign { bank_bef, addr_bef } = cpu_addr;
   
@@ -713,6 +728,9 @@ module iigs
     // Check adb_strobe BEFORE resetting it (otherwise we'd check the new value of 0)
     if (adb_strobe & cpu_we_n) begin
       io_dout <= adb_dout;
+      if (adb_addr == 8'h24) begin
+        $display("IIGS C024 RESPONSE: adb_dout=0x%02h -> io_dout", adb_dout);
+      end
     end
     adb_strobe <= 1'b0;
 
@@ -1629,7 +1647,8 @@ wire [7:0] din =
 
   wire [7:0] HDD_DO;
 
-  wire [7:0] cpu_din = IO ? iwm_strobe ? iwm_dout : io_dout : din;
+  // CPU data input mux: prioritize ADB reads (combinational), then IWM, then general I/O
+  wire [7:0] cpu_din = IO ? (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout)) : din;
 
   // Debug: Detect when CPU receives default 0x80 value (potential unhandled I/O)
   always @(posedge CLK_14M) begin
@@ -2008,17 +2027,25 @@ wire ready_out;
   wire adb_open_apple, adb_closed_apple, adb_shift, adb_ctrl;
   wire adb_akd;
   wire [7:0] adb_K;
-  
+
+  // For ADB reads, use combinational address for immediate response
+  // For ADB writes, use registered address that's set when strobe is asserted
+  wire [7:0] adb_addr_mux = adb_read ? cpu_addr[7:0] : adb_addr;
+  wire adb_rw_mux = adb_read ? 1'b1 : adb_rw;  // Always read when adb_read is active
+  // Combinational strobe for reads (for state updates), registered strobe for writes
+  wire adb_strobe_mux = adb_read | adb_strobe;
+
   adb adb(
           .CLK_14M(CLK_14M),
           .cen(phi2),
           .reset(reset),
-          .addr(adb_addr),
-          .rw(adb_rw),
+          .addr(adb_addr_mux),
+          .rw(adb_rw_mux),
           .din(adb_din),
-          .dout(adb_dout),
+          .dout(),  // Unused - using dout_comb for same-cycle reads
+          .dout_comb(adb_dout),  // Combinational output for CPU reads
           .irq(/* unused - ADB IRQ handled via registers */),
-          .strobe(adb_strobe),
+          .strobe(adb_strobe_mux),
           .capslock(adb_capslock),
           .ps2_key(ps2_key),
           .ps2_mouse(ps2_mouse),

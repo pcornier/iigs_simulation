@@ -1687,8 +1687,13 @@ void RunBatch(int steps)
 unsigned char mouse_clock = 0;
 unsigned char mouse_clock_reduce = 0;
 unsigned char mouse_buttons = 0;
-unsigned char mouse_x = 0;
-unsigned char mouse_y = 0;
+signed char mouse_x = 0;
+signed char mouse_y = 0;
+
+// Real mouse tracking for Apple IIgs
+int prev_mouse_x = 0;
+int prev_mouse_y = 0;
+bool mouse_captured = false;  // True when mouse is captured for IIgs control
 
 char spinner_toggle = 0;
 
@@ -2078,12 +2083,42 @@ int main(int argc, char** argv, char** env) {
 	while (!done)
 	{
 		SDL_Event event;
+		// Reset mouse deltas each frame before accumulating events
+		mouse_x = 0;
+		mouse_y = 0;
 		while (SDL_PollEvent(&event))
 		{
 			ImGui_ImplSDL2_ProcessEvent(&event);
 			if (event.type == SDL_QUIT)
 				done = true;
+			// Handle mouse motion when captured
+			if (event.type == SDL_MOUSEMOTION && mouse_captured) {
+				mouse_x += event.motion.xrel;
+				mouse_y -= event.motion.yrel;  // Invert Y for Apple IIgs coordinate system
+			}
+			// Handle mouse buttons when captured
+			if (mouse_captured) {
+				if (event.type == SDL_MOUSEBUTTONDOWN) {
+					if (event.button.button == SDL_BUTTON_LEFT)
+						mouse_buttons |= 0x01;
+				}
+				if (event.type == SDL_MOUSEBUTTONUP) {
+					if (event.button.button == SDL_BUTTON_LEFT)
+						mouse_buttons &= ~0x01;
+				}
+			}
+			// Escape key releases mouse capture
+			if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE && mouse_captured) {
+				mouse_captured = false;
+				SDL_SetRelativeMouseMode(SDL_FALSE);
+				ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+			}
 		}
+		// Clamp mouse deltas to signed 8-bit range
+		if (mouse_x > 127) mouse_x = 127;
+		if (mouse_x < -127) mouse_x = -127;
+		if (mouse_y > 127) mouse_y = 127;
+		if (mouse_y < -127) mouse_y = -127;
 #endif
 		video.StartFrame();
 
@@ -2207,7 +2242,19 @@ int main(int argc, char** argv, char** env) {
 
 		// Draw VGA output
 		ImGui::Image(video.texture_id, ImVec2(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y));
-		
+
+		// Mouse capture for Apple IIgs: capture when clicking on VGA output, release with Escape
+		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
+			mouse_captured = true;
+			SDL_SetRelativeMouseMode(SDL_TRUE);
+			ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+		}
+		if (mouse_captured) {
+			ImGui::Text("Mouse captured - Press ESC to release");
+		} else {
+			ImGui::Text("Click on display to capture mouse");
+		}
+
 		// Check if this frame should be screenshotted (after texture is displayed)
 		bool took_screenshot_this_frame = false;
 		if (screenshot_mode) {
@@ -2319,22 +2366,38 @@ int main(int argc, char** argv, char** env) {
 		//	if (spinner_toggle) { top->spinner_0 |= 1UL << 8; }
 		//}
 
-		mouse_buttons = 0;
-		mouse_x = 0;
-		mouse_y = 0;
-		if (input.inputs[input_left]) { mouse_x = -2; }
-		if (input.inputs[input_right]) { mouse_x = 2; }
-		if (input.inputs[input_up]) { mouse_y = 2; }
-		if (input.inputs[input_down]) { mouse_y = -2; }
+		// Mouse input: use real captured mouse or arrow keys as fallback
+		if (!mouse_captured) {
+			// Fallback to arrow keys when mouse not captured
+			mouse_buttons = 0;
+			mouse_x = 0;
+			mouse_y = 0;
+			if (input.inputs[input_left]) { mouse_x = -2; }
+			if (input.inputs[input_right]) { mouse_x = 2; }
+			if (input.inputs[input_up]) { mouse_y = 2; }
+			if (input.inputs[input_down]) { mouse_y = -2; }
+			if (input.inputs[input_a]) { mouse_buttons |= 0x01; }
+		}
+		// mouse_x, mouse_y, mouse_buttons already set from SDL events when captured
 
-		if (input.inputs[input_a]) { mouse_buttons |= (1UL << 0); }
-		if (input.inputs[input_b]) { mouse_buttons |= (1UL << 1); }
+		// Build PS/2 mouse packet:
+		// Byte 0 [7:0]: Button state + sign bits (bit 0=button, bit 4=X sign, bit 5=Y sign)
+		// Byte 1 [15:8]: X delta (signed 8-bit)
+		// Byte 2 [23:16]: Y delta (signed 8-bit)
+		// Bit 24: Toggle bit for event detection
+		unsigned char status_byte = mouse_buttons & 0x01;
+		if (mouse_x < 0) status_byte |= 0x10;  // X sign bit
+		if (mouse_y < 0) status_byte |= 0x20;  // Y sign bit
 
-		unsigned long mouse_temp = mouse_buttons;
-		mouse_temp += (mouse_x << 8);
-		mouse_temp += (mouse_y << 16);
+		unsigned long mouse_temp = status_byte;
+		mouse_temp |= ((unsigned char)mouse_x << 8);
+		mouse_temp |= ((unsigned char)mouse_y << 16);
+
+		// Only toggle clock when there's actual mouse data to report
+		if (mouse_x != 0 || mouse_y != 0 || mouse_buttons != 0) {
+			mouse_clock = !mouse_clock;
+		}
 		if (mouse_clock) { mouse_temp |= (1UL << 24); }
-		mouse_clock = !mouse_clock;
 
 		top->ps2_mouse = mouse_temp;
 		top->ps2_mouse_ext = mouse_x + (mouse_buttons << 8);

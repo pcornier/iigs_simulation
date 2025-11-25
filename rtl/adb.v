@@ -6,6 +6,7 @@ module adb(
   input rw,
   input [7:0] din,
   output reg [7:0] dout,
+  output [7:0] dout_comb,  // Combinational output for same-cycle reads
   output irq,
   input strobe,
   input [10:0] ps2_key,
@@ -507,6 +508,55 @@ function [7:0] rate_to_vbl_count;
   end
 endfunction
 
+// Combinational output for same-cycle reads (bypasses registered dout)
+// This is needed because the CPU reads data in the same cycle as the address is presented
+reg [7:0] dout_comb_reg;
+assign dout_comb = dout_comb_reg;
+
+always @(*) begin
+  // Default to registered dout
+  dout_comb_reg = dout;
+
+  // Override for specific addresses that need combinational response
+  case (addr)
+    8'h24: begin  // $C024 - Mouse Data
+      if (rw) begin
+        if (valid_mouse_data) begin
+          if (mouse_coord)
+            dout_comb_reg = device_registers[3][0];  // Y + button
+          else
+            dout_comb_reg = device_registers[3][1];  // X + always-1-bit
+        end else begin
+          dout_comb_reg = 8'h80;  // No data
+        end
+      end
+    end
+    8'h27: begin  // $C027 - ADB Status
+      if (rw) begin
+        dout_comb_reg = {
+          valid_mouse_data | (pending_data > 0),  // bit 7: mouse data valid
+          mouse_int,                               // bit 6: mouse interrupt enable
+          pending_data > 0 ? 1'b1 : 1'b0,         // bit 5: data valid
+          data_int,                                // bit 4: data interrupt enable
+          valid_kbd,                               // bit 3: keyboard data valid
+          kbd_int,                                 // bit 2: keyboard interrupt enable
+          mouse_coord,                             // bit 1: mouse coordinate flag
+          cmd_full                                 // bit 0: command full
+        };
+      end
+    end
+    8'h00: begin  // $C000 - Keyboard data
+      if (rw) begin
+        dout_comb_reg = K;
+      end
+    end
+    default: begin
+      // Use registered dout for other addresses
+      dout_comb_reg = dout;
+    end
+  endcase
+end
+
 always @(posedge CLK_14M) begin
 
   // Reset handling
@@ -838,20 +888,39 @@ always @(posedge CLK_14M) begin
     end
     
     // PS/2 mouse event processing
+    // PS/2 format: [7:0]=status (bit0=button, bit4=Xsign, bit5=Ysign)
+    //              [15:8]=X delta, [23:16]=Y delta, [24]=toggle
     if (ps2_mouse[24] != ps2_mouse_toggle_prev) begin
-      // Only process mouse data if it's meaningful (not just zeros)
-      if (ps2_mouse[7:0] != 8'h00) begin
-        // Add to mouse FIFO if there's space
-        if (mouse_fifo_count < MAX_MOUSE_BUF) begin
-          mouse_fifo[mouse_fifo_head] <= ps2_mouse[7:0];
-          mouse_fifo_head <= (mouse_fifo_head + 1) % MAX_MOUSE_BUF;
-          mouse_fifo_count <= mouse_fifo_count + 1;
-          
-          // Store current mouse data in device register
-          device_registers[3][0] <= ps2_mouse[7:0];
-          valid_mouse_data <= 1'b1;
-          device_data_pending[3] <= 8'h01;
-        end
+      // Check if there's any meaningful mouse data (movement or button)
+      if (ps2_mouse[15:8] != 8'h00 || ps2_mouse[23:16] != 8'h00 || ps2_mouse[0]) begin
+        // Build ADB mouse data format (2 bytes per Apple IIgs spec):
+        // Byte 0: bit7=~button, bits6:0=Y delta (clamped to 7-bit signed, -63 to +63)
+        // Byte 1: bit7=1, bits6:0=X delta (clamped to 7-bit signed, -63 to +63)
+
+        // Clamp X delta from 8-bit signed to 7-bit signed range (-63 to +63)
+        // ps2_mouse[15:8] is 8-bit signed X delta
+        if ($signed(ps2_mouse[15:8]) > 63)
+          device_registers[3][1] <= {1'b1, 7'd63};      // Clamp to +63
+        else if ($signed(ps2_mouse[15:8]) < -63)
+          device_registers[3][1] <= {1'b1, 7'b1000001}; // Clamp to -63 (0x41 in 7-bit signed)
+        else
+          device_registers[3][1] <= {1'b1, ps2_mouse[14:8]};
+
+        // Clamp Y delta from 8-bit signed to 7-bit signed range (-63 to +63)
+        // ps2_mouse[23:16] is 8-bit signed Y delta
+        if ($signed(ps2_mouse[23:16]) > 63)
+          device_registers[3][0] <= {~ps2_mouse[0], 7'd63};      // Clamp to +63
+        else if ($signed(ps2_mouse[23:16]) < -63)
+          device_registers[3][0] <= {~ps2_mouse[0], 7'b1000001}; // Clamp to -63
+        else
+          device_registers[3][0] <= {~ps2_mouse[0], ps2_mouse[22:16]};
+
+        valid_mouse_data <= 1'b1;
+        device_data_pending[3] <= 8'h02;  // 2 bytes available
+
+        $display("ADB MOUSE: X=%d Y=%d btn=%d -> reg0=0x%02h reg1=0x%02h",
+                 $signed(ps2_mouse[15:8]), $signed(ps2_mouse[23:16]), ps2_mouse[0],
+                 {~ps2_mouse[0], ps2_mouse[22:16]}, {1'b1, ps2_mouse[14:8]});
       end
     end
     
@@ -1208,11 +1277,14 @@ always @(posedge CLK_14M) begin
                             end
                           end else if (din[7:4] == 4'd3 && din[3:2] == 2'd0) begin
                             // Mouse device register 0 - return mouse data if available
+                            // ADB mouse returns 2 bytes: reg0 (Y+button) and reg1 (X)
                             if (device_data_pending[3] > 0) begin
-                              data <= { 24'd0, device_registers[3][0] };
-                              pending_data <= 3'd1;
+                              data <= { 16'd0, device_registers[3][1], device_registers[3][0] };
+                              pending_data <= 3'd2;  // 2 bytes of mouse data
                               device_data_pending[3] <= 8'h00;  // Clear pending data
                               valid_mouse_data <= 1'b0;  // Clear flag after reading
+                              $display("ADB MOUSE READ: returning 0x%02h 0x%02h",
+                                       device_registers[3][0], device_registers[3][1]);
                             end else begin
                               data <= 32'd0;  // No data available
                               pending_data <= 3'd0;
@@ -1388,17 +1460,19 @@ always @(posedge CLK_14M) begin
       end
 
       8'h27: begin
-`ifdef ADB_DEBUG
-        $display("DEBUG: ADB 27 case entered, rw=%b", rw);
-`endif
         // $C027 - ADB Control Register
         if (rw) begin
           // Read $C027 - Status bits
-          // NOTE: Documentation says bit 7 is "Mouse Data register full", BUT actual ROM
-          // behavior polls bit 7 for ALL ADB command responses (VERSION, READ_MEM, etc.)
-          // Setting bit 7 = pending_data makes ROM selftest test 09 work correctly
+          // bit 7: Mouse Data register full (valid_mouse_data) OR command response ready
+          // bit 6: Mouse interrupt enable
+          // bit 5: Data register contains valid data (pending_data)
+          // bit 4: Data interrupt enable
+          // bit 3: Keyboard data valid
+          // bit 2: Keyboard interrupt enable
+          // bit 1: Mouse coordinate flag (0=X next, 1=Y next)
+          // bit 0: Command full
           dout <= {
-            pending_data > 0 ? 1'b1 : 1'b0,  // bit 7: command response ready (ROM polls this!)
+            valid_mouse_data | (pending_data > 0),  // bit 7: mouse data OR command response
             mouse_int,             // bit 6: mouse interrupt enable
             pending_data > 0 ? 1'b1 : 1'b0,  // bit 5: Command/Data register contains valid data
             data_int,              // bit 4: data interrupt enable
@@ -1407,15 +1481,10 @@ always @(posedge CLK_14M) begin
             mouse_coord,           // bit 1: mouse coordinate flag
             cmd_full               // bit 0: command full
           };
-`ifdef ADB_DEBUG
-          $display("DEBUG: ADB 27 READ: valid_kbd=%b, kbd_int=%b, pending_data=%d, cmd_full=%b -> dout=0x%02h", 
-                   valid_kbd, kbd_int, pending_data, cmd_full, 
-                   {valid_mouse_data, mouse_int, pending_data > 0 ? 1'b1 : 1'b0, data_int, valid_kbd, kbd_int, mouse_coord, cmd_full});
-`endif
-          
-          // Auto-clear valid_mouse_data if it's been read while no pending mouse data
-          if (valid_mouse_data && device_data_pending[3] == 0) begin
-            valid_mouse_data <= 1'b0;
+          if (strobe && valid_mouse_data) begin
+            $display("C027 READ: mouse_valid=1 mouse_coord=%b -> 0x%02h",
+                     mouse_coord,
+                     {valid_mouse_data | (pending_data > 0), mouse_int, pending_data > 0 ? 1'b1 : 1'b0, data_int, valid_kbd, kbd_int, mouse_coord, cmd_full});
           end
         end else if (cen & strobe) begin
           // Write $C027 - Interrupt enables
@@ -1503,21 +1572,44 @@ always @(posedge CLK_14M) begin
       end
 
       8'h24: begin
-        // $C024 - Mouse Data Register (read-only)  
+        // $C024 - Mouse Data Register (read-only)
+        // Returns X delta then Y delta on alternating reads
+        // Format: bit 7 = button state (inverted) for Y, always 1 for X
+        //         bits 6:0 = signed delta value (-63 to +63)
         if (rw) begin
-          // Return mouse data from FIFO
-          if (mouse_fifo_count > 0) begin
-            dout <= mouse_fifo[mouse_fifo_tail];
-            mouse_fifo_tail <= (mouse_fifo_tail + 1) % MAX_MOUSE_BUF;
-            mouse_fifo_count <= mouse_fifo_count - 1;
-            
-            // Clear mouse valid flag if FIFO is now empty
-            if (mouse_fifo_count == 1) begin
-              valid_mouse_data <= 1'b0;
+          // Combinational read output (no strobe needed)
+          if (valid_mouse_data) begin
+            if (mouse_coord) begin
+              dout <= device_registers[3][0];  // Y + button
+            end else begin
+              dout <= device_registers[3][1];  // X + always-1-bit
             end
           end else begin
-            dout <= 8'h00;  // No mouse data available
-            valid_mouse_data <= 1'b0;
+            dout <= 8'h80;  // No data: button not pressed, delta=0
+          end
+
+          // State updates on FALLING edge of strobe (after CPU has read the data)
+          // This ensures the NEXT read gets the toggled coordinate
+          if (~strobe & strobe_prev) begin
+            if (valid_mouse_data) begin
+              if (mouse_coord) begin
+                // After reading Y, clear valid flag and reset coord
+                valid_mouse_data <= 1'b0;
+                mouse_coord <= 1'b0;
+                $display("C024 READ Y: 0x%02h (btn=%d, dy=%d)",
+                         device_registers[3][0], ~device_registers[3][0][7],
+                         $signed({device_registers[3][0][6], device_registers[3][0][6:0]}));
+              end else begin
+                // After reading X, toggle coord for next Y read
+                mouse_coord <= 1'b1;
+                $display("C024 READ X: 0x%02h (dx=%d)",
+                         device_registers[3][1],
+                         $signed({device_registers[3][1][6], device_registers[3][1][6:0]}));
+              end
+            end else begin
+              // Toggle coord even when no data (maintains alternating pattern)
+              mouse_coord <= ~mouse_coord;
+            end
           end
         end
       end
