@@ -798,20 +798,12 @@ always @(posedge CLK_14M) begin
               valid_kbd <= 1'b1;
               device_data_pending[2] <= 8'h01;
               
-              // Update Apple IIe compatibility registers - prevent multiple updates per keypress
+              // Update Apple IIe compatibility registers
               if (temp_iie_char != 8'hFF && !k_register_updated) begin
-                // Check if this would be a duplicate of the current K register value
-                if (K[6:0] != temp_iie_char[6:0]) begin
-                  $display("ADB: Setting K register for new keypress: PS2=%03h Apple=%02h ASCII=%02h K=%02h", ps2_key[8:0], temp_apple_key, temp_iie_char, {1'b1, temp_iie_char[6:0]});
-                  K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
-                  akd <= 1'b1;  // Any key down
-                  k_register_updated <= 1'b1;  // Mark that we've updated K for this keypress
-                end else begin
-                  $display("ADB: BLOCKED duplicate K register value: current K=%02h, attempted=%02h", K, {1'b1, temp_iie_char[6:0]});
-                  k_register_updated <= 1'b1;  // Still mark as updated to prevent further attempts
-                end
-              end else if (temp_iie_char != 8'hFF && k_register_updated) begin
-                $display("ADB: BLOCKED duplicate K register update for PS2=%03h (k_updated=%b)", ps2_key[8:0], k_register_updated);
+                $display("ADB: Setting K register: PS2=%03h Apple=%02h ASCII=%02h", ps2_key[8:0], temp_apple_key, temp_iie_char);
+                K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
+                akd <= 1'b1;  // Any key down
+                k_register_updated <= 1'b1;  // Mark that we've updated K for this keypress
               end
             end
           end else begin
