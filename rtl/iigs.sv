@@ -1561,10 +1561,8 @@ bram #(.widthad_a(17)) slowram
         .address_b(video_addr[16:0]),
         .data_b(8'b0),
         .q_b(video_data),
-        .wren_b(1'b0)
-
-
-        //.ce_b(1'b1)
+        .wren_b(1'b0),
+        .enable_b(ce_pix)
 );
 
 video_timing video_timing(
