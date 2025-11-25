@@ -2094,7 +2094,7 @@ int main(int argc, char** argv, char** env) {
 			// Handle mouse motion when captured
 			if (event.type == SDL_MOUSEMOTION && mouse_captured) {
 				mouse_x += event.motion.xrel;
-				mouse_y -= event.motion.yrel;  // Invert Y for Apple IIgs coordinate system
+				mouse_y += event.motion.yrel;  // RTL handles Y inversion for Apple IIgs
 			}
 			// Handle mouse buttons when captured
 			if (mouse_captured) {

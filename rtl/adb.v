@@ -908,12 +908,14 @@ always @(posedge CLK_14M) begin
 
         // Clamp Y delta from 8-bit signed to 7-bit signed range (-63 to +63)
         // ps2_mouse[23:16] is 8-bit signed Y delta
+        // Negate Y: PS/2 sends positive when moving up, but Apple IIgs expects
+        // positive Y to move cursor down (screen coordinates)
         if ($signed(ps2_mouse[23:16]) > 63)
-          device_registers[3][0] <= {~ps2_mouse[0], 7'd63};      // Clamp to +63
+          device_registers[3][0] <= {~ps2_mouse[0], 7'b1000001}; // Clamp to -63 (negated from +63)
         else if ($signed(ps2_mouse[23:16]) < -63)
-          device_registers[3][0] <= {~ps2_mouse[0], 7'b1000001}; // Clamp to -63
+          device_registers[3][0] <= {~ps2_mouse[0], 7'd63};      // Clamp to +63 (negated from -63)
         else
-          device_registers[3][0] <= {~ps2_mouse[0], ps2_mouse[22:16]};
+          device_registers[3][0] <= {~ps2_mouse[0], -ps2_mouse[22:16]};
 
         valid_mouse_data <= 1'b1;
         device_data_pending[3] <= 8'h02;  // 2 bytes available
