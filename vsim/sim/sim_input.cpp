@@ -599,8 +599,10 @@ void SimInput::Read() {
 	if (!headless) {
 		for (int k = 0; k < m_keyboardStateCount; k++) {
 			if (m_keyboardState_last[k] != m_keyboardState[k]) {
-				bool ext = 0;
-				SimInput_PS2KeyEvent evt = SimInput_PS2KeyEvent(k, m_keyboardState[k], ext, ev2ps2[k]);
+				// Extract extended flag from the mapped PS/2 code
+				unsigned int mapped = ev2ps2[k];
+				bool ext = (mapped & EXT) != 0;
+				SimInput_PS2KeyEvent evt = SimInput_PS2KeyEvent(k, m_keyboardState[k], ext, mapped);
 				keyEvents.push(evt);
 			}
 			m_keyboardState_last[k] = m_keyboardState[k];

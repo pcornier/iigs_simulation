@@ -1415,35 +1415,27 @@ always @(posedge CLK_14M) begin
           dout <= K;  // Return current key with strobe bit
 
           // GSplus-style key repeat: generate repeat on $C000 READ
-          // when strobe is clear (key was consumed) and a key is held down
-          if (strobe && !K[7] && ps2_key_held && held_iie_char != 8'hFF) begin
-            // Check if repeat timer has expired
-            if (hz60_count >= repeat_vbl_target) begin
-              // Time to repeat! Re-inject the held key
-              K <= {1'b1, held_iie_char[6:0]};  // Set strobe + ASCII
-              c025[3] <= 1'b1;  // Set repeat function flag ($C025 bit 3)
-
-              // Set next repeat time based on whether first repeat is done
-              if (!repeat_first_done) begin
-                // After initial delay, switch to rate timing
-                repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
-                repeat_first_done <= 1'b1;
-              end else begin
-                // Subsequent repeats use rate timing
-                repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
-              end
+          // Only trigger on RISING edge of strobe to prevent multiple repeats per bus cycle
+          if (strobe && !strobe_prev && !K[7] && ps2_key_held && held_iie_char != 8'hFF && repeat_delay_vbl != 8'd0) begin
+            if ($signed(hz60_count - repeat_vbl_target) >= 0) begin
+              K <= {1'b1, held_iie_char[6:0]};
+              c025[3] <= 1'b1;
+              repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
+              repeat_first_done <= 1'b1;
 `ifdef SIMULATION
-              $display("ADB REPEAT: char=%02h at hz60=%d next_target=%d", held_iie_char, hz60_count, hz60_count + repeat_rate_vbl);
+              $display("ADB REPEAT: char=%02h at hz60=%d next_target=%d first_done=%d", held_iie_char, hz60_count, hz60_count + repeat_rate_vbl, repeat_first_done);
 `endif
             end
           end
         end
       end
       
-      8'h10: begin  // $C010 - Keyboard strobe clear
+      8'h10: begin  // $C010 - Keyboard strobe clear (ANY access clears strobe)
         if (rw) begin
-          dout <= K;
-        end else if (cen & strobe & !c010_processed_this_strobe) begin
+          dout <= K;  // Return K value on read
+        end
+        // Clear strobe on ANY access (read or write) - matches GSplus behavior
+        if (cen & strobe & !c010_processed_this_strobe) begin
 `ifdef ADB_DEBUG
           $display("ADB C010 WRITE PROCESSED (cen=%b, strobe=%b) - processing C010 clear", cen, strobe);
 `endif
