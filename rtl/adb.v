@@ -63,7 +63,7 @@ reg [7:0] mouse_ctl_addr = 8'd3;
 reg [7:0] repeat_rate, repeat_delay;
 reg [7:0] char_set = 8'd0;
 reg [7:0] layout = 8'd0;
-reg [7:0] repeat_info = 8'h23;
+reg [7:0] repeat_info = 8'h23;  // Key repeat configuration: delay[6:4], rate[3:0]
 
 // Interrupt and status flags
 reg data_int, mouse_int, kbd_int;
@@ -85,17 +85,9 @@ reg [3:0] kbd_fifo_tail;                 // FIFO tail pointer
 reg [3:0] kbd_fifo_count;                // Number of keys in FIFO
 reg kbd_strobe;                          // Keyboard strobe bit
 
-// Mouse FIFO and management  
-parameter MAX_MOUSE_BUF = 8;
-reg [7:0] mouse_fifo [MAX_MOUSE_BUF-1:0]; // Mouse data FIFO
-reg [3:0] mouse_fifo_head;               // FIFO head pointer
-reg [3:0] mouse_fifo_tail;               // FIFO tail pointer
-reg [3:0] mouse_fifo_count;              // Number of mouse events in FIFO
-
 // Modifier key tracking for selftest override and keyboard processing
 reg shift_down;           // Bit 0: Shift key down
-reg ctrl_down;            // Bit 1: Control key down  
-reg caps_lock_down;       // Bit 2: Caps Lock down
+reg ctrl_down;            // Bit 1: Control key down
 reg option_down;          // Bit 6: Option key down
 reg cmd_down;             // Bit 7: Command key down
 
@@ -104,7 +96,6 @@ reg ps2_key_held;                    // A key is currently held down
 reg [8:0] held_ps2_key;              // PS/2 scancode of held key
 reg [7:0] held_iie_char;             // ASCII character for repeat
 reg [15:0] repeat_vbl_target;        // VBL count when next repeat should occur
-reg repeat_first_done;               // First repeat (after delay) has occurred
 reg c010_processed_this_strobe;      // Prevent multiple C010 processing per bus cycle
 reg prev_strobe;                     // For edge detection
 
@@ -152,9 +143,7 @@ bram #(
 // Apple IIe compatibility registers
 reg [7:0] c025;
 
-// PS/2 input handling and state tracking
-reg [10:0] ps2_key_prev;  // Store previous PS/2 key data to prevent duplicate processing
-reg [24:0] ps2_mouse_prev;
+// PS/2 input handling - track toggle bits for edge detection
 reg ps2_key_toggle_prev, ps2_mouse_toggle_prev;
 
 // Modifier key states (moved up above with other regs)
@@ -590,7 +579,6 @@ always @(posedge CLK_14M) begin
     // PS/2 input tracking
     ps2_key_toggle_prev <= 1'b0;
     ps2_mouse_toggle_prev <= 1'b0;
-    ps2_key_prev <= 11'd0;
     
     // Modifier key states
     shift_down <= 1'b0;
@@ -645,19 +633,10 @@ always @(posedge CLK_14M) begin
     for (int i = 0; i < MAX_KBD_BUF; i++) begin
       kbd_fifo[i] <= 8'h00;
     end
-    
-    // Initialize mouse FIFO
-    mouse_fifo_head <= 4'd0;
-    mouse_fifo_tail <= 4'd0;
-    mouse_fifo_count <= 4'd0;
-    for (int i = 0; i < MAX_MOUSE_BUF; i++) begin
-      mouse_fifo[i] <= 8'h00;
-    end
-    
+
     // Initialize modifier key states
     shift_down <= 1'b0;
     ctrl_down <= 1'b0;
-    caps_lock_down <= 1'b0;
     option_down <= 1'b0;
     cmd_down <= 1'b0;
     
@@ -666,7 +645,6 @@ always @(posedge CLK_14M) begin
     held_ps2_key <= 9'd0;
     held_iie_char <= 8'd0;
     repeat_vbl_target <= 16'd0;
-    repeat_first_done <= 1'b0;
     c010_processed_this_strobe <= 1'b0;
     prev_strobe <= 1'b0;
 
@@ -679,9 +657,7 @@ always @(posedge CLK_14M) begin
     // Default RAM control signals (override when needed)
     ram_wen <= 1'b0;
     
-    // Track PS/2 input changes
-    ps2_key_prev <= ps2_key;
-    ps2_mouse_prev <= ps2_mouse;
+    // Track PS/2 toggle bits for edge detection
     ps2_key_toggle_prev <= ps2_key[10];
     ps2_mouse_toggle_prev <= ps2_mouse[24];
     
@@ -696,9 +672,9 @@ always @(posedge CLK_14M) begin
     // Generate 60Hz counter from 14MHz clock
     if (clk_60hz_counter >= CLK_60HZ_PERIOD - 1) begin
       clk_60hz_counter <= 18'd0;
-      hz60_count <= hz60_count + 1;  // Increment 60Hz counter
+      hz60_count <= hz60_count + 16'd1;  // Increment 60Hz counter
     end else begin
-      clk_60hz_counter <= clk_60hz_counter + 1;
+      clk_60hz_counter <= clk_60hz_counter + 18'd1;
     end
     
     // PS/2 keyboard event processing
@@ -768,14 +744,13 @@ always @(posedge CLK_14M) begin
 
               // Set initial repeat timer (first repeat after delay)
               repeat_vbl_target <= hz60_count + {8'd0, repeat_delay_vbl};
-              repeat_first_done <= 1'b0;  // First repeat not done yet
             end
 
             // Add to keyboard FIFO if there's space
-            if (kbd_fifo_count < MAX_KBD_BUF) begin
-              kbd_fifo[kbd_fifo_head] <= temp_apple_key;
-              kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
-              kbd_fifo_count <= kbd_fifo_count + 1;
+            if (kbd_fifo_count < MAX_KBD_BUF[3:0]) begin
+              kbd_fifo[kbd_fifo_head[2:0]] <= temp_apple_key;
+              kbd_fifo_head <= (kbd_fifo_head + 4'd1) & 4'd7;  // MAX_KBD_BUF-1 mask
+              kbd_fifo_count <= kbd_fifo_count + 4'd1;
 
               valid_kbd <= 1'b1;
               device_data_pending[2] <= 8'h01;
@@ -798,7 +773,6 @@ always @(posedge CLK_14M) begin
               held_ps2_key <= 9'd0;
               held_iie_char <= 8'd0;
               repeat_vbl_target <= 16'd0;
-              repeat_first_done <= 1'b0;
               c025[3] <= 1'b0;  // Clear repeat function flag
             end
 
@@ -1086,13 +1060,11 @@ always @(posedge CLK_14M) begin
                   // ABORT - Clear all ADB state including key repeat
                   ps2_key_held <= 1'b0;
                   repeat_vbl_target <= 16'd0;
-                  repeat_first_done <= 1'b0;
                 end
                 8'h03: begin
                   // FLUSH keyboard buffer - also stop key repeat
                   ps2_key_held <= 1'b0;
                   repeat_vbl_target <= 16'd0;
-                  repeat_first_done <= 1'b0;
 
                   // Clear keyboard FIFO
                   kbd_fifo_head <= 4'd0;
@@ -1118,10 +1090,10 @@ always @(posedge CLK_14M) begin
                   pending_data <= 3'd1;
                 end
                 8'h0b: begin
-                  // Read device info
+                  // Read device info - returns config including repeat_info
                   data <= {
-                    mouse_ctl_addr,
-                    kbd_ctl_addr,
+                    {mouse_ctl_addr[3:0], kbd_ctl_addr[3:0]},  // Combined addr byte
+                    repeat_info,   // Key repeat settings
                     char_set,
                     layout
                   };
@@ -1129,7 +1101,7 @@ always @(posedge CLK_14M) begin
                 end
                 8'h0d: begin
                   // ADB Version command - return version number
-                  data <= { 24'd0, VERSION };  // Clear upper bits, set version in LSB
+                  data <= {24'd0, VERSION[7:0]};  // Clear upper bits, set version in LSB
                   pending_data <= 3'd1;
                   state <= IDLE;  // Immediate response, return to IDLE
                 end
@@ -1204,7 +1176,7 @@ always @(posedge CLK_14M) begin
                               data <= { 24'd0, device_registers[2][0] };
                               pending_data <= 3'd1;
                               device_data_pending[2] <= 8'h00;  // Clear pending data
-                              if (device_registers[2][0] & 8'h80) valid_kbd <= 1'b0;  // Clear on key release
+                              if ((device_registers[2][0] & 8'h80) != 8'd0) valid_kbd <= 1'b0;  // Clear on key release
                             end else begin
                               data <= 32'd0;  // No data available
                               pending_data <= 3'd0;
@@ -1299,8 +1271,8 @@ always @(posedge CLK_14M) begin
                     // Byte 2: mouse_ctl_addr, kbd_ctl_addr
                     // Byte 1: (reserved)
                     // Byte 0: repeat_info
-                    mouse_ctl_addr <= cmd_data[23:20];
-                    kbd_ctl_addr   <= cmd_data[19:16];
+                    mouse_ctl_addr <= {4'd0, cmd_data[23:20]};
+                    kbd_ctl_addr   <= {4'd0, cmd_data[19:16]};
                     repeat_info    <= cmd_data[7:0];
 
                     // Recalculate VBL timing values immediately
@@ -1311,8 +1283,8 @@ always @(posedge CLK_14M) begin
                     // SYNC (0x07) - Multi-byte command, process all data at once
                     if (initial_cmd_len == 4'd4) begin // ROM1
                       adb_mode       <= cmd_data[31:24];
-                      mouse_ctl_addr <= cmd_data[23:20];
-                      kbd_ctl_addr   <= cmd_data[19:16];
+                      mouse_ctl_addr <= {4'd0, cmd_data[23:20]};
+                      kbd_ctl_addr   <= {4'd0, cmd_data[19:16]};
                       repeat_info    <= cmd_data[7:0];
 
                       // Recalculate VBL timing values
@@ -1320,8 +1292,8 @@ always @(posedge CLK_14M) begin
                       repeat_rate_vbl <= rate_to_vbl_count(cmd_data[3:0], (cmd_data[31:24] & 8'h08) != 8'h00);
                     end else begin // ROM3 (8 bytes)
                       adb_mode       <= cmd_data[63:56];
-                      mouse_ctl_addr <= cmd_data[55:52];
-                      kbd_ctl_addr   <= cmd_data[51:48];
+                      mouse_ctl_addr <= {4'd0, cmd_data[55:52]};
+                      kbd_ctl_addr   <= {4'd0, cmd_data[51:48]};
                       repeat_info    <= cmd_data[39:32];
                       char_set       <= cmd_data[23:16];
                       layout         <= cmd_data[15:8];
@@ -1421,9 +1393,8 @@ always @(posedge CLK_14M) begin
               K <= {1'b1, held_iie_char[6:0]};
               c025[3] <= 1'b1;
               repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
-              repeat_first_done <= 1'b1;
 `ifdef SIMULATION
-              $display("ADB REPEAT: char=%02h at hz60=%d next_target=%d first_done=%d", held_iie_char, hz60_count, hz60_count + repeat_rate_vbl, repeat_first_done);
+              $display("ADB REPEAT: char=%02h at hz60=%d next_target=%d", held_iie_char, hz60_count, hz60_count + {8'd0, repeat_rate_vbl});
 `endif
             end
           end
