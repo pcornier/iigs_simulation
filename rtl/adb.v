@@ -737,13 +737,18 @@ always @(posedge CLK_14M) begin
       end
       
       // Process normal keys (not modifier keys)
-      begin
+      // Skip modifier keys: Shift (0x012, 0x059), Ctrl (0x014, 0x114), Alt (0x011, 0x111), Win/Menu (0x11f, 0x127)
+      if (ps2_key[8:0] != 9'h012 && ps2_key[8:0] != 9'h059 &&  // Shift
+          ps2_key[8:0] != 9'h014 && ps2_key[8:0] != 9'h114 &&  // Ctrl
+          ps2_key[8:0] != 9'h011 && ps2_key[8:0] != 9'h111 &&  // Alt
+          ps2_key[8:0] != 9'h11f && ps2_key[8:0] != 9'h127 &&  // Win/Menu
+          ps2_key[8:0] != 9'h058) begin                         // Caps Lock
         reg [7:0] temp_apple_key;
         reg [7:0] temp_iie_char;
-        
+
         temp_apple_key = ps2_to_apple_key(ps2_key[8:0]);
-        
-        if (temp_apple_key != 8'h7F && !(ps2_key[8:0] == 9'h058)) begin
+
+        if (temp_apple_key != 8'h7F) begin
           if (ps2_key[9]) begin  // Key pressed (not released)
 `ifdef SIMULATION
             $display("ADB: PS2 KEY DOWN: PS2=%03h Apple=%02h", ps2_key[8:0], temp_apple_key);
@@ -981,9 +986,18 @@ always @(posedge CLK_14M) begin
     end
     case (addr)
 
-      8'h25: begin
+      8'h25: begin  // $C025 - Modifier Key Register
         if (rw) begin
-          dout <= c025;
+          // Return actual modifier key states, not stored c025 value
+          // Bit 7: Command key down (open apple)
+          // Bit 6: Option key down (closed apple)
+          // Bit 5: Updated modifier key latch (not implemented)
+          // Bit 4: Numeric keypad key down (not implemented)
+          // Bit 3: Repeat function active
+          // Bit 2: Caps Lock active
+          // Bit 1: Control key down
+          // Bit 0: Shift key down
+          dout <= {cmd_down, option_down, 1'b0, 1'b0, c025[3], caps_lock_state, ctrl_down, shift_down};
         end else if (cen & strobe) begin
           c025 <= din;
         end
