@@ -99,29 +99,23 @@ reg caps_lock_down;       // Bit 2: Caps Lock down
 reg option_down;          // Bit 6: Option key down
 reg cmd_down;             // Bit 7: Command key down
 
-// Key repeat - simplified VBL-based approach (like GSplus)
-// Clemens approach: track PS/2 key held down and queue repeats when timers expire
-reg ps2_key_held;                    // Flag indicating a PS/2 key is currently held down (no key-up received)
-reg [8:0] held_ps2_key;              // The PS/2 scancode currently being held
-reg [7:0] held_apple_key;            // The Apple keycode for the held key
-reg [7:0] held_iie_char;             // The Apple IIe ASCII for the held key
-reg [15:0] repeat_vbl_target;        // 60Hz count when next repeat should occur (16-bit to match hz60_count)
-reg repeat_timer_active;             // Whether the repeat timer is running
-reg k_register_updated;              // Flag: K register updated for current keypress (prevents duplicates)  
-reg fifo_key_added;                  // Flag: Key added to FIFO for current keypress (prevents duplicates)
-reg c010_processed_this_strobe;      // Flag: C010 write already processed this strobe transaction
-reg prev_strobe;                     // Previous strobe value to detect transaction boundaries
+// Key repeat state - GSplus-style approach (repeat on C000 read when strobe clear)
+reg ps2_key_held;                    // A key is currently held down
+reg [8:0] held_ps2_key;              // PS/2 scancode of held key
+reg [7:0] held_iie_char;             // ASCII character for repeat
+reg [15:0] repeat_vbl_target;        // VBL count when next repeat should occur
+reg repeat_first_done;               // First repeat (after delay) has occurred
+reg c010_processed_this_strobe;      // Prevent multiple C010 processing per bus cycle
+reg prev_strobe;                     // For edge detection
 
-// 60Hz clock divider for proper key repeat timing (14MHz / 233333 ≈ 60Hz)
-reg [17:0] clk_60hz_counter;         // Counter for 60Hz generation (needs 18 bits for 233333)
-reg clk_60hz_enable;                 // 60Hz enable pulse
-reg [15:0] hz60_count;               // 60Hz tick counter for key repeat timing (16-bit to prevent overflow)
-localparam CLK_60HZ_PERIOD = 18'd233333; // 14MHz / 60Hz = 233,333 clocks
-reg [7:0] repeat_delay_vbl;          // Repeat delay in VBL counts
-reg [7:0] repeat_rate_vbl;           // Repeat rate in VBL counts  
-reg fast_repeat_enabled;             // Flag for key-specific faster repeat rates
-reg [7:0] repeat_delay_setting;      // Current repeat delay setting (0-7)
-reg [7:0] repeat_rate_setting;       // Current repeat rate setting (0-9)
+// 60Hz timing for repeat
+reg [17:0] clk_60hz_counter;
+reg [15:0] hz60_count;
+localparam CLK_60HZ_PERIOD = 18'd233333; // 14MHz / 60Hz
+
+// Repeat timing configuration (in VBL counts at 60Hz)
+reg [7:0] repeat_delay_vbl;          // Initial delay before repeat starts
+reg [7:0] repeat_rate_vbl;           // Interval between repeats
 
 // IRQ generation
 wire data_irq = data_int & (pending_data > 0);
@@ -667,27 +661,20 @@ always @(posedge CLK_14M) begin
     option_down <= 1'b0;
     cmd_down <= 1'b0;
     
-    // Initialize key repeat state - VBL based like GSplus
+    // Initialize key repeat state
     ps2_key_held <= 1'b0;
     held_ps2_key <= 9'd0;
-    held_apple_key <= 8'd0;
     held_iie_char <= 8'd0;
     repeat_vbl_target <= 16'd0;
-    repeat_timer_active <= 1'b0;
-    k_register_updated <= 1'b0;
-    fifo_key_added <= 1'b0;
+    repeat_first_done <= 1'b0;
     c010_processed_this_strobe <= 1'b0;
     prev_strobe <= 1'b0;
-    
-    // Initialize 60Hz clock divider
+
+    // Initialize 60Hz timing
     clk_60hz_counter <= 18'd0;
-    clk_60hz_enable <= 1'b0;
     hz60_count <= 16'd0;
-    repeat_delay_vbl <= 8'd30;              // Default: 30 VBL = 500ms @ 60Hz (more reasonable)
-    repeat_rate_vbl <= 8'd10;               // Default: 10 VBL = ~6 repeats/sec @ 60Hz (much slower)
-    fast_repeat_enabled <= 1'b0;
-    repeat_delay_setting <= 8'd1;          // Default delay setting
-    repeat_rate_setting <= 8'd4;           // Default rate setting
+    repeat_delay_vbl <= 8'd45;              // Default: 45 VBL = 750ms @ 60Hz
+    repeat_rate_vbl <= 8'd3;                // Default: 3 VBL = ~20 repeats/sec
   end else begin
     // Default RAM control signals (override when needed)
     ram_wen <= 1'b0;
@@ -706,11 +693,9 @@ always @(posedge CLK_14M) begin
       c010_processed_this_strobe <= 1'b0;
     end
     
-    // Generate 60Hz enable pulse from 14MHz clock
-    clk_60hz_enable <= 1'b0;  // Default to no pulse
+    // Generate 60Hz counter from 14MHz clock
     if (clk_60hz_counter >= CLK_60HZ_PERIOD - 1) begin
       clk_60hz_counter <= 18'd0;
-      clk_60hz_enable <= 1'b1;  // Generate enable pulse
       hz60_count <= hz60_count + 1;  // Increment 60Hz counter
     end else begin
       clk_60hz_counter <= clk_60hz_counter + 1;
@@ -764,46 +749,37 @@ always @(posedge CLK_14M) begin
             $display("ADB: PS2 KEY DOWN: PS2=%03h Apple=%02h", ps2_key[8:0], temp_apple_key);
 `endif
             temp_iie_char = adb_to_apple_iie_ascii(
-              temp_apple_key[6:0], 
-              shift_down, 
-              ctrl_down, 
+              temp_apple_key[6:0],
+              shift_down,
+              ctrl_down,
               caps_lock_state
             );
-            
-            // Clemens approach: track this PS/2 key as held down for repeat
+
+            // Track this key as held down for potential repeat
             if (is_repeatable_key(temp_apple_key) && temp_iie_char != 8'hFF) begin
               ps2_key_held <= 1'b1;
               held_ps2_key <= ps2_key[8:0];  // Store PS/2 scancode
-              held_apple_key <= temp_apple_key;  // Store Apple keycode
-              held_iie_char <= temp_iie_char;   // Store ASCII
-              
-              // Start repeat timer (first repeat after delay) - now using 60Hz timing
-              repeat_timer_active <= 1'b1;
-              repeat_vbl_target <= hz60_count + repeat_delay_vbl;
-              
+              held_iie_char <= temp_iie_char;   // Store ASCII for repeat
+
+              // Set initial repeat timer (first repeat after delay)
+              repeat_vbl_target <= hz60_count + {8'd0, repeat_delay_vbl};
+              repeat_first_done <= 1'b0;  // First repeat not done yet
             end
-            
-            // Add to keyboard FIFO if there's space - prevent multiple additions per keypress
-            if (kbd_fifo_count < MAX_KBD_BUF && !fifo_key_added) begin
+
+            // Add to keyboard FIFO if there's space
+            if (kbd_fifo_count < MAX_KBD_BUF) begin
               kbd_fifo[kbd_fifo_head] <= temp_apple_key;
               kbd_fifo_head <= (kbd_fifo_head + 1) % MAX_KBD_BUF;
               kbd_fifo_count <= kbd_fifo_count + 1;
-              fifo_key_added <= 1'b1;  // Mark that we've added this key to FIFO
-              
-              // If no current key, load immediately
-              if (kbd_fifo_count == 0) begin
-                kbd_strobe <= 1'b1;
-              end
-              
+
               valid_kbd <= 1'b1;
               device_data_pending[2] <= 8'h01;
-              
-              // Update Apple IIe compatibility registers
-              if (temp_iie_char != 8'hFF && !k_register_updated) begin
+
+              // Update Apple IIe K register immediately
+              if (temp_iie_char != 8'hFF) begin
                 $display("ADB: Setting K register: PS2=%03h Apple=%02h ASCII=%02h", ps2_key[8:0], temp_apple_key, temp_iie_char);
                 K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
                 akd <= 1'b1;  // Any key down
-                k_register_updated <= 1'b1;  // Mark that we've updated K for this keypress
               end
             end
           end else begin
@@ -811,18 +787,14 @@ always @(posedge CLK_14M) begin
 `ifdef SIMULATION
             $display("ADB: PS2 KEY UP: PS2=%03h (held=%03h held_flag=%0d)", ps2_key[8:0], held_ps2_key, ps2_key_held);
 `endif
-            // Always clear these flags on key release so next keypress works
-            k_register_updated <= 1'b0;
-            fifo_key_added <= 1'b0;
-
             // Stop repeat if this was the held PS/2 key
             if (ps2_key_held && (ps2_key[8:0] == held_ps2_key)) begin
               ps2_key_held <= 1'b0;
-              repeat_timer_active <= 1'b0;
               held_ps2_key <= 9'd0;
-              held_apple_key <= 8'd0;
               held_iie_char <= 8'd0;
               repeat_vbl_target <= 16'd0;
+              repeat_first_done <= 1'b0;
+              c025[3] <= 1'b0;  // Clear repeat function flag
             end
 
             akd <= 1'b0;  // Clear any key down
@@ -1099,15 +1071,15 @@ always @(posedge CLK_14M) begin
                 8'h01: begin
                   // ABORT - Clear all ADB state including key repeat
                   ps2_key_held <= 1'b0;
-                  repeat_timer_active <= 1'b0;
                   repeat_vbl_target <= 16'd0;
+                  repeat_first_done <= 1'b0;
                 end
                 8'h03: begin
                   // FLUSH keyboard buffer - also stop key repeat
                   ps2_key_held <= 1'b0;
-                  repeat_timer_active <= 1'b0;
                   repeat_vbl_target <= 16'd0;
-                  
+                  repeat_first_done <= 1'b0;
+
                   // Clear keyboard FIFO
                   kbd_fifo_head <= 4'd0;
                   kbd_fifo_tail <= 4'd0;
@@ -1308,7 +1280,7 @@ always @(posedge CLK_14M) begin
                 case (cmd)
                   8'h04: adb_mode <= din | adb_mode;
                   8'h05: adb_mode <= adb_mode & ~din;
-                  8'h06: begin 
+                  8'h06: begin
                     // SET_CONFIG (0x06) - Configure ADB parameters (3 bytes)
                     // Byte 2: mouse_ctl_addr, kbd_ctl_addr
                     // Byte 1: (reserved)
@@ -1316,52 +1288,33 @@ always @(posedge CLK_14M) begin
                     mouse_ctl_addr <= cmd_data[23:20];
                     kbd_ctl_addr   <= cmd_data[19:16];
                     repeat_info    <= cmd_data[7:0];
-                    
-                    // Extract and apply repeat configuration
-                    repeat_delay_setting <= cmd_data[6:4];  // Bits 6:4 = delay (0-7)
-                    repeat_rate_setting  <= cmd_data[3:0];  // Bits 3:0 = rate (0-9)
-                    
+
                     // Recalculate VBL timing values immediately
                     repeat_delay_vbl <= delay_to_vbl_count(cmd_data[6:4]);
-                    repeat_rate_vbl <= rate_to_vbl_count(cmd_data[3:0], 1'b0); // No fast repeat for normal config
+                    repeat_rate_vbl <= rate_to_vbl_count(cmd_data[3:0], 1'b0);
                   end
-                  8'h07: begin 
+                  8'h07: begin
                     // SYNC (0x07) - Multi-byte command, process all data at once
-                    // Data is now stored correctly in cmd_data, apply it
                     if (initial_cmd_len == 4'd4) begin // ROM1
                       adb_mode       <= cmd_data[31:24];
                       mouse_ctl_addr <= cmd_data[23:20];
                       kbd_ctl_addr   <= cmd_data[19:16];
-                      // cmd_data[15:8] is reserved
                       repeat_info    <= cmd_data[7:0];
-                      
-                      // Extract repeat configuration and fast repeat enable
-                      repeat_delay_setting <= cmd_data[6:4];     // Bits 6:4 = delay
-                      repeat_rate_setting  <= cmd_data[3:0];     // Bits 3:0 = rate
-                      fast_repeat_enabled  <= (cmd_data[31:24] & 8'h08) != 8'h00; // ADB mode bit 3
-                      
+
                       // Recalculate VBL timing values
                       repeat_delay_vbl <= delay_to_vbl_count(cmd_data[6:4]);
-                      repeat_rate_vbl <= rate_to_vbl_count(cmd_data[3:0], fast_repeat_enabled);
+                      repeat_rate_vbl <= rate_to_vbl_count(cmd_data[3:0], (cmd_data[31:24] & 8'h08) != 8'h00);
                     end else begin // ROM3 (8 bytes)
-                      // Implemented based on GSplus source
                       adb_mode       <= cmd_data[63:56];
                       mouse_ctl_addr <= cmd_data[55:52];
                       kbd_ctl_addr   <= cmd_data[51:48];
-                      // cmd_data[47:40] is reserved
                       repeat_info    <= cmd_data[39:32];
                       char_set       <= cmd_data[23:16];
                       layout         <= cmd_data[15:8];
-                      // cmd_data[7:0] is reserved
-                      
-                      // Extract repeat configuration and fast repeat enable  
-                      repeat_delay_setting <= cmd_data[38:36];   // Bits 38:36 = delay
-                      repeat_rate_setting  <= cmd_data[35:32];   // Bits 35:32 = rate
-                      fast_repeat_enabled  <= (cmd_data[63:56] & 8'h08) != 8'h00; // ADB mode bit 3
-                      
-                      // Recalculate VBL timing values  
+
+                      // Recalculate VBL timing values
                       repeat_delay_vbl <= delay_to_vbl_count(cmd_data[38:36]);
-                      repeat_rate_vbl <= rate_to_vbl_count(cmd_data[35:32], fast_repeat_enabled);
+                      repeat_rate_vbl <= rate_to_vbl_count(cmd_data[35:32], (cmd_data[63:56] & 8'h08) != 8'h00);
                     end
                   end
                   8'h08: begin
@@ -1446,6 +1399,30 @@ always @(posedge CLK_14M) begin
       8'h00: begin  // $C000 - Keyboard data
         if (rw) begin
           dout <= K;  // Return current key with strobe bit
+
+          // GSplus-style key repeat: generate repeat on $C000 READ
+          // when strobe is clear (key was consumed) and a key is held down
+          if (strobe && !K[7] && ps2_key_held && held_iie_char != 8'hFF) begin
+            // Check if repeat timer has expired
+            if (hz60_count >= repeat_vbl_target) begin
+              // Time to repeat! Re-inject the held key
+              K <= {1'b1, held_iie_char[6:0]};  // Set strobe + ASCII
+              c025[3] <= 1'b1;  // Set repeat function flag ($C025 bit 3)
+
+              // Set next repeat time based on whether first repeat is done
+              if (!repeat_first_done) begin
+                // After initial delay, switch to rate timing
+                repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
+                repeat_first_done <= 1'b1;
+              end else begin
+                // Subsequent repeats use rate timing
+                repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
+              end
+`ifdef SIMULATION
+              $display("ADB REPEAT: char=%02h at hz60=%d next_target=%d", held_iie_char, hz60_count, hz60_count + repeat_rate_vbl);
+`endif
+            end
+          end
         end
       end
       
@@ -1454,14 +1431,14 @@ always @(posedge CLK_14M) begin
           dout <= K;
         end else if (cen & strobe & !c010_processed_this_strobe) begin
 `ifdef ADB_DEBUG
-          $display("ADB C010 WRITE PROCESSED (cen=%b, strobe=%b, processed_flag=%b) - processing C010 clear", cen, strobe, c010_processed_this_strobe);
+          $display("ADB C010 WRITE PROCESSED (cen=%b, strobe=%b) - processing C010 clear", cen, strobe);
 `endif
-          $display("ADB C010: K before clear = %02h, fifo_count=%d, k_updated=%b, fifo_added=%b", K, kbd_fifo_count, k_register_updated, fifo_key_added);
+          $display("ADB C010: K before clear = %02h, fifo_count=%d", K, kbd_fifo_count);
           c010_processed_this_strobe <= 1'b1;  // Mark that we processed C010 this strobe transaction
           K <= {1'b0, K[6:0]};  // Clear strobe bit
           kbd_strobe <= 1'b0;  // Clear ADB strobe
-          fifo_key_added <= 1'b0;      // Clear flag to allow next key to be added to FIFO
-          
+          c025[3] <= 1'b0;  // Clear repeat function flag (GSplus: g_c025_val &= ~0x08)
+
           // Advance FIFO to next character
           if (kbd_fifo_count > 0) begin
             kbd_fifo_tail <= (kbd_fifo_tail + 1) % MAX_KBD_BUF;
@@ -1482,19 +1459,11 @@ always @(posedge CLK_14M) begin
               $display("ADB C010: Loaded next FIFO char=%02h", next_char);
             end else begin
               akd <= 1'b0;  // Clear any key down status
-              k_register_updated <= 1'b0;  // Clear flag when FIFO becomes empty
             end
-          end else begin
-            k_register_updated <= 1'b0;  // Clear flag when FIFO is completely empty
           end
         end else if (cen & strobe & c010_processed_this_strobe) begin
 `ifdef ADB_DEBUG
           $display("ADB C010 WRITE REJECTED - already processed this strobe transaction (cen=%b, strobe=%b)", cen, strobe);
-`endif
-        end else if (!cen | !strobe) begin
-          // Debug when C010 write is not processed due to timing
-`ifdef ADB_DEBUG
-          if (strobe) $display("ADB C010 WRITE IGNORED - cen=%b strobe=%b (waiting for both)", cen, strobe);
 `endif
         end
       end
