@@ -178,10 +178,9 @@ assign HDMI_FREEZE = 0;
 assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
-assign AUDIO_S = 0;
-assign AUDIO_L = 0;
+assign AUDIO_S = 1;
 assign AUDIO_R = 0;
-assign AUDIO_MIX = 0;
+assign AUDIO_MIX = 3;
 
 assign LED_DISK = 0;
 assign LED_POWER = 0;
@@ -330,6 +329,7 @@ iigs iigs (
 	.VBlank(vblank),
 	.HS(hsync),
 	.VS(vsync),
+	.AUDIO_L(AUDIO_L),
 	/* hard drive */
 	.HDD_SECTOR(hdd_sector),
 	.HDD_READ(hdd_read),

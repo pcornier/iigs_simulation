@@ -18,6 +18,8 @@ module iigs
   output HS,
   output VS,
 
+  output [15:0] AUDIO_L,
+
   output phi2,
   output phi0,
   output clk_7M,
@@ -2207,6 +2209,7 @@ wire ready_out;
             .host_addr(snd_addr),
             .host_data_in(snd_din),
             .host_data_out(snd_dout),
+            .sound_out(AUDIO_L),
             .irq(snd_irq)
             );
 
