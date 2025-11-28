@@ -117,11 +117,8 @@ module es5503
 	      end
 	   end
 	   6: r_table_size[reg_addr[4:0]] <= reg_data_in;
-	   7: case (reg_addr[1:0])
-		// OIR; read-only
-		1: oscs_enabled <= reg_data_in[5:1];
-		// ADC; read-only
-	      endcase // case (reg_addr[1:0])
+	   7: if (reg_addr[4:0] == 5'h01)
+		   oscs_enabled <= reg_data_in[5:1];
 	 endcase // case (reg_addr[7:5])
       end // if (wr)
       else begin // read
