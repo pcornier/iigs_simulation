@@ -27,6 +27,8 @@ module soundglu
    reg [1:0]	    sound_cycle_state;
    reg		    sound_write_pending;
    reg [7:0]	    read_data_reg;
+   reg		    select_d;
+   reg		    increment_pending;
 
    always @(posedge clk) begin
       clk_phase <= clk_phase + 1;
@@ -34,6 +36,13 @@ module soundglu
       doc_enable <= ph0_en;
       doc_wr <= 0;
       ram_wr <= 0;
+
+      select_d <= select;
+
+      if (increment_pending && !select_d && select) begin
+	 sound_addr <= sound_addr + 1;
+	 increment_pending <= 0;
+      end
 
       // doc_enable high means the DOC just executed its cycle, so it's
       // time to execute the pending host access
@@ -49,7 +58,7 @@ module soundglu
 	 sound_cycle_state <= ST_IDLE;
 	 
 	 if (auto_increment)
-	   sound_addr <= sound_addr + 1;
+	   increment_pending <= 1;
       end
 
       // CPU interface
@@ -101,6 +110,7 @@ module soundglu
 	 sound_cycle_state <= ST_IDLE;
 	 doc_host_en <= 0;
 	 sound_write_pending <= 0;
+	 select_d <= 0;
       end
    end // always @ (posedge clk)
 endmodule // soundglu
