@@ -23,6 +23,7 @@ module es5503
    reg [4:0]	     current_osc;
    reg		     refreshing;
    reg		     current_refresh;
+   reg		     osc_en_d;
 
    // Per-oscillator configuration
    reg [7:0]	     r_freq_low    [31:0];
@@ -85,6 +86,8 @@ module es5503
    endfunction // mux_addr
 
    always @(posedge clk) begin
+      osc_en_d <= osc_en;
+
       addr_out <= {r_table_size[current_osc][6],
 		   mux_addr(accumulator[current_osc],
 			    r_table_ptr[current_osc],
@@ -147,6 +150,36 @@ module es5503
       end // else: !if(wr)
 
       if (osc_en) begin
+	 if (!r_control[current_osc][0]) begin
+	    //$display("Osc %d running", current_osc);
+	    // Accumulator/halt update
+	    accumulator[current_osc] <= accumulator_sum[23:0];
+	    if (accumulator_wrapped || r_sample_data[current_osc] == 8'h00) begin
+	       r_control[current_osc][0] <= (r_control[current_osc][1] ||
+					     r_sample_data[current_osc] == 8'h00);
+	       if (r_control[current_osc][1])
+		 accumulator[current_osc] <= 0;
+	       // IRQ handling
+	       if (r_control[current_osc][3] && !irq_pending[current_osc]) begin
+		  irq_pending[current_osc] <= 1;
+		  irq_stack[irq_sp] <= current_osc;
+		  irq_sp <= irq_sp + 1;
+	       end
+	    end
+
+	    // Output sample update
+	    sound_out <= $signed(r_sample_data[current_osc] ^ 8'h80) *
+			 $signed({8'b0, r_volume[current_osc]});
+	    ca <= r_control[current_osc][7:4];
+	 end // if (!r_control[current_osc][0])
+	 else begin
+	    sound_out <= 16'h0000;
+	 end // else: !if(!r_control[current_osc][0])
+      end // if (osc_en)
+      else if (osc_en_d) begin
+	 // We're using a synchronous sound RAM, so the data comes in one cycle later
+	 r_sample_data[current_osc] <= sample_data_in;
+
 	 if (current_osc == oscs_enabled && !refreshing) begin
 	    refreshing <= 1;
 	    current_refresh <= 0;
@@ -161,44 +194,19 @@ module es5503
 	 end
 	 else
 	   current_osc <= current_osc + 1;
-	 if (!r_control[current_osc][0]) begin
-	    //$display("Osc %d running", current_osc);
-	    // Accumulator/halt update
-	    accumulator[current_osc] <= accumulator_sum[23:0];
-	    if (accumulator_wrapped || sample_data_in == 8'h00) begin
-	       r_control[current_osc][0] <= (r_control[current_osc][1] || sample_data_in == 8'h00);
-	       if (r_control[current_osc][1])
-		 accumulator[current_osc] <= 0;
-	       // IRQ handling
-	       if (r_control[current_osc][3] && !irq_pending[current_osc]) begin
-		  irq_pending[current_osc] <= 1;
-		  irq_stack[irq_sp] <= current_osc;
-		  irq_sp <= irq_sp + 1;
-	       end
-	    end
-
-	    // Wavetable sample update
-	    r_sample_data[current_osc] <= sample_data_in;
-
-	    // Output sample update
-	    sound_out <= $signed(sample_data_in ^ 8'h80) *
-			 $signed({8'b0, r_volume[current_osc]});
-	    ca <= r_control[current_osc][7:4];
-	 end // if (!r_control[current_osc][0])
-	 else begin
-	    sound_out <= 16'h0000;
-	 end // else: !if(!r_control[current_osc][0])
-      end // if (osc_en)
+      end // if (osc_en_d)
 
       if (reset) begin
 	 oscs_enabled <= 0;
 	 current_osc <= 0;
 	 refreshing <= 0;
 	 current_refresh <= 0;
+	 osc_en_d <= 0;
 	 for (i=0; i < 32; i=i+1) accumulator[i] <= 0;
 	 irq_pending <= 0;
 	 irq_sp <= 0;
 	 irq_stack[0] <= 5'h1f;
+	 sound_out <= 16'h0000;
       end
    end // always @ (posedge clk)
 endmodule // es5503
