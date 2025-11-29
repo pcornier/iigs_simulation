@@ -205,9 +205,24 @@ module P65C816
       begin
          STATE <= {4{1'b0}};
          IR <= {8{1'b0}};
+`ifdef SIMULATION
+         $display("CPU_RESET: RST_N asserted (low), STATE<=0, IR<=0");
+`endif
       end
       else
       begin
+`ifdef SIMULATION
+         // Debug reset vector fetch
+         if (IsResetInterrupt && MC.ADDR_BUS == 4'b1111) begin
+            $display("CPU_RESET_VECTOR: IsResetInterrupt=%d ADDR_BUS=%06x D_IN=%02x STATE=%d EN=%d",
+                     IsResetInterrupt, ADDR_BUS, D_IN, STATE, EN);
+         end
+         // Debug when reset interrupt clears
+         if (GotInterrupt && LAST_CYCLE && EN) begin
+            $display("CPU_RESET_COMPLETE: GotInterrupt clearing, PC will be %04x (DR=%02x D_IN=%02x)",
+                     {D_IN, DR}, DR, D_IN);
+         end
+`endif
          if (IR == 8'h28 && STATE == 3) begin
             //$display("CYCLE_START: EN=%d STATE=%d NextState=%d PC=%02x:%04x ADDR_BUS=%06x D_IN=%02x", EN, STATE, NextState, PBR, {PC[15:8], PC[7:0]}, ADDR_BUS, D_IN);
          end
@@ -709,6 +724,9 @@ module P65C816
          GotInterrupt <= 1'b1;
          NMI_ACTIVE <= 1'b0;
          IRQ_ACTIVE <= 1'b0;
+`ifdef SIMULATION
+         $display("CPU_RESET_INT: RST_N low -> IsResetInterrupt=1, GotInterrupt=1");
+`endif
       end
       else
       begin
@@ -734,8 +752,13 @@ module P65C816
                   if (NMI_ACTIVE == 1'b1)
                      NMI_ACTIVE <= 1'b0;
                end
-               else
+               else begin
                   GotInterrupt <= 1'b0;
+`ifdef SIMULATION
+                  if (IsResetInterrupt)
+                     $display("CPU_RESET_INT: LAST_CYCLE clearing GotInterrupt and IsResetInterrupt, PC=%04x", PC);
+`endif
+               end
 
                IsResetInterrupt <= 1'b0;
                IsNMIInterrupt <= NMI_ACTIVE;

@@ -24,7 +24,8 @@ module adb(
   output reg apple_shift,
   output reg apple_ctrl,
   output reg akd,
-  output reg [7:0] K
+  output reg [7:0] K,
+  output reset_key_pressed  // Reset key (F11/0x7F) is currently pressed
 );
 
 // Version parameter - set based on ROM type
@@ -90,6 +91,11 @@ reg shift_down;           // Bit 0: Shift key down
 reg ctrl_down;            // Bit 1: Control key down
 reg option_down;          // Bit 6: Option key down
 reg cmd_down;             // Bit 7: Command key down
+reg reset_key_down;       // Reset key (F11 mapped to 0x7F) is pressed
+
+// Reset key output - active when Reset key is pressed
+// The ROM checks for Ctrl+Reset to trigger reset
+assign reset_key_pressed = reset_key_down;
 
 // Key repeat state - GSplus-style approach (repeat on C000 read when strobe clear)
 reg ps2_key_held;                    // A key is currently held down
@@ -274,7 +280,7 @@ function [7:0] ps2_to_apple_key;
       9'h075: ps2_to_apple_key = 8'h5B;  // KP 8
       9'h076: ps2_to_apple_key = 8'h35;  // ESCAPE
       9'h077: ps2_to_apple_key = 8'h47;  // NUMLOCK (Mac keypad clear)
-      9'h078: ps2_to_apple_key = 8'h67;  // F11
+      9'h078: ps2_to_apple_key = 8'h7F;  // F11 -> Apple Reset key (was 0x67/F11)
       9'h079: ps2_to_apple_key = 8'h45;  // KP +
       9'h07a: ps2_to_apple_key = 8'h55;  // KP 3
       9'h07b: ps2_to_apple_key = 8'h4E;  // KP -
@@ -586,6 +592,7 @@ always @(posedge CLK_14M) begin
     cmd_down <= 1'b0;
     option_down <= 1'b0;
     caps_lock_state <= 1'b0;
+    reset_key_down <= 1'b0;
     
     // Apple IIe compatibility
     CLR80COL <= 1'b0;
@@ -639,6 +646,7 @@ always @(posedge CLK_14M) begin
     ctrl_down <= 1'b0;
     option_down <= 1'b0;
     cmd_down <= 1'b0;
+    reset_key_down <= 1'b0;
     
     // Initialize key repeat state
     ps2_key_held <= 1'b0;
@@ -712,13 +720,26 @@ always @(posedge CLK_14M) begin
         endcase
       end
       
-      // Process normal keys (not modifier keys)
+      // Track F11 (PS/2 0x078) as the Apple Reset key
+      // Reset key is special - it doesn't generate characters but signals reset intent
+      if (ps2_key[8:0] == 9'h078) begin  // F11 -> Reset key
+        reset_key_down <= ps2_key[9];  // Track press/release state
+        if (ps2_key[9]) begin
+          $display("ADB: RESET KEY (F11) PRESSED - ctrl_down=%0d open_apple=%0d closed_apple=%0d", ctrl_down, open_apple, closed_apple);
+        end else begin
+          $display("ADB: RESET KEY (F11) RELEASED");
+        end
+      end
+
+      // Process normal keys (not modifier keys or reset key)
       // Skip modifier keys: Shift (0x012, 0x059), Ctrl (0x014, 0x114), Alt (0x011, 0x111), Win/Menu (0x11f, 0x127)
+      // Also skip F11 (0x078) which is now the reset key
       if (ps2_key[8:0] != 9'h012 && ps2_key[8:0] != 9'h059 &&  // Shift
           ps2_key[8:0] != 9'h014 && ps2_key[8:0] != 9'h114 &&  // Ctrl
           ps2_key[8:0] != 9'h011 && ps2_key[8:0] != 9'h111 &&  // Alt
           ps2_key[8:0] != 9'h11f && ps2_key[8:0] != 9'h127 &&  // Win/Menu
-          ps2_key[8:0] != 9'h058) begin                         // Caps Lock
+          ps2_key[8:0] != 9'h058 &&                             // Caps Lock
+          ps2_key[8:0] != 9'h078) begin                         // F11 (Reset key)
         reg [7:0] temp_apple_key;
         reg [7:0] temp_iie_char;
 

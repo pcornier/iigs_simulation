@@ -207,8 +207,9 @@ localparam CONF_STR = {
 	"OA,Force Self Test,OFF,ON;",
 	"-;",
 
-	"R0,Reset;",
-	"V,v",`BUILD_DATE 
+	"R0,Warm Reset;",
+	"R1,Cold Reset;",
+	"V,v",`BUILD_DATE
 };
 
 wire forced_scandoubler;
@@ -289,7 +290,19 @@ pll pll
 	.locked(locked)
 );
 
-wire reset = RESET | status[0] | buttons[1];
+// Reset logic - status[0] = Warm Reset, status[1] = Cold Reset
+// Keyboard reset signals come from iigs module (Ctrl+F11, Ctrl+OpenApple+F11)
+wire keyboard_reset;
+wire keyboard_cold_reset;
+
+// Combine all reset sources
+// Include ~locked to hold reset until PLL is stable (critical for FPGA)
+wire warm_reset_trigger = status[0] | keyboard_reset;
+wire cold_reset_trigger = status[1] | keyboard_cold_reset;
+wire reset = RESET | ~locked | warm_reset_trigger | cold_reset_trigger | buttons[1];
+
+// cold_reset is 1 for power-on (RESET/~locked) or explicit cold reset, 0 for warm reset
+wire cold_reset = RESET | ~locked | cold_reset_trigger;
 
 wire selftest_override = status[10];
 
@@ -299,6 +312,7 @@ wire clk_7M;
 
 iigs iigs (
 	.reset(reset),
+	.cold_reset(cold_reset),
 	.CLK_28M(clk_28),
 	.CLK_14M(clk_sys),
 	.clk_vid(clk_vid),
@@ -366,8 +380,11 @@ iigs iigs (
 	.UART_TXD(UART_TXD),
 	.UART_RXD(UART_RXD),
 	.UART_RTS(UART_RTS),
-	.UART_CTS(UART_CTS)
-	
+	.UART_CTS(UART_CTS),
+
+	// Keyboard-triggered reset outputs (Ctrl+F11, Ctrl+OpenApple+F11)
+	.keyboard_reset(keyboard_reset),
+	.keyboard_cold_reset(keyboard_cold_reset)
 );
 
 wire [22:0] fastram_address;

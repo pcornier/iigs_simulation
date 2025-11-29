@@ -1,6 +1,7 @@
 module iigs
   (
    input              reset,
+   input              cold_reset,  // 1 = cold/power-on reset (CYAREG bit 6 = 1), 0 = warm reset
 
    input              CLK_28M,
    input              CLK_14M,
@@ -92,9 +93,11 @@ module iigs
 	 output        UART_TXD,
     input         UART_RXD,
     output        UART_RTS,
-    input         UART_CTS
+    input         UART_CTS,
 
-	
+   // Keyboard-triggered reset outputs
+   output        keyboard_reset,      // Ctrl+F11 was pressed - trigger warm reset
+   output        keyboard_cold_reset  // Ctrl+OpenApple+F11 was pressed - trigger cold reset
 
 );
    logic [7:0]       bank;
@@ -110,6 +113,7 @@ module iigs
    logic [3:0] BORDERCOLOR;
    logic [7:0] SLTROMSEL;
    logic [7:0] CYAREG;
+   logic reset_prev;  // For detecting reset release
    logic CXROM;
    logic       RDROM;
    logic       LC_WE;
@@ -658,15 +662,20 @@ module iigs
         $display("C036_DEBUG: IO=%b, we=%b, dout=%h", IO, ~cpu_we_n, cpu_dout);
     end
     if (reset) begin
-      // dummy values dumped from emulator
-      // C036 Speed Register initialization - match GSPlus behavior
-`ifdef ROM3
-      CYAREG <= 8'h80; // ROM03: FAST_ENABLED (bit 7) only -> force cold boot with selftest
-      $display("SPEED_REG_INIT: ROM03 detected -> CYAREG=$80 (POWERED_ON=0, FORCED cold boot, run selftest)");
-`else
-      CYAREG <= 8'h80; // ROM01: FAST_ENABLED (bit 7) only -> cold boot with selftest  
-      $display("SPEED_REG_INIT: ROM01 detected -> CYAREG=$80 (POWERED_ON=0, cold boot, run selftest)");
-`endif
+      // C036 Speed Register initialization - proper warm/cold reset handling
+      // Bit 7: Fast mode (2.8MHz) - always set
+      // Bit 6: Power-on status - SET on power-up/cold reset, CLEAR on warm reset
+      //        When bit 6=1, ROM performs full initialization (RAM test, etc.)
+      //        When bit 6=0, ROM skips initialization (warm reset behavior)
+      if (cold_reset) begin
+        // Cold/power-on reset: Set bit 6=1 for full ROM initialization sequence
+        CYAREG <= 8'hC0;  // Bit 7=fast mode, Bit 6=power-on status
+        $display("RESET_TRACE: *** COLD RESET *** CYAREG=$C0 (bit 6=1 for full boot)");
+      end else begin
+        // Warm reset: Preserve bit 6, set bit 7, clear other bits
+        CYAREG <= {1'b1, CYAREG[6], 6'b000000};
+        $display("RESET_TRACE: *** WARM RESET *** CYAREG=$%02X (preserving bit 6=%b)", {1'b1, CYAREG[6], 6'b000000}, CYAREG[6]);
+      end
       STATEREG <=  8'b0000_1101;  // GSPlus: 0x0D (rdrom, lcbank2, intcx, bit2)
       shadow <= 8'b0000_1000;  // Original value: bit 3=1 (SHGR disabled), others=0 (enabled)
       $display("SHADOW_REG_INIT: shadow=%08b (Original shadowing config)", 8'b0000_1000);
@@ -707,7 +716,14 @@ module iigs
       LCRAM2<=1;  // Fix: Should be 1 to match STATEREG initialization (bit 1 = LCRAM2)
       LC_WE<=0;
       ROMBANK<=0;;
+      $display("RESET_TRACE: All registers initialized, waiting for reset release");
     end
+
+    // Track reset release - detect falling edge of reset
+    if (reset_prev && !reset) begin
+      $display("RESET_TRACE: *** RESET RELEASED *** CPU should now fetch from vector $FFFC");
+    end
+    reset_prev <= reset;
 
     // INTFLAG changes are tracked by centralized IRQ logic in iigs.sv
     // interrupt_clear_pulse is managed in IO section to avoid race condition
@@ -813,7 +829,7 @@ module iigs
             // 12'h028: [REMOVED - does not exist on real hardware]
             12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
             12'h02b: C02BVAL <= cpu_dout; // from gsplus
-            12'h02d: SLTROMSEL <= cpu_dout;
+            12'h02d: begin SLTROMSEL <= cpu_dout; $display("**SLTROMSEL <= %02x (slot7_external=%0d)", cpu_dout, cpu_dout[7]); end
             12'h030: SPKR <= cpu_dout;
             12'h031: begin
               DISK35<= cpu_dout & 8'hc0;
@@ -2027,6 +2043,12 @@ wire ready_out;
   wire adb_open_apple, adb_closed_apple, adb_shift, adb_ctrl;
   wire adb_akd;
   wire [7:0] adb_K;
+  wire adb_reset_key_pressed;  // Reset key (F11) is pressed
+
+  // Keyboard-triggered reset logic
+  // Ctrl+F11 = warm reset, Ctrl+OpenApple+F11 = cold reset
+  assign keyboard_reset = adb_reset_key_pressed & adb_ctrl;
+  assign keyboard_cold_reset = adb_reset_key_pressed & adb_ctrl & adb_open_apple;
 
   // For ADB reads, use combinational address for immediate response
   // For ADB writes, use registered address that's set when strobe is asserted
@@ -2057,7 +2079,8 @@ wire ready_out;
           .apple_shift(adb_shift),         // Shift key
           .apple_ctrl(adb_ctrl),           // Control key
           .akd(adb_akd),                   // Any key down
-          .K(adb_K)                        // Apple IIe character with strobe
+          .K(adb_K),                       // Apple IIe character with strobe
+          .reset_key_pressed(adb_reset_key_pressed)  // Reset key (F11) is pressed
           );
 
   prtc prtc(

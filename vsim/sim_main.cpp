@@ -273,6 +273,12 @@ SimClock CLK_14M(1);
 int soft_reset = 0;
 vluint64_t soft_reset_time = 0;
 
+// Cold reset (power-on style reset vs warm reset)
+int cold_reset = 0;           // 0 = warm reset, 1 = cold reset (full power-on initialization)
+int reset_pending = 0;        // Reset is requested (from menu or keyboard)
+int reset_pending_cold = 0;   // Type of pending reset (0=warm, 1=cold)
+vluint64_t reset_time = 0;    // Counter for reset duration
+
 //
 // IWM emulation
 //#include "defc.h"
@@ -967,10 +973,44 @@ int verilate() {
 			fprintf(stderr, "soft_reset_time %ld initialReset %x\n", soft_reset_time, initialReset);
 		}
 
-		// Assert reset during startup
-		if (main_time < initialReset) { top->reset = 1; }
+		// Handle reset from menu or keyboard
+		if (reset_pending) {
+			fprintf(stderr, "Reset triggered: cold=%d main_time=%lu\n", reset_pending_cold, main_time);
+			top->reset = 1;
+			top->cold_reset = reset_pending_cold;
+			reset_pending = 0;
+			reset_time = 0;
+			fprintf(stderr, "USER_RESET: Asserted reset=%d cold_reset=%d\n", top->reset, top->cold_reset);
+		}
+		if (top->reset && main_time >= initialReset) {
+			// Count reset duration
+			if (CLK_14M.IsRising()) {
+				reset_time++;
+				if (reset_time <= 5 || reset_time % 10000 == 0) {
+					fprintf(stderr, "USER_RESET: Reset held: reset_time=%lu/%u (rising edge)\n", reset_time, initialReset);
+				}
+			}
+			// Hold reset for same duration as initial reset
+			if (reset_time >= initialReset) {
+				fprintf(stderr, "USER_RESET: Releasing reset after %ld cycles, main_time=%lu\n", reset_time, main_time);
+				top->reset = 0;
+				top->cold_reset = 0;
+				reset_time = 0;
+			}
+		}
+
+		// Check keyboard-triggered resets (Ctrl+F11 or Ctrl+OpenApple+F11)
+		if (top->keyboard_reset && !top->reset) {
+			// Keyboard triggered a reset
+			reset_pending = 1;
+			reset_pending_cold = top->keyboard_cold_reset ? 1 : 0;
+			fprintf(stderr, "Keyboard reset: Ctrl+F11 pressed (cold=%d)\n", reset_pending_cold);
+		}
+
+		// Assert reset during startup (always cold reset on power-on)
+		if (main_time < initialReset) { top->reset = 1; top->cold_reset = 1; }
 		// Deassert reset after startup
-		if (main_time == initialReset) { top->reset = 0; }
+		if (main_time == initialReset) { top->reset = 0; top->cold_reset = 0; }
 		
 		// Handle self-test mode override timing
 		if (selftest_mode) {
@@ -1708,6 +1748,12 @@ bool screenshot_mode = false;
 int stop_at_frame = -1;
 bool stop_at_frame_enabled = false;
 
+// Reset at frame functionality (for testing reset)
+// ------------------------------------------------
+int reset_at_frame = -1;
+bool reset_at_frame_enabled = false;
+bool reset_at_frame_cold = false;  // true = cold reset, false = warm reset
+
 // Memory dump functionality
 // -------------------------
 std::vector<int> memory_dump_frames;
@@ -1729,6 +1775,8 @@ void show_help() {
 	printf("  --memory-dump <frames>        Dump memory at specified frame numbers\n");
 	printf("                                (comma-separated list, e.g., 100,200,300)\n");
 	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
+	printf("  --reset-at-frame <frame>      Trigger warm reset at specified frame\n");
+	printf("  --cold-reset-at-frame <frame> Trigger cold reset at specified frame\n");
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
 	printf("  --disk <filename>             Use specified disk image (default: hd.hdv)\n");
@@ -1899,6 +1947,18 @@ int main(int argc, char** argv, char** env) {
 			stop_at_frame = std::stoi(argv[i + 1]);
 			printf("Will stop simulation at frame %d\n", stop_at_frame);
 			i++; // Skip the next argument since it's the frame number
+		} else if (strcmp(argv[i], "--reset-at-frame") == 0 && i + 1 < argc) {
+			reset_at_frame_enabled = true;
+			reset_at_frame = std::stoi(argv[i + 1]);
+			reset_at_frame_cold = false;
+			printf("Will trigger WARM reset at frame %d\n", reset_at_frame);
+			i++;
+		} else if (strcmp(argv[i], "--cold-reset-at-frame") == 0 && i + 1 < argc) {
+			reset_at_frame_enabled = true;
+			reset_at_frame = std::stoi(argv[i + 1]);
+			reset_at_frame_cold = true;
+			printf("Will trigger COLD reset at frame %d\n", reset_at_frame);
+			i++;
 		} else if (strcmp(argv[i], "--dump-csv-after") == 0 && i + 1 < argc) {
 			dump_csv_after_frame = std::stoi(argv[i + 1]);
 			printf("Will start dumping CSV at frame %d\n", dump_csv_after_frame);
@@ -2056,6 +2116,14 @@ int main(int argc, char** argv, char** env) {
                        memory_dump_frames.erase(it2);
                    }
                }
+               // Trigger reset at frame (for testing reset functionality)
+               if (reset_at_frame_enabled && video.count_frame == reset_at_frame) {
+                   fprintf(stderr, "Triggering %s reset at frame %d\n",
+                           reset_at_frame_cold ? "COLD" : "WARM", reset_at_frame);
+                   reset_pending = 1;
+                   reset_pending_cold = reset_at_frame_cold ? 1 : 0;
+                   reset_at_frame_enabled = false;  // Only trigger once
+               }
                // Stop at frame
                if (stop_at_frame_enabled && video.count_frame >= stop_at_frame) {
                    printf("Reached stop frame %d, exiting...\n", stop_at_frame);
@@ -2159,7 +2227,29 @@ int main(int argc, char** argv, char** env) {
 		//		if (ImGui::Button("Load ROM"))
 			//ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".rom", ".");
 
-				//if (ImGui::Button("Soft Reset")) { fprintf(stderr,"soft reset\n"); soft_reset=1; } ImGui::SameLine();
+		// Reset buttons
+		ImGui::Separator();
+		ImGui::Text("System Reset:");
+		if (ImGui::Button("Warm Reset (Ctrl+F11)")) {
+			fprintf(stderr, "Warm Reset requested from ImGui menu\n");
+			reset_pending = 1;
+			reset_pending_cold = 0;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cold Reset (Ctrl+OA+F11)")) {
+			fprintf(stderr, "Cold Reset requested from ImGui menu\n");
+			reset_pending = 1;
+			reset_pending_cold = 1;
+		}
+		ImGui::SameLine();
+		ImGui::TextDisabled("(?)");
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::Text("Warm Reset: CPU reset, preserves power-on flag (CYAREG bit 6=0)");
+			ImGui::Text("Cold Reset: Full power-on reset, sets CYAREG=$C0 (bit 6=1 triggers ROM init)");
+			ImGui::Text("Keyboard: F11 = Reset key, Ctrl+F11 = Warm, Ctrl+OpenApple+F11 = Cold");
+			ImGui::EndTooltip();
+		}
 
 		ImGui::End();
 
@@ -2276,6 +2366,15 @@ int main(int argc, char** argv, char** env) {
 			}
 		}
 		
+		// Check if we should trigger reset at this frame
+		if (reset_at_frame_enabled && video.count_frame == reset_at_frame) {
+			fprintf(stderr, "GUI: Triggering %s reset at frame %d\n",
+					reset_at_frame_cold ? "COLD" : "WARM", reset_at_frame);
+			reset_pending = 1;
+			reset_pending_cold = reset_at_frame_cold ? 1 : 0;
+			reset_at_frame_enabled = false;  // Only trigger once
+		}
+
 		// Check if we should stop at this frame
 		if (stop_at_frame_enabled && video.count_frame == stop_at_frame) {
 			if (took_screenshot_this_frame) {

@@ -6,6 +6,7 @@ module emu (
 
         input CLK_14M,
         input reset,
+        input cold_reset,      // 1 = cold/power-on reset (full init), 0 = warm reset
         input soft_reset,
         input menu,
         input adam,
@@ -91,9 +92,11 @@ module emu (
         input [9:0]             img_mounted,
         input                   img_readonly,
 
-        input [63:0]			img_size
+        input [63:0]			img_size,
 
-
+        // Keyboard-triggered reset outputs (from Ctrl+F11 or Ctrl+OpenApple+F11)
+        output keyboard_reset,
+        output keyboard_cold_reset
 
 );
   initial begin
@@ -134,6 +137,7 @@ wire [5:0] TRACK2;
 wire clk_sys=CLK_14M;
 iigs  iigs(
         .reset(reset),
+        .cold_reset(cold_reset),
         .CLK_28M(clk_sys),
         .CLK_14M(clk_sys),
         .clk_vid(clk_sys),
@@ -197,7 +201,11 @@ iigs  iigs(
         .paddle_0(paddle_0),
         .paddle_1(paddle_1),
         .paddle_2(paddle_2),
-        .paddle_3(paddle_3)
+        .paddle_3(paddle_3),
+
+        // Keyboard-triggered reset outputs
+        .keyboard_reset(keyboard_reset),
+        .keyboard_cold_reset(keyboard_cold_reset)
 );
 
 /*
