@@ -156,6 +156,9 @@ module iigs
   logic [7:0]         io_dout;
   logic [7:0]         slot_dout;
 
+  // External slot ROM returns $FF (no card present) - tells ROM to skip this slot
+  assign slot_dout = 8'hFF;
+
   logic               onesecond_irq;
   logic               qtrsecond_irq;
   logic               snd_irq;

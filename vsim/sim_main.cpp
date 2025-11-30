@@ -1761,7 +1761,7 @@ bool memory_dump_mode = false;
 
 // Disk image support
 // ---------------------------
-std::string disk_image = "hd.hdv";
+std::string disk_image = "";  // Empty by default - only mount if specified via --disk
 
 void show_help() {
 	printf("Apple IIgs Hardware Simulator\n");
@@ -1779,7 +1779,7 @@ void show_help() {
 	printf("  --cold-reset-at-frame <frame> Trigger cold reset at specified frame\n");
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
-	printf("  --disk <filename>             Use specified disk image (default: hd.hdv)\n");
+	printf("  --disk <filename>             Use specified disk image (no disk mounted by default)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
@@ -2075,8 +2075,13 @@ int main(int argc, char** argv, char** env) {
 
     // Mount a test floppy image into Drive 1 to exercise IWM path in sim
     //blockdevice.MountDisk("floppy.nib", 0);
-    // Mount HDD image into slot 7 backend (using specified disk image)
-   blockdevice.MountDisk(disk_image.c_str(), 1);
+    // Mount HDD image into slot 7 backend (only if specified via --disk)
+    if (!disk_image.empty()) {
+        printf("Mounting disk image: %s\n", disk_image.c_str());
+        blockdevice.MountDisk(disk_image.c_str(), 1);
+    } else {
+        printf("No disk image specified - booting without disk\n");
+    }
 
    // In headless mode, run a continuous simulation honoring stop/screenshot flags
    if (headless) {

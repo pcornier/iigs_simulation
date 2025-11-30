@@ -184,8 +184,10 @@ module iwm_controller(
         end
         // Opportunistic motor auto-start on read accesses if a disk is ready
         // This mirrors firmware behavior which normally turns on the motor; it helps the sim progress.
+        // IMPORTANT: Do NOT auto-start motor when no disk is mounted - this causes the boot ROM
+        // to enter a read loop that never finds valid data and then jumps to Applesoft
         else if (DEVICE_SELECT && WR_CYCLE) begin
-            // Auto-start whenever CPU is reading IWM with a ready disk, especially in DATA register state
+            // Auto-start ONLY when CPU is reading IWM with a ready disk
             if (selected_ready && !drive_on) begin
                 if ({q7,q6} == 2'b00 || (A[7:4] == 4'hE)) begin
                     drive_on <= 1'b1;
@@ -194,6 +196,12 @@ module iwm_controller(
 `endif
                 end
             end
+`ifdef SIMULATION
+            // Debug: log when ROM tries to access disk with no disk mounted
+            if (!selected_ready && !drive_on && ({q7,q6} == 2'b00)) begin
+                $display("IWM: NO_DISK - not auto-starting motor for read @%02h (no disk mounted)", A[7:0]);
+            end
+`endif
         end
         // Monitor 3.5"/5.25" select changes
 `ifdef SIMULATION
@@ -271,8 +279,13 @@ module iwm_controller(
     // According to Apple II documentation, when checking track 0, the drive should return status info, not disk data.
     
     // Track 0 detection logic for 5.25" drives
-    // Assume we're at track 0 if no explicit seek commands were seen, allowing boot to progress
-    wire drive525_at_track0 = 1'b1;  // For now, assume 5.25" drive starts at track 0
+    // Get actual track position from the selected drive
+    // TRACK1/TRACK2 are [5:0] giving 0-34 track numbers from the drives
+    wire [5:0] drive1_track = TRACK1;
+    wire [5:0] drive2_track = TRACK2;
+    wire drive1_at_track0 = (drive1_track == 6'd0);
+    wire drive2_at_track0 = (drive2_track == 6'd0);
+    wire drive525_at_track0 = drive2_select ? drive2_at_track0 : drive1_at_track0;
     
     // 3.5" drive status logic based on motor phases (from iwm.cpp iwm_read_status35)
     wire [3:0] status35_state = {motor_phase[1], motor_phase[0], drive35_select, motor_phase[2]};
@@ -283,15 +296,30 @@ module iwm_controller(
     wire [7:0] track0_status_525 = {2'b11, ~drive525_at_track0, last_mode_wr};  // Bit 5 clear when at track 0
     wire [7:0] track0_status_35 = (status35_state == 4'h0A) ? {7'b0000000, ~drive35_at_track0} : 8'h00;
     
-    // Determine if this is a track status check read
+    // Determine if this is a track status check read (address $C0EE specifically)
     wire track_status_check = (A[3:0] == 4'hE) && ({current_q7, current_q6} == 2'b00) && selected_ready;
-    wire no_drive_track_read = (A[3:0] == 4'hE) && !selected_ready;
+    // No-drive data read: any data register read (q7=0, q6=0) when no floppy disk is mounted
+    wire no_drive_data_read = ({current_q7, current_q6} == 2'b00) && !selected_ready;
     wire [7:0] stub_status = 8'hC0 | {3'b000, last_mode_wr};
     
     // Select appropriate track status
     wire [7:0] track_status_value = eff_drive35 ? track0_status_35 : track0_status_525;
     
-    wire [7:0] iwm_reg_out = ({current_q7, current_q6} == 2'b00) ? (no_drive_track_read ? stub_status :         // No drives: stub
+    // No-drive data register value:
+    // - Bit 7 = 1 (valid nibble marker - needed for FF:581F to exit)
+    // - Bit 6 = 1 (reserved)
+    // - Bit 5 = 0 (at track 0 / no drive - exits IIgs ROM loop at FF:4717)
+    // - Bits 4:0 = last_mode_wr (echoes back written value for handshake at FF:4723-4729)
+    // Note: C661 loop has timeout via Y counter, so bit 7=1 is OK there
+    wire [7:0] no_drive_data_reg = {2'b11, 1'b0, last_mode_wr};  // $C0 | last_mode_wr with bit 5 clear
+
+    // Data register output logic:
+    // - No disk mounted: return no_drive_data_reg ($C0 | last_mode_wr, bit 5 clear)
+    //   This passes ROM checks: FF:4717 (bit5=0), FF:4720 (bits4:0 match), FF:581F (bit7=1)
+    // - Disk mounted, motor off: return $FF
+    // - Disk mounted, motor on: return actual data from read_latch
+    // - Track status check: return track0 status for stepper positioning
+    wire [7:0] iwm_reg_out = ({current_q7, current_q6} == 2'b00) ? (no_drive_data_read ? no_drive_data_reg :   // No drives: echoes mode with bits 7,6,5=0
                                                                      track_status_check ? track_status_value :  // Track status check
                                                                      drive_on ? read_latch : 8'hFF) :           // Normal data/motor off
                              ({current_q7, current_q6} == 2'b01) ? status_reg :                                // Status register 
@@ -328,9 +356,9 @@ module iwm_controller(
             $display("IWM: q7=1,q6=1 read @%02h -> 0x00 (matches iwm.cpp)", A[7:0]);
         end
         
-        // Debug no-drive track status case
-        if (no_drive_track_read && DEVICE_SELECT && WR_CYCLE) begin
-            $display("IWM: NO_DRIVE track status read @%02h -> %02h (0xC0 | last_mode_wr=%02h) - using stub logic", A[7:0], stub_status, last_mode_wr);
+        // Debug no-drive data read case
+        if (no_drive_data_read && DEVICE_SELECT && WR_CYCLE) begin
+            $display("IWM: NO_DRIVE data read @%02h -> %02h (bit5=0, bits4:0=last_mode_wr)", A[7:0], no_drive_data_reg);
         end
         
         // Debug track status checks
