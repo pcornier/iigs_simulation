@@ -299,5 +299,5 @@ wloop2
 ;; data
 *= $c7fc	; org $c7fc
  !word $7fff ; how many blocks are on the device.
- !byte $D7 ; specifics about the device (number of drives, read/write/format capability, etc)
+ !byte $C7 ; specifics about the device (number of drives, read/write/format capability, etc)
  !byte <Entrypoint_ProDOS ; entry point offset for ProDOS (must be $0a)

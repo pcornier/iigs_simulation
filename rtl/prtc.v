@@ -325,14 +325,14 @@ always @(posedge CLK_14M) begin
 
 // Initialize clock deterministically under simulation to avoid nondeterministic diffs
 // Otherwise, hook up host timestamp (Mac epoch) on first use
-`ifdef SIMULATION
-if (clock_data==0)
-	clock_data <= 32'h0600_0000; // match Clemens early read of C033 (high byte = $06)
-`else
+//`ifdef SIMULATION
+//if (clock_data==0)
+//	clock_data <= 32'h0600_0000; // match Clemens early read of C033 (high byte = $06)
+//`else
 // hook up unix timestamp
 if (clock_data==0)
 	clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
-`endif
+//`endif
 
 
 

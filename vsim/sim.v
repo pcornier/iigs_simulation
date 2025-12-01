@@ -58,7 +58,7 @@ module emu (
         input selftest_override,
 
         // [31:0] - seconds since 1970-01-01 00:00:00, [32] - toggle with every change
-        input [32:0] timestamp,
+        input [32:0] TIMESTAMP,
 
         output [7:0] VGA_R,
         output [7:0] VGA_G,
@@ -143,7 +143,7 @@ iigs  iigs(
         .clk_vid(clk_sys),
         .ce_pix(ce_pix),
         .cpu_wait(cpu_wait_hdd),
-        .timestamp({33{1'b0}}),  // Add missing timestamp connection
+        .timestamp(TIMESTAMP),//{33{1'b0}}),  // Add missing timestamp connection
         .floppy_wp(1'b1),  // Add missing floppy_wp
         .R(VGA_R),
         .G(VGA_G),

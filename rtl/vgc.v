@@ -232,7 +232,9 @@ begin
 		end
 	end else if (H < ('d32+640)) begin
 		h_counter<=h_counter+1'b1;
-		if (h_counter==2'd2)  
+		// Only advance address for first 159 advances (byte 0->159), skip the 160th
+		// With 1-cycle display shift, advance #159 happens at H=667, so skip advance at H>=668
+		if (h_counter==2'd2 && H < 'd668)
 			begin
 				base_toggle<=~base_toggle;
 				if (linear_mode) begin
@@ -772,7 +774,7 @@ begin
 // Apple II modes: active display V=32-223 (192 lines), border V<32 or V>=224
 // SHRG modes: active display V=32-231 (200 lines), border V<32 or V>=232
 if ((!NEWVIDEO[7] && ((H < 'd32 || H > 'd703) || (V < 'd32 || V >= 'd224) || ((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd703)))) ||
-    (NEWVIDEO[7] && ((H < 'd32 || H > 'd703 || V < 'd32 || V > 'd231))))
+    (NEWVIDEO[7] && ((H < 'd33 || H >= 'd673 || V < 'd32 || V > 'd231))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};

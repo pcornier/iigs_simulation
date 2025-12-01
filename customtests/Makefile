@@ -18,14 +18,14 @@ TIMING_DISK = timing_race_test.2mg
         scc_rxenable scc_exact scc_repro scc_postloop scc_fifo_test adb_device_enum \
         adb_rom_test09 adb_rom_checksum selftest01 selftest02 selftest03 \
         selftest04 selftest05 selftest06 selftest07 selftest08 selftest09 \
-        selftest0a selftest0b selftest0c
+        selftest0a selftest0b selftest0c time
 
 # ============================================================================
 # Default Target
 # ============================================================================
 all: scc_test scc_regtest scc_selftest scc_regptr_test sccauto_test \
      scc_phantom_test serial_selftest plb_test dbr_corruption_test \
-     dbr_plb_stage_test dbr_e0_scan_test c034_test timing_test \
+     dbr_plb_stage_test dbr_e0_scan_test c034_test timing_test time \
 io_debug_test io_autorun_test
 
 # ============================================================================
@@ -46,6 +46,20 @@ scc_test.2mg: SCC.SYSTEM
 	$(CP2) add scc_test.2mg "SCC.SYSTEM"
 	$(CP2) sa scc_test.2mg type=SYS "SCC.SYSTEM"
 	@echo "SCC test disk ready: scc_test.2mg"
+
+time: TIME.SYSTEM time.2mg
+
+TIME.SYSTEM: TIME.S
+	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+
+time.2mg: TIME.SYSTEM
+	@echo "Creating TIME test disk..."
+	@cp blank.2mg time.2mg 2>/dev/null || echo "Note: blank.2mg not found, using existing time.2mg"
+	$(CP2) rm time.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm time.2mg "TIME.SYSTEM" 2>/dev/null || true
+	$(CP2) add time.2mg "TIME.SYSTEM"
+	$(CP2) sa time.2mg type=SYS "TIME.SYSTEM"
+	@echo "TIME test disk ready: time.2mg"
 
 # SCC Register Test - simple read/write test for debugging I/O access
 scc_regtest: SCCREG.SYSTEM scc_regtest.2mg
