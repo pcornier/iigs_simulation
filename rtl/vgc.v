@@ -323,7 +323,10 @@ end
 
 /* APPLE IIe */
 
-
+// Flash counter for blinking text (~2Hz, toggles every ~0.25 seconds)
+reg [22:0] flash_cnt;
+always @(posedge clk_vid) if (ce_pix) flash_cnt <= flash_cnt + 1'b1;
+wire flash_state = flash_cnt[21];
 
 // Apple IIgs color palette (16 colors)
 reg [11:0] palette_rgb_r[0:15] = '{
@@ -485,9 +488,18 @@ rom #(.memfile("chr.mem"),.AW(12)) charrom(
 );
 
 wire [7:0] chrom_data_out;
+// KEGS font data: 1 = foreground pixel, 0 = background pixel
+// No inversion needed for KEGS-based chr.mem
+wire [7:0] chrom_data_inv = chrom_data_out;
 wire [11:0] chram_addr;
 wire [11:0] chrom_addr;
 
+// Text mode shift register for FPGA-compatible timing
+// The character ROM has 1-cycle latency, so we need to pre-fetch and buffer
+// Load the ROM data into a shift register, then shift out pixels
+reg [6:0] text_shift_reg;
+reg [7:0] video_data_text;  // Latched video data for character ROM addressing
+reg text_load_pending;      // Flag to load shift register when ROM data is ready
 
 //
 // 40 and 80 column video modes
@@ -501,10 +513,8 @@ reg [5:0] chram_x;
 // Apple II character ROM: 7 pixels wide (bits 0-6), bit 7 unused for text
 // In 80-column mode: xpos 0-6 maps directly to character bits 0-6
 // In 40-column mode: xpos 0-13 maps to character bits 0-6 (pixel doubled)
-// Ensure we don't access bit 7 which may be undefined
-wire [2:0] char_bit_80 = (xpos[2:0] > 6) ? 3'd6 : xpos[2:0];
-wire [2:0] char_bit_40 = (xpos[3:1] > 6) ? 3'd6 : xpos[3:1];
-wire  textpixel = EIGHTYCOL ? chrom_data_out[char_bit_80] : chrom_data_out[char_bit_40];
+// Text pixel output from shift register (FPGA-compatible with sync ROM)
+wire textpixel = text_shift_reg[0];
 
     // Regular Hires - Apple II hi-res: 7 pixels per byte (bits 0-6), bit 7 is color/palette
     // Emit 7 pixel bits LSB-first and replicate the last pixel into the pad bit.
@@ -670,6 +680,8 @@ begin
 		graphics_color <= 4'b0;
 		apple2_shift_reg <= 6'b0;
 		pixel_counter <= 11'b0;
+		text_shift_reg <= 7'b0;
+		text_load_pending <= 1'b0;
 	end
 	else
 	begin
@@ -736,9 +748,43 @@ begin
 		end
 
 		xpos<=xpos+1'b1;
+
+		// Text mode shift register management (FPGA-compatible sync ROM timing)
+		// ROM has 1-cycle latency, so we pre-fetch and buffer in shift register
+		if (!GR) begin
+			if (EIGHTYCOL) begin
+				// 80-column text mode: 7 pixels per character (xpos 0-6)
+				// Timing: xpos=4: set address, xpos=5: video_data ready, xpos=6: ROM ready
+				// At xpos=0: load shift register with pre-fetched ROM data
+				if (xpos == 'd0) begin
+					// Load shift register with ROM data (ready from pre-fetch)
+					text_shift_reg <= chrom_data_inv[6:0];
+					// Latch video_data for this character's ROM addressing
+					video_data_text <= video_data;
+				end else begin
+					// Shift out pixels LSB first (shift right, read bit 0)
+					text_shift_reg <= {1'b0, text_shift_reg[6:1]};
+				end
+			end else begin
+				// 40-column text mode: 14 pixels per character (xpos 0-13), pixel doubled
+				// Each pixel displays twice (even xpos shows pixel, odd xpos shifts to next)
+				if (xpos == 'd0) begin
+					// Load shift register with ROM data
+					text_shift_reg <= chrom_data_inv[6:0];
+					video_data_text <= video_data;
+				end else if (xpos[0] == 1'b0 && xpos != 'd0) begin
+					// Shift on EVEN xpos (2,4,6,8,10,12) for pixel doubling
+					// This way: xpos 0-1 show bit0, xpos 2-3 show bit1, etc.
+					text_shift_reg <= {1'b0, text_shift_reg[6:1]};
+				end
+				// Odd xpos (1,3,5,7,9,11,13): hold for pixel doubling
+			end
+		end
+
 		if (EIGHTYCOL) begin
-		  if (xpos=='d5) begin
-		    // Advance memory loading earlier in 80-column mode
+		  if (xpos=='d4) begin
+		    // Pre-fetch: advance memory 1 cycle earlier for sync ROM timing
+		    // This gives memory 1 cycle to respond, then ROM 1 cycle
 		    aux[16]<=~aux[16];                    // Toggle between main/aux every character
 		    if (aux[16]==1'b0)                    // Only increment memory address every 2 characters
 		      chram_x<=chram_x+1'b1;              // (each memory location holds 2 characters)
@@ -746,10 +792,14 @@ begin
 		  if (xpos=='d6) begin
 			xpos<=0;
                   end
-        end else if (xpos=='d13) begin
-            // Advance memory loading in 40-column mode (every 14 pixels)
-            xpos<=0;
+        end else if (xpos=='d11 && !EIGHTYCOL) begin
+            // Pre-fetch for 40-column mode: increment address 2 cycles early
+            // xpos=11: address changes, xpos=12: video_data ready, xpos=13: ROM ready
+            // This gives memory + ROM time to respond before xpos=0
             chram_x<=chram_x+1'b1;
+        end else if (xpos=='d13) begin
+            // 40-column mode: wrap xpos at end of character (no chram_x inc here)
+            xpos<=0;
         end
 		
 		// Use LDPS equivalent for buffer reload timing - but only trigger on edges
@@ -793,10 +843,11 @@ begin
         G <= {graphics_rgb[7:4],graphics_rgb[7:4]};
         B <= {graphics_rgb[3:0],graphics_rgb[3:0]};
     end else begin
-        // Text mode
-        R <= ~textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]};
-        G <= ~textpixel ? {TRGB[7:4],TRGB[7:4]} : {BRGB[7:4],BRGB[7:4]};
-        B <= ~textpixel ? {TRGB[3:0],TRGB[3:0]} : {BRGB[3:0],BRGB[3:0]};
+        // Text mode - textpixel is inverted at ROM level (like a2fpga)
+        // textpixel=1 means foreground/text color, textpixel=0 means background
+        R <= textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]};
+        G <= textpixel ? {TRGB[7:4],TRGB[7:4]} : {BRGB[7:4],BRGB[7:4]};
+        B <= textpixel ? {TRGB[3:0],TRGB[3:0]} : {BRGB[3:0],BRGB[3:0]};
     end
 end
 end
@@ -831,12 +882,41 @@ wire [22:0] video_addr_ii = use_aux_bank ? video_addr_ii_base + 23'h10000 : vide
 
 // Character Y position within 8-pixel character cell (using clamped coordinates)
 wire [2:0] chpos_y = apple_ii_y_clamped[2:0];
-assign chrom_addr = { ALTCHARSET,video_data[7:0], chpos_y};
 
+// Character ROM address calculation with proper attribute handling (a2fpga-style)
+// The Apple II character set uses bits 6-7 for display attributes:
+//   $00-$3F (bit 7=0, bit 6=0): Inverse characters
+//   $40-$7F (bit 7=0, bit 6=1): Flash (primary) or MouseText (alternate charset)
+//   $80-$FF (bit 7=1): Normal characters
+// ROM address format (12 bits total):
+//   bit 11: always 0
+//   bit 10: normal char OR (flash char AND flash_state AND primary charset)
+//   bit 9:  flash/mousetext bit AND (ALTCHARSET OR normal char)
+//   bits 8:3: character code lower 6 bits (video_data[5:0])
+//   bits 2:0: row within character (chpos_y)
+wire chrom_bit10 = video_data[7] | (video_data[6] & flash_state & ~ALTCHARSET);
+wire chrom_bit9 = video_data[6] & (ALTCHARSET | video_data[7]);
+assign chrom_addr = {1'b0, chrom_bit10, chrom_bit9, video_data[5:0], chpos_y};
+
+// Debug: trace MouseText character rendering
+// Uncomment to see what's happening with specific characters
+`define DEBUG_MOUSETEXT 1
+`ifdef DEBUG_MOUSETEXT
+always @(posedge clk_vid) if (ce_pix) begin
+    // Trace any MouseText character (0x40-0x5F range with ALTCHARSET)
+    if (H >= 72 && H <= 200 && V >= 80 && V <= 88 && !GR && text80_mode &&
+        ALTCHARSET && video_data >= 8'h40 && video_data < 8'h60 && xpos == 0) begin
+        $display("MT: H=%d V=%d chpos_y=%d vdata=%h addr=%h data=%h bits=%b%b%b%b%b%b%b",
+                 H, V, chpos_y, video_data, chrom_addr, chrom_data_out,
+                 chrom_data_out[6], chrom_data_out[5], chrom_data_out[4],
+                 chrom_data_out[3], chrom_data_out[2], chrom_data_out[1], chrom_data_out[0]);
+    end
+end
+`endif
 
 always @(posedge clk_vid) if (ce_pix)
 begin
-    // Debug text80 and graphics modes - show initial frames only  
+    // Debug text80 and graphics modes - show initial frames only
     if (H == 32 && V == 32) begin
         $display("MODE: H=%d V=%d TEXTG=%b EIGHTYCOL=%b GR=%b HIRES_MODE=%b AN3=%b text80=%b graphics=%b line_type=%d",
                  H, V, TEXTG, EIGHTYCOL, GR, HIRES_MODE, AN3, text80_mode, graphics_mode, line_type_w);
@@ -852,11 +932,11 @@ begin
                  window_y_w, chpos_y, chrom_addr, chrom_data_out, textpixel);
     end
     
-    // Debug character ROM and text pixel output - extensive debugging for a few pixels
-    if (H >= 32 && H <= 100 && V == 32 && !GR) begin
-        $display("  TEXT PIXEL: H=%d video_data=%h chrom_addr=%h chrom_data=%h xpos=%d textpixel=%b", 
-                 H, video_data, chrom_addr, chrom_data_out, xpos, textpixel);
-    end
+    // Debug disabled
+    // if (H >= 72 && H <= 130 && V == 56 && !GR && text80_mode) begin
+    //     $display("  80COL: H=%d V=%d video_data=%h aux=%b chram_x=%d xpos=%d addr=%h use_aux=%b",
+    //              H, V, video_data, aux[16], chram_x, xpos, video_addr_ii, use_aux_bank);
+    // end
 //	$display("V %x oldV %x chram_y %x base_y %x offset %x video_addr %x video_data %x video_data %x %c %x \n",V[8:3],oldV,chram_y,base_y,offset,video_addr,video_data,video_data[6:0],video_data[6:0],chrom_data_out);
 end
 
