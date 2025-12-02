@@ -1,5 +1,6 @@
 module soundglu
-  (input	     clk,  // TODO?: This is currently 28.6 MHz SWITCHED TO 14
+  (input	     CLK_14M,
+   input	     clk_7M_en,
    input	     ph0_en,
    input	     reset,
    input	     select,
@@ -7,13 +8,13 @@ module soundglu
    input [1:0]	     host_addr,
    input [7:0]	     host_data_in,
    input [7:0]	     sound_data_in,
+   input	     osc_en,
    output reg	     ram_access,
    output reg [7:0]  host_data_out,
    output reg [15:0] sound_addr,
    output reg [7:0]  sound_data_out,
    output reg	     ram_wr,
    output reg	     doc_wr,
-   output reg	     doc_enable,
    output reg	     doc_host_en
    );
 
@@ -23,17 +24,13 @@ module soundglu
 
    reg		    auto_increment;
    reg [3:0]	    volume;
-   reg [3:0]	    clk_phase; // SWITCH TO 14
    reg [1:0]	    sound_cycle_state;
    reg		    sound_write_pending;
    reg [7:0]	    read_data_reg;
    reg		    select_d;
    reg		    increment_pending;
 
-   always @(posedge clk) begin
-      clk_phase <= clk_phase + 1;
-      //doc_enable <= clk_phase == 0;
-      doc_enable <= ph0_en;
+   always @(posedge CLK_14M) begin
       doc_wr <= 0;
       ram_wr <= 0;
 
@@ -44,13 +41,14 @@ module soundglu
 	 increment_pending <= 0;
       end
 
-      // doc_enable high means the DOC just executed its cycle, so it's
+      // osc_en high means the DOC just executed its cycle, so it's
       // time to execute the pending host access
-      if (sound_cycle_state == ST_PENDING && doc_enable) begin
+      if (sound_cycle_state == ST_PENDING && osc_en) begin
 	 sound_cycle_state <= ST_FINISHING;
 	 doc_host_en <= !ram_access;
 	 doc_wr <= !ram_access && sound_write_pending;
 	 ram_wr <= ram_access && sound_write_pending;
+	 read_data_reg <= sound_data_in;
       end
       else if (sound_cycle_state == ST_FINISHING) begin
 	 doc_host_en <= 0;
@@ -96,7 +94,6 @@ module soundglu
 		 if (ph0_en) begin
 		    sound_cycle_state <= ST_PENDING;
 		    sound_write_pending <= 0;
-		    read_data_reg <= sound_data_in;
 		 end
 	      end
 	      2: host_data_out <= sound_addr[7:0];  // Address Pointer Low
@@ -106,11 +103,10 @@ module soundglu
       end // if (select)
 
       if (reset) begin
-	 clk_phase <= 0;
 	 sound_cycle_state <= ST_IDLE;
 	 doc_host_en <= 0;
 	 sound_write_pending <= 0;
 	 select_d <= 0;
       end
-   end // always @ (posedge clk)
+   end // if (clk_7M_en)
 endmodule // soundglu

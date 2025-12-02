@@ -1,18 +1,19 @@
 `timescale 1ns/1ns
 
 module sound
-   (input        CLK_14M,
-    input        ph0_en,
-    input        select,
-    input        reset,
-    input        wr,
-    input [1:0]  host_addr,
-    input [7:0]  host_data_in,
-    output [7:0] host_data_out,
+   (input             CLK_14M,
+    input             clk_7M_en,
+    input             ph0_en,
+    input             select,
+    input             reset,
+    input             wr,
+    input [1:0]       host_addr,
+    input [7:0]       host_data_in,
+    output [7:0]      host_data_out,
     output reg [15:0] sound_out,
     output reg        out_strobe,
     output [3:0]      ca,
-   output            irq);
+    output            irq);
 
    wire [16:0]       doc_addr_out;
    wire [15:0]       ram_addr;
@@ -39,7 +40,8 @@ module sound
 
    // BUGFIX: forward ph0_en into soundglu so doc_enable is clocked correctly
    soundglu glu
-     (.clk(CLK_14M),
+     (.CLK_14M(CLK_14M),
+      .clk_7M_en(clk_7M_en),
       .ph0_en(ph0_en),
       .reset(reset),
       .select(select),
@@ -47,13 +49,13 @@ module sound
       .host_addr(host_addr),
       .host_data_in(host_data_in),
       .sound_data_in(glu_data_in),
+      .osc_en(osc_en),
       .ram_access(ram_select),
       .host_data_out(host_data_out),
       .sound_addr(glu_addr_out),
       .sound_data_out(glu_data_out),
       .ram_wr(ram_wr),
       .doc_wr(doc_wr),
-      .doc_enable(osc_en),
       .doc_host_en(doc_host_en));
 
    syncram ram(
@@ -64,8 +66,8 @@ module sound
       .data_out(ram_data_out));
 
    es5503 doc(
-      .clk(CLK_14M),
-      .osc_en(osc_en),
+      .CLK_14M(CLK_14M),
+      .clk_7M_en(clk_7M_en),
       .reset(reset),
       .wr(doc_wr),
       .host_en(doc_host_en),
@@ -76,5 +78,6 @@ module sound
       .addr_out(doc_addr_out),
       .sound_out(doc_sound_out),
       .ca(ca),
-      .irq(irq));
+      .irq(irq),
+      .osc_en(osc_en));
 endmodule

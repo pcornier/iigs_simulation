@@ -1,8 +1,8 @@
 `timescale 1ns/1ns
 
 module es5503
-   (input	      clk,
-    input	      osc_en,
+   (input	      CLK_14M,
+    input	      clk_7M_en,
     input	      reset,
     input	      wr,
     input	      host_en,
@@ -13,7 +13,8 @@ module es5503
     output reg [16:0] addr_out,
     output reg [15:0] sound_out,
     output [3:0]      ca,
-    output	      irq
+    output	      irq,
+    output	      osc_en
     );
 
    // Global configuration
@@ -23,7 +24,6 @@ module es5503
    reg [4:0]	     current_osc;
    reg		     refreshing;
    reg		     current_refresh;
-   reg		     osc_en_d;
 
    // Per-oscillator configuration
    reg [7:0]	     r_freq_low    [31:0];
@@ -44,6 +44,17 @@ module es5503
    wire [24:0]	     accumulator_sum;
    wire [24:0]	     accumulator_flip;
    wire		     accumulator_wrapped;
+
+   reg [2:0]	     clk_phase;
+   reg		     osc_en_d;
+
+   assign osc_en = (clk_phase == 3'b111) & clk_7M_en;
+
+   always @(posedge CLK_14M) begin
+      osc_en_d <= osc_en;
+      if (clk_7M_en)
+	clk_phase <= reset ? 3'b000 : clk_phase + 3'b001;
+   end
 
    assign accumulator_sum = accumulator[current_osc] +
 			    {9'b0,
@@ -85,9 +96,7 @@ module es5503
       end
    endfunction // mux_addr
 
-   always @(posedge clk) begin
-      osc_en_d <= osc_en;
-
+   always @(posedge CLK_14M) begin
       addr_out <= {r_table_size[current_osc][6],
 		   mux_addr(accumulator[current_osc],
 			    r_table_ptr[current_osc],
@@ -198,7 +207,6 @@ module es5503
 	 current_osc <= 0;
 	 refreshing <= 0;
 	 current_refresh <= 0;
-	 osc_en_d <= 0;
 	 for (i=0; i < 32; i=i+1) accumulator[i] <= 0;
 	 irq_pending <= 0;
 	 irq_sp <= 0;

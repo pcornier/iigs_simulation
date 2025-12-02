@@ -2202,6 +2202,7 @@ wire ready_out;
 */
   sound snd(
             .CLK_14M(CLK_14M),
+            .clk_7M_en(clk_7M_en),
             .ph0_en(phi0),
             .reset(reset),
             .select(snd_strobe),
