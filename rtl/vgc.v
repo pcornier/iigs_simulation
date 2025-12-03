@@ -636,10 +636,13 @@ wire graphics_mode = lores_mode | hires_mode;
 
 // Current graphics pixel output (combinational for immediate display, no pipeline delay)
 // During buffer reload, output the first pixel of the new byte directly
-// For lores mode, bit 0 of expanded data is first pixel
+// For lores mode, bit 0 of expanded data is the high nibble bit 0 (upper half) or low nibble bit 0 (lower half)
 // For hires mode, bit 0 of video_data is first pixel (LSB-first)
+// Note: expandLores40 returns {nibble[3],nibble[2],nibble[1],nibble[0],nibble[3],nibble[2],nibble[1]}
+// so bit 0 is nibble[1], but we just need any valid pixel - use nibble bit directly
+wire lores_reload_pixel = window_y_w[2] ? video_data[5] : video_data[1];  // bit 1 of active nibble
 wire graphics_pixel_out = buffer_needs_reload ?
-    (lores_mode ? expandLores40(video_data, window_y_w[2])[0] : video_data[0]) :
+    (lores_mode ? lores_reload_pixel : video_data[0]) :
     graphics_pix_shift[0];
 
 //
