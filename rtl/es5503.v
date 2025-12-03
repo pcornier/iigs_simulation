@@ -48,6 +48,9 @@ module es5503
    reg [2:0]	     clk_phase;
    reg		     osc_en_d;
 
+   // Convenience signals
+   wire	[4:0]	     next_osc = current_osc + 5'b1;
+
    assign osc_en = (clk_phase == 3'b111) & clk_7M_en;
 
    always @(posedge CLK_14M) begin
@@ -160,25 +163,47 @@ module es5503
 	    //$display("Osc %d running", current_osc);
 	    // Accumulator/halt update
 	    accumulator[current_osc] <= accumulator_sum[23:0];
+
+	    // Halt the oscillator
 	    if (accumulator_wrapped || r_sample_data[current_osc] == 8'h00) begin
 	       r_control[current_osc][0] <= (r_control[current_osc][1] ||
 					     r_sample_data[current_osc] == 8'h00);
-	       if (r_control[current_osc][1])
-		 accumulator[current_osc] <= 0;
+
+	       if (r_control[current_osc][1]) // oneshot or swap; clear the oscillator
+		  accumulator[current_osc] <= 0;
+
+	       if (r_control[current_osc][2]) begin // Sync/swap/AM
+		  accumulator[current_osc] <= 0;
+
+		  // Sync/swap occurs when the current oscillator is even and not 0, the mode is 2 or 3, and the previous oscillator is not halted
+		  // Swap seems to arise naturally from sync+oneshot; halting the current oscillator was already handled above
+		  if ((current_osc != 5'd0) && (current_osc[0] == 1'd0) && (r_control[current_osc - 1][0] == 1'b0))
+		    accumulator[current_osc - 1] <= 32'h0;
+
+		  // AM occurs when the current oscillator is odd and not 31, and the mode is 2
+		  if ((current_osc != 5'd31) && (current_osc[0] == 1'd1) && (r_control[current_osc][1:0] == 2'd2))
+		    // Our data becomes next osc's volume instead of being played
+		    r_volume[next_osc] <= r_sample_data[current_osc] ^ 8'h80;
+	       end
+
 	       // IRQ handling
 	       if (r_control[current_osc][3] && !irq_pending[current_osc]) begin
 		  irq_pending[current_osc] <= 1;
 		  irq_stack[irq_sp] <= current_osc;
 		  irq_sp <= irq_sp + 1;
 	       end
-	    end
+	    end // if (accumulator_wrapped || r_sample_data[current_osc] == 8'h00)
 
 	    // Output sample update
-	    sound_out <= $signed(r_sample_data[current_osc] ^ 8'h80) *
-			 $signed({8'b0, r_volume[current_osc]});
+	    if (r_control[current_osc][2:1] == 2'd2 && current_osc[0] == 1'd1)
+	      sound_out <= 16'h0000; // AM mode; no sample playback
+	    else // All other modes
+	      sound_out <= $signed(r_sample_data[current_osc] ^ 8'h80) *
+			   $signed({8'b0, r_volume[current_osc]});
+
 	    ca <= r_control[current_osc][7:4];
 	 end // if (!r_control[current_osc][0])
-	 else begin
+	 else begin // Not running
 	    sound_out <= 16'h0000;
 	 end // else: !if(!r_control[current_osc][0])
       end // if (osc_en)
@@ -199,7 +224,7 @@ module es5503
 	      current_refresh <= 1;
 	 end
 	 else
-	   current_osc <= current_osc + 1;
+	   current_osc <= next_osc;
       end // if (osc_en_d)
 
       if (reset) begin
