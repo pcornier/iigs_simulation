@@ -405,7 +405,8 @@ always @(*) begin
         if (dhires_mode) begin
             // Double Hi-Res monochrome mode: display black/white based on current pixel
             // No color artifacting - just raw pixel data
-            if (graphics_pixel) begin
+            // Use graphics_pixel_out (combinational) for immediate display without pipeline delay
+            if (graphics_pixel_out) begin
                 apple2_r = 8'hFF;
                 apple2_g = 8'hFF;
                 apple2_b = 8'hFF;
@@ -633,6 +634,14 @@ wire lores_mode = (line_type_w == LORES40_LINE) | (line_type_w == LORES80_LINE);
 wire hires_mode = (line_type_w == HIRES40_LINE) | (line_type_w == HIRES80_LINE);
 wire graphics_mode = lores_mode | hires_mode;
 
+// Current graphics pixel output (combinational for immediate display, no pipeline delay)
+// During buffer reload, output the first pixel of the new byte directly
+// For lores mode, bit 0 of expanded data is first pixel
+// For hires mode, bit 0 of video_data is first pixel (LSB-first)
+wire graphics_pixel_out = buffer_needs_reload ?
+    (lores_mode ? expandLores40(video_data, window_y_w[2])[0] : video_data[0]) :
+    graphics_pix_shift[0];
+
 //
 // Text Mode chars are 7 bits wide, not 8
 //
@@ -641,11 +650,21 @@ wire graphics_mode = lores_mode | hires_mode;
 // This signal controls when to load new character/graphics data
 wire ldps_load;
 //wire text80_mode = (!GR & EIGHTYCOL);
-assign ldps_load = (NEWVIDEO[7]) ? 
+// ldps_load triggers buffer reload. For 40-col mode, we need 2+ cycles between
+// chram_x increment and reload for memory latency:
+// - xpos=10: ldps_load triggers buffer_needs_reload
+// - xpos=11: chram_x increments (address changes, registered)
+// - xpos=12: video_addr_ii updates (combinational from new chram_x)
+// - xpos=13: video_data valid (after memory latency)
+// - xpos=0 (next char): reload from valid video_data
+// So ldps_load at xpos=10 gives us reload at xpos=11, which is still too early.
+// We need reload to happen AFTER video_data is valid at xpos=13.
+// Solution: change ldps_load to xpos=12 so reload happens at xpos=13 when data is ready.
+assign ldps_load = (NEWVIDEO[7]) ?
                    // SHRG mode timing
-                   ((H >= 28 && H < 32) || (H >= 32 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 11))))) :
-                   // Apple II mode timing  
-                   ((H >= 68 && H < 72) || (H >= 72 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 11)))));
+                   ((H >= 28 && H < 32) || (H >= 32 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12))))) :
+                   // Apple II mode timing
+                   ((H >= 68 && H < 72) || (H >= 72 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12)))));
 
 reg [3:0] xpos;
 reg [16:0] aux;
