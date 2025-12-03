@@ -399,11 +399,23 @@ always @(*) begin
     if (hires_mode) begin
         // Start with black background
         apple2_r = 8'h00;
-        apple2_g = 8'h00; 
+        apple2_g = 8'h00;
         apple2_b = 8'h00;
-        
-        if (consistent_tint) begin
-            // Tint is consistent: display color using basis vectors
+
+        if (dhires_mode) begin
+            // Double Hi-Res monochrome mode: display black/white based on current pixel
+            // No color artifacting - just raw pixel data
+            if (graphics_pixel) begin
+                apple2_r = 8'hFF;
+                apple2_g = 8'hFF;
+                apple2_b = 8'hFF;
+            end else begin
+                apple2_r = 8'h00;
+                apple2_g = 8'h00;
+                apple2_b = 8'h00;
+            end
+        end else if (consistent_tint) begin
+            // Regular hires with consistent tint: display color using basis vectors
             // Add contributions from 4 adjacent pixels
             if (apple2_shift_reg[3]) begin
                 apple2_r = apple2_r + basis_r[(color_phase + 1) & 2'b11];
@@ -426,7 +438,7 @@ always @(*) begin
                 apple2_b = apple2_b + basis_b[color_phase];
             end
         end else begin
-            // Tint is changing: display only black, gray, or white  
+            // Tint is changing: display only black, gray, or white
             case (apple2_shift_reg[3:2])
                 2'b11: begin apple2_r = 8'hFF; apple2_g = 8'hFF; apple2_b = 8'hFF; end // White
                 2'b01, 2'b10: begin apple2_r = 8'h80; apple2_g = 8'h80; apple2_b = 8'h80; end // Gray
@@ -701,10 +713,9 @@ begin
 `endif
 				end else if (hires_mode) begin
 					// Hires: expand pixel bits (0-6), store color bit (7) separately
+					// In Double Hi-Res mode, bit 7 is data not a color bit
 					graphics_pix_shift <= expandHires40(video_data);
-					graphics_color <= {3'b0, video_data[7]};  // Store color/palette bit
-					if (H >= 32 && H <= 100 && V == 32) 
-						$display("  HIRES RELOAD: H=%d video_data=%h expanded=%b color_bit=%b", H, video_data, expandHires40(video_data), video_data[7]);
+					graphics_color <= dhires_mode ? 4'b0 : {3'b0, video_data[7]};  // DHIRES: no color bit
 				end
 				buffer_needs_reload <= 1'b0;
 			end else begin
@@ -875,9 +886,10 @@ wire GR = ~(TEXTG | mixed_mode_active);
 wire [15:0] lineaddr_result = lineaddr({2'b0, apple_ii_y_clamped});
 wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + chram_x;
 
-// Text80 mode needs aux memory bank switching
+// 80-column modes (text80 and double hi-res) need aux memory bank switching
 wire text80_mode = (!GR & EIGHTYCOL);
-wire use_aux_bank = text80_mode & aux[16];
+wire dhires_mode = (GR & HIRES_MODE & EIGHTYCOL & !AN3);  // Double Hi-Res mode
+wire use_aux_bank = (text80_mode | dhires_mode) & aux[16];
 wire [22:0] video_addr_ii = use_aux_bank ? video_addr_ii_base + 23'h10000 : video_addr_ii_base;
 
 // Character Y position within 8-pixel character cell (using clamped coordinates)
