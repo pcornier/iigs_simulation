@@ -184,7 +184,7 @@ const int input_menu = 12;
 
 // Video
 // -----
-#define VGA_WIDTH 700
+#define VGA_WIDTH 704
 #define VGA_HEIGHT 240
 #define VGA_ROTATE 0  // 90 degrees anti-clockwise
 #define VGA_SCALE_X vga_scale
@@ -1978,7 +1978,8 @@ void show_help() {
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
 	printf("  --send-keys <frame>:<keys>    Send keyboard input at specified frame\n");
 	printf("                                Can be specified multiple times\n");
-	printf("                                Use \\n for Enter, \\t for Tab, \\\\ for backslash\n\n");
+	printf("                                Use \\n for Enter, \\t for Tab, \\e for ESC,\n");
+	printf("                                \\xNN for hex codes, \\\\ for backslash\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
 	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
@@ -2194,7 +2195,14 @@ int main(int argc, char** argv, char** env) {
                     if (next == 'n') { processed_keys += '\n'; j++; }
                     else if (next == 'r') { processed_keys += '\r'; j++; }
                     else if (next == 't') { processed_keys += '\t'; j++; }
+                    else if (next == 'e') { processed_keys += '\x1b'; j++; }  // ESC key
                     else if (next == '\\') { processed_keys += '\\'; j++; }
+                    else if (next == 'x' && j + 3 < keys.length()) {
+                        // Handle \xNN hex escape sequences
+                        char hex[3] = {keys[j + 2], keys[j + 3], 0};
+                        processed_keys += (char)strtol(hex, nullptr, 16);
+                        j += 3;
+                    }
                     else { processed_keys += keys[j]; }
                 } else {
                     processed_keys += keys[j];

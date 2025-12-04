@@ -387,7 +387,12 @@ reg [5:0] apple2_shift_reg;
 // Horizontal pixel counter for authentic Apple II color phase (modulo 4)
 // Use H counter with offset to maintain proper phase relationship
 reg [10:0] pixel_counter;
-wire [1:0] color_phase = H[1:0]; // Use original H-based approach
+// Color phase for NTSC artifact colors - needs to be aligned with actual Apple II timing
+// The base phase comes from H position with an offset for correct alignment.
+// Bit 7 of the hires byte (stored in graphics_color[0]) shifts the phase by 1,
+// selecting between violet/green (bit7=0) and blue/orange (bit7=1) palettes.
+wire [1:0] color_phase_base = (H[1:0] + 2'b11) & 2'b11; // Offset by 3 for base alignment
+wire [1:0] color_phase = (color_phase_base + {1'b0, graphics_color[0]}) & 2'b11;
 
 // Authentic Apple II tint consistency check
 wire consistent_tint = (apple2_shift_reg[0] == apple2_shift_reg[4]) & 
@@ -687,6 +692,7 @@ begin
 			end
 		end else begin
 			// Apple II modes: start loading at H=68
+			// Pre-fetch timing: chram_x=0 at H=68, reload at H=71, data ready at H=72
 			if (H == 68) begin
 				if (EIGHTYCOL) begin
 					chram_x <= 0;
@@ -695,15 +701,27 @@ begin
 					chram_x <= 0;
 					aux <= 0;
 				end
-			end else if (H == 70) begin
-				buffer_needs_reload <= 1'b1;
+			end else if (H == 71) begin
+				// Pre-load the shift register at H=71 so first pixel is ready at H=72
+				// This is the ONLY place where we load during the init block
+				if (hires_mode) begin
+					graphics_pix_shift <= expandHires40(video_data);
+					graphics_color <= {3'b0, video_data[7]};
+				end else if (lores_mode) begin
+					graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
+					graphics_color <= window_y_w[2] ? video_data[7:4] : video_data[3:0];
+				end
 			end
 		end
-		
+
 		xpos<=0;
-		graphics_pix_shift <= 8'b0;
-		graphics_color <= 4'b0;
+		// Only clear graphics shift register early in the line (before pre-load)
+		if (H < 71) begin
+			graphics_pix_shift <= 8'b0;
+			graphics_color <= 4'b0;
+		end
 		apple2_shift_reg <= 6'b0;
+		graphics_pixel <= 1'b0;
 		pixel_counter <= 11'b0;
 		text_shift_reg <= 7'b0;
 		text_load_pending <= 1'b0;
@@ -711,8 +729,10 @@ begin
 	else
 	begin
 		// Graphics pixel buffer system - coordinate with memory timing
-		if (H >= 32 && H <= 100 && V == 32)
-			$display("  DEBUG CONDITION: graphics_mode=%b GR=%b line_type=%d condition=%b", graphics_mode, GR, line_type_w, (graphics_mode && GR));
+		// Debug start and end of line to check horizontal alignment
+		if (((H >= 70 && H <= 90) || (H >= 620 && H <= 640)) && V == 100 && hires_mode)
+			$display("HPIX: H=%d xpos=%d chram_x=%d reload=%b shift=%b pixel=%b video_data=%h",
+			         H, xpos, chram_x, buffer_needs_reload, graphics_pix_shift, graphics_pix_shift[0], video_data);
 		if (graphics_mode && GR) begin
 			// Reload buffer when chram_x changes (new memory data available)
 			if (buffer_needs_reload) begin
@@ -726,9 +746,10 @@ begin
 `endif
 				end else if (hires_mode) begin
 					// Hires: expand pixel bits (0-6), store color bit (7) separately
-					// In Double Hi-Res mode, bit 7 is data not a color bit
+					// Always store bit 7 for color phase - even in "DHIRES" mode since
+					// games like 8bit-Slicks run with EIGHTYCOL set but still need color
 					graphics_pix_shift <= expandHires40(video_data);
-					graphics_color <= dhires_mode ? 4'b0 : {3'b0, video_data[7]};  // DHIRES: no color bit
+					graphics_color <= {3'b0, video_data[7]};  // Store color/palette bit
 				end
 				buffer_needs_reload <= 1'b0;
 			end else begin
@@ -840,15 +861,19 @@ begin
 
 
 
-// Mode-dependent border generation (updated for 704-pixel visible area)
-// Layout: |Left Border(40px)|Active Display(560px)|Right Border(104px)| = 704 total for Apple II
-// Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total for SHRG
-// Outside total screen area OR inside Apple II mode margin areas
-// Border generation: 
-// Apple II modes: active display V=32-223 (192 lines), border V<32 or V>=224
-// SHRG modes: active display V=32-231 (200 lines), border V<32 or V>=232
-if ((!NEWVIDEO[7] && ((H < 'd32 || H > 'd703) || (V < 'd32 || V >= 'd224) || ((H >= 'd32 && H < 'd72) || (H >= 'd632 && H <= 'd703)))) ||
-    (NEWVIDEO[7] && ((H < 'd33 || H >= 'd673 || V < 'd32 || V > 'd231))))
+// Mode-dependent border generation (704-pixel visible area, H=0-703)
+// Apple II TEXT modes: |Left Border(72px)|Active Display(560px)|Right Border(72px)| = 704 total
+//   Text has minimal pipeline latency, uses original timing
+// Apple II GFX modes:  |Left Border(77px)|Active Display(560px)|Right Border(67px)| = 704 total
+//   Graphics has 5-pixel pipeline latency (apple2_shift_reg), shift border right
+// SHRG modes:          |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total
+// Border generation:
+// Apple II TEXT: active display H=72-631 (560 pixels), V=32-223 (192 lines)
+// Apple II GFX:  active display H=77-636 (560 pixels), V=32-223 (192 lines)
+// SHRG modes:    active display H=32-671 (640 pixels), V=32-231 (200 lines)
+if ((!NEWVIDEO[7] && GR && ((H < 'd77 || H > 'd636) || (V < 'd32 || V >= 'd224))) ||
+    (!NEWVIDEO[7] && !GR && ((H < 'd72 || H > 'd631) || (V < 'd32 || V >= 'd224))) ||
+    (NEWVIDEO[7] && ((H < 'd32 || H >= 'd672 || V < 'd32 || V >= 'd232))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
