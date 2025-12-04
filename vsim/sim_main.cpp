@@ -1804,6 +1804,160 @@ bool memory_dump_mode = false;
 // ---------------------------
 std::string disk_image = "";  // Empty by default - only mount if specified via --disk
 
+// Key injection functionality
+// ---------------------------
+struct KeyInjection {
+    int frame;
+    std::string keys;
+};
+std::vector<KeyInjection> key_injections;
+
+// ASCII to PS/2 scancode mapping (for SDL/non-Windows platforms)
+// Returns: scancode in bits 7:0, EXT flag in bit 19, SHIFT required in bit 9
+struct AsciiToPS2 {
+    unsigned int scancode;
+    bool needs_shift;
+};
+
+// Map printable ASCII characters to PS/2 scancodes
+// Based on US keyboard layout
+static AsciiToPS2 ascii_to_ps2(char c) {
+    AsciiToPS2 result = {0xFF, false};  // Default: unmapped
+
+    // Lowercase letters (a-z) -> no shift needed
+    if (c >= 'a' && c <= 'z') {
+        static const unsigned int letter_scancodes[] = {
+            0x1c, 0x32, 0x21, 0x23, 0x24, 0x2b, 0x34, 0x33,  // a-h
+            0x43, 0x3b, 0x42, 0x4b, 0x3a, 0x31, 0x44, 0x4d,  // i-p
+            0x15, 0x2d, 0x1b, 0x2c, 0x3c, 0x2a, 0x1d, 0x22,  // q-x
+            0x35, 0x1a                                        // y-z
+        };
+        result.scancode = letter_scancodes[c - 'a'];
+        result.needs_shift = false;
+        return result;
+    }
+
+    // Uppercase letters (A-Z) -> shift + letter
+    if (c >= 'A' && c <= 'Z') {
+        static const unsigned int letter_scancodes[] = {
+            0x1c, 0x32, 0x21, 0x23, 0x24, 0x2b, 0x34, 0x33,  // A-H
+            0x43, 0x3b, 0x42, 0x4b, 0x3a, 0x31, 0x44, 0x4d,  // I-P
+            0x15, 0x2d, 0x1b, 0x2c, 0x3c, 0x2a, 0x1d, 0x22,  // Q-X
+            0x35, 0x1a                                        // Y-Z
+        };
+        result.scancode = letter_scancodes[c - 'A'];
+        result.needs_shift = true;
+        return result;
+    }
+
+    // Numbers 0-9
+    if (c >= '0' && c <= '9') {
+        static const unsigned int num_scancodes[] = {
+            0x45, 0x16, 0x1e, 0x26, 0x25, 0x2e, 0x36, 0x3d, 0x3e, 0x46  // 0-9
+        };
+        result.scancode = num_scancodes[c - '0'];
+        result.needs_shift = false;
+        return result;
+    }
+
+    // Special characters
+    switch (c) {
+        case ' ':  result.scancode = 0x29; result.needs_shift = false; break;  // Space
+        case '\n': result.scancode = 0x5a; result.needs_shift = false; break;  // Enter
+        case '\r': result.scancode = 0x5a; result.needs_shift = false; break;  // Enter
+        case '\t': result.scancode = 0x0d; result.needs_shift = false; break;  // Tab
+        case '\b': result.scancode = 0x66; result.needs_shift = false; break;  // Backspace
+        case 0x1b: result.scancode = 0x76; result.needs_shift = false; break;  // Escape
+
+        // Punctuation without shift
+        case '-':  result.scancode = 0x4e; result.needs_shift = false; break;
+        case '=':  result.scancode = 0x55; result.needs_shift = false; break;
+        case '[':  result.scancode = 0x54; result.needs_shift = false; break;
+        case ']':  result.scancode = 0x5b; result.needs_shift = false; break;
+        case '\\': result.scancode = 0x5d; result.needs_shift = false; break;
+        case ';':  result.scancode = 0x4c; result.needs_shift = false; break;
+        case '\'': result.scancode = 0x52; result.needs_shift = false; break;
+        case '`':  result.scancode = 0x0e; result.needs_shift = false; break;
+        case ',':  result.scancode = 0x41; result.needs_shift = false; break;
+        case '.':  result.scancode = 0x49; result.needs_shift = false; break;
+        case '/':  result.scancode = 0x4a; result.needs_shift = false; break;
+
+        // Punctuation with shift
+        case '!':  result.scancode = 0x16; result.needs_shift = true; break;  // Shift+1
+        case '@':  result.scancode = 0x1e; result.needs_shift = true; break;  // Shift+2
+        case '#':  result.scancode = 0x26; result.needs_shift = true; break;  // Shift+3
+        case '$':  result.scancode = 0x25; result.needs_shift = true; break;  // Shift+4
+        case '%':  result.scancode = 0x2e; result.needs_shift = true; break;  // Shift+5
+        case '^':  result.scancode = 0x36; result.needs_shift = true; break;  // Shift+6
+        case '&':  result.scancode = 0x3d; result.needs_shift = true; break;  // Shift+7
+        case '*':  result.scancode = 0x3e; result.needs_shift = true; break;  // Shift+8
+        case '(':  result.scancode = 0x46; result.needs_shift = true; break;  // Shift+9
+        case ')':  result.scancode = 0x45; result.needs_shift = true; break;  // Shift+0
+        case '_':  result.scancode = 0x4e; result.needs_shift = true; break;  // Shift+-
+        case '+':  result.scancode = 0x55; result.needs_shift = true; break;  // Shift+=
+        case '{':  result.scancode = 0x54; result.needs_shift = true; break;  // Shift+[
+        case '}':  result.scancode = 0x5b; result.needs_shift = true; break;  // Shift+]
+        case '|':  result.scancode = 0x5d; result.needs_shift = true; break;  // Shift+backslash
+        case ':':  result.scancode = 0x4c; result.needs_shift = true; break;  // Shift+;
+        case '"':  result.scancode = 0x52; result.needs_shift = true; break;  // Shift+'
+        case '~':  result.scancode = 0x0e; result.needs_shift = true; break;  // Shift+`
+        case '<':  result.scancode = 0x41; result.needs_shift = true; break;  // Shift+,
+        case '>':  result.scancode = 0x49; result.needs_shift = true; break;  // Shift+.
+        case '?':  result.scancode = 0x4a; result.needs_shift = true; break;  // Shift+/
+    }
+
+    return result;
+}
+
+// Queue key events for a string of characters
+void queue_key_string(const std::string& keys) {
+    const unsigned int SHIFT_SCANCODE = 0x12;  // Left shift PS/2 scancode
+
+    for (char c : keys) {
+        AsciiToPS2 mapping = ascii_to_ps2(c);
+        if (mapping.scancode == 0xFF) {
+            fprintf(stderr, "Warning: unmapped character '%c' (0x%02x) in key injection\n", c, (unsigned char)c);
+            continue;
+        }
+
+        // If shift is needed, press shift first
+        if (mapping.needs_shift) {
+            SimInput_PS2KeyEvent shift_down(SHIFT_SCANCODE, true, false, SHIFT_SCANCODE);
+            input.keyEvents.push(shift_down);
+        }
+
+        // Press key
+        SimInput_PS2KeyEvent key_down(mapping.scancode, true, false, mapping.scancode);
+        input.keyEvents.push(key_down);
+
+        // Release key
+        SimInput_PS2KeyEvent key_up(mapping.scancode, false, false, mapping.scancode);
+        input.keyEvents.push(key_up);
+
+        // If shift was pressed, release it
+        if (mapping.needs_shift) {
+            SimInput_PS2KeyEvent shift_up(SHIFT_SCANCODE, false, false, SHIFT_SCANCODE);
+            input.keyEvents.push(shift_up);
+        }
+    }
+
+    printf("Queued %zu key events for string: %s\n", keys.length() * 2, keys.c_str());
+}
+
+// Process key injections for the current frame
+void process_key_injections(int current_frame) {
+    auto it = key_injections.begin();
+    while (it != key_injections.end()) {
+        if (it->frame == current_frame) {
+            printf("Injecting keys at frame %d: %s\n", current_frame, it->keys.c_str());
+            queue_key_string(it->keys);
+            it = key_injections.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void show_help() {
 	printf("Apple IIgs Hardware Simulator\n");
 	printf("Usage: ./Vemu [options]\n\n");
@@ -1821,16 +1975,21 @@ void show_help() {
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
 	printf("  --disk <filename>             Use specified disk image (no disk mounted by default)\n");
-	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n\n");
+	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
+	printf("  --send-keys <frame>:<keys>    Send keyboard input at specified frame\n");
+	printf("                                Can be specified multiple times\n");
+	printf("                                Use \\n for Enter, \\t for Tab, \\\\ for backslash\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
 	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
-	printf("  ./Vemu --stop-at-frame 300   Stop simulation after frame 300\n");
-	printf("  ./Vemu --disk totalreplay.hdv  Use totalreplay.hdv as disk image\n");
+	printf("  ./Vemu --stop-at-frame 300    Stop simulation after frame 300\n");
+	printf("  ./Vemu --disk totalreplay.hdv Use totalreplay.hdv as disk image\n");
 	printf("  ./Vemu --disk pd.hdv --screenshot 50 --stop-at-frame 100\n");
 	printf("                                Use pd.hdv, take screenshot at frame 50, stop at 100\n");
 	printf("  ./Vemu --memory-dump 200      Dump memory at frame 200\n");
 	printf("  ./Vemu --selftest --no-cpu-log    Run selftest without CPU logging\n");
+	printf("  ./Vemu --disk totalreplay.hdv --send-keys 200:lode\\n\n");
+	printf("                                Boot Total Replay and type 'lode' + Enter at frame 200\n");
 }
 
 void save_screenshot(int frame_number) {
@@ -2016,6 +2175,36 @@ int main(int argc, char** argv, char** env) {
             disk_image = argv[i + 1];
             printf("Using disk image: %s\n", disk_image.c_str());
             i++; // Skip the next argument since it's the filename
+        } else if (strcmp(argv[i], "--send-keys") == 0 && i + 1 < argc) {
+            // Parse frame:keys format
+            std::string arg = argv[i + 1];
+            size_t colon_pos = arg.find(':');
+            if (colon_pos == std::string::npos) {
+                fprintf(stderr, "Error: --send-keys requires format <frame>:<keys>\n");
+                return 1;
+            }
+            int frame = std::stoi(arg.substr(0, colon_pos));
+            std::string keys = arg.substr(colon_pos + 1);
+
+            // Process escape sequences in the keys string
+            std::string processed_keys;
+            for (size_t j = 0; j < keys.length(); j++) {
+                if (keys[j] == '\\' && j + 1 < keys.length()) {
+                    char next = keys[j + 1];
+                    if (next == 'n') { processed_keys += '\n'; j++; }
+                    else if (next == 'r') { processed_keys += '\r'; j++; }
+                    else if (next == 't') { processed_keys += '\t'; j++; }
+                    else if (next == '\\') { processed_keys += '\\'; j++; }
+                    else { processed_keys += keys[j]; }
+                } else {
+                    processed_keys += keys[j];
+                }
+            }
+
+            KeyInjection ki = {frame, processed_keys};
+            key_injections.push_back(ki);
+            printf("Will send keys at frame %d: %s\n", frame, processed_keys.c_str());
+            i++; // Skip the next argument since it's the frame:keys
         }
     }
 
@@ -2147,6 +2336,10 @@ int main(int argc, char** argv, char** env) {
            if (video.count_frame != last_logged_frame) {
                printf("Frame: %d\n", video.count_frame);
                last_logged_frame = video.count_frame;
+               // Handle key injections
+               if (!key_injections.empty()) {
+                   process_key_injections(video.count_frame);
+               }
                // Handle screenshots
                if (screenshot_mode) {
                    auto it = std::find(screenshot_frames.begin(), screenshot_frames.end(), video.count_frame);
@@ -2376,6 +2569,10 @@ int main(int argc, char** argv, char** env) {
 		if (video.count_frame != last_logged_frame) {
 			printf("Frame: %d\n", video.count_frame);
 			last_logged_frame = video.count_frame;
+			// Handle key injections in GUI mode too
+			if (!key_injections.empty()) {
+				process_key_injections(video.count_frame);
+			}
 		}
 
 		// Draw VGA output

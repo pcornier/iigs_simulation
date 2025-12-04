@@ -645,7 +645,7 @@ void SimInput::BeforeEval()
 
 			//ps2_key_temp = ev2ps2[evt.code];
 			ps2_key_temp = evt.mapped;
-			/*fprintf(stderr, "evt = %x  ext = %d key = %d \n", evt.code, evt.extended, evt.mapped);*/
+			/*fprintf(stderr, "PS2 KEY: code=%02x pressed=%d ext=%d mapped=%02x\n", evt.code, evt.pressed, evt.extended, evt.mapped);*/
 
 			if (evt.extended) { ps2_key_temp |= (1UL << 8); }
 			if (evt.pressed) { ps2_key_temp |= (1UL << 9); }
