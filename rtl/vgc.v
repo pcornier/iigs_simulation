@@ -402,20 +402,11 @@ always @(*) begin
         apple2_g = 8'h00;
         apple2_b = 8'h00;
 
-        if (dhires_mode) begin
-            // Double Hi-Res monochrome mode: display black/white based on current pixel
-            // No color artifacting - just raw pixel data
-            // Use graphics_pixel_out (combinational) for immediate display without pipeline delay
-            if (graphics_pixel_out) begin
-                apple2_r = 8'hFF;
-                apple2_g = 8'hFF;
-                apple2_b = 8'hFF;
-            end else begin
-                apple2_r = 8'h00;
-                apple2_g = 8'h00;
-                apple2_b = 8'h00;
-            end
-        end else if (consistent_tint) begin
+        // Use NTSC color artifacting for ALL hires modes (including DHIRES)
+        // The dhires_mode monochrome rendering was breaking games like 8bit-Slicks
+        // that run in standard HIRES but with EIGHTYCOL left set by menu software.
+        // True DHIRES color (16-color) mode would need different handling.
+        if (consistent_tint) begin
             // Regular hires with consistent tint: display color using basis vectors
             // Add contributions from 4 adjacent pixels
             if (apple2_shift_reg[3]) begin
