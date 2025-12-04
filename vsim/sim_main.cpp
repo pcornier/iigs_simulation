@@ -2210,7 +2210,7 @@ int main(int argc, char** argv, char** env) {
 			// Handle mouse motion when captured
 			if (event.type == SDL_MOUSEMOTION && mouse_captured) {
 				mouse_x += event.motion.xrel;
-				mouse_y += event.motion.yrel;  // RTL negates Y, so don't negate here
+				mouse_y -= event.motion.yrel;  // RTL negates Y, so don't negate here
 			}
 			// Handle mouse buttons when captured
 			if (mouse_captured) {
