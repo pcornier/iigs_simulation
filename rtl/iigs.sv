@@ -303,7 +303,8 @@ module iigs
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
   // Combinational ADB read detection - bypasses io_dout timing issue for ADB reads
-  // ADB addresses: $C000, $C010, $C024, $C025, $C026, $C027, $C044, $C045, $C064-$C067, $C070
+  // ADB addresses: $C000, $C010, $C024, $C025, $C026, $C027, $C044, $C045
+  // NOTE: $C064-$C067 are paddle timer reads, $C070 is paddle trigger - NOT ADB
   wire adb_read = IO & cpu_we_n & (
     cpu_addr[7:0] == 8'h00 |  // $C000 - Keyboard data
     cpu_addr[7:0] == 8'h10 |  // $C010 - Keyboard strobe
@@ -312,9 +313,7 @@ module iigs
     cpu_addr[7:0] == 8'h26 |  // $C026 - ADB command/data
     cpu_addr[7:0] == 8'h27 |  // $C027 - ADB status
     cpu_addr[7:0] == 8'h44 |  // $C044 - Mouse X (alternate)
-    cpu_addr[7:0] == 8'h45 |  // $C045 - Mouse Y (alternate)
-    (cpu_addr[7:4] == 4'h6 & cpu_addr[3:2] == 2'b01) |  // $C064-$C067 - Paddle buttons
-    cpu_addr[7:0] == 8'h70    // $C070 - Paddle trigger
+    cpu_addr[7:0] == 8'h45    // $C045 - Mouse Y (alternate)
   );
 
   // Use combinational logic but add debug to detect timing issues
@@ -1051,20 +1050,19 @@ module iigs
 `endif
             end
             12'h000, 12'h010, 12'h024, 12'h025,
-            12'h026, 12'h027, 12'h044, 12'h045,
-            12'h064, 12'h065,
-            12'h066, 12'h067, 12'h070: begin
+            12'h026, 12'h027, 12'h044, 12'h045: begin
+              // ADB addresses - handled by ADB module
               adb_addr <= addr[7:0];
               adb_strobe <= 1'b1;
               adb_rw <= 1'b1;
               $display("ADB RD %03h", addr[11:0]);
-              // Let ADB module handle all its addresses - remove hardcoded overrides
-              if (addr[11:0] == 12'h070) begin
-                paddle_trigger <= 1'b1;  // Trigger paddle timers on read too
-                $display("PADDLE TRIGGER (READ)");
-              end
-              // All ADB addresses ($C000, $C010, $C025, $C026, $C027, etc.) handled by ADB module
             end
+            12'h070: begin
+              // Paddle trigger - NOT an ADB address
+              paddle_trigger <= 1'b1;
+              $display("PADDLE TRIGGER (READ)");
+            end
+            // NOTE: $C064-$C067 are paddle timer reads, handled below at lines 1205-1208
 
             12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
             12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end

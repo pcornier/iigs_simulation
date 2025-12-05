@@ -1824,6 +1824,20 @@ struct MouseInjection {
 std::vector<MouseInjection> mouse_injections;
 int mouse_injection_frames_remaining = 0;  // Countdown for current injection
 
+// Joystick/Paddle injection functionality
+// ---------------------------------------
+struct JoystickInjection {
+    int frame;
+    int paddle0;   // Paddle 0 value (0-255), -1 means don't change
+    int paddle1;   // Paddle 1 value (0-255), -1 means don't change
+    int paddle2;   // Paddle 2 value (0-255), -1 means don't change
+    int paddle3;   // Paddle 3 value (0-255), -1 means don't change
+    int buttons;   // Button state: bit 0 = button 0, bit 1 = button 1, -1 means don't change
+    int duration;  // Number of frames to apply these values
+};
+std::vector<JoystickInjection> joystick_injections;
+int joystick_injection_frames_remaining = 0;
+
 // ASCII to PS/2 scancode mapping (for SDL/non-Windows platforms)
 // Returns: scancode in bits 7:0, EXT flag in bit 19, SHIFT required in bit 9
 struct AsciiToPS2 {
@@ -2011,6 +2025,54 @@ bool process_mouse_injections(int current_frame) {
     return false;
 }
 
+// Active joystick injection state
+static int injected_paddle0 = 128;  // Center position
+static int injected_paddle1 = 128;
+static int injected_paddle2 = 128;
+static int injected_paddle3 = 128;
+static int injected_joy_buttons = 0;
+static bool joystick_injection_active = false;
+
+// Process joystick injections for the current frame
+// Returns true if joystick is being injected (overrides normal joystick input)
+bool process_joystick_injections(int current_frame) {
+    // Check if there's a new injection starting this frame
+    auto it = joystick_injections.begin();
+    while (it != joystick_injections.end()) {
+        if (it->frame == current_frame) {
+            printf("Injecting joystick at frame %d: p0=%d p1=%d p2=%d p3=%d btn=%d dur=%d\n",
+                   current_frame, it->paddle0, it->paddle1, it->paddle2, it->paddle3,
+                   it->buttons, it->duration);
+            if (it->paddle0 >= 0) injected_paddle0 = it->paddle0;
+            if (it->paddle1 >= 0) injected_paddle1 = it->paddle1;
+            if (it->paddle2 >= 0) injected_paddle2 = it->paddle2;
+            if (it->paddle3 >= 0) injected_paddle3 = it->paddle3;
+            if (it->buttons >= 0) injected_joy_buttons = it->buttons;
+            joystick_injection_frames_remaining = it->duration;
+            joystick_injection_active = true;
+            it = joystick_injections.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Process active injection
+    if (joystick_injection_active && joystick_injection_frames_remaining > 0) {
+        joystick_injection_frames_remaining--;
+        if (joystick_injection_frames_remaining == 0) {
+            // Injection complete - reset to center
+            injected_paddle0 = 128;
+            injected_paddle1 = 128;
+            injected_paddle2 = 128;
+            injected_paddle3 = 128;
+            injected_joy_buttons = 0;
+            joystick_injection_active = false;
+        }
+        return true;  // Joystick is being injected
+    }
+    return false;
+}
+
 void show_help() {
 	printf("Apple IIgs Hardware Simulator\n");
 	printf("Usage: ./Vemu [options]\n\n");
@@ -2038,6 +2100,12 @@ void show_help() {
 	printf("                                dx,dy: movement deltas (-127 to 127)\n");
 	printf("                                btn: button state (0=none, 1=left click)\n");
 	printf("                                dur: duration in frames (default 1)\n");
+	printf("                                Can be specified multiple times\n");
+	printf("  --send-joystick <frame>:<p0>,<p1>[,<p2>,<p3>][,<btn>[,<dur>]]\n");
+	printf("                                Send joystick/paddle input at specified frame\n");
+	printf("                                p0-p3: paddle values (0-255, 128=center, -1=unchanged)\n");
+	printf("                                btn: button state (bit 0=btn0, bit 1=btn1, -1=unchanged)\n");
+	printf("                                dur: duration in frames (default 1)\n");
 	printf("                                Can be specified multiple times\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
@@ -2052,6 +2120,8 @@ void show_help() {
 	printf("                                Boot Total Replay and type 'lode' + Enter at frame 200\n");
 	printf("  ./Vemu --disk app.hdv --send-mouse 100:10,0 --send-mouse 110:0,0,1\n");
 	printf("                                Move mouse right 10 at frame 100, click at frame 110\n");
+	printf("  ./Vemu --disk game.hdv --send-joystick 100:0,128\n");
+	printf("                                Move joystick full left at frame 100\n");
 }
 
 void save_screenshot(int frame_number) {
@@ -2305,6 +2375,45 @@ int main(int argc, char** argv, char** env) {
             printf("Will send mouse at frame %d: dx=%d dy=%d btn=%d dur=%d\n",
                    frame, dx, dy, btn, dur);
             i++; // Skip the next argument
+        } else if (strcmp(argv[i], "--send-joystick") == 0 && i + 1 < argc) {
+            // Parse frame:p0,p1[,p2,p3][,btn[,dur]] format
+            std::string arg = argv[i + 1];
+            size_t colon_pos = arg.find(':');
+            if (colon_pos == std::string::npos) {
+                fprintf(stderr, "Error: --send-joystick requires format <frame>:<p0>,<p1>[,<p2>,<p3>][,<btn>[,<dur>]]\n");
+                return 1;
+            }
+            int frame = std::stoi(arg.substr(0, colon_pos));
+            std::string params = arg.substr(colon_pos + 1);
+
+            // Parse p0,p1[,p2,p3[,btn[,dur]]]
+            int p0 = -1, p1 = -1, p2 = -1, p3 = -1, btn = -1, dur = 1;
+            int parsed = sscanf(params.c_str(), "%d,%d,%d,%d,%d,%d", &p0, &p1, &p2, &p3, &btn, &dur);
+            if (parsed < 2) {
+                fprintf(stderr, "Error: --send-joystick requires at least p0,p1 values\n");
+                return 1;
+            }
+            // Handle case where only 4 values given (p0,p1,btn,dur) vs (p0,p1,p2,p3)
+            if (parsed == 4 && p2 >= 0 && p2 <= 3 && p3 >= 1) {
+                // Looks like p0,p1,btn,dur format
+                dur = p3;
+                btn = p2;
+                p2 = -1;
+                p3 = -1;
+            }
+
+            // Clamp paddle values to 0-255
+            if (p0 > 255) p0 = 255;
+            if (p1 > 255) p1 = 255;
+            if (p2 > 255) p2 = 255;
+            if (p3 > 255) p3 = 255;
+            if (dur < 1) dur = 1;
+
+            JoystickInjection ji = {frame, p0, p1, p2, p3, btn, dur};
+            joystick_injections.push_back(ji);
+            printf("Will send joystick at frame %d: p0=%d p1=%d p2=%d p3=%d btn=%d dur=%d\n",
+                   frame, p0, p1, p2, p3, btn, dur);
+            i++; // Skip the next argument
         }
     }
 
@@ -2457,6 +2566,26 @@ int main(int argc, char** argv, char** env) {
                        top->ps2_mouse = mouse_temp;
                        top->ps2_mouse_ext = injected_mouse_x + (injected_mouse_buttons << 8);
                    }
+               }
+               // Handle joystick injections (headless mode)
+               if (!joystick_injections.empty() || joystick_injection_active) {
+                   process_joystick_injections(video.count_frame);
+               }
+               // Apply joystick values (always, so they persist)
+               if (joystick_injection_active) {
+                   top->paddle_0 = injected_paddle0;
+                   top->paddle_1 = injected_paddle1;
+                   top->paddle_2 = injected_paddle2;
+                   top->paddle_3 = injected_paddle3;
+                   // Buttons are active low on Apple II
+                   top->joystick_0 = (injected_joy_buttons & 1) ? 0 : (1 << 4);  // Button 0
+                   top->joystick_0 |= (injected_joy_buttons & 2) ? 0 : (1 << 5); // Button 1
+               } else {
+                   // Default centered position
+                   top->paddle_0 = 128;
+                   top->paddle_1 = 128;
+                   top->paddle_2 = 128;
+                   top->paddle_3 = 128;
                }
                // Handle screenshots
                if (screenshot_mode) {
@@ -2695,6 +2824,10 @@ int main(int argc, char** argv, char** env) {
 			if (!mouse_injections.empty() || mouse_injection_active) {
 				process_mouse_injections(video.count_frame);
 			}
+			// Handle joystick injections in GUI mode too
+			if (!joystick_injections.empty() || joystick_injection_active) {
+				process_joystick_injections(video.count_frame);
+			}
 		}
 
 		// Draw VGA output
@@ -2819,6 +2952,23 @@ int main(int argc, char** argv, char** env) {
 			if (input.inputs[i]) { top->joystick_0 |= (1 << i); }
 		}
 		top->joystick_1 = top->joystick_0;
+
+		// Apply joystick/paddle values
+		if (joystick_injection_active) {
+			top->paddle_0 = injected_paddle0;
+			top->paddle_1 = injected_paddle1;
+			top->paddle_2 = injected_paddle2;
+			top->paddle_3 = injected_paddle3;
+			// Override button bits for injected buttons
+			if (injected_joy_buttons & 1) top->joystick_0 |= (1 << 4);  // Button 0
+			if (injected_joy_buttons & 2) top->joystick_0 |= (1 << 5);  // Button 1
+		} else {
+			// Default centered position
+			top->paddle_0 = 128;
+			top->paddle_1 = 128;
+			top->paddle_2 = 128;
+			top->paddle_3 = 128;
+		}
 
 		/*top->joystick_analog_0 += 1;
 		top->joystick_analog_0 -= 256;*/
