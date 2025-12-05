@@ -56,6 +56,7 @@ reg [63:0] cmd_data;
 reg [3:0] initial_cmd_len;
 reg cmd_response_ready;  // Flag indicating command completed with response
 reg strobe_prev;  // Previous strobe value for edge detection
+reg c024_was_read;  // Track if C024 was read on previous strobe (for falling edge handling)
 
 // Device configuration registers
 reg [7:0] adb_mode;
@@ -564,6 +565,7 @@ always @(posedge CLK_14M) begin
     mouse_coord <= 1'b0;
     cmd_response_ready <= 1'b0;
     strobe_prev <= 1'b0;
+    c024_was_read <= 1'b0;
 
     // Initialize data register with ADB ready status (GSplus-style)
     // Set bit 3 (0x08) = SRQ flag to indicate ADB controller is ready
@@ -1492,34 +1494,46 @@ always @(posedge CLK_14M) begin
             dout <= 8'h80;  // No data: button not pressed, delta=0
           end
 
-          // State updates on FALLING edge of strobe (after CPU has read the data)
-          // This ensures the NEXT read gets the toggled coordinate
-          if (~strobe & strobe_prev) begin
-            if (valid_mouse_data) begin
-              if (mouse_coord) begin
-                // After reading Y, clear valid flag and reset coord
-                valid_mouse_data <= 1'b0;
-                mouse_coord <= 1'b0;
-                $display("C024 READ Y: 0x%02h (btn=%d, dy=%d)",
-                         device_registers[3][0], ~device_registers[3][0][7],
-                         $signed({device_registers[3][0][6], device_registers[3][0][6:0]}));
-              end else begin
-                // After reading X, toggle coord for next Y read
-                mouse_coord <= 1'b1;
-                $display("C024 READ X: 0x%02h (dx=%d)",
-                         device_registers[3][1],
-                         $signed({device_registers[3][1][6], device_registers[3][1][6:0]}));
-              end
-            end else begin
-              // Toggle coord even when no data (maintains alternating pattern)
-              mouse_coord <= ~mouse_coord;
-            end
+          // Mark that C024 was read this strobe cycle (for falling edge handling)
+          if (strobe) begin
+            c024_was_read <= 1'b1;
           end
         end
       end
 
       default: dout <= 8'd0;
     endcase
+
+    // Handle C024 mouse_coord toggle on falling edge of strobe
+    // This must be outside the case block because by the time strobe falls,
+    // the address may have already changed to something else
+    if (~strobe & strobe_prev & c024_was_read) begin
+      if (valid_mouse_data) begin
+        if (mouse_coord) begin
+          // After reading Y, clear valid flag and reset coord
+          valid_mouse_data <= 1'b0;
+          mouse_coord <= 1'b0;
+          $display("C024 READ Y: 0x%02h (btn=%d, dy=%d)",
+                   device_registers[3][0], ~device_registers[3][0][7],
+                   $signed({device_registers[3][0][6], device_registers[3][0][6:0]}));
+        end else begin
+          // After reading X, toggle coord for next Y read
+          mouse_coord <= 1'b1;
+          $display("C024 READ X: 0x%02h (dx=%d)",
+                   device_registers[3][1],
+                   $signed({device_registers[3][1][6], device_registers[3][1][6:0]}));
+        end
+      end else begin
+        // Toggle coord even when no data (maintains alternating pattern)
+        mouse_coord <= ~mouse_coord;
+      end
+      c024_was_read <= 1'b0;  // Clear the flag after handling
+    end
+
+    // Clear c024_was_read on falling edge even if it wasn't set (belt and suspenders)
+    if (~strobe & strobe_prev) begin
+      c024_was_read <= 1'b0;
+    end
 
     // Update edge detection register on every cycle
     strobe_prev <= strobe;

@@ -1812,6 +1812,18 @@ struct KeyInjection {
 };
 std::vector<KeyInjection> key_injections;
 
+// Mouse injection functionality
+// ---------------------------
+struct MouseInjection {
+    int frame;
+    int dx;        // X delta (-127 to 127)
+    int dy;        // Y delta (-127 to 127)
+    int buttons;   // Button state: bit 0 = left button
+    int duration;  // Number of frames to apply this movement
+};
+std::vector<MouseInjection> mouse_injections;
+int mouse_injection_frames_remaining = 0;  // Countdown for current injection
+
 // ASCII to PS/2 scancode mapping (for SDL/non-Windows platforms)
 // Returns: scancode in bits 7:0, EXT flag in bit 19, SHIFT required in bit 9
 struct AsciiToPS2 {
@@ -1958,6 +1970,47 @@ void process_key_injections(int current_frame) {
     }
 }
 
+// Active mouse injection state
+static signed char injected_mouse_x = 0;
+static signed char injected_mouse_y = 0;
+static int injected_mouse_buttons = 0;
+static bool mouse_injection_active = false;
+
+// Process mouse injections for the current frame
+// Returns true if mouse is being injected (overrides normal mouse input)
+bool process_mouse_injections(int current_frame) {
+    // Check if there's a new injection starting this frame
+    auto it = mouse_injections.begin();
+    while (it != mouse_injections.end()) {
+        if (it->frame == current_frame) {
+            printf("Injecting mouse at frame %d: dx=%d dy=%d btn=%d dur=%d\n",
+                   current_frame, it->dx, it->dy, it->buttons, it->duration);
+            injected_mouse_x = (signed char)it->dx;
+            injected_mouse_y = (signed char)it->dy;
+            injected_mouse_buttons = it->buttons;
+            mouse_injection_frames_remaining = it->duration;
+            mouse_injection_active = true;
+            it = mouse_injections.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Process active injection
+    if (mouse_injection_active && mouse_injection_frames_remaining > 0) {
+        mouse_injection_frames_remaining--;
+        if (mouse_injection_frames_remaining == 0) {
+            // Injection complete - clear state
+            injected_mouse_x = 0;
+            injected_mouse_y = 0;
+            injected_mouse_buttons = 0;
+            mouse_injection_active = false;
+        }
+        return true;  // Mouse is being injected
+    }
+    return false;
+}
+
 void show_help() {
 	printf("Apple IIgs Hardware Simulator\n");
 	printf("Usage: ./Vemu [options]\n\n");
@@ -1979,7 +2032,13 @@ void show_help() {
 	printf("  --send-keys <frame>:<keys>    Send keyboard input at specified frame\n");
 	printf("                                Can be specified multiple times\n");
 	printf("                                Use \\n for Enter, \\t for Tab, \\e for ESC,\n");
-	printf("                                \\xNN for hex codes, \\\\ for backslash\n\n");
+	printf("                                \\xNN for hex codes, \\\\ for backslash\n");
+	printf("  --send-mouse <frame>:<dx>,<dy>[,<btn>[,<dur>]]\n");
+	printf("                                Send mouse input at specified frame\n");
+	printf("                                dx,dy: movement deltas (-127 to 127)\n");
+	printf("                                btn: button state (0=none, 1=left click)\n");
+	printf("                                dur: duration in frames (default 1)\n");
+	printf("                                Can be specified multiple times\n\n");
 	printf("Examples:\n");
 	printf("  ./Vemu                        Run simulator in windowed mode\n");
 	printf("  ./Vemu --screenshot 245       Take screenshot at frame 245\n");
@@ -1991,6 +2050,8 @@ void show_help() {
 	printf("  ./Vemu --selftest --no-cpu-log    Run selftest without CPU logging\n");
 	printf("  ./Vemu --disk totalreplay.hdv --send-keys 200:lode\\n\n");
 	printf("                                Boot Total Replay and type 'lode' + Enter at frame 200\n");
+	printf("  ./Vemu --disk app.hdv --send-mouse 100:10,0 --send-mouse 110:0,0,1\n");
+	printf("                                Move mouse right 10 at frame 100, click at frame 110\n");
 }
 
 void save_screenshot(int frame_number) {
@@ -2213,6 +2274,37 @@ int main(int argc, char** argv, char** env) {
             key_injections.push_back(ki);
             printf("Will send keys at frame %d: %s\n", frame, processed_keys.c_str());
             i++; // Skip the next argument since it's the frame:keys
+        } else if (strcmp(argv[i], "--send-mouse") == 0 && i + 1 < argc) {
+            // Parse frame:dx,dy[,btn[,dur]] format
+            std::string arg = argv[i + 1];
+            size_t colon_pos = arg.find(':');
+            if (colon_pos == std::string::npos) {
+                fprintf(stderr, "Error: --send-mouse requires format <frame>:<dx>,<dy>[,<btn>[,<dur>]]\n");
+                return 1;
+            }
+            int frame = std::stoi(arg.substr(0, colon_pos));
+            std::string params = arg.substr(colon_pos + 1);
+
+            // Parse dx,dy[,btn[,dur]]
+            int dx = 0, dy = 0, btn = 0, dur = 1;
+            int parsed = sscanf(params.c_str(), "%d,%d,%d,%d", &dx, &dy, &btn, &dur);
+            if (parsed < 2) {
+                fprintf(stderr, "Error: --send-mouse requires at least dx,dy values\n");
+                return 1;
+            }
+
+            // Clamp values
+            if (dx > 127) dx = 127;
+            if (dx < -127) dx = -127;
+            if (dy > 127) dy = 127;
+            if (dy < -127) dy = -127;
+            if (dur < 1) dur = 1;
+
+            MouseInjection mi = {frame, dx, dy, btn, dur};
+            mouse_injections.push_back(mi);
+            printf("Will send mouse at frame %d: dx=%d dy=%d btn=%d dur=%d\n",
+                   frame, dx, dy, btn, dur);
+            i++; // Skip the next argument
         }
     }
 
@@ -2347,6 +2439,24 @@ int main(int argc, char** argv, char** env) {
                // Handle key injections
                if (!key_injections.empty()) {
                    process_key_injections(video.count_frame);
+               }
+               // Handle mouse injections (headless mode)
+               if (!mouse_injections.empty() || mouse_injection_active) {
+                   bool injecting = process_mouse_injections(video.count_frame);
+                   if (injecting) {
+                       // Build PS/2 mouse packet from injected values
+                       unsigned char status_byte = (injected_mouse_buttons & 0x07) | 0x08;
+                       if (injected_mouse_x < 0) status_byte |= 0x10;
+                       if (injected_mouse_y < 0) status_byte |= 0x20;
+                       unsigned long mouse_temp = status_byte;
+                       mouse_temp |= ((unsigned char)injected_mouse_x << 8);
+                       mouse_temp |= ((unsigned char)injected_mouse_y << 16);
+                       // Toggle clock to signal new data
+                       mouse_clock = !mouse_clock;
+                       if (mouse_clock) { mouse_temp |= (1UL << 24); }
+                       top->ps2_mouse = mouse_temp;
+                       top->ps2_mouse_ext = injected_mouse_x + (injected_mouse_buttons << 8);
+                   }
                }
                // Handle screenshots
                if (screenshot_mode) {
@@ -2581,6 +2691,10 @@ int main(int argc, char** argv, char** env) {
 			if (!key_injections.empty()) {
 				process_key_injections(video.count_frame);
 			}
+			// Handle mouse injections in GUI mode too
+			if (!mouse_injections.empty() || mouse_injection_active) {
+				process_mouse_injections(video.count_frame);
+			}
 		}
 
 		// Draw VGA output
@@ -2718,8 +2832,13 @@ int main(int argc, char** argv, char** env) {
 		//	if (spinner_toggle) { top->spinner_0 |= 1UL << 8; }
 		//}
 
-		// Mouse input: use real captured mouse or arrow keys as fallback
-		if (!mouse_captured) {
+		// Mouse input: check for injection first, then captured mouse or arrow keys as fallback
+		if (mouse_injection_active) {
+			// Use injected mouse values
+			mouse_x = injected_mouse_x;
+			mouse_y = injected_mouse_y;
+			mouse_buttons = injected_mouse_buttons;
+		} else if (!mouse_captured) {
 			// Fallback to arrow keys when mouse not captured
 			mouse_buttons = 0;
 			mouse_x = 0;
