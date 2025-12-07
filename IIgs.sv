@@ -208,6 +208,9 @@ localparam CONF_STR = {
 
 	"R0,Warm Reset;",
 	"R1,Cold Reset;",
+	"JA,Fire 1,Fire 2;",
+	"jn,A|P,B;",
+	"jp,Y|P,B;",
 	"V,v",`BUILD_DATE
 };
 
@@ -230,7 +233,9 @@ wire [63:0] img_size;
 
 wire [32:0] TIMESTAMP;
 wire [15:0] joystick_0;
-wire [15:0] joystick_a0;
+//wire [15:0] joystick_a0;
+wire [15:0] joystick_l_analog_0;
+wire [15:0] joystick_l_analog_1;
 wire  [7:0] paddle_0;
 
 wire [10:0] ps2_key;
@@ -269,7 +274,8 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
 	.joystick_0(joystick_0),
-	.joystick_l_analog_0(joystick_a0),
+	.joystick_l_analog_0(joystick_l_analog_0),
+	.joystick_l_analog_1(joystick_l_analog_1),
 	.paddle_0(paddle_0)
 );
 
@@ -370,8 +376,8 @@ iigs iigs (
 	// Joystick and paddle inputs
 	.joystick_0(joystick_0),
 	// .joystick_1(joystick_1),
-	// .joystick_l_analog_0(joystick_l_analog_0),
-	// .joystick_l_analog_1(joystick_l_analog_1),
+	 .joystick_l_analog_0(joystick_l_analog_0),
+	 .joystick_l_analog_1(joystick_l_analog_1),
 	.paddle_0(paddle_0),
 	// .paddle_1(paddle_1),
 	// .paddle_2(paddle_2),
