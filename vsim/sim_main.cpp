@@ -2033,6 +2033,18 @@ static int injected_paddle3 = 128;
 static int injected_joy_buttons = 0;
 static bool joystick_injection_active = false;
 
+// Convert unsigned paddle value (0-255) to signed analog value for joystick_l_analog
+// The FPGA converts back with: paddle = {~sign_bit, lower_7_bits}
+// So paddle 0 = signed -128, paddle 128 = signed 0, paddle 255 = signed +127
+static inline int8_t paddle_to_analog(int paddle_value) {
+    return (int8_t)(paddle_value - 128);
+}
+
+// Pack two paddle values into a 16-bit analog value (X in [7:0], Y in [15:8])
+static inline uint16_t pack_analog(int paddle_x, int paddle_y) {
+    return ((uint8_t)paddle_to_analog(paddle_y) << 8) | (uint8_t)paddle_to_analog(paddle_x);
+}
+
 // Process joystick injections for the current frame
 // Returns true if joystick is being injected (overrides normal joystick input)
 bool process_joystick_injections(int current_frame) {
@@ -2571,21 +2583,17 @@ int main(int argc, char** argv, char** env) {
                if (!joystick_injections.empty() || joystick_injection_active) {
                    process_joystick_injections(video.count_frame);
                }
-               // Apply joystick values (always, so they persist)
+               // Apply joystick values via analog inputs (always, so they persist)
                if (joystick_injection_active) {
-                   top->paddle_0 = injected_paddle0;
-                   top->paddle_1 = injected_paddle1;
-                   top->paddle_2 = injected_paddle2;
-                   top->paddle_3 = injected_paddle3;
-                   // Buttons are active low on Apple II
-                   top->joystick_0 = (injected_joy_buttons & 1) ? 0 : (1 << 4);  // Button 0
-                   top->joystick_0 |= (injected_joy_buttons & 2) ? 0 : (1 << 5); // Button 1
+                   top->joystick_l_analog_0 = pack_analog(injected_paddle0, injected_paddle1);
+                   top->joystick_l_analog_1 = pack_analog(injected_paddle2, injected_paddle3);
+                   // Buttons are active high in joystick_0
+                   top->joystick_0 = (injected_joy_buttons & 1) ? (1 << 4) : 0;  // Button 0
+                   top->joystick_0 |= (injected_joy_buttons & 2) ? (1 << 5) : 0; // Button 1
                } else {
-                   // Default centered position
-                   top->paddle_0 = 128;
-                   top->paddle_1 = 128;
-                   top->paddle_2 = 128;
-                   top->paddle_3 = 128;
+                   // Default centered position (128 = signed 0)
+                   top->joystick_l_analog_0 = pack_analog(128, 128);
+                   top->joystick_l_analog_1 = pack_analog(128, 128);
                }
                // Handle screenshots
                if (screenshot_mode) {
@@ -2953,21 +2961,17 @@ int main(int argc, char** argv, char** env) {
 		}
 		top->joystick_1 = top->joystick_0;
 
-		// Apply joystick/paddle values
+		// Apply joystick/paddle values via analog inputs
 		if (joystick_injection_active) {
-			top->paddle_0 = injected_paddle0;
-			top->paddle_1 = injected_paddle1;
-			top->paddle_2 = injected_paddle2;
-			top->paddle_3 = injected_paddle3;
+			top->joystick_l_analog_0 = pack_analog(injected_paddle0, injected_paddle1);
+			top->joystick_l_analog_1 = pack_analog(injected_paddle2, injected_paddle3);
 			// Override button bits for injected buttons
 			if (injected_joy_buttons & 1) top->joystick_0 |= (1 << 4);  // Button 0
 			if (injected_joy_buttons & 2) top->joystick_0 |= (1 << 5);  // Button 1
 		} else {
-			// Default centered position
-			top->paddle_0 = 128;
-			top->paddle_1 = 128;
-			top->paddle_2 = 128;
-			top->paddle_3 = 128;
+			// Default centered position (128 = signed 0)
+			top->joystick_l_analog_0 = pack_analog(128, 128);
+			top->joystick_l_analog_1 = pack_analog(128, 128);
 		}
 
 		/*top->joystick_analog_0 += 1;

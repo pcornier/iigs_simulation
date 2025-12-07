@@ -2246,22 +2246,14 @@ wire ready_out;
   // key_reads variable removed - ADB handles $C010 strobe clearing internally
 
   // === Joystick/Paddle Support ===
-  
-  // Choose paddle input source (can switch between paddle and analog stick)
+
+  // Use analog sticks as paddle inputs (convert signed to unsigned)
+  // Paddle 0/1 = Player 1 stick X/Y, Paddle 2/3 = Player 2 stick X/Y
   wire [7:0] paddle_input[3:0];
-  `ifdef USE_ANALOG_STICK
-    // Use analog sticks as paddles (convert signed to unsigned)
-    assign paddle_input[0] = {~joystick_l_analog_0[7], joystick_l_analog_0[6:0]};  // X
-    assign paddle_input[1] = {~joystick_l_analog_0[15], joystick_l_analog_0[14:8]}; // Y
-    assign paddle_input[2] = {~joystick_l_analog_1[7], joystick_l_analog_1[6:0]};  
-    assign paddle_input[3] = {~joystick_l_analog_1[15], joystick_l_analog_1[14:8]};
-  `else
-    // Use dedicated paddle inputs (default)
-    assign paddle_input[0] = paddle_0;
-    assign paddle_input[1] = paddle_1;
-    assign paddle_input[2] = paddle_2; 
-    assign paddle_input[3] = paddle_3;
-  `endif
+  assign paddle_input[0] = {~joystick_l_analog_0[7], joystick_l_analog_0[6:0]};  // P1 X
+  assign paddle_input[1] = {~joystick_l_analog_0[15], joystick_l_analog_0[14:8]}; // P1 Y
+  assign paddle_input[2] = {~joystick_l_analog_1[7], joystick_l_analog_1[6:0]};   // P2 X
+  assign paddle_input[3] = {~joystick_l_analog_1[15], joystick_l_analog_1[14:8]}; // P2 Y
 
   // Paddle timing simulation
   wire [3:0] paddle_timer_expired;
