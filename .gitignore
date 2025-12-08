@@ -48,3 +48,6 @@ customtests/*_Output.txt
 customtests/*_Symbols.txt
 customtests/*_FileInformation.txt
 vsim/imgui.ini
+*.vcd
+*.fst
+*.fst.hier
