@@ -42,3 +42,9 @@ verilator/.vs/
 *.vs
 *obj_dir
 x64
+customtests/*.2mg
+customtests/*.SYSTEM
+customtests/*_Output.txt
+customtests/*_Symbols.txt
+customtests/*_FileInformation.txt
+vsim/imgui.ini
