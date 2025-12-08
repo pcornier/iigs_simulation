@@ -47,10 +47,51 @@ make clean             # Clean build artifacts
 ./obj_dir/Vemu > debug.log 2>&1
 
 # use a disk image
-./Vemu --disk totalreplay.hdv  
+./Vemu --disk totalreplay.hdv
 ./Vemu --disk pd.hdv --screenshot 50 --stop-at-frame 100
+```
 
+### Keyboard Input (--send-keys)
+Send keyboard input at specific frames for automated testing:
+```bash
+# Basic key injection at frame 100
+./obj_dir/Vemu --send-keys 100:hello
 
+# Special escape sequences:
+#   \n  = Enter/Return
+#   \t  = Tab
+#   \e  = Escape (ESC key)
+#   \\  = Literal backslash
+#   \xNN = Hex code (e.g., \x1b for ESC, \x08 for backspace)
+
+# Examples:
+./obj_dir/Vemu --send-keys 100:b\n          # Type 'b' then press Enter
+./obj_dir/Vemu --send-keys 100:\e           # Press Escape key
+./obj_dir/Vemu --send-keys 100:test\nyes\n  # Type 'test', Enter, 'yes', Enter
+
+# Multiple key sequences at different frames
+./obj_dir/Vemu --send-keys 100:a --send-keys 200:b\n
+```
+
+### Mouse Input (--send-mouse)
+Send mouse movements and clicks at specific frames:
+```bash
+# Format: --send-mouse <frame>:<dx>,<dy>[,<btn>[,<dur>]]
+#   dx, dy  = Movement deltas (-127 to 127)
+#   btn     = Button state: 0=none, 1=left click (optional, default 0)
+#   dur     = Duration in frames to hold (optional, default 1)
+
+# Move mouse right 50 pixels at frame 100
+./obj_dir/Vemu --send-mouse 100:50,0
+
+# Move mouse down 30 pixels with left button held
+./obj_dir/Vemu --send-mouse 100:0,30,1
+
+# Click and hold for 5 frames
+./obj_dir/Vemu --send-mouse 100:0,0,1,5
+
+# Multiple mouse actions
+./obj_dir/Vemu --send-mouse 100:100,0 --send-mouse 150:0,0,1,5
 ```
 
 ## Core Architecture

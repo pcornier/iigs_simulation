@@ -604,12 +604,17 @@ wire textpixel = text_shift_reg[0];
     localparam [2:0] HIRES80_LINE = 7;
 
 
-        wire [2:0] line_type_w = (!GR & !EIGHTYCOL) ? TEXT40_LINE :
+        // Line type detection for Apple II video modes
+// AN3 controls whether EIGHTYCOL selects double-width modes:
+// - AN3=1: Standard Apple II modes (40-column), EIGHTYCOL ignored for graphics
+// - AN3=0: IIgs double modes (80-column) when EIGHTYCOL=1
+// For text modes, EIGHTYCOL always controls 40/80 column selection
+wire [2:0] line_type_w = (!GR & !EIGHTYCOL) ? TEXT40_LINE :
         (!GR & EIGHTYCOL) ? TEXT80_LINE :
-        (GR & !HIRES_MODE & !EIGHTYCOL) ? LORES40_LINE :         // Standard Apple II lores
-        (GR & !HIRES_MODE & EIGHTYCOL & !AN3) ? LORES80_LINE :   // IIgs double lores  
-        (GR & HIRES_MODE & !EIGHTYCOL) ? HIRES40_LINE :          // Standard Apple II hires
-        (GR & HIRES_MODE & EIGHTYCOL & !AN3) ? HIRES80_LINE :    // IIgs double hires
+        (GR & !HIRES_MODE & (AN3 | !EIGHTYCOL)) ? LORES40_LINE :  // Standard Apple II lores (AN3=1 OR EIGHTYCOL=0)
+        (GR & !HIRES_MODE & !AN3 & EIGHTYCOL) ? LORES80_LINE :    // IIgs double lores (AN3=0 AND EIGHTYCOL=1)
+        (GR & HIRES_MODE & (AN3 | !EIGHTYCOL)) ? HIRES40_LINE :   // Standard Apple II hires (AN3=1 OR EIGHTYCOL=0)
+        (GR & HIRES_MODE & !AN3 & EIGHTYCOL) ? HIRES80_LINE :     // IIgs double hires (AN3=0 AND EIGHTYCOL=1)
         TEXT40_LINE;
 
 //
