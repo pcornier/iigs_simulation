@@ -2587,15 +2587,24 @@ int main(int argc, char** argv, char** env) {
                if (!joystick_injections.empty() || joystick_injection_active) {
                    process_joystick_injections(video.count_frame);
                }
-               // Apply joystick values via analog inputs (always, so they persist)
+               // Apply joystick values via direct paddle inputs (0-255 unsigned)
                if (joystick_injection_active) {
+                   top->paddle_0 = injected_paddle0;
+                   top->paddle_1 = injected_paddle1;
+                   top->paddle_2 = injected_paddle2;
+                   top->paddle_3 = injected_paddle3;
+                   // Also set analog for compatibility
                    top->joystick_l_analog_0 = pack_analog(injected_paddle0, injected_paddle1);
                    top->joystick_l_analog_1 = pack_analog(injected_paddle2, injected_paddle3);
                    // Buttons are active high in joystick_0
                    top->joystick_0 = (injected_joy_buttons & 1) ? (1 << 4) : 0;  // Button 0
                    top->joystick_0 |= (injected_joy_buttons & 2) ? (1 << 5) : 0; // Button 1
                } else {
-                   // Default centered position (128 = signed 0)
+                   // Default centered position (128)
+                   top->paddle_0 = 128;
+                   top->paddle_1 = 128;
+                   top->paddle_2 = 128;
+                   top->paddle_3 = 128;
                    top->joystick_l_analog_0 = pack_analog(128, 128);
                    top->joystick_l_analog_1 = pack_analog(128, 128);
                }

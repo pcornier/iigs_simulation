@@ -2313,13 +2313,19 @@ wire ready_out;
 
   // === Joystick/Paddle Support ===
 
-  // Use analog sticks as paddle inputs (convert signed to unsigned)
-  // Paddle 0/1 = Player 1 stick X/Y, Paddle 2/3 = Player 2 stick X/Y
+  // Convert from MiSTer joystick_l_analog signed format to unsigned paddle values
+  // MiSTer format: signed 8-bit per axis (-128 to +127, center=0)
+  //   joystick_l_analog_0[7:0]  = X axis (negative=left, positive=right)
+  //   joystick_l_analog_0[15:8] = Y axis (negative=up, positive=down)
+  // Apple II paddle format: unsigned 8-bit (0-255, center=128)
+  //   Paddle 0 = X (0=left, 255=right)
+  //   Paddle 1 = Y (0=up, 255=down)
+  // Conversion: unsigned = signed XOR 0x80 (flip sign bit)
   wire [7:0] paddle_input[3:0];
-  assign paddle_input[0] = {~joystick_l_analog_0[7], joystick_l_analog_0[6:0]};  // P1 X
-  assign paddle_input[1] = {~joystick_l_analog_0[15], joystick_l_analog_0[14:8]}; // P1 Y
-  assign paddle_input[2] = {~joystick_l_analog_1[7], joystick_l_analog_1[6:0]};   // P2 X
-  assign paddle_input[3] = {~joystick_l_analog_1[15], joystick_l_analog_1[14:8]}; // P2 Y
+  assign paddle_input[0] = joystick_l_analog_0[7:0] ^ 8'h80;   // P1 X
+  assign paddle_input[1] = joystick_l_analog_0[15:8] ^ 8'h80;  // P1 Y
+  assign paddle_input[2] = joystick_l_analog_1[7:0] ^ 8'h80;   // P2 X
+  assign paddle_input[3] = joystick_l_analog_1[15:8] ^ 8'h80;  // P2 Y
 
   // Paddle timing simulation
   wire [3:0] paddle_timer_expired;
