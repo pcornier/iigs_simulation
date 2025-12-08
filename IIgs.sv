@@ -199,7 +199,7 @@ localparam CONF_STR = {
 	"IIgs;UART19200:9600:4800:2400:1200:300;",
 	"-;",
 	//"S0,DSK;",
-	"S0,HDV2MG;",
+	"S0,HDVPO ;",
 	"S1,DSK;",
 	"S2,DSK;",
 	"-;",
