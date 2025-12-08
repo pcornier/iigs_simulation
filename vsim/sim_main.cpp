@@ -2566,12 +2566,16 @@ int main(int argc, char** argv, char** env) {
                    bool injecting = process_mouse_injections(video.count_frame);
                    if (injecting) {
                        // Build PS/2 mouse packet from injected values
+                       // Negate Y to match real mouse behavior: positive dy from user = move down
+                       // Real mouse: SDL yrel positive (down) -> negated in line 2661 -> negative in packet
+                       // So we negate injected_mouse_y to match: positive dy -> negative in packet -> cursor down
+                       signed char packet_y = -injected_mouse_y;
                        unsigned char status_byte = (injected_mouse_buttons & 0x07) | 0x08;
                        if (injected_mouse_x < 0) status_byte |= 0x10;
-                       if (injected_mouse_y < 0) status_byte |= 0x20;
+                       if (packet_y < 0) status_byte |= 0x20;
                        unsigned long mouse_temp = status_byte;
                        mouse_temp |= ((unsigned char)injected_mouse_x << 8);
-                       mouse_temp |= ((unsigned char)injected_mouse_y << 16);
+                       mouse_temp |= ((unsigned char)packet_y << 16);
                        // Toggle clock to signal new data
                        mouse_clock = !mouse_clock;
                        if (mouse_clock) { mouse_temp |= (1UL << 24); }
@@ -2989,8 +2993,9 @@ int main(int argc, char** argv, char** env) {
 		// Mouse input: check for injection first, then captured mouse or arrow keys as fallback
 		if (mouse_injection_active) {
 			// Use injected mouse values
+			// Negate Y: user's positive dy = move down, but internal convention is negative Y = down
 			mouse_x = injected_mouse_x;
-			mouse_y = injected_mouse_y;
+			mouse_y = -injected_mouse_y;
 			mouse_buttons = injected_mouse_buttons;
 		} else if (!mouse_captured) {
 			// Fallback to arrow keys when mouse not captured

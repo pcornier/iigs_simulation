@@ -1666,8 +1666,60 @@ wire [7:0] din =
 
   wire [7:0] HDD_DO;
 
-  // CPU data input mux: prioritize ADB reads (combinational), then IWM, then general I/O
-  wire [7:0] cpu_din = IO ? (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout)) : din;
+  // Combinational bypass for simple register reads - fixes timing issue where
+  // io_dout is registered but CPU reads combinationally. Without this bypass,
+  // reads to addresses like $C035 (shadow) would return stale/default values.
+  // This is analogous to the adb_read bypass but for simple internal registers.
+  // NOTE: key_keys is combinationally available for status reads
+  wire simple_reg_read = IO & cpu_we_n & (
+    cpu_addr[7:0] == 8'h35 |  // $C035 - Shadow register
+    cpu_addr[7:0] == 8'h36 |  // $C036 - Speed register (CYAREG)
+    cpu_addr[7:0] == 8'h29 |  // $C029 - NEWVIDEO
+    cpu_addr[7:0] == 8'h68 |  // $C068 - State register
+    // Softswitch status reads $C011-$C01F (bit 7 = flag, bits 6:0 = key_keys)
+    cpu_addr[7:0] == 8'h11 |  // $C011 - LCRAM2 (Bank select)
+    cpu_addr[7:0] == 8'h12 |  // $C012 - RDROM
+    cpu_addr[7:0] == 8'h13 |  // $C013 - RAMRD
+    cpu_addr[7:0] == 8'h14 |  // $C014 - RAMWRT
+    cpu_addr[7:0] == 8'h15 |  // $C015 - INTCXROM
+    cpu_addr[7:0] == 8'h16 |  // $C016 - ALTZP
+    cpu_addr[7:0] == 8'h17 |  // $C017 - SLOTC3ROM
+    cpu_addr[7:0] == 8'h18 |  // $C018 - STORE80
+    cpu_addr[7:0] == 8'h19 |  // $C019 - VBL
+    cpu_addr[7:0] == 8'h1a |  // $C01A - TEXTG
+    cpu_addr[7:0] == 8'h1b |  // $C01B - MIXG
+    cpu_addr[7:0] == 8'h1c |  // $C01C - PAGE2
+    cpu_addr[7:0] == 8'h1d |  // $C01D - HIRES
+    cpu_addr[7:0] == 8'h1e |  // $C01E - ALTCHARSET
+    cpu_addr[7:0] == 8'h1f    // $C01F - EIGHTYCOL
+  );
+
+  // Combinational mux for simple register data
+  wire [7:0] simple_reg_data =
+    (cpu_addr[7:0] == 8'h35) ? shadow :
+    (cpu_addr[7:0] == 8'h36) ? CYAREG :
+    (cpu_addr[7:0] == 8'h29) ? NEWVIDEO :
+    (cpu_addr[7:0] == 8'h68) ? {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} :
+    // Softswitch status reads: bit 7 = flag, bits 6:0 = key_keys
+    (cpu_addr[7:0] == 8'h11) ? {LCRAM2, key_keys} :
+    (cpu_addr[7:0] == 8'h12) ? {~RDROM, key_keys} :
+    (cpu_addr[7:0] == 8'h13) ? {RAMRD, key_keys} :
+    (cpu_addr[7:0] == 8'h14) ? {RAMWRT, key_keys} :
+    (cpu_addr[7:0] == 8'h15) ? {INTCXROM, key_keys} :
+    (cpu_addr[7:0] == 8'h16) ? {ALTZP, key_keys} :
+    (cpu_addr[7:0] == 8'h17) ? {SLOTC3ROM, key_keys} :
+    (cpu_addr[7:0] == 8'h18) ? {STORE80, key_keys} :
+    (cpu_addr[7:0] == 8'h19) ? {(V >= 199), key_keys} :  // VBL: bit 7 HIGH when V >= 199
+    (cpu_addr[7:0] == 8'h1a) ? {TEXTG, key_keys} :
+    (cpu_addr[7:0] == 8'h1b) ? {MIXG, key_keys} :
+    (cpu_addr[7:0] == 8'h1c) ? {PAGE2, key_keys} :
+    (cpu_addr[7:0] == 8'h1d) ? {HIRES_MODE, key_keys} :
+    (cpu_addr[7:0] == 8'h1e) ? {ALTCHARSET, key_keys} :
+    (cpu_addr[7:0] == 8'h1f) ? {EIGHTYCOL, key_keys} :
+    8'h00;
+
+  // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
+  wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
 
   // Debug: Detect when CPU receives default 0x80 value (potential unhandled I/O)
   always @(posedge CLK_14M) begin

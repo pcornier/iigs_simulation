@@ -831,12 +831,17 @@ always @(posedge CLK_14M) begin
       // Clamp Y delta from 8-bit signed to 7-bit signed range (-63 to +63)
       // ps2_mouse[23:16] is 8-bit signed Y delta
       // Negate Y for Apple IIgs screen coordinates (positive Y = cursor moves down)
+      // Note: Must negate the full 8-bit value, then take lower 7 bits for ADB format
       if ($signed(ps2_mouse[23:16]) > 63)
         device_registers[3][0] <= {~ps2_mouse[0], 7'b1000001}; // Clamp to -63 (negated)
       else if ($signed(ps2_mouse[23:16]) < -63)
         device_registers[3][0] <= {~ps2_mouse[0], 7'd63};      // Clamp to +63 (negated)
-      else
-        device_registers[3][0] <= {~ps2_mouse[0], -ps2_mouse[22:16]};
+      else begin
+        // Negate the 8-bit signed Y value, then extract lower 7 bits
+        reg signed [7:0] neg_y;
+        neg_y = -$signed(ps2_mouse[23:16]);
+        device_registers[3][0] <= {~ps2_mouse[0], neg_y[6:0]};
+      end
 
       valid_mouse_data <= 1'b1;
       device_data_pending[3] <= 8'h02;  // 2 bytes available
