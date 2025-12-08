@@ -16,8 +16,11 @@ module paddle_timer(
 
 // Calculate timeout: paddle_value * 11.04 CPU cycles
 // This simulates the RC discharge time of real paddles
+// Note: Even paddle value 0 needs a minimum timeout so games can detect the timer
+// The minimum is 2 cycles to ensure the timer is still active when first read
 reg [23:0] trigger_cycle;
-wire [19:0] timeout_cycles = (paddle_value * 20'd11) + (paddle_value >> 2);
+wire [19:0] base_timeout = (paddle_value * 20'd11) + (paddle_value >> 2);
+wire [19:0] timeout_cycles = (base_timeout < 20'd2) ? 20'd2 : base_timeout;
 
 always @(posedge clk or posedge reset) begin
     if (reset) begin

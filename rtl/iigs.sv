@@ -1208,8 +1208,14 @@ module iigs
 `endif
             end
             12'h063: io_dout <= {sw2, 7'b0000000};                      // SW2 (bit 7: 1=pressed)
-            12'h064: io_dout <= {~paddle_timer_expired[0], 1'b0, ~AN3, 5'b00000}; // PADDL0 (bit 7: 1=still timing, 0=done) + AN3 (bit 5: 1=clear, 0=set)
-            12'h065: io_dout <= {~paddle_timer_expired[1], 7'b0000000}; // PADDL1 (bit 7: 1=still timing, 0=done)
+            12'h064: begin
+              io_dout <= {~paddle_timer_expired[0], 1'b0, ~AN3, 5'b00000}; // PADDL0 (bit 7: 1=still timing, 0=done) + AN3 (bit 5: 1=clear, 0=set)
+              // $display("PDL0_READ: expired=%d paddle_input=%d", paddle_timer_expired[0], paddle_input[0]);
+            end
+            12'h065: begin
+              io_dout <= {~paddle_timer_expired[1], 7'b0000000}; // PADDL1 (bit 7: 1=still timing, 0=done)
+              // $display("PDL1_READ: expired=%d paddle_input=%d", paddle_timer_expired[1], paddle_input[1]);
+            end
             12'h066: io_dout <= {~paddle_timer_expired[2], 7'b0000000}; // PADDL2 (bit 7: 1=still timing, 0=done)
             12'h067: io_dout <= {~paddle_timer_expired[3], 7'b0000000}; // PADDL3 (bit 7: 1=still timing, 0=done)
             12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM};
