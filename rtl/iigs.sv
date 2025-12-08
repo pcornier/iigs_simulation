@@ -789,22 +789,26 @@ module iigs
         begin
           //$display("** IO_WR %x %x",addr[11:0],cpu_dout);
           case (addr[11:0])
-            12'h000: begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end
-            12'h001: begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end
-            12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
-            12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
-            12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
-            12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
-            12'h006: begin $display("**INTCXROM %x",0);INTCXROM<= 1'b0; end
-            12'h007: begin $display("**INTCXROM %x",1);INTCXROM <= 1'b1; end
-            12'h008: begin $display("**ALTZP %x",0); ALTZP<= 1'b0; end
-            12'h009: begin $display("**ALTZP %x",1); ALTZP<= 1'b1; end
-            12'h00A: begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b0; end
-            12'h00B: begin $display("**SLOTC3ROM %x",1);SLOTC3ROM<= 1'b1; end
-            12'h00C: begin $display("**EIGHTYCOL %x",0); EIGHTYCOL<= 1'b0; end
-            12'h00D: begin $display("**EIGHTYCOL %x",1); EIGHTYCOL<= 1'b1; end
-            12'h00E: begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end
-            12'h00F: begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end
+            // Apple II compatibility soft switches ($C000-$C00F)
+            // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
+            // This prevents MVN/MVP block moves through bank $01 I/O space from corrupting state
+            // See doc/gauntlet_crash_analysis.md for details
+            12'h000: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end end
+            12'h001: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end end
+            12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end end
+            12'h003: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end end
+            12'h004: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end end
+            12'h005: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end end
+            12'h006: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**INTCXROM %x",0);INTCXROM<= 1'b0; end end
+            12'h007: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**INTCXROM %x",1);INTCXROM <= 1'b1; end end
+            12'h008: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**ALTZP %x",0); ALTZP<= 1'b0; end end
+            12'h009: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**ALTZP %x",1); ALTZP<= 1'b1; end end
+            12'h00A: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**SLOTC3ROM %x",0);SLOTC3ROM<= 1'b0; end end
+            12'h00B: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**SLOTC3ROM %x",1);SLOTC3ROM<= 1'b1; end end
+            12'h00C: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**EIGHTYCOL %x",0); EIGHTYCOL<= 1'b0; end end
+            12'h00D: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**EIGHTYCOL %x",1); EIGHTYCOL<= 1'b1; end end
+            12'h00E: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end end
+            12'h00F: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end end
             12'h010, 12'h026, 12'h027, 12'h070: begin
               // Note: $C010 (key strobe clear) now handled directly by ADB module
               if (addr[11:0]==12'h070) begin
@@ -1064,10 +1068,14 @@ module iigs
             end
             // NOTE: $C064-$C067 are paddle timer reads, handled below at lines 1205-1208
 
-            12'h002: begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end
-            12'h003: begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end
-            12'h004: begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end
-            12'h005: begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end
+            // Apple II compatibility soft switches ($C002-$C005) - RAMRD/RAMWRT control
+            // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
+            // This prevents MVN/MVP block moves through bank $01 I/O space from corrupting state
+            // See doc/gauntlet_crash_analysis.md for details
+            12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end end
+            12'h003: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end end
+            12'h004: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end end
+            12'h005: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end end
 
             //12'h010: begin io_dout<=key_keys; key_reads<=1; end
             //12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
