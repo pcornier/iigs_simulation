@@ -1,3 +1,6 @@
+// Define DEBUG_CLKDIV to enable verbose clock divider debug output
+// `define DEBUG_CLKDIV
+
 module clock_divider (
     input  wire        clk_14M,        // 14.318 MHz input clock
     input  wire        reset,          // Active high reset
@@ -265,7 +268,9 @@ always @(posedge clk_14M) begin
         
 `ifdef SIMULATION
         if ((slow != prev_slow) || (slowMem != prev_slowMem)) begin
+`ifdef DEBUG_CLKDIV
             $display("CLKDIV: slow=%0d slowMem=%0d -> slow=%0d slowMem=%0d ph0_cnt=%0d ph2_cnt=%0d t=%0t", prev_slow, prev_slowMem, slow, slowMem, ph0_counter, ph2_counter, $time);
+`endif
             if (!slow && !slowMem) begin
                 slow_ph2_cnt <= 0;
                 slow_14m_cycles <= 0;

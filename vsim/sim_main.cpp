@@ -202,6 +202,7 @@ Vemu* top = NULL;
 static FILE* g_vsim_trace_csv = nullptr;
 static unsigned long long g_vsim_seq = 0ULL;
 static bool g_vsim_trace_active = false;
+static bool g_csv_trace_enabled = false;  // Must be enabled via --enable-csv-trace
 int dump_csv_after_frame = -1;
 static void vsim_trace_open_fresh() {
     if (g_vsim_trace_csv) { fclose(g_vsim_trace_csv); g_vsim_trace_csv = nullptr; }
@@ -309,6 +310,7 @@ void resetSim() {
 
 bool stop_on_log_mismatch = 1;
 bool debug_6502 = 1;
+bool quiet_mode = false;  // Suppress CPU trace to stdout
 int cpu_sync;
 long cpu_instruction_count;
 int cpu_clock;
@@ -330,8 +332,10 @@ long log_index;
 
 bool writeLog(const char* line)
 {
-	// Always print to stdout (for log files)
-	printf("%s\n",line);
+	// Print to stdout unless in quiet mode
+	if (!quiet_mode) {
+		printf("%s\n",line);
+	}
 
 	// Only do memory-intensive operations when debug_6502 is enabled
 	if (debug_6502) {
@@ -1331,8 +1335,8 @@ int verilate() {
                         if (actual_is_rom && !(actual_phys_bank >= 0xFC)) {
                             actual_is_rom = 0;
                         }
-                        // Gate CSV at reset vector
-                        if (!g_vsim_trace_active && (actual_is_rom) && (actual_phys_bank == 0xFF) && addr16 == 0xFFFC) {
+                        // Gate CSV at reset vector (only if CSV tracing is enabled)
+                        if (g_csv_trace_enabled && !g_vsim_trace_active && (actual_is_rom) && (actual_phys_bank == 0xFF) && addr16 == 0xFFFC) {
                             g_vsim_trace_active = true;
                             vsim_trace_open_fresh();
                         }
@@ -1377,12 +1381,13 @@ int verilate() {
                         // parallel_clemens_recent_log_read removed
 
                         // Gate CSV tracing to start at first vector fetch (ROM overlay at FF:FFFC)
-                        if (!g_vsim_trace_active && (actual_is_rom) && (actual_phys_bank == 0xFF) && addr16 == 0xFFFC) {
+                        // Only if CSV tracing is enabled via --enable-csv-trace
+                        if (g_csv_trace_enabled && !g_vsim_trace_active && (actual_is_rom) && (actual_phys_bank == 0xFF) && addr16 == 0xFFFC) {
                             g_vsim_trace_active = true;
                             vsim_trace_open_fresh();
                         }
                         // Gate CSV tracing to start at first vector fetch FF:FFFC
-                        if (!g_vsim_trace_active && bank == 0xFF && addr16 == 0xFFFC) {
+                        if (g_csv_trace_enabled && !g_vsim_trace_active && bank == 0xFF && addr16 == 0xFFFC) {
                             g_vsim_trace_active = true;
                             vsim_trace_open_fresh();
                         }
@@ -1991,38 +1996,41 @@ static int injected_mouse_buttons = 0;
 static bool mouse_injection_active = false;
 
 // Process mouse injections for the current frame
-// Returns true if mouse is being injected (overrides normal mouse input)
+// Returns true if a NEW injection started this frame (for toggle signaling)
 bool process_mouse_injections(int current_frame) {
+    static int last_processed_frame = -1;
+    bool new_injection_started = false;
+
     // Check if there's a new injection starting this frame
     auto it = mouse_injections.begin();
     while (it != mouse_injections.end()) {
         if (it->frame == current_frame) {
-            printf("Injecting mouse at frame %d: dx=%d dy=%d btn=%d dur=%d\n",
-                   current_frame, it->dx, it->dy, it->buttons, it->duration);
             injected_mouse_x = (signed char)it->dx;
             injected_mouse_y = (signed char)it->dy;
             injected_mouse_buttons = it->buttons;
             mouse_injection_frames_remaining = it->duration;
             mouse_injection_active = true;
+            new_injection_started = true;
             it = mouse_injections.erase(it);
         } else {
             ++it;
         }
     }
 
-    // Process active injection
-    if (mouse_injection_active && mouse_injection_frames_remaining > 0) {
+    // Decrement duration counter only once per frame (not when a new injection just started)
+    if (mouse_injection_active && !new_injection_started && current_frame != last_processed_frame) {
         mouse_injection_frames_remaining--;
-        if (mouse_injection_frames_remaining == 0) {
+        if (mouse_injection_frames_remaining <= 0) {
             // Injection complete - clear state
             injected_mouse_x = 0;
             injected_mouse_y = 0;
             injected_mouse_buttons = 0;
             mouse_injection_active = false;
         }
-        return true;  // Mouse is being injected
     }
-    return false;
+
+    last_processed_frame = current_frame;
+    return new_injection_started;
 }
 
 // Active joystick injection state
@@ -2101,7 +2109,9 @@ void show_help() {
 	printf("  --cold-reset-at-frame <frame> Trigger cold reset at specified frame\n");
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
+	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
 	printf("  --disk <filename>             Use specified disk image (no disk mounted by default)\n");
+	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
 	printf("  --send-keys <frame>:<keys>    Send keyboard input at specified frame\n");
 	printf("                                Can be specified multiple times\n");
@@ -2303,9 +2313,13 @@ int main(int argc, char** argv, char** env) {
 			reset_at_frame_cold = true;
 			printf("Will trigger COLD reset at frame %d\n", reset_at_frame);
 			i++;
+		} else if (strcmp(argv[i], "--enable-csv-trace") == 0) {
+			g_csv_trace_enabled = true;
+			printf("CSV memory trace logging enabled (vsim_trace.csv)\n");
 		} else if (strcmp(argv[i], "--dump-csv-after") == 0 && i + 1 < argc) {
+			g_csv_trace_enabled = true;  // Implicitly enable CSV tracing
 			dump_csv_after_frame = std::stoi(argv[i + 1]);
-			printf("Will start dumping CSV at frame %d\n", dump_csv_after_frame);
+			printf("CSV trace enabled, will start dumping at frame %d\n", dump_csv_after_frame);
 			i++; // Skip the next argument since it's the frame number
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
@@ -2313,6 +2327,9 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--no-cpu-log") == 0) {
 			debug_6502 = false;
 			printf("CPU log memory storage disabled to save memory (stdout traces still enabled)\n");
+		} else if (strcmp(argv[i], "--quiet") == 0) {
+			quiet_mode = true;
+			printf("Quiet mode enabled - CPU instruction trace suppressed\n");
         } else if (strcmp(argv[i], "--headless") == 0) {
             headless = true;
         } else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
@@ -2562,26 +2579,29 @@ int main(int argc, char** argv, char** env) {
                    process_key_injections(video.count_frame);
                }
                // Handle mouse injections (headless mode)
+               // Similar to joystick: process injections, then ALWAYS apply mouse values
                if (!mouse_injections.empty() || mouse_injection_active) {
-                   bool injecting = process_mouse_injections(video.count_frame);
-                   if (injecting) {
-                       // Build PS/2 mouse packet from injected values
-                       // Negate Y to match real mouse behavior: positive dy from user = move down
-                       // Real mouse: SDL yrel positive (down) -> negated in line 2661 -> negative in packet
-                       // So we negate injected_mouse_y to match: positive dy -> negative in packet -> cursor down
-                       signed char packet_y = -injected_mouse_y;
-                       unsigned char status_byte = (injected_mouse_buttons & 0x07) | 0x08;
-                       if (injected_mouse_x < 0) status_byte |= 0x10;
-                       if (packet_y < 0) status_byte |= 0x20;
-                       unsigned long mouse_temp = status_byte;
-                       mouse_temp |= ((unsigned char)injected_mouse_x << 8);
-                       mouse_temp |= ((unsigned char)packet_y << 16);
-                       // Toggle clock to signal new data
+                   bool new_injection = process_mouse_injections(video.count_frame);
+                   if (new_injection) {
+                       // Toggle clock ONLY when new data arrives - this signals new data to Verilog
                        mouse_clock = !mouse_clock;
-                       if (mouse_clock) { mouse_temp |= (1UL << 24); }
-                       top->ps2_mouse = mouse_temp;
-                       top->ps2_mouse_ext = injected_mouse_x + (injected_mouse_buttons << 8);
                    }
+               }
+               // ALWAYS set ps2_mouse value (like joystick) - the toggle bit tells Verilog when there's new data
+               if (mouse_injection_active) {
+                   // Build PS/2 mouse packet from injected values
+                   // Negate Y to match real mouse behavior: positive dy from user = move down
+                   signed char packet_y = -injected_mouse_y;
+                   unsigned char status_byte = (injected_mouse_buttons & 0x07) | 0x08;
+                   if (injected_mouse_x < 0) status_byte |= 0x10;
+                   if (packet_y < 0) status_byte |= 0x20;
+                   unsigned long mouse_temp = status_byte;
+                   mouse_temp |= ((unsigned char)injected_mouse_x << 8);
+                   mouse_temp |= ((unsigned char)packet_y << 16);
+                   // Set bit 24 to current mouse_clock state
+                   if (mouse_clock) { mouse_temp |= (1UL << 24); }
+                   top->ps2_mouse = mouse_temp;
+                   top->ps2_mouse_ext = injected_mouse_x + (injected_mouse_buttons << 8);
                }
                // Handle joystick injections (headless mode)
                if (!joystick_injections.empty() || joystick_injection_active) {

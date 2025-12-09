@@ -1,3 +1,6 @@
+// Define DEBUG_SCC to enable verbose SCC debug output
+// `define DEBUG_SCC
+
 `timescale 1ns / 100ps
 
 /*
@@ -175,9 +178,11 @@ module scc
 	// Update rindex for legacy compatibility
 	always@(posedge clk) begin
 		rindex <= rindex_latch;
+`ifdef DEBUG_SCC
 		if (rindex != rindex_latch) begin
 			$display("SCC_RINDEX_UPDATE: rindex %x -> %x", rindex, rindex_latch);
 		end
+`endif
 	end
 
 	/* Register index is set by a write to WR0 and reset
@@ -195,9 +200,13 @@ module scc
 			if (rx_queue_pos_a < 3) begin
 				rx_queue_a[rx_queue_pos_a] <= data_a;
 				rx_queue_pos_a <= rx_queue_pos_a + 1;
+`ifdef DEBUG_SCC
 				$display("SCC_RX_FIFO_ENQUEUE: ch=A data=%02x pos=%d->%d", data_a, rx_queue_pos_a, rx_queue_pos_a + 1);
+`endif
 			end else begin
+`ifdef DEBUG_SCC
 				$display("SCC_RX_FIFO_FULL: ch=A dropping data=%02x (queue full)", data_a);
+`endif
 			end
 		end
 
@@ -206,9 +215,13 @@ module scc
 			if (rx_queue_pos_b < 3) begin
 				rx_queue_b[rx_queue_pos_b] <= data_b;
 				rx_queue_pos_b <= rx_queue_pos_b + 1;
+`ifdef DEBUG_SCC
 				$display("SCC_RX_FIFO_ENQUEUE: ch=B data=%02x pos=%d->%d", data_b, rx_queue_pos_b, rx_queue_pos_b + 1);
+`endif
 			end else begin
+`ifdef DEBUG_SCC
 				$display("SCC_RX_FIFO_FULL: ch=B dropping data=%02x (queue full)", data_b);
+`endif
 			end
 		end
 
@@ -266,18 +279,20 @@ module scc
 							rindex_a[2:0] <= wdata[2:0];
 							rindex_a[3] <= (wdata[5:3] == 3'b001);  // Point high
 							scc_state_a <= 1;  // Transition to REGISTER state
-
+`ifdef DEBUG_SCC
 							$display("SCC_WR0_WRITE: ch=A wdata=%02x rindex_new=%x point_high=%b state=READY->REGISTER",
 								wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
 								(wdata[5:3] == 3'b001));
-
+`endif
 							/* enable int on next rx char */
 							if (wdata[5:3] == 3'b100)
 								rx_first_a<=1;
 						end else begin
 							/* State REGISTER: This write is to selected register */
+`ifdef DEBUG_SCC
 							$display("SCC_WR_SELECTED: ch=A rindex=%x wdata=%02x (WR%d)",
 								rindex_a, wdata, rindex_a);
+`endif
 							/* Reset happens at top of control access block */
 						end
 					end else begin
@@ -287,21 +302,26 @@ module scc
 							rindex_b[2:0] <= wdata[2:0];
 							rindex_b[3] <= (wdata[5:3] == 3'b001);  // Point high
 							scc_state_b <= 1;  // Transition to REGISTER state
-
+`ifdef DEBUG_SCC
 							$display("SCC_WR0_WRITE: ch=B wdata=%02x rindex_new=%x point_high=%b state=READY->REGISTER",
 								wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
 								(wdata[5:3] == 3'b001));
+`endif
 						end else begin
 							/* State REGISTER: This write is to selected register */
+`ifdef DEBUG_SCC
 							$display("SCC_WR_SELECTED: ch=B rindex=%x wdata=%02x (WR%d)",
 								rindex_b, wdata, rindex_b);
+`endif
 							/* Reset happens at top of control access block */
 						end
 					end
 				end else begin
 					/* Reads from control register */
+`ifdef DEBUG_SCC
 					$display("SCC_RD_CTRL: ch=%s rindex=%x (RR%d)",
 						rs[0] ? "A" : "B", rs[0] ? rindex_a : rindex_b, rs[0] ? rindex_a : rindex_b);
+`endif
 					/* Reset happens at top of control access block */
 				end
 			end else begin

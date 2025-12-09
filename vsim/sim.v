@@ -1,3 +1,6 @@
+// Define DEBUG_SIM to enable verbose simulation debug output
+// `define DEBUG_SIM
+
 `timescale 1ns / 1ps
 /*============================================================================
 ===========================================================================*/
@@ -235,7 +238,9 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
 
 
 always @(posedge clk_sys) begin
+`ifdef DEBUG_SIM
         if (reset) $display("TOPRESET");
+`endif
 end
 
 `define FASTSIM 1

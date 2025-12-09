@@ -1,3 +1,15 @@
+// Define DEBUG_BANK to enable verbose bank/memory debug output
+// `define DEBUG_BANK
+
+// Define DEBUG_RESET to enable verbose reset/init debug output
+// `define DEBUG_RESET
+
+// Define DEBUG_IO to enable verbose I/O switch debug output
+// `define DEBUG_IO
+
+// Define DEBUG_IRQ to enable verbose interrupt debug output
+// `define DEBUG_IRQ
+
 module iigs
   (
    input              reset,
@@ -5,8 +17,8 @@ module iigs
 
    input              CLK_28M,
    input              CLK_14M,
-   input              clk_vid, 
-   input              ce_pix, 
+   input              clk_vid,
+   input              ce_pix,
    input              cpu_wait,
    input [32:0]       timestamp,
 
@@ -493,6 +505,7 @@ module iigs
   // ROM write-through for language card
   assign rom_writethrough = ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE && we);
 
+`ifdef DEBUG_BANK
   // Debug: C034 RTC access tracing (to catch address bus corruption)
   always @(posedge CLK_14M) begin
     // Monitor ALL C034 accesses to catch address bus corruption
@@ -514,8 +527,20 @@ module iigs
 
     // Monitor Bank E1 operations for timing issues
     if ((bank_bef == 8'hE1) && (we || ~we)) begin
-      $display("BANK_E1_OP: addr=%04x we=%b data=%02x addr_bus=%06x",
-               addr_bef, we, we ? cpu_dout : cpu_din, addr_bus);
+      $display("BANK_E1_OP: addr=%04x we=%b data=%02x addr_bus=%06x slowram_ce=%b slowram_we=%b slowram_addr=%05x",
+               addr_bef, we, we ? cpu_dout : cpu_din, addr_bus, slowram_ce, slowram_we, {bank_bef[0], addr_bef});
+    end
+
+    // Enhanced debug for tool pointer area E1:03C8-03CB (cursor tracking critical)
+    if ((bank_bef == 8'hE1) && (addr_bef >= 16'h03C8) && (addr_bef <= 16'h03CB)) begin
+      $display("TOOL_PTR_DEBUG: addr=E1:%04x we=%b data=%02x slowram_ce=%b slowram_we=%b slowram_dout=%02x cpu_din=%02x cpu_dout=%02x",
+               addr_bef, we, we ? cpu_dout : slowram_dout, slowram_ce, slowram_we, slowram_dout, cpu_din, cpu_dout);
+    end
+
+    // Enhanced debug for cursor position area E1:0190-0193
+    if ((bank_bef == 8'hE1) && (addr_bef >= 16'h0190) && (addr_bef <= 16'h0193)) begin
+      $display("CURSOR_POS_DEBUG: addr=E1:%04x we=%b data=%02x slowram_ce=%b slowram_we=%b slowram_dout=%02x",
+               addr_bef, we, we ? cpu_dout : slowram_dout, slowram_ce, slowram_we, slowram_dout);
     end
   end
 
@@ -634,12 +659,13 @@ module iigs
     
     // DEBUG: Monitor ALL memory controller logic for $0600 range (bypass all conditions)
     if (addr_bef >= 16'h0600 && addr_bef <= 16'h0610) begin
-      $display("MEM_CTRL_ALL: bank_%02x addr=%04x IO=%b we=%b fastram_ce=%b slowram_ce=%b txt1_shadow=%b", 
+      $display("MEM_CTRL_ALL: bank_%02x addr=%04x IO=%b we=%b fastram_ce=%b slowram_ce=%b txt1_shadow=%b",
                bank_bef, addr_bef, IO, we, fastram_ce_int, slowram_ce_int, txt1_shadow);
     end
   end
-  
+
   reg [7:0] prev_shadow = 8'h00;
+`endif // DEBUG_BANK
 
   // ROM chip-enable (original bank_bef-based decode with IIe-style windows)
   assign romc_ce = bank_bef == 8'hfc;
@@ -662,9 +688,11 @@ module iigs
     if (!(IO && cpu_we_n && (addr[11:0] >= 12'h038) && (addr[11:0] <= 12'h03b))) begin
       scc_rd_active <= 1'b0;
     end
+`ifdef DEBUG_RESET
     if (addr == 16'hC036) begin
         $display("C036_DEBUG: IO=%b, we=%b, dout=%h", IO, ~cpu_we_n, cpu_dout);
     end
+`endif
     if (reset) begin
       // C036 Speed Register initialization - proper warm/cold reset handling
       // Bit 7: Fast mode (2.8MHz) - always set
@@ -674,18 +702,24 @@ module iigs
       if (cold_reset) begin
         // Cold/power-on reset: Set bit 6=1 for full ROM initialization sequence
         CYAREG <= 8'hC0;  // Bit 7=fast mode, Bit 6=power-on status
+`ifdef DEBUG_RESET
         $display("RESET_TRACE: *** COLD RESET *** CYAREG=$C0 (bit 6=1 for full boot)");
+`endif
       end else begin
         // Warm reset: Preserve bit 6, set bit 7, clear other bits
         CYAREG <= {1'b1, CYAREG[6], 6'b000000};
+`ifdef DEBUG_RESET
         $display("RESET_TRACE: *** WARM RESET *** CYAREG=$%02X (preserving bit 6=%b)", {1'b1, CYAREG[6], 6'b000000}, CYAREG[6]);
+`endif
       end
       STATEREG <=  8'b0000_1101;  // GSPlus: 0x0D (rdrom, lcbank2, intcx, bit2)
       shadow <= 8'b0000_1000;  // Original value: bit 3=1 (SHGR disabled), others=0 (enabled)
+`ifdef DEBUG_RESET
       $display("SHADOW_REG_INIT: shadow=%08b (Original shadowing config)", 8'b0000_1000);
-      $display("  TXT1=%b HGR1=%b HGR2=%b SHGR=%b AUX=%b TXT2=%b LC=%b", 
+      $display("  TXT1=%b HGR1=%b HGR2=%b SHGR=%b AUX=%b TXT2=%b LC=%b",
                1'b1, 1'b1, 1'b1, 1'b0, 1'b0, 1'b1, 1'b1);
       $display("  Text/HGR shadowing ACTIVE, Super HiRes shadowing DISABLED");
+`endif
       SOUNDCTL <= 8'd0;
       //SOUNDCTL <= 8'h05;
       NEWVIDEO <= 8'h41;
@@ -720,12 +754,16 @@ module iigs
       LCRAM2<=1;  // Fix: Should be 1 to match STATEREG initialization (bit 1 = LCRAM2)
       LC_WE<=0;
       ROMBANK<=0;;
+`ifdef DEBUG_RESET
       $display("RESET_TRACE: All registers initialized, waiting for reset release");
+`endif
     end
 
     // Track reset release - detect falling edge of reset
     if (reset_prev && !reset) begin
+`ifdef DEBUG_RESET
       $display("RESET_TRACE: *** RESET RELEASED *** CPU should now fetch from vector $FFFC");
+`endif
     end
     reset_prev <= reset;
 
@@ -739,18 +777,22 @@ module iigs
     if (IO && ~(scc_cs & cpu_we_n) && ~(adb_strobe & cpu_we_n) && ~(snd_strobe & cpu_we_n) &&
         ~((addr[11:8] == 4'h0) && (addr[7:2] == 6'h0e))) begin // Exclude C038-C03B
       io_dout <= din;
+`ifdef DEBUG_BANK
       // DEBUG: Warn when CPU receives default 0x80 value from unhandled I/O
       if (din == 8'h80 && cpu_we_n) begin
         $display("WARNING_DEFAULT_IO: CPU reading default 0x80 from unhandled I/O addr=C%03X bank=%02X", addr[11:0], bank);
       end
+`endif
     end
     paddle_trigger <= 1'b0;  // Default: no paddle trigger
     // Check adb_strobe BEFORE resetting it (otherwise we'd check the new value of 0)
     if (adb_strobe & cpu_we_n) begin
       io_dout <= adb_dout;
+`ifdef DEBUG_BANK
       if (adb_addr == 8'h24) begin
         $display("IIGS C024 RESPONSE: adb_dout=0x%02h -> io_dout", adb_dout);
       end
+`endif
     end
     adb_strobe <= 1'b0;
 
@@ -793,6 +835,7 @@ module iigs
             // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
             // This prevents MVN/MVP block moves through bank $01 I/O space from corrupting state
             // See doc/gauntlet_crash_analysis.md for details
+`ifdef DEBUG_IO
             12'h000: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**STORE80 %x",0); STORE80<= 1'b0 ; end end
             12'h001: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**STORE80 %x",1); STORE80<= 1'b1 ; end end
             12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end end
@@ -809,17 +852,39 @@ module iigs
             12'h00D: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**EIGHTYCOL %x",1); EIGHTYCOL<= 1'b1; end end
             12'h00E: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**ALTCHARSET %x",0); ALTCHARSET<= 1'b0; end end
             12'h00F: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**ALTCHARSET %x",1); ALTCHARSET<= 1'b1; end end
+`else
+            12'h000: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin STORE80<= 1'b0 ; end end
+            12'h001: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin STORE80<= 1'b1 ; end end
+            12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMRD<= 1'b0 ; end end
+            12'h003: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMRD<= 1'b1 ; end end
+            12'h004: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMWRT<= 1'b0 ; end end
+            12'h005: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMWRT<= 1'b1 ; end end
+            12'h006: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin INTCXROM<= 1'b0; end end
+            12'h007: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin INTCXROM <= 1'b1; end end
+            12'h008: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin ALTZP<= 1'b0; end end
+            12'h009: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin ALTZP<= 1'b1; end end
+            12'h00A: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin SLOTC3ROM<= 1'b0; end end
+            12'h00B: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin SLOTC3ROM<= 1'b1; end end
+            12'h00C: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin EIGHTYCOL<= 1'b0; end end
+            12'h00D: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin EIGHTYCOL<= 1'b1; end end
+            12'h00E: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin ALTCHARSET<= 1'b0; end end
+            12'h00F: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin ALTCHARSET<= 1'b1; end end
+`endif
             12'h010, 12'h026, 12'h027, 12'h070: begin
               // Note: $C010 (key strobe clear) now handled directly by ADB module
               if (addr[11:0]==12'h070) begin
                 paddle_trigger <= 1'b1;  // Trigger paddle timers
+`ifdef DEBUG_IO
                 $display("PADDLE TRIGGER");
+`endif
               end
               adb_addr <= addr[7:0];
               adb_strobe <= 1'b1;
               adb_din <= cpu_dout;
               adb_rw <= 1'b0;
+`ifdef DEBUG_IO
               $display("ADB WR %03h <= %02h", addr[11:0], cpu_dout);
+`endif
             end
             12'h011,12'h12,12'h13,12'h14,12'h15,12'h16,12'h17,12'h18,12'h19,12'h1a,12'h1b,12'h1c,
               12'h01d,12'h1e,12'h1f:
@@ -828,16 +893,28 @@ module iigs
                 end
             12'h021: MONOCHROME <=cpu_dout;
             12'h022: TEXTCOLOR <= cpu_dout;
+`ifdef DEBUG_IO
             12'h023: begin $display("VGCINT 23 2 %x 1 %x",cpu_dout[2],cpu_dout[1]);VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
+`else
+            12'h023: begin VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
+`endif
             // C028: ROMBANK register does not exist as a separate register on real Apple IIgs hardware.
             // The Hardware Reference Manual states ROMBANK "must always be 0" and "do not modify this bit".
             // ROMBANK is only accessible as bit 1 of STATEREG (C068), where it exists but has no functional 
             // effect (no ROM bank switching occurs). Both KEGS and GSPlus emulators treat C028 as completely
             // unimplemented. Any software accessing C028 is likely erroneous or written for third-party cards.
             // 12'h028: [REMOVED - does not exist on real hardware]
+`ifdef DEBUG_IO
             12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
+`else
+            12'h029: begin NEWVIDEO <= cpu_dout; end
+`endif
             12'h02b: C02BVAL <= cpu_dout; // from gsplus
+`ifdef DEBUG_IO
             12'h02d: begin SLTROMSEL <= cpu_dout; $display("**SLTROMSEL <= %02x (slot7_external=%0d)", cpu_dout, cpu_dout[7]); end
+`else
+            12'h02d: begin SLTROMSEL <= cpu_dout; end
+`endif
             12'h030: SPKR <= cpu_dout;
             12'h031: begin
               DISK35<= cpu_dout & 8'hc0;
@@ -847,7 +924,9 @@ module iigs
             end
             12'h032:
               begin
+`ifdef DEBUG_IO
                 $display("VGCINT 32: bit6 %x bit5 %x",cpu_dout[6],cpu_dout[5]);
+`endif
                 if (cpu_dout[6]==1'b0)
                   VGCINT[6]<=1'b0;
                 if (cpu_dout[5]==1'b0)
@@ -865,15 +944,21 @@ module iigs
                 BORDERCOLOR=cpu_dout[3:0];
             end
             12'h035: begin
+`ifdef DEBUG_IO
               $display("SHADOW_REG_WRITE: old=%08b new=%08b", shadow, cpu_dout);
-              $display("  bit0(TXT1):%b->%b bit1(HGR1):%b->%b bit2(HGR2):%b->%b bit3(SHGR):%b->%b", 
+              $display("  bit0(TXT1):%b->%b bit1(HGR1):%b->%b bit2(HGR2):%b->%b bit3(SHGR):%b->%b",
                        shadow[0], cpu_dout[0], shadow[1], cpu_dout[1], shadow[2], cpu_dout[2], shadow[3], cpu_dout[3]);
-              $display("  bit4(AUX):%b->%b bit5(TXT2):%b->%b bit6(LC):%b->%b bit7(RSVD):%b->%b", 
+              $display("  bit4(AUX):%b->%b bit5(TXT2):%b->%b bit6(LC):%b->%b bit7(RSVD):%b->%b",
                        shadow[4], cpu_dout[4], shadow[5], cpu_dout[5], shadow[6], cpu_dout[6], shadow[7], cpu_dout[7]);
               $display("  TXT1_shadow_enable: %b->%b (0=active)", shadow[0], cpu_dout[0]);
+`endif
               shadow <= cpu_dout;
             end
+`ifdef DEBUG_IO
             12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
+`else
+            12'h036: begin CYAREG <= cpu_dout; end
+`endif
             // SCC (Serial Communications Controller) - Zilog 8530
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
 	      if (phi2) begin
@@ -881,7 +966,9 @@ module iigs
               scc_we <= 1'b1;
               scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
               scc_din <= cpu_dout;
+`ifdef DEBUG_IO
               $display("SCC_WRITE: addr=C%03X rs=%b data=%02X bank=%02X", addr[11:0], addr[1:0], cpu_dout, bank);
+`endif
 		end
             end
             12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
@@ -889,23 +976,32 @@ module iigs
               snd_strobe <= 1'b1;
               snd_addr <= addr[1:0];
               snd_din <= cpu_dout;
+`ifdef DEBUG_IO
               $display("SOUND WR %03h <= %02h (SNDCTL/DATA/APL/APH)", addr[11:0], cpu_dout);
+`endif
             end
-            12'h041: begin 
-              $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]}); 
+            12'h041: begin
+`ifdef DEBUG_IRQ
+              $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]});
+`endif
               INTEN <= {INTEN[7:5],cpu_dout[4:0]};
-`ifdef SIMULATION
+`ifdef DEBUG_IRQ
               if (~cpu_dout[3]) $display("INTEN: VBL interrupt disabled, will be cleared centrally");
               if (~cpu_dout[4]) $display("INTEN: Quarter-second interrupt disabled, will be cleared centrally");
 `endif
             end
+`ifdef DEBUG_IRQ
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
-            12'h047: begin 
+`endif
+            12'h047: begin
               if (phi2) begin  // Add phi2 gating like other critical I/O
-                // C047 write will be detected by centralized IRQ manager  
+                // C047 write will be detected by centralized IRQ manager
+`ifdef DEBUG_IRQ
                 $display("VBL_DEBUG: C047 WRITE - Will be processed by centralized IRQ manager at V=%0d H=%0d", V, H);
+`endif
               end
             end // clear the interrupts
+`ifdef DEBUG_IO
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
             12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -916,18 +1012,35 @@ module iigs
             12'h057: begin $display("**HIRES %x",1);HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
             12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
             12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
+`else
+            12'h050: begin TEXTG<=1'b0;end
+            12'h051: begin TEXTG<=1'b1;end
+            12'h052: begin MIXG<=1'b0;end
+            12'h053: begin MIXG<=1'b1;end
+            12'h054: begin PAGE2<=1'b0; end
+            12'h055: begin PAGE2<=1'b1; end
+            12'h056: begin HIRES_MODE<=1'b0; end // LORES - turn off hi-res
+            12'h057: begin HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
+            12'h05e: begin AN3<=1'b0; end  // CLRAN3
+            12'h05f: begin AN3<=1'b1; end  // SETAN3
+`endif
             // $C068: bit0 stays high during boot sequence, why?
             // if bit0=1 it means that internal ROM at SCx00 is selected
             // does it mean slot cards are not accessible?
+`ifdef DEBUG_IO
             12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
-            //12'h068: begin $display("** WR68: %x  ALTZP %x PAGE2 %x RAMRD %x RAMWRT %x RDROM %x LCRAM2 %x ROMBANK %x INTCXROM %x ",cpu_dout,cpu_dout[7],cpu_dout[6],cpu_dout[5],cpu_dout[4],cpu_dout[3],cpu_dout[2],cpu_dout[1],cpu_dout[0]); {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
+`else
+            12'h068: begin {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} <= {cpu_dout[7:4],cpu_dout[3],cpu_dout[2:0]}; end
+`endif
 
 
             12'h080,	// Read RAM bank 2 no write
               12'h084:	// Read bank 2 no write
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_WR C080/C084: RDROM=0 LCRAM2=1 LC_WE=0 (RAM read, no write)");
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b1;
                     LC_WE <= 1'b0;
@@ -938,7 +1051,9 @@ module iigs
               12'h085:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b1;
                     LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
@@ -949,7 +1064,9 @@ module iigs
               12'h086:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_WR C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b0;
@@ -960,7 +1077,9 @@ module iigs
               12'h087:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b1;
                     LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
@@ -971,7 +1090,9 @@ module iigs
               12'h08C:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_WR C088/C08C: RDROM=0 LCRAM2=0 LC_WE=0 (Bank1 RAM read, no write)");
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b0;
@@ -982,7 +1103,9 @@ module iigs
               12'h08D:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
@@ -993,7 +1116,9 @@ module iigs
               12'h08E:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_WR C08A/C08E: RDROM=1 LCRAM2=0 LC_WE=0 (Bank1 ROM read, no write)");
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b0;
@@ -1004,7 +1129,9 @@ module iigs
               12'h08F:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("WRITE: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
@@ -1021,7 +1148,9 @@ module iigs
                   iwm_strobe <= 1'b1;
                   iwm_din <= cpu_dout;
                   iwm_rw <= 1'b0;
+`ifdef DEBUG_IO
                   $display("IWM WR %03h <= %02h", addr[11:0], cpu_dout);
+`endif
                 end
             // Slot IO $C0D0-$C0DF (SmartPort) and $C0F0-$C0FF handled externally at top-level. Do not override here.
             12'h0d0,12'h0d1,12'h0d2,12'h0d3,
@@ -1030,8 +1159,11 @@ module iigs
             12'h0dc,12'h0dd,12'h0de,12'h0df: begin
               // no-op: external SmartPort handles this range
             end
-            default:
+            default: begin
+`ifdef DEBUG_IO
               $display("** IO_WR %x %x",addr[11:0],cpu_dout);
+`endif
+            end
           endcase
         end
       else
@@ -1059,12 +1191,16 @@ module iigs
               adb_addr <= addr[7:0];
               adb_strobe <= 1'b1;
               adb_rw <= 1'b1;
+`ifdef DEBUG_IO
               $display("ADB RD %03h", addr[11:0]);
+`endif
             end
             12'h070: begin
               // Paddle trigger - NOT an ADB address
               paddle_trigger <= 1'b1;
+`ifdef DEBUG_IO
               $display("PADDLE TRIGGER (READ)");
+`endif
             end
             // NOTE: $C064-$C067 are paddle timer reads, handled below at lines 1205-1208
 
@@ -1072,10 +1208,17 @@ module iigs
             // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
             // This prevents MVN/MVP block moves through bank $01 I/O space from corrupting state
             // See doc/gauntlet_crash_analysis.md for details
+`ifdef DEBUG_IO
             12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end end
             12'h003: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end end
             12'h004: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end end
             12'h005: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end end
+`else
+            12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMRD<= 1'b0 ; end end
+            12'h003: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMRD<= 1'b1 ; end end
+            12'h004: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMWRT<= 1'b0 ; end end
+            12'h005: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMWRT<= 1'b1 ; end end
+`endif
 
             //12'h010: begin io_dout<=key_keys; key_reads<=1; end
             //12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
@@ -1084,7 +1227,11 @@ module iigs
             12'h012: io_dout <= {~RDROM, key_keys};
             12'h013: io_dout <= {RAMRD, key_keys};
             12'h014: io_dout <= {RAMWRT, key_keys};
+`ifdef DEBUG_IO
             12'h015: begin io_dout <= {INTCXROM, key_keys}; $display("read INTCXROM %x ", INTCXROM); end
+`else
+            12'h015: begin io_dout <= {INTCXROM, key_keys}; end
+`endif
             12'h016: io_dout <= {ALTZP, key_keys};
             12'h017: io_dout <= {SLOTC3ROM, key_keys};
             12'h018: io_dout <= {STORE80, key_keys};
@@ -1146,7 +1293,11 @@ module iigs
               prtc_strobe <= 1'b1;
             end
             12'h035: io_dout <= shadow;
+`ifdef DEBUG_IO
             12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
+`else
+            12'h036: begin io_dout<=CYAREG; end
+`endif
             12'h037: io_dout <= 'h0; // from gsplus
 
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
@@ -1158,7 +1309,9 @@ module iigs
                 scc_we <= 1'b0;
                 scc_rs <= addr[1:0];  // [1]=data/ctrl, [0]=a/b port
                 scc_rd_active <= 1'b1;
+`ifdef DEBUG_IO
                 $display("SCC_READ: addr=C%03X rs=%b bank=%02X phi2=%b", addr[11:0], addr[1:0], bank, phi2);
+`endif
               end
             end
 
@@ -1167,8 +1320,12 @@ module iigs
               snd_rw <= 1'b0;
               snd_strobe <= 1'b1;
             end
+`ifdef DEBUG_IRQ
             12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
+`else
+            12'h041: begin io_dout <= INTEN;end
+`endif
             //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
             12'h046: begin
               io_dout <= irq_pending[7:0]; // Return interrupt flags directly
@@ -1180,6 +1337,7 @@ module iigs
             12'h047: begin
               io_dout <= 8'h00;  // C047 reads return 0 (interrupt clear handled in clocked block)
             end
+`ifdef DEBUG_IO
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
             12'h052: begin $display("**MIXG %x",0); MIXG<=1'b0;end
@@ -1188,11 +1346,23 @@ module iigs
             12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
             12'h056: begin $display("**LORES %x",0);HIRES_MODE<=1'b0; end // LORES - turn off hi-res
             12'h057: begin $display("**HIRES %x",1);HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
+            12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
+            12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
+`else
+            12'h050: begin TEXTG<=1'b0;end
+            12'h051: begin TEXTG<=1'b1;end
+            12'h052: begin MIXG<=1'b0;end
+            12'h053: begin MIXG<=1'b1;end
+            12'h054: begin PAGE2<=1'b0; end
+            12'h055: begin PAGE2<=1'b1; end
+            12'h056: begin HIRES_MODE<=1'b0; end // LORES - turn off hi-res
+            12'h057: begin HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
+            12'h05e: begin AN3<=1'b0; end  // CLRAN3
+            12'h05f: begin AN3<=1'b1; end  // SETAN3
+`endif
             12'h058: io_dout <= 'h0; // some kind of soft switch?
             12'h05a: io_dout <= 'h0; // some kind of soft switch?
             12'h05d: io_dout <= 'h0; // some kind of soft switch?
-            12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
-            12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
             
             // Joystick/Paddle I/O
             12'h061: begin
@@ -1250,7 +1420,9 @@ module iigs
               12'h084:	// Read bank 2 no write
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C080/C084: RDROM=0 LCRAM2=1 LC_WE=0 (RAM read, no write)");
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b1;
                     LC_WE <= 1'b0;
@@ -1261,7 +1433,9 @@ module iigs
               12'h085:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C081/C085: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b1;
                   end
@@ -1274,7 +1448,9 @@ module iigs
               12'h086:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b0;
@@ -1285,7 +1461,9 @@ module iigs
               12'h087:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C083/C087: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b1;
                   end
@@ -1298,7 +1476,9 @@ module iigs
               12'h08C:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C088/C08C: RDROM=0 LCRAM2=0 LC_WE=0 (Bank1 RAM read, no write)");
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b0;
@@ -1309,7 +1489,9 @@ module iigs
               12'h08D:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C089/C08D: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
                   end
@@ -1322,7 +1504,9 @@ module iigs
               12'h08E:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C08A/C08E: RDROM=1 LCRAM2=0 LC_WE=0 (Bank1 ROM read, no write)");
+`endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
                     LC_WE <= 1'b0;
@@ -1333,7 +1517,9 @@ module iigs
               12'h08F:
                 begin
                   if (phi2) begin
+`ifdef DEBUG_IO
                     $display("LC_RD C08B/C08F: ROM WRITE THROUGH LC_WE_PRE %x LC_WE %x",LC_WE_PRE,LC_WE);
+`endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b0;
                   end
@@ -1351,7 +1537,9 @@ module iigs
                   iwm_addr <= addr[7:0];
                   iwm_strobe <= 1'b1;
                   iwm_rw <= 1'b1;
+`ifdef DEBUG_IO
                   $display("IWM RD %03h -> %02h", addr[11:0], iwm_dout);
+`endif
                 end
             // Slot IO $C0D0-$C0DF (SmartPort) and $C0F0-$C0FF handled externally at top-level. Do not override here.
             12'h0d0,12'h0d1,12'h0d2,12'h0d3,
@@ -1366,8 +1554,11 @@ module iigs
               // This case prevents falling through to default case
             end
 
-            default:
+            default: begin
+`ifdef DEBUG_IO
               $display("** IO_RD %x ",addr[11:0]);
+`endif
+            end
           endcase
         end
     end
@@ -1735,6 +1926,7 @@ wire [7:0] din =
   // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
   wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
 
+`ifdef DEBUG_BANK
   // Debug: Detect when CPU receives default 0x80 value (potential unhandled I/O)
   always @(posedge CLK_14M) begin
     if (cpu_we_n && cpu_din == 8'h80 && cpu_addr[15:8] == 8'hC0) begin
@@ -1742,6 +1934,7 @@ wire [7:0] din =
                cpu_addr, bank, IO, din, io_dout);
     end
   end
+`endif
 
   // ----------------------------------------------------------------------------
   // SIMULATION-ONLY IRQ TRACEPOINTS

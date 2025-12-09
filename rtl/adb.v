@@ -1,3 +1,6 @@
+// Define DEBUG_ADB to enable verbose ADB debug output
+// `define DEBUG_ADB
+
 module adb(
   input CLK_14M,
   input cen,
@@ -726,11 +729,13 @@ always @(posedge CLK_14M) begin
       // Reset key is special - it doesn't generate characters but signals reset intent
       if (ps2_key[8:0] == 9'h078) begin  // F11 -> Reset key
         reset_key_down <= ps2_key[9];  // Track press/release state
+`ifdef DEBUG_ADB
         if (ps2_key[9]) begin
           $display("ADB: RESET KEY (F11) PRESSED - ctrl_down=%0d open_apple=%0d closed_apple=%0d", ctrl_down, open_apple, closed_apple);
         end else begin
           $display("ADB: RESET KEY (F11) RELEASED");
         end
+`endif
       end
 
       // Process normal keys (not modifier keys or reset key)
@@ -780,7 +785,9 @@ always @(posedge CLK_14M) begin
 
               // Update Apple IIe K register immediately
               if (temp_iie_char != 8'hFF) begin
+`ifdef DEBUG_ADB
                 $display("ADB: Setting K register: PS2=%03h Apple=%02h ASCII=%02h", ps2_key[8:0], temp_apple_key, temp_iie_char);
+`endif
                 K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
                 akd <= 1'b1;  // Any key down
               end
@@ -846,9 +853,11 @@ always @(posedge CLK_14M) begin
       valid_mouse_data <= 1'b1;
       device_data_pending[3] <= 8'h02;  // 2 bytes available
 
+`ifdef DEBUG_ADB
       $display("ADB MOUSE: X=%d Y=%d btn=%d -> reg0=0x%02h reg1=0x%02h",
                $signed(ps2_mouse[15:8]), $signed(ps2_mouse[23:16]), ps2_mouse[0],
                {~ps2_mouse[0], ps2_mouse[22:16]}, {1'b1, ps2_mouse[14:8]});
+`endif
     end
     
     // Timeout handling for stuck commands
@@ -882,7 +891,9 @@ always @(posedge CLK_14M) begin
     // This runs every cycle, independent of strobe, to execute commands after the last byte is stored
     // NOTE: Only READ_MEM (0x09) needs this - other commands are handled in the strobe-gated block
     if (state == CMD && cmd_len == 4'd0 && cmd == 8'h09) begin
+`ifdef DEBUG_ADB
       $display("ADB CMD EXEC: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
+`endif
       state <= IDLE;
       cmd_response_ready <= 1'b1;  // Signal that command has been processed
 
@@ -893,7 +904,9 @@ always @(posedge CLK_14M) begin
           // cmd_data[7:0] = address HIGH byte (second byte sent)
           // Full 16-bit address = (cmd_data[7:0] << 8) | cmd_data[15:8]
 
+`ifdef DEBUG_ADB
           $display("ADB READ_MEM: addr=0x%04h (bytes: low=0x%02h high=0x%02h)", {cmd_data[7:0], cmd_data[15:8]}, cmd_data[15:8], cmd_data[7:0]);
+`endif
 
           if ({cmd_data[7:0], cmd_data[15:8]} < 16'h0100) begin
             // RAM area (0x00-0xFF): Read from RAM
@@ -905,42 +918,58 @@ always @(posedge CLK_14M) begin
               8'h01: begin
                 // ROM checksum low byte
                 data <= { 24'd0, 8'h72 };
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: Special addr 0x01 -> 0x72 (ROM checksum low)");
+`endif
               end
               8'h03: begin
                 // ROM checksum high byte - ROM1=0xF7, ROM3=0x26
                 if (VERSION >= 6) begin
                   data <= { 24'd0, 8'h26 };
+`ifdef DEBUG_ADB
                   $display("ADB READ_MEM: Special addr 0x03 -> 0x26 (ROM checksum high ROM3)");
+`endif
                 end else begin
                   data <= { 24'd0, 8'hF7 };
+`ifdef DEBUG_ADB
                   $display("ADB READ_MEM: Special addr 0x03 -> 0xF7 (ROM checksum high ROM1)");
+`endif
                 end
               end
               8'h0B: begin
                 // Special key state byte for Out of This World (ROM 1)
                 data <= { 24'd0, 8'h00 };
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: Special addr 0x0B -> 0x00");
+`endif
               end
               8'h0C: begin
                 // Special key state byte for Out of This World (ROM 3)
                 data <= { 24'd0, 8'h00 };
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: Special addr 0x0C -> 0x00");
+`endif
               end
               8'hE2: begin
                 // No Apple IIe keyboard support (bits 1 and 2 = 1)
                 data <= { 24'd0, 8'h06 };
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: Special addr 0xE2 -> 0x06 (no IIe keyboard)");
+`endif
               end
               8'hE8: begin
                 // Apple/Option key state
                 data <= { 24'd0, 8'h00 };
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: Special addr 0xE8 -> 0x00 (no Apple/Option keys)");
+`endif
               end
               default: begin
                 // Normal RAM read
                 data <= { 24'd0, ram_dout };
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: RAM addr=0x%02h data=0x%02h", cmd_data[15:8], ram_dout);
+`endif
               end
             endcase
           end else if ({cmd_data[7:0], cmd_data[15:8]} >= 16'h1000 && {cmd_data[7:0], cmd_data[15:8]} < 16'h2000) begin
@@ -948,41 +977,53 @@ always @(posedge CLK_14M) begin
             case ({cmd_data[7:0], cmd_data[15:8]})
               16'h1400: begin
                 data <= { 24'd0, 8'h72 };  // ROM checksum low byte
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: ROM addr 0x1400 -> 0x72 (checksum low)");
+`endif
               end
               16'h1401: begin
                 // ROM checksum high byte - ROM1=0xF7, ROM3=0x26
                 if (VERSION >= 6) begin
                   data <= { 24'd0, 8'h26 };
+`ifdef DEBUG_ADB
                   $display("ADB READ_MEM: ROM addr 0x1401 -> 0x26 (checksum high ROM3)");
+`endif
                 end else begin
                   data <= { 24'd0, 8'hF7 };
+`ifdef DEBUG_ADB
                   $display("ADB READ_MEM: ROM addr 0x1401 -> 0xF7 (checksum high ROM1)");
+`endif
                 end
               end
               default: begin
                 data <= { 24'd0, 8'h00 };  // Rest of ROM returns 0
+`ifdef DEBUG_ADB
                 $display("ADB READ_MEM: ROM addr 0x%04h -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
+`endif
               end
             endcase
           end else begin
             // Out of range
             data <= { 24'd0, 8'h00 };
+`ifdef DEBUG_ADB
             $display("ADB READ_MEM: addr 0x%04h out of range -> 0x00", {cmd_data[7:0], cmd_data[15:8]});
+`endif
           end
           pending_data <= 3'd1;
         end
         // Add other commands that need execution here if needed in future
         default: begin
           // Unknown command or already handled inline
+`ifdef DEBUG_ADB
           $display("ADB CMD EXEC: cmd=0x%02h not handled in exec block (may be handled inline)", cmd);
+`endif
         end
       endcase
     end
 
     // Address decoding and register access
     if (strobe) begin
-`ifdef ADB_DEBUG
+`ifdef DEBUG_ADB
       $display("ADB MODULE: strobe=1, addr=0x%02h (%d), rw=%b", addr, addr, rw);
 `endif
     end
@@ -1006,7 +1047,7 @@ always @(posedge CLK_14M) begin
       end
 
       8'h26: begin
-`ifdef ADB_DEBUG
+`ifdef DEBUG_ADB
         $display("DEBUG: ADB 26 case entered, rw=%b cen=%b strobe=%b", rw, cen, strobe);
 `endif
         // Read $C026 - ADB Command/Data Register
@@ -1025,10 +1066,14 @@ always @(posedge CLK_14M) begin
                 // Format: bit 7=response, bit 6=0, bits 5-4=0, bit 3=SRQ, bits 2-0=data count
                 if (pending_data > 3'd0) begin
                   dout <= 8'h80 | {5'd0, pending_data - 3'd1};  // Response + data count
+`ifdef DEBUG_ADB
                   $display("ADB READ C026: cmd_response_ready=1, pending_data=%d, returning 0x%02h", pending_data, 8'h80 | {5'd0, pending_data - 3'd1});
+`endif
                 end else begin
                   dout <= 8'h80;  // Response received, no data
+`ifdef DEBUG_ADB
                   $display("ADB READ C026: cmd_response_ready=1, pending_data=0, returning 0x80");
+`endif
                 end
               end else begin
                 // No command response - return SRQ/status only
@@ -1041,16 +1086,22 @@ always @(posedge CLK_14M) begin
               // Return status indicating ready for command bytes
               // Return 0x80 to indicate "ready" (similar to command response status)
               dout <= 8'h80;
+`ifdef DEBUG_ADB
               $display("ADB C026 READ in CMD state: returning 0x80 (ready for cmd data), cmd_len=%d", cmd_len);
+`endif
             end
             DATA: begin
               dout <= data[7:0];
+`ifdef DEBUG_ADB
               $display("ADB C026 READ in DATA state: returning data[7:0]=0x%02h, pending_data=%d", data[7:0], pending_data);
+`endif
               // Shift data and decrement counter on each read
               data <= { 8'd0, data[31:8] };
               if (pending_data > 3'd0) pending_data <= pending_data - 3'd1;
               if (pending_data == 3'd1) state <= IDLE;
+`ifdef DEBUG_ADB
               $display("ADB C026 DATA: After read, pending_data will be %d, state will be %d", pending_data - 3'd1, (pending_data == 3'd1) ? 0 : 2);
+`endif
             end
           endcase
           // Clear response flag after read when no pending data
@@ -1064,21 +1115,23 @@ always @(posedge CLK_14M) begin
           if (~strobe & strobe_prev & (state == IDLE) & cmd_response_ready & (pending_data > 3'd0)) begin
             cmd_response_ready <= 1'b0;
             state <= DATA;
+`ifdef DEBUG_ADB
             $display("ADB C026 READ: Transitioning IDLE->DATA on strobe falling edge, pending_data=%d, data=%08x data[7:0]=0x%02h", pending_data, data, data[7:0]);
+`endif
           end
         end
         // Write $C026 - ADB Commands
         else if (strobe & ~strobe_prev) begin  // Edge detect: only process on rising edge of strobe
-`ifdef ADB_DEBUG
+`ifdef DEBUG_ADB
           $display("ADB_MODULE_WR_C026: cen=%b strobe=%b din=%02h [PROCESSING]", cen, strobe, din);
 `endif
           case (state)
 
             IDLE: begin
-`ifdef ADB_DEBUG
+`ifdef DEBUG_ADB
               $display("ADB PROCESSING WRITE in IDLE state");
-`endif
               $display("ADB WRITE C026 IDLE: din=0x%02h, prev_cmd=0x%02h, state=%d, cmd_len=%d", din, cmd, state, cmd_len);
+`endif
               cmd <= din;
               cmd_timeout <= 16'd0;  // Reset timeout for new command
               cmd_data <= 64'd0;     // Clear command data buffer
@@ -1110,8 +1163,18 @@ always @(posedge CLK_14M) begin
                   initial_cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8;
                   state <= CMD;
                 end
-                8'h08: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; $display("ADB CMD 0x08: Transitioning to CMD state, cmd_len=2"); end
-                8'h09: begin cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD; $display("ADB CMD 0x09 (READ_MEM): Transitioning to CMD state, cmd_len=2"); end
+                8'h08: begin
+                  cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD;
+`ifdef DEBUG_ADB
+                  $display("ADB CMD 0x08: Transitioning to CMD state, cmd_len=2");
+`endif
+                end
+                8'h09: begin
+                  cmd_len <= 4'd2; initial_cmd_len <= 4'd2; state <= CMD;
+`ifdef DEBUG_ADB
+                  $display("ADB CMD 0x09 (READ_MEM): Transitioning to CMD state, cmd_len=2");
+`endif
+                end
                 8'h0a: begin
                   // Read ADB modes
                   data <= { 24'd0, adb_mode };
@@ -1163,18 +1226,24 @@ always @(posedge CLK_14M) begin
                 end
                 8'h73: ; // disable SRQ on mouse
                 default: begin
+`ifdef DEBUG_ADB
                   $display("ADB WRITE C026 DEFAULT: din=0x%02h, cmd=0x%02h, din>=0x10=%d, din[1:0]=%b, state=%d", din, cmd, (din >= 8'h10), din[1:0], state);
+`endif
                   // Check if this is a device command (pattern: AAAARRCCT)
                   // A=address, R=register, C=command, T=type
                   if (din >= 8'h10) begin  // Device commands start at 0x10
+`ifdef DEBUG_ADB
                     $display("ADB DEVICE COMMAND: din=0x%02h, device=%d, cmd=%b", din, din[7:4], din[1:0]);
+`endif
                     // Decode device command: AAAARRCCT (A=addr, R=reg, C=cmd bits)
                     case (din[1:0])  // dev_cmd bits
                       2'b01: begin // FLUSH device
                         cmd_response_ready <= 1'b1;  // Set response flag
                         pending_data <= 3'd0;        // No data bytes
                         state <= IDLE;
+`ifdef DEBUG_ADB
                         $display("ADB FLUSH device %d: setting cmd_response_ready=1, pending_data=0", din[7:4]);
+`endif
                       end
                       2'b10: begin // LISTEN (write to device)
                         if (device_present[din[7:4]]) begin
@@ -1217,8 +1286,10 @@ always @(posedge CLK_14M) begin
                               pending_data <= 3'd2;  // 2 bytes of mouse data
                               device_data_pending[3] <= 8'h00;  // Clear pending data
                               valid_mouse_data <= 1'b0;  // Clear flag after reading
+`ifdef DEBUG_ADB
                               $display("ADB MOUSE READ: returning 0x%02h 0x%02h",
                                        device_registers[3][0], device_registers[3][1]);
+`endif
                             end else begin
                               data <= 32'd0;  // No data available
                               pending_data <= 3'd0;
@@ -1235,7 +1306,9 @@ always @(posedge CLK_14M) begin
                           cmd_response_ready <= 1'b1;  // Set response flag
                           pending_data <= 3'd0;        // No data bytes
                           state <= IDLE;
+`ifdef DEBUG_ADB
                           $display("ADB TALK device %d (NOT PRESENT): setting cmd_response_ready=1, pending_data=0", din[7:4]);
+`endif
                         end
                       end
                       default: begin
@@ -1251,7 +1324,9 @@ always @(posedge CLK_14M) begin
             end
 
             CMD: begin
+`ifdef DEBUG_ADB
               $display("ADB CMD state: din=0x%02h cmd=0x%02h cmd_len=%d initial_cmd_len=%d", din, cmd, cmd_len, initial_cmd_len);
+`endif
 
               // First,store incoming data byte and decrement counter (if cmd_len > 0)
               // This must happen BEFORE we try to execute any command
@@ -1281,13 +1356,17 @@ always @(posedge CLK_14M) begin
 
                 // If this was the last byte (cmd_len==1), we'll execute the command next cycle
                 if (cmd_len == 4'd1) begin
+`ifdef DEBUG_ADB
                   $display("ADB CMD: Stored final byte din=0x%02h, will execute next cycle", din);
+`endif
                 end
               end
               // If cmd_len is 0, this means we stored all bytes last cycle
               // Now execute the completed command
               else begin
+`ifdef DEBUG_ADB
                 $display("ADB CMD COMPLETE: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
+`endif
                 state <= IDLE;
                 cmd <= 8'h00;  // Clear cmd for next command
 
@@ -1336,13 +1415,17 @@ always @(posedge CLK_14M) begin
                     // cmd_data[15:8] = address (single byte, 0-255)
                     // din = value to write
                     // Based on gsplus: only addresses < 0x100 are writable (RAM)
+`ifdef DEBUG_ADB
                     $display("ADB WRITE_MEM: addr=0x%02h value=0x%02h", cmd_data[15:8], din);
+`endif
                     if (cmd_data[15:8] < 8'h60) begin  // Only first 96 bytes are actual RAM
                       ram_addr <= cmd_data[15:8];
                       ram_din <= din;
                       ram_wen <= 1'b1;
                     end else begin
+`ifdef DEBUG_ADB
                       $display("ADB WRITE_MEM: addr 0x%02h out of range, ignoring", cmd_data[15:8]);
+`endif
                     end
                   end
                   8'h09: begin
@@ -1368,7 +1451,7 @@ always @(posedge CLK_14M) begin
             end
           endcase
         end else if (strobe) begin
-`ifdef ADB_DEBUG
+`ifdef DEBUG_ADB
           $display("ADB_MODULE_WR_C026: cen=%b strobe=%b din=%02h [BLOCKED - CEN NOT HIGH]", cen, strobe, din);
 `endif
         end
@@ -1396,11 +1479,13 @@ always @(posedge CLK_14M) begin
             mouse_coord,           // bit 1: mouse coordinate flag
             cmd_full               // bit 0: command full
           };
+`ifdef DEBUG_ADB
           if (strobe && valid_mouse_data) begin
             $display("C027 READ: mouse_valid=1 mouse_coord=%b -> 0x%02h",
                      mouse_coord,
                      {valid_mouse_data | (pending_data > 0), mouse_int, pending_data > 0 ? 1'b1 : 1'b0, data_int, valid_kbd, kbd_int, mouse_coord, cmd_full});
           end
+`endif
         end else if (cen & strobe) begin
           // Write $C027 - Interrupt enables
           mouse_int <= din[6];
@@ -1435,10 +1520,10 @@ always @(posedge CLK_14M) begin
         end
         // Clear strobe on ANY access (read or write) - matches GSplus behavior
         if (cen & strobe & !c010_processed_this_strobe) begin
-`ifdef ADB_DEBUG
+`ifdef DEBUG_ADB
           $display("ADB C010 WRITE PROCESSED (cen=%b, strobe=%b) - processing C010 clear", cen, strobe);
-`endif
           $display("ADB C010: K before clear = %02h, fifo_count=%d", K, kbd_fifo_count);
+`endif
           c010_processed_this_strobe <= 1'b1;  // Mark that we processed C010 this strobe transaction
           K <= {1'b0, K[6:0]};  // Clear strobe bit
           kbd_strobe <= 1'b0;  // Clear ADB strobe
@@ -1461,13 +1546,15 @@ always @(posedge CLK_14M) begin
               // Load next character - duplicates are allowed (e.g., "tt")
               K <= {1'b1, next_char[6:0]};
               kbd_strobe <= 1'b1;
+`ifdef DEBUG_ADB
               $display("ADB C010: Loaded next FIFO char=%02h", next_char);
+`endif
             end else begin
               akd <= 1'b0;  // Clear any key down status
             end
           end
         end else if (cen & strobe & c010_processed_this_strobe) begin
-`ifdef ADB_DEBUG
+`ifdef DEBUG_ADB
           $display("ADB C010 WRITE REJECTED - already processed this strobe transaction (cen=%b, strobe=%b)", cen, strobe);
 `endif
         end
@@ -1518,15 +1605,19 @@ always @(posedge CLK_14M) begin
           // After reading Y, clear valid flag and reset coord
           valid_mouse_data <= 1'b0;
           mouse_coord <= 1'b0;
+`ifdef DEBUG_ADB
           $display("C024 READ Y: 0x%02h (btn=%d, dy=%d)",
                    device_registers[3][0], ~device_registers[3][0][7],
                    $signed({device_registers[3][0][6], device_registers[3][0][6:0]}));
+`endif
         end else begin
           // After reading X, toggle coord for next Y read
           mouse_coord <= 1'b1;
+`ifdef DEBUG_ADB
           $display("C024 READ X: 0x%02h (dx=%d)",
                    device_registers[3][1],
                    $signed({device_registers[3][1][6], device_registers[3][1][6:0]}));
+`endif
         end
       end else begin
         // Toggle coord even when no data (maintains alternating pattern)
@@ -1543,10 +1634,12 @@ always @(posedge CLK_14M) begin
     // Update edge detection register on every cycle
     strobe_prev <= strobe;
 
+`ifdef DEBUG_ADB
     // Debug: Track state changes
     if (state != 2'b00 || (strobe & ~strobe_prev)) begin
       $display("ADB_STATE_TRACK: state=%d strobe=%b strobe_prev=%b cmd_len=%d", state, strobe, strobe_prev, cmd_len);
     end
+`endif
   end
 end
 

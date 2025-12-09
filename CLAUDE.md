@@ -163,11 +163,58 @@ The `lineaddr()` function implements the authentic Apple II memory layout where 
 
 - After each change run the regression.sh script in the vsim directory. If there are any changes stop and notify the user. Changes will be reported by diff of a binary png. You can optionaly analyze the images and see what the differences are.
 
+### Debug Output Control
+
+Debug output is controlled via compile-time macros and runtime flags to balance verbosity vs performance.
+
+**Compile-time debug macros** (edit source files to enable by uncommenting the `define):
+
+| File | Macro | Description |
+|------|-------|-------------|
+| rtl/adb.v | DEBUG_ADB | ADB keyboard/mouse state tracking |
+| rtl/iigs.sv | DEBUG_BANK | Bank/memory access debugging |
+| rtl/iigs.sv | DEBUG_RESET | Reset sequence and register init |
+| rtl/iigs.sv | DEBUG_IO | Soft switch accesses (C000-C0FF) |
+| rtl/iigs.sv | DEBUG_IRQ | Interrupt handling and VBL |
+| rtl/scc8530.v | DEBUG_SCC | Serial Communications Controller |
+| rtl/clock_divider.v | DEBUG_CLKDIV | Clock speed transitions |
+| vsim/sim.v | DEBUG_SIM | Top-level simulation events |
+
+```verilog
+// Example: In rtl/iigs.sv, uncomment line 5 to enable reset debugging:
+`define DEBUG_RESET
+```
+
+**Runtime debug options:**
+```bash
+# Enable CSV memory trace logging (creates vsim_trace.csv)
+# WARNING: This is ~51% slower and creates large files (~210MB per 100 frames)
+./obj_dir/Vemu --enable-csv-trace
+
+# Start CSV tracing only after a specific frame (reduces file size)
+./obj_dir/Vemu --dump-csv-after 500
+
+# Disable CPU instruction logging to save memory (stdout still works)
+./obj_dir/Vemu --no-cpu-log
+```
+
+**Performance impact of debug options:**
+
+| Configuration | Relative Speed | Notes |
+|--------------|----------------|-------|
+| Default (no macros) | 100% | ~350 lines/5 frames, ~10s/100 frames |
+| With CSV trace | ~49% | Large vsim_trace.csv created |
+| DEBUG_CLKDIV enabled | ~85% | Clock speed transition logging |
+| DEBUG_ADB enabled | ~20% | Very verbose ADB state output |
+| DEBUG_BANK enabled | ~25% | Verbose memory/bank tracing |
+| All debug macros | ~10% | Full debug output (~292K lines/5 frames) |
+
 ### Debug Output Analysis
-The simulation produces extensive debug output including:
-- CPU instruction traces with addresses and opcodes
+The simulation produces debug output including:
+- CPU instruction traces with addresses and opcodes (always enabled to stdout)
 - Video timing and pixel buffer operations
-- Memory access patterns and bank switching
+- Memory access patterns and bank switching (requires DEBUG_BANK)
+- ADB keyboard/mouse state changes (requires DEBUG_ADB)
 - Graphics mode transitions and pixel data
 
 ### Common Debug Patterns
