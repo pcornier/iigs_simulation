@@ -2330,14 +2330,14 @@ wire ready_out;
   // Paddle timing simulation
   wire [3:0] paddle_timer_expired;
   reg paddle_trigger;
-  reg [23:0] cpu_cycle_counter;
-  
-  // Increment cycle counter
+  reg [31:0] tick_counter_14m;  // 14MHz tick counter for wall-clock timing
+
+  // Increment 14MHz tick counter (wall-clock time, independent of CPU speed)
   always @(posedge CLK_14M) begin
     if (reset)
-      cpu_cycle_counter <= 24'd0;
-    else if (phi2)
-      cpu_cycle_counter <= cpu_cycle_counter + 24'd1;
+      tick_counter_14m <= 32'd0;
+    else
+      tick_counter_14m <= tick_counter_14m + 32'd1;
   end
 
   genvar i;
@@ -2348,7 +2348,7 @@ wire ready_out;
         .reset(reset),
         .trigger(paddle_trigger),
         .paddle_value(paddle_input[i]),
-        .cycle_counter(cpu_cycle_counter),
+        .tick_counter(tick_counter_14m),
         .timer_expired(paddle_timer_expired[i])
       );
     end

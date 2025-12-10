@@ -208,9 +208,9 @@ localparam CONF_STR = {
 
 	"R0,Warm Reset;",
 	"R1,Cold Reset;",
-	"JA,Fire 1,Fire 2;",
-	"jn,A|P,B;",
-	"jp,Y|P,B;",
+	"JA,Fire 1,Fire 2,Fire 3;",
+	"jn,A|P,B,Y;",
+	"jp,Y|P,B,Y;",
 	"V,v",`BUILD_DATE
 };
 
