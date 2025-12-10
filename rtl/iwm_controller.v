@@ -226,11 +226,14 @@ module iwm_controller(
             // This mirrors firmware behavior which normally turns on the motor; it helps the sim progress.
             // IMPORTANT: Do NOT auto-start motor when no disk is mounted - this causes the boot ROM
             // to enter a read loop that never finds valid data and then jumps to Applesoft
-            if (WR_CYCLE && selected_ready && !drive_on) begin
+            // NOTE: Check drive_real_on (actual motor state) not drive_on (command state)
+            // because drive_on may have just been set to 0 in this same cycle, but drive_real_on
+            // reflects the actual delayed motor state after spindown timeout
+            if (WR_CYCLE && selected_ready && !drive_real_on) begin
                 if ({q7,q6} == 2'b00 || (A[7:4] == 4'hE)) begin
                     drive_on <= 1'b1;
 `ifdef SIMULATION
-                    $display("IWM: MOTOR ON (auto) due to read @%02h q7q6=%0d%0d and disk ready", A[7:0], q7, q6);
+                    $display("IWM: MOTOR ON (auto) due to read @%02h q7q6=%0d%0d and disk ready (drive_real_on was 0)", A[7:0], q7, q6);
 `endif
                 end
             end
@@ -360,9 +363,12 @@ module iwm_controller(
     // - Disk mounted, motor off: return $FF
     // - Disk mounted, motor on: return actual data from read_latch
     // - Track status check: return track0 status for stepper positioning
+    // NOTE: Use drive_real_on (actual motor state) not drive_on (command state)
+    // because the motor has a 1-second spindown delay, and we should return real data
+    // during that delay period even if drive_on was cleared
     wire [7:0] iwm_reg_out = ({current_q7, current_q6} == 2'b00) ? (no_drive_data_read ? no_drive_data_reg :   // No drives: echoes mode with bits 7,6,5=0
                                                                      track_status_check ? track_status_value :  // Track status check
-                                                                     drive_on ? read_latch : 8'hFF) :           // Normal data/motor off
+                                                                     drive_real_on ? read_latch : 8'hFF) :      // Normal data/motor off (use drive_real_on)
                              ({current_q7, current_q6} == 2'b01) ? status_reg :                                // Status register 
                              ({current_q7, current_q6} == 2'b10) ? handshake_reg :                            // Write-handshake register
                              ({current_q7, current_q6} == 2'b11) ? 8'h00 :                                   // q7=1,q6=1: return 0x00
@@ -373,9 +379,9 @@ module iwm_controller(
     reg motor_off_ff_sent;
     reg no_drive_status_sent;
     always @(posedge CLK_14M) begin
-        if (({current_q7, current_q6} == 2'b00) && !drive_on && DEVICE_SELECT && WR_CYCLE) begin
+        if (({current_q7, current_q6} == 2'b00) && !drive_real_on && DEVICE_SELECT && WR_CYCLE) begin
             if (!motor_off_ff_sent) begin
-                $display("IWM: Returning 0xFF for DATA register - motor off (matches reference iwm.cpp)");
+                $display("IWM: Returning 0xFF for DATA register - motor actually off (drive_real_on=0)");
                 motor_off_ff_sent <= 1'b1;
             end
         end else begin
@@ -693,12 +699,20 @@ module iwm_controller(
                     inactivity_timer = 24'h0;
                 end else if (inactivity_timer < 14000000) begin
                     inactivity_timer = inactivity_timer + 1;
+`ifdef SIMULATION
+                    // Debug: log timer progress every 1M cycles
+                    if (inactivity_timer == 1000000 || inactivity_timer == 5000000 ||
+                        inactivity_timer == 10000000 || inactivity_timer == 13000000 ||
+                        inactivity_timer == 13900000) begin
+                        $display("IWM: inactivity_timer=%0d (%.1fM cycles)", inactivity_timer, inactivity_timer / 1000000.0);
+                    end
+`endif
                 end else begin
                     // Inactivity timeout reached - turn off motor
                     drive_real_on <= 1'b0;
                     inactivity_timer = 24'h0;
 `ifdef SIMULATION
-                    $display("IWM: MOTOR OFF (inactivity timeout)");
+                    $display("IWM: MOTOR OFF (inactivity timeout) after 14M cycles");
 `endif
                 end
             end
