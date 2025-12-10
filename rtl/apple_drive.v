@@ -235,8 +235,9 @@ module apple_drive(
                 // Reset byte_delay to provide maximum rate limiting
                 byte_delay <= byte_period;
             end
-            // OLD Q3 timing disabled for now - CPU-driven timing should be sufficient
-            else if (Q3 && ~Q3_D && DISK_READY && DISK_ACTIVE && ~TRACK_BUSY && 1'b0) begin  // disabled
+            // Q3 timing simulates disk rotation - data advances at disk speed, not CPU speed
+            // This is essential for proper disk operation
+            else if (Q3 && ~Q3_D && DISK_READY && DISK_ACTIVE && ~TRACK_BUSY) begin
                 byte_delay <= byte_delay - 1;
 `ifdef SIMULATION
                 q3_edge_counter <= q3_edge_counter + 1;

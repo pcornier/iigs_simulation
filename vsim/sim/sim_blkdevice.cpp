@@ -38,15 +38,21 @@ QData* img_size=NULL;
 void SimBlockDevice::MountDisk( std::string file, int index) {
 	disk[index].open(file.c_str(), std::ios::out | std::ios::in | std::ios::binary | std::ios::ate);
         if (disk[index]) {
-		fprintf(stderr,"we are here\n");
            // we shouldn't do the actual mount here..
            disk_size[index]= disk[index].tellg();
-	//fprintf(stderr,"mount size %ld\n",disk_size[index]);
            disk[index].seekg(0);
            mountQueue[index]=1;
-           printf("disk %d inserted (%s)\n",index,file.c_str());
+           printf("BLKDEV: disk %d inserted (%s) size=%ld bytes\n", index, file.c_str(), disk_size[index]);
+           if (index == 0) {
+               // NIB floppy format check: 232960 = 35 tracks × 6656 bytes/track
+               if (disk_size[index] == 232960) {
+                   printf("BLKDEV: Detected 5.25\" NIB format (35 tracks × 6656 bytes)\n");
+               } else {
+                   printf("BLKDEV: WARNING - Floppy size %ld doesn't match expected NIB size 232960\n", disk_size[index]);
+               }
+           }
         }else {
-		fprintf(stderr,"some kind of error: %s\n",file.c_str());
+		fprintf(stderr,"BLKDEV ERROR: Failed to open: %s\n",file.c_str());
 	}
 
 }
@@ -115,16 +121,18 @@ void SimBlockDevice::BeforeEval(int cycles)
                             disk_size[i] -= header_size[i];
                     }
             }
-fprintf(stderr,"mounting.. %d\n",i);
+           printf("BLKDEV: Mounting drive %d, img_size=%ld, header_offset=%ld\n", i, disk_size[i], header_size[i]);
+           if (i == 0) {
+               printf("FLOPPY: Mount signal sent - setting img_mounted[0], expecting floppy_track to detect mount\n");
+           }
            mountQueue[i]=0;
            *img_size = disk_size[i];
 	   *img_readonly=0;
-fprintf(stderr,"img_size .. %ld\n",*img_size);
            disk[i].seekg(header_size[i]);
            bitset(*img_mounted,i);
            ack_delay=1200;
     } else if (ack_delay==1 && bitcheck(*img_mounted,i) ) {
-fprintf(stderr,"mounting flag cleared  %d\n",i);
+           printf("BLKDEV: Mount flag cleared for drive %d\n", i);
         bitclear(*img_mounted,i) ;
         //*img_size = 0;
     } else { if (!reading && !writing && ack_delay>0) ack_delay--; }
@@ -132,20 +140,25 @@ fprintf(stderr,"mounting flag cleared  %d\n",i);
     // start reading when sd_rd pulses high
     if ((current_disk==-1 || current_disk==i) && (bitcheck(*sd_rd,i) || bitcheck(*sd_wr,i) )) {
        // set current disk here..
-//fprintf(stderr,"setting current disk %d %x ack_delay %x\n",i,*sd_rd,ack_delay);
        current_disk=i;
       if (!ack_delay) {
         int lba = *(sd_lba[i]);
         if (bitcheck(*sd_rd,i)) {
         	reading = true;
-	} 
+	}
         if (bitcheck(*sd_wr,i)) {
         	writing = true;
-	} 
+	}
 
         disk[i].clear();
         disk[i].seekg((lba) * kBLKSZ + header_size[i]);
-      //  printf("seek %06X lba: (%x) (%d,%d) drive %d reading %d writing %d ack %x\n", (lba) * kBLKSZ,lba,lba,kBLKSZ,i,reading,writing,*sd_ack);
+        // Debug output for floppy (index 0) - show track calculation
+        if (i == 0) {
+            int track = lba / 13;  // 13 sectors per track
+            int sector = lba % 13;
+            printf("FLOPPY DMA: LBA=%d (track=%d sector=%d) seek=%06X reading=%d writing=%d\n",
+                   lba, track, sector, (lba) * kBLKSZ + header_size[i], reading, writing);
+        }
         bytecnt = 0;
         *sd_buff_addr = 0;
         ack_delay = 1200;

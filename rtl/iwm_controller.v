@@ -132,6 +132,10 @@ module iwm_controller(
                           ( eff_drive35 &  drive2_select & DISK_READY[3]);
 
 
+    // Edge detection for DEVICE_SELECT to prevent multiple state changes per CPU cycle
+    reg device_select_prev;
+    wire device_select_edge = DEVICE_SELECT && !device_select_prev;
+
     // --- IWM State Machine and Register Access ---
     always @(posedge CLK_14M or posedge RESET) begin
         if (RESET) begin
@@ -142,53 +146,80 @@ module iwm_controller(
             q7 <= 1'b0;
             mode_reg <= 8'b0; // All mode bits reset to 0
             drive35_select_d <= 1'b0;
-        end else if (DEVICE_SELECT && !WR_CYCLE) begin
-            // Handle soft switch writes
+            device_select_prev <= 1'b0;
+        end else begin
+            // Track DEVICE_SELECT for edge detection
+            device_select_prev <= DEVICE_SELECT;
+
+        if (device_select_edge) begin
+            // IWM soft switches respond to address bits, but with important caveats:
+            // - Stepper phases ($C0E0-$C0E7): toggle on any access
+            // - Motor on/off ($C0E8/$C0E9): toggle on any access
+            // - Drive select ($C0EA/$C0EB): toggle on any access
+            // - Q6/Q7 ($C0EC-$C0EF): toggle on any access, but also used for data reads
+            //
+            // CRITICAL FIX: When reading from $C0EC or $C0EE with Q6=0/Q7=0 (data read mode),
+            // we should NOT be changing motor or drive_select states. The CPU is reading
+            // data, not trying to control the motor. Only latch Q6/Q7 on these addresses.
+            //
+            // The confusion arises because $C0EC/$C0EE accesses happen during disk reads,
+            // and those addresses happen to have the same A[3:0] pattern that would
+            // otherwise control motor/drive_select. But in the actual Apple II/IIgs,
+            // the IWM knows the difference based on which soft switch is being accessed.
+
             if (A[3] == 1'b0) begin
+                // $C0E0-$C0E7: Stepper motor phases - always latch
                 motor_phase[A[2:1]] <= A[0];
 `ifdef SIMULATION
-                $display("IWM SW: motor_phase[%0d] <= %0d (A=%h)", A[2:1], A[0], A[3:0]);
+                $display("IWM SW: motor_phase[%0d] <= %0d (A=%h WR=%0d)", A[2:1], A[0], A[3:0], !WR_CYCLE);
 `endif
             end else begin
+                // $C0E8-$C0EF: Motor, drive select, Q6, Q7
                 case (A[2:1])
-                    2'b00: begin drive_on <= A[0];
+                    2'b00: begin
+                        // $C0E8/$C0E9: Motor control - latch the state
+                        drive_on <= A[0];
 `ifdef SIMULATION
-                        $display("IWM SW: drive_on <= %0d", A[0]);
+                        $display("IWM SW: drive_on <= %0d (A=%h WR=%0d)", A[0], A[3:0], !WR_CYCLE);
 `endif
                     end
-                    2'b01: begin drive2_select <= A[0];
+                    2'b01: begin
+                        // $C0EA/$C0EB: Drive select - latch the state
+                        drive2_select <= A[0];
 `ifdef SIMULATION
-                        $display("IWM SW: drive2_select <= %0d", A[0]);
+                        $display("IWM SW: drive2_select <= %0d (A=%h WR=%0d)", A[0], A[3:0], !WR_CYCLE);
 `endif
                     end
-                    2'b10: begin q6 <= A[0];
+                    2'b10: begin
+                        // $C0EC/$C0ED: Q6 control - always latch (needed for data reads)
+                        q6 <= A[0];
 `ifdef SIMULATION
-                        $display("IWM SW: q6 <= %0d", A[0]);
+                        $display("IWM SW: q6 <= %0d (A=%h WR=%0d)", A[0], A[3:0], !WR_CYCLE);
 `endif
                     end
-                    2'b11: begin q7 <= A[0];
+                    2'b11: begin
+                        // $C0EE/$C0EF: Q7 control - always latch (needed for data reads)
+                        q7 <= A[0];
 `ifdef SIMULATION
-                        $display("IWM SW: q7 <= %0d", A[0]);
+                        $display("IWM SW: q7 <= %0d (A=%h WR=%0d)", A[0], A[3:0], !WR_CYCLE);
 `endif
                     end
                 endcase
             end
             
             // Handle Mode Register writes: only when motor is off, state q7=1,q6=1 and odd address (A0=1)
-            if (!drive_on && q7 && q6 && A[0]) begin
+            if (!WR_CYCLE && !drive_on && q7 && q6 && A[0]) begin
                 mode_reg <= {3'b000, D_IN[4:0]};
 `ifdef SIMULATION
                 $display("IWM: MODE_REG <= %02h (fast=%0d)", {3'b000,D_IN[4:0]}, D_IN[3]);
 `endif
             end
-        end
-        // Opportunistic motor auto-start on read accesses if a disk is ready
-        // This mirrors firmware behavior which normally turns on the motor; it helps the sim progress.
-        // IMPORTANT: Do NOT auto-start motor when no disk is mounted - this causes the boot ROM
-        // to enter a read loop that never finds valid data and then jumps to Applesoft
-        else if (DEVICE_SELECT && WR_CYCLE) begin
-            // Auto-start ONLY when CPU is reading IWM with a ready disk
-            if (selected_ready && !drive_on) begin
+
+            // Opportunistic motor auto-start on read accesses if a disk is ready
+            // This mirrors firmware behavior which normally turns on the motor; it helps the sim progress.
+            // IMPORTANT: Do NOT auto-start motor when no disk is mounted - this causes the boot ROM
+            // to enter a read loop that never finds valid data and then jumps to Applesoft
+            if (WR_CYCLE && selected_ready && !drive_on) begin
                 if ({q7,q6} == 2'b00 || (A[7:4] == 4'hE)) begin
                     drive_on <= 1'b1;
 `ifdef SIMULATION
@@ -198,7 +229,7 @@ module iwm_controller(
             end
 `ifdef SIMULATION
             // Debug: log when ROM tries to access disk with no disk mounted
-            if (!selected_ready && !drive_on && ({q7,q6} == 2'b00)) begin
+            if (WR_CYCLE && !selected_ready && !drive_on && ({q7,q6} == 2'b00)) begin
                 $display("IWM: NO_DISK - not auto-starting motor for read @%02h (no disk mounted)", A[7:0]);
             end
 `endif
@@ -210,6 +241,7 @@ module iwm_controller(
             drive35_select_d <= drive35_select;
         end
 `endif
+        end // else begin (not RESET)
     end
 
     // Mux the data input from the active drive into the read latch
@@ -296,8 +328,10 @@ module iwm_controller(
     wire [7:0] track0_status_525 = {2'b11, ~drive525_at_track0, last_mode_wr};  // Bit 5 clear when at track 0
     wire [7:0] track0_status_35 = (status35_state == 4'h0A) ? {7'b0000000, ~drive35_at_track0} : 8'h00;
     
-    // Determine if this is a track status check read (address $C0EE specifically)
-    wire track_status_check = (A[3:0] == 4'hE) && ({current_q7, current_q6} == 2'b00) && selected_ready;
+    // Track status check ONLY when motor is OFF and we're probing for track 0
+    // When motor is ON, always return actual disk data, not track status
+    // This was incorrectly overriding all reads from $C0EE which broke disk booting
+    wire track_status_check = (A[3:0] == 4'hE) && ({current_q7, current_q6} == 2'b00) && selected_ready && !drive_on;
     // No-drive data read: any data register read (q7=0, q6=0) when no floppy disk is mounted
     wire no_drive_data_read = ({current_q7, current_q6} == 2'b00) && !selected_ready;
     wire [7:0] stub_status = 8'hC0 | {3'b000, last_mode_wr};

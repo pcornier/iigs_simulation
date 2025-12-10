@@ -965,6 +965,7 @@ void send_clock() {
 	
 	time_t t;
 
+	tzset();
 	time(&t);
 
 	struct tm tm;
@@ -1808,6 +1809,7 @@ bool memory_dump_mode = false;
 // Disk image support
 // ---------------------------
 std::string disk_image = "";  // Empty by default - only mount if specified via --disk
+std::string floppy_image = "";  // Floppy disk image (NIB format, 5.25" 140K)
 
 // Key injection functionality
 // ---------------------------
@@ -2110,7 +2112,8 @@ void show_help() {
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
 	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
-	printf("  --disk <filename>             Use specified disk image (no disk mounted by default)\n");
+	printf("  --disk <filename>             Use specified HDD image (slot 7, no disk mounted by default)\n");
+	printf("  --floppy <filename>           Use specified floppy image (5.25\" NIB format, drive 1)\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
 	printf("  --send-keys <frame>:<keys>    Send keyboard input at specified frame\n");
@@ -2336,6 +2339,10 @@ int main(int argc, char** argv, char** env) {
             disk_image = argv[i + 1];
             printf("Using disk image: %s\n", disk_image.c_str());
             i++; // Skip the next argument since it's the filename
+        } else if (strcmp(argv[i], "--floppy") == 0 && i + 1 < argc) {
+            floppy_image = argv[i + 1];
+            printf("Using floppy image: %s (will mount to drive 1, 5.25\" 140K)\n", floppy_image.c_str());
+            i++; // Skip the next argument since it's the filename
         } else if (strcmp(argv[i], "--send-keys") == 0 && i + 1 < argc) {
             // Parse frame:keys format
             std::string arg = argv[i + 1];
@@ -2542,14 +2549,20 @@ int main(int argc, char** argv, char** env) {
         if (video.Initialise(windowTitle) == 1) { return 1; }
     }
 
-    // Mount a test floppy image into Drive 1 to exercise IWM path in sim
-    //blockdevice.MountDisk("floppy.nib", 0);
+    // Mount floppy image to index 0 (5.25" drive 1) if specified via --floppy
+    if (!floppy_image.empty()) {
+        printf("Mounting floppy image: %s to index 0 (5.25\" drive 1)\n", floppy_image.c_str());
+        blockdevice.MountDisk(floppy_image.c_str(), 0);
+    }
+
     // Mount HDD image into slot 7 backend (only if specified via --disk)
     if (!disk_image.empty()) {
-        printf("Mounting disk image: %s\n", disk_image.c_str());
+        printf("Mounting disk image: %s to index 1 (HDD slot 7)\n", disk_image.c_str());
         blockdevice.MountDisk(disk_image.c_str(), 1);
-    } else {
-        printf("No disk image specified - booting without disk\n");
+    }
+
+    if (disk_image.empty() && floppy_image.empty()) {
+        printf("No disk images specified - booting without disk\n");
     }
 
    // In headless mode, run a continuous simulation honoring stop/screenshot flags

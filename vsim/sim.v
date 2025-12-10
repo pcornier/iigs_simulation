@@ -408,7 +408,7 @@ floppy_track floppy_track_1
    .track (TRACK1),
    .busy  (TRACK1_RAM_BUSY),
    .change(DISK_CHANGE[0]),
-   .mount (img_mounted[0]),
+   .mount (disk_mount[0]),   // Use disk_mount (persists) not img_mounted (gets cleared)
    .ready  (DISK_READY[0]),
    .active (fd_disk_1),
 
