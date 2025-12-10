@@ -110,6 +110,17 @@ module apple_drive(
 
     assign TRACK = phase[8:2];
 
+`ifdef SIMULATION
+    reg [8:0] prev_phase;
+    always @(posedge CLK_14M) begin
+        if (phase != prev_phase) begin
+            $display("DRIVE%0s: phase changed %0d -> %0d (TRACK=%0d -> %0d) MOTOR_PHASE=%b ACTIVE=%0d",
+                     IS_35_INCH?"(3.5)":"(5.25)", prev_phase, phase, prev_phase[8:2], phase[8:2], MOTOR_PHASE, DISK_ACTIVE);
+        end
+        prev_phase <= phase;
+    end
+`endif
+
     // Read/Write logic with corrected timing
     always @(posedge CLK_14M or posedge RESET) begin
         reg [7:0] byte_delay;

@@ -124,7 +124,11 @@ always @(posedge clk) begin
         end
     end
     else
-    if(ready && ((cur_track != track) || (old_change && ~change) || (dirty && ~active)))
+    // Only reload track when:
+    // 1. Track changed AND drive is NOT active (don't interrupt reads/writes)
+    // 2. Disk changed
+    // 3. Dirty and inactive (save data)
+    if(ready && (((cur_track != track) && ~active) || (old_change && ~change) || (dirty && ~active)))
         if (dirty && cur_track != 'b111111) begin
             saving <= 1;
             lba <= cur_track * 8'd13;
@@ -142,7 +146,8 @@ always @(posedge clk) begin
             busy <= 1;
             dirty <= 0;
 `ifdef SIMULATION
-            $display("FLOPPY: load track %0d (LBA base=%0d)", track, track*13);
+            $display("FLOPPY: load track %0d (LBA base=%0d) cur_track=%0d track_diff=%0d dirty=%0d active=%0d [track_input=%b]",
+                     track, track*13, cur_track, (cur_track != track), dirty, active, track);
 `endif
         end
 end

@@ -93,6 +93,7 @@ module iigs
    input  [7:0]       TRACK1_DO,
    output             TRACK1_WE,
    input              TRACK1_BUSY,
+   output             FD_DISK_1,     // Drive 1 active (for track buffer coordination)
 
    output [5:0]       TRACK2,
    output [12:0]      TRACK2_ADDR,
@@ -100,6 +101,7 @@ module iigs
    input  [7:0]       TRACK2_DO,
    output             TRACK2_WE,
    input              TRACK2_BUSY,
+   output             FD_DISK_2,     // Drive 2 active (for track buffer coordination)
 
    input [3:0]        DISK_READY,
    input              FLOPPY_WP,
@@ -2398,6 +2400,7 @@ wire ready_out;
       .TRACK1_DO(TRACK1_DO),
       .TRACK1_WE(TRACK1_WE),
       .TRACK1_BUSY(TRACK1_BUSY),
+      .FD_DISK_1(FD_DISK_1),
       // 5.25" Drive 2
       .TRACK2(TRACK2),
       .TRACK2_ADDR(TRACK2_ADDR),
@@ -2405,6 +2408,7 @@ wire ready_out;
       .TRACK2_DO(TRACK2_DO),
       .TRACK2_WE(TRACK2_WE),
       .TRACK2_BUSY(TRACK2_BUSY),
+      .FD_DISK_2(FD_DISK_2),
       // 3.5" not yet wired
       .TRACK3(), .TRACK3_ADDR(), .TRACK3_SIDE(), .TRACK3_DI(), .TRACK3_DO(8'h00), .TRACK3_WE(), .TRACK3_BUSY(1'b0),
       .TRACK4(), .TRACK4_ADDR(), .TRACK4_SIDE(), .TRACK4_DI(), .TRACK4_DO(8'h00), .TRACK4_WE(), .TRACK4_BUSY(1'b0)

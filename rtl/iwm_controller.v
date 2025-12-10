@@ -20,9 +20,9 @@ module iwm_controller(
     WRITE_PROTECT,
     // --- Expanded Track Memory Interface ---
     // Drive 1 (5.25")
-    TRACK1, TRACK1_ADDR, TRACK1_DI, TRACK1_DO, TRACK1_WE, TRACK1_BUSY,
+    TRACK1, TRACK1_ADDR, TRACK1_DI, TRACK1_DO, TRACK1_WE, TRACK1_BUSY, FD_DISK_1,
     // Drive 2 (5.25")
-    TRACK2, TRACK2_ADDR, TRACK2_DI, TRACK2_DO, TRACK2_WE, TRACK2_BUSY,
+    TRACK2, TRACK2_ADDR, TRACK2_DI, TRACK2_DO, TRACK2_WE, TRACK2_BUSY, FD_DISK_2,
     // Drive 3 (3.5", 800K)
     TRACK3, TRACK3_ADDR, TRACK3_SIDE, TRACK3_DI, TRACK3_DO, TRACK3_WE, TRACK3_BUSY,
     // Drive 4 (3.5", 800K)
@@ -52,6 +52,7 @@ module iwm_controller(
     input [7:0]     TRACK1_DO;
     output          TRACK1_WE;
     input           TRACK1_BUSY;
+    output          FD_DISK_1;      // Drive 1 is actively reading/writing
 
     output [5:0]    TRACK2;
     output [12:0]   TRACK2_ADDR;
@@ -59,6 +60,7 @@ module iwm_controller(
     input [7:0]     TRACK2_DO;
     output          TRACK2_WE;
     input           TRACK2_BUSY;
+    output          FD_DISK_2;      // Drive 2 is actively reading/writing
 
     // --- Expanded interface for two 3.5" 800K drives ---
     output [6:0]    TRACK3;
@@ -126,6 +128,11 @@ module iwm_controller(
     wire D2_ACTIVE = drive_real_on &  drive2_select & ~eff_drive35;
     wire D3_ACTIVE = drive_real_on & ~drive2_select &  eff_drive35;
     wire D4_ACTIVE = drive_real_on &  drive2_select &  eff_drive35;
+
+    // Export drive active signals for track buffer coordination
+    assign FD_DISK_1 = D1_ACTIVE;
+    assign FD_DISK_2 = D2_ACTIVE;
+
     wire selected_ready = (~eff_drive35 & ~drive2_select & DISK_READY[0]) |
                           (~eff_drive35 &  drive2_select & DISK_READY[1]) |
                           ( eff_drive35 & ~drive2_select & DISK_READY[2]) |

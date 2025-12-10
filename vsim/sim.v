@@ -173,6 +173,7 @@ iigs  iigs(
     .TRACK1_DI(TRACK1_RAM_DI),
     .TRACK1_WE(TRACK1_RAM_WE),
     .TRACK1_BUSY(TRACK1_RAM_BUSY),
+    .FD_DISK_1(fd_disk_1),
     //-- track buffer interface for disk 2
     .TRACK2(TRACK2),
     .TRACK2_ADDR(TRACK2_RAM_ADDR),
@@ -180,6 +181,7 @@ iigs  iigs(
     .TRACK2_DI(TRACK2_RAM_DI),
     .TRACK2_WE(TRACK2_RAM_WE),
     .TRACK2_BUSY(TRACK2_RAM_BUSY),
+    .FD_DISK_2(fd_disk_2),
     // Disk ready to IWM (pad to 4 bits)
     .DISK_READY({2'b00, DISK_READY}),
 
