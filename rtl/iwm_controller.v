@@ -97,8 +97,10 @@ module iwm_controller(
     wire            drive35_select = DISK35[6];
     reg             drive35_select_d;
     wire            read_disk = (DEVICE_SELECT == 1'b1 && A[3:0] == 4'hC);
-    // Generate a data-read strobe when CPU reads DATA register (q7q6=00) at any address
-    wire            data_read_strobe = (DEVICE_SELECT == 1'b1 && WR_CYCLE && ({q7,q6} == 2'b00));
+    // Generate a data-read strobe when CPU reads DATA register (q7q6=00)
+    // ONLY for C0EC (A[3:0]=0xC) or C0EE (A[3:0]=0xE), NOT for phase control registers
+    // A[3:1]=110 matches both xC (1100) and xE (1110)
+    wire            data_read_strobe = (DEVICE_SELECT == 1'b1 && WR_CYCLE && ({q7,q6} == 2'b00) && (A[3:1] == 3'b110));
 `ifdef SIMULATION
     reg prev_data_read_strobe;
     always @(posedge CLK_14M) begin
@@ -368,7 +370,7 @@ module iwm_controller(
     // during that delay period even if drive_on was cleared
     wire [7:0] iwm_reg_out = ({current_q7, current_q6} == 2'b00) ? (no_drive_data_read ? no_drive_data_reg :   // No drives: echoes mode with bits 7,6,5=0
                                                                      track_status_check ? track_status_value :  // Track status check
-                                                                     drive_real_on ? read_latch : 8'hFF) :      // Normal data/motor off (use drive_real_on)
+                                                                     drive_real_on ? read_latch : no_drive_data_reg) :  // Motor off: echo mode bits
                              ({current_q7, current_q6} == 2'b01) ? status_reg :                                // Status register 
                              ({current_q7, current_q6} == 2'b10) ? handshake_reg :                            // Write-handshake register
                              ({current_q7, current_q6} == 2'b11) ? 8'h00 :                                   // q7=1,q6=1: return 0x00

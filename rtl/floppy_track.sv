@@ -128,7 +128,7 @@ always @(posedge clk) begin
     // 1. Track changed AND drive is NOT active (don't interrupt reads/writes)
     // 2. Disk changed
     // 3. Dirty and inactive (save data)
-    if(ready && (((cur_track != track) && ~active) || (old_change && ~change) || (dirty && ~active)))
+    if(ready && ((cur_track != track) || (old_change && ~change) || (dirty && ~active)))
         if (dirty && cur_track != 'b111111) begin
             saving <= 1;
             lba <= cur_track * 8'd13;

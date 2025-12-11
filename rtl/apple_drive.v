@@ -48,6 +48,15 @@ module apple_drive(
     reg [12:0]      track_byte_addr;
     reg [7:0]       data_reg;
     reg             reset_data_reg;
+    // BRAM read latency compensation: track_byte_addr is one ahead of what we're outputting
+    // When we first start or after address changes, we need to wait for BRAM to provide data
+    reg             bram_data_valid;  // Set after BRAM has had time to respond to address
+    // Data ready flag for CPU byte synchronization
+    // SET when a new byte loads into data_reg (disk has delivered fresh data)
+    // CLEARED one cycle after READ_STROBE fires (CPU has read the byte)
+    // When clear, D_OUT bit 7 is cleared so CPU knows to wait for next byte
+    reg             data_ready;
+    reg             prev_read_strobe;  // Delayed READ_STROBE for proper clearing
 `ifdef SIMULATION
     reg [31:0]      q3_edge_counter;
     reg [31:0]      data_update_counter;
@@ -61,8 +70,8 @@ module apple_drive(
     // Data rate: 1 nibble per 32µs (slow) or 16µs (fast)
     // 1 byte = 64µs (slow) or 32µs (fast)
     // With a 2MHz clock (500ns period), we need 128 cycles for slow and 64 for fast.
-    localparam SLOW_BYTE_PERIOD = 8'd128;
-    localparam FAST_BYTE_PERIOD = 8'd64;
+    localparam SLOW_BYTE_PERIOD = 8'd64;
+    localparam FAST_BYTE_PERIOD = 8'd32;
 
     wire [9:0] max_phase = IS_35_INCH ? MAX_PHASE_35 : MAX_PHASE_525;
     wire [7:0] byte_period = FAST_MODE ? FAST_BYTE_PERIOD[7:0] : SLOW_BYTE_PERIOD[7:0];
@@ -129,14 +138,23 @@ module apple_drive(
         reg [15:0] sample_count;
         reg        track_busy_d;
         if (RESET) begin
-            track_byte_addr <= 13'b0;
-            byte_delay <= 8'd128;  // Initialize to proper delay (SLOW_BYTE_PERIOD)
+            // BRAM READ LATENCY COMPENSATION:
+            // Initialize track_byte_addr to 1 so it's "one ahead" of output.
+            // When we output byte 0, track_byte_addr is 1 (fetching byte 1).
+            // BRAM has 1-cycle latency: address set on cycle N, data ready on cycle N+1.
+            // By running track_byte_addr one step ahead, TRACK_DO contains the
+            // correct data for the PREVIOUS address value when we read it.
+            track_byte_addr <= 13'b1;  // Start at 1 (one ahead) for BRAM latency compensation
+            byte_delay <= 8'd1;  // Start at 1 so first Q3 edge triggers data load
             reset_data_reg <= 1'b0;
             data_reg <= 8'h00;
             disk_ready_d <= 1'b0;
             disk_active_d <= 1'b0;
             sample_count <= 16'd0;
             track_busy_d <= 1'b0;
+            bram_data_valid <= 1'b0;  // Need to wait for BRAM data after reset
+            data_ready <= 1'b0;  // No data ready after reset
+            prev_read_strobe <= 1'b0;  // Initialize strobe tracking
 `ifdef SIMULATION
             q3_edge_counter <= 0;
             data_update_counter <= 0;
@@ -173,6 +191,15 @@ module apple_drive(
                 track_busy_d <= TRACK_BUSY;
             end
             // For reads: advance on Q3 clock like reference implementation. For writes: on Q3 tick.
+
+            // Clear data_ready ONE CYCLE AFTER READ_STROBE fires (Falling Edge)
+            // This allows the CPU to see bit 7=1 throughout the entire read cycle.
+            // We clear it when the strobe goes low so the NEXT read sees bit 7=0.
+            if (prev_read_strobe && !READ_STROBE && (WRITE_MODE == 1'b0)) begin
+                data_ready <= 1'b0;  // CLEAR: End of CPU read
+            end
+            prev_read_strobe <= READ_STROBE;
+
 `ifdef SIMULATION
             if (Q3 && ~Q3_D && DISK_READY && DISK_ACTIVE && sample_count < 16'd20) begin
                 $display("DRIVE%0s: Q3 tick (ready=%0d active=%0d busy=%0d delay=%0d)", IS_35_INCH?"(3.5)":"(5.25)", DISK_READY, DISK_ACTIVE, TRACK_BUSY, byte_delay);
@@ -201,54 +228,14 @@ module apple_drive(
                 end
             end
 `endif
-            // Primary timing: advance on CPU reads via READ_STROBE for responsive disk access
-            // Secondary timing: Q3 clock provides maximum rate limit and timing fallback
-            
-`ifdef SIMULATION
-            // Debug why advancement might be failing after count 360
-            if (READ_STROBE && (WRITE_MODE == 1'b0) && data_update_counter >= 360) begin
-                if (!(DISK_READY && DISK_ACTIVE && ~TRACK_BUSY)) begin
-                    $display("DRIVE%0s: CPU READ BLOCKED - conditions failed: READY=%0d ACTIVE=%0d ~BUSY=%0d (count=%0d)", 
-                             IS_35_INCH?"(3.5)":"(5.25)", DISK_READY, DISK_ACTIVE, ~TRACK_BUSY, data_update_counter);
-                end
-            end
-`endif
-            
-            // CPU-driven advancement: advance immediately when CPU reads the data register
-            if (READ_STROBE && (WRITE_MODE == 1'b0) && DISK_READY && DISK_ACTIVE && ~TRACK_BUSY) begin
-`ifdef SIMULATION
-                $display("DRIVE%0s: CPU READ detected - advancing track immediately", IS_35_INCH?"(3.5)":"(5.25)");
-`endif
-                // Handle data clearing first if needed
-                if (reset_data_reg) begin
-                    data_reg <= 8'b0;
-                    reset_data_reg <= 1'b0;
-`ifdef SIMULATION
-                    $display("DRIVE%0s: DATA_REG cleared to 00 (was %02h) [CPU-driven]", IS_35_INCH?"(3.5)":"(5.25)", data_reg);
-`endif
-                end else begin
-                    // Load new data and advance
-                    data_reg <= TRACK_DO;
-                    // Advance track address
-                    if (track_byte_addr == 13'h19FF) track_byte_addr <= 13'b0;
-                    else track_byte_addr <= track_byte_addr + 1;
-`ifdef SIMULATION
-                    data_update_counter <= data_update_counter + 1;
-                    $display("DRIVE%0s: CPU_READ_UPDATE #%0d - data_reg<=%02h track_byte_addr<=%04h (advancing to %04h)", IS_35_INCH?"(3.5)":"(5.25)", 
-                             data_update_counter + 1, TRACK_DO, track_byte_addr, 
-                             (track_byte_addr == 13'h19FF) ? 13'b0 : track_byte_addr + 1);
-                    // Check for potential counter overflow
-                    if (data_update_counter == 32'hFFFFFFFE) begin
-                        $display("DRIVE%0s: WARNING - data_update_counter about to overflow!", IS_35_INCH?"(3.5)":"(5.25)");
-                    end
-`endif
-                end
-                // Reset byte_delay to provide maximum rate limiting
-                byte_delay <= byte_period;
-            end
+            // Disk rotation is driven ONLY by Q3 timing, NOT by CPU reads!
+            // The CPU reads whatever data is currently in data_reg at the disk's rotation rate.
+            // This is critical for proper GCR sync detection - the disk rotates at a fixed rate
+            // regardless of how fast the CPU polls it.
+
             // Q3 timing simulates disk rotation - data advances at disk speed, not CPU speed
             // This is essential for proper disk operation
-            else if (Q3 && ~Q3_D && DISK_READY && DISK_ACTIVE && ~TRACK_BUSY) begin
+            if (Q3 && ~Q3_D && DISK_READY && DISK_ACTIVE && ~TRACK_BUSY) begin
                 byte_delay <= byte_delay - 1;
 `ifdef SIMULATION
                 q3_edge_counter <= q3_edge_counter + 1;
@@ -285,33 +272,37 @@ module apple_drive(
 `endif
                         end
                         
-                        // Load new data when byte_delay expires 
-                        if (byte_delay == 0) begin
-                            byte_delay <= byte_period;  // Reset the timer
+                        // Load new data - we're already in the byte_delay==0 branch (else from byte_delay > 0)
+                        // BRAM READ LATENCY FIX:
+                        // BRAM has 1-cycle read latency. TRACK_DO contains data from the address
+                        // we set on the PREVIOUS cycle. So we need to:
+                        // 1. Output current TRACK_DO (which is data for current track_byte_addr)
+                        // 2. Advance track_byte_addr (to fetch NEXT byte for next iteration)
+                        //
+                        // The key insight: track_byte_addr is "one ahead" - it's fetching the
+                        // NEXT byte while we output the CURRENT byte from TRACK_DO.
 `ifdef SIMULATION
-                            $display("DRIVE%0s: BYTE_DELAY EXPIRED - loading new data and advancing", IS_35_INCH?"(3.5)":"(5.25)");
-                            $display("DRIVE%0s: BEFORE - data_reg=%02h track_byte_addr=%04h TRACK_DO=%02h", IS_35_INCH?"(3.5)":"(5.25)", data_reg, track_byte_addr, TRACK_DO);
+                        $display("DRIVE%0s: BYTE_DELAY EXPIRED - loading new data and advancing", IS_35_INCH?"(3.5)":"(5.25)");
+                        $display("DRIVE%0s: BEFORE - data_reg=%02h track_byte_addr=%04h TRACK_DO=%02h", IS_35_INCH?"(3.5)":"(5.25)", data_reg, track_byte_addr, TRACK_DO);
 `endif
-                            data_reg <= TRACK_DO;
-                            // Advance track address
-                            if (track_byte_addr == 13'h19FF) track_byte_addr <= 13'b0;
-                            else track_byte_addr <= track_byte_addr + 1;
+                        data_reg <= TRACK_DO;
+                        data_ready <= 1'b1;  // SET: New byte is now available for CPU
+                        // Advance track address to fetch NEXT byte (BRAM will have it ready next time)
+                        if (track_byte_addr == 13'h19FF) track_byte_addr <= 13'b0;
+                        else track_byte_addr <= track_byte_addr + 1;
 `ifdef SIMULATION
-                            data_update_counter <= data_update_counter + 1;
-                            $display("DRIVE%0s: DATA_UPDATE #%0d - data_reg<=%02h track_byte_addr<=%04h (advancing to %04h) Q3_edge=#%0d", IS_35_INCH?"(3.5)":"(5.25)", 
-                                     data_update_counter + 1, TRACK_DO, track_byte_addr, 
-                                     (track_byte_addr == 13'h19FF) ? 13'b0 : track_byte_addr + 1, q3_edge_counter + 1);
-                            if (sample_count < 16'd64 || (sample_count % 16'd100) == 0) begin
-                                $display("DRIVE%0s RD: track=%0d addr=%04h data=%02h (from TRACK_DO) -> data_reg -> D_OUT [count=%0d]", IS_35_INCH?"(3.5)":"(5.25)", TRACK, track_byte_addr, TRACK_DO, sample_count);
-                            end
-`endif
-`ifdef SIMULATION
-                            if (sample_count < 16'd64) begin
-                                sample_count <= sample_count + 1;
-                            end
-`endif
+                        data_update_counter <= data_update_counter + 1;
+                        $display("DRIVE%0s: DATA_UPDATE #%0d - data_reg<=%02h track_byte_addr<=%04h (advancing to %04h) Q3_edge=#%0d", IS_35_INCH?"(3.5)":"(5.25)",
+                                 data_update_counter + 1, TRACK_DO, track_byte_addr,
+                                 (track_byte_addr == 13'h19FF) ? 13'b0 : track_byte_addr + 1, q3_edge_counter + 1);
+                        if (sample_count < 16'd64 || (sample_count % 16'd100) == 0) begin
+                            $display("DRIVE%0s RD: track=%0d addr=%04h data=%02h (from TRACK_DO) -> data_reg -> D_OUT [count=%0d]", IS_35_INCH?"(3.5)":"(5.25)", TRACK, track_byte_addr, TRACK_DO, sample_count);
                         end
-                        
+                        if (sample_count < 16'd64) begin
+                            sample_count <= sample_count + 1;
+                        end
+`endif
+
                         // Request data clearing for next cycle if needed
                         if (READ_DISK && PH0) begin
                             reset_data_reg <= 1'b1;
@@ -327,17 +318,12 @@ module apple_drive(
                         if (READ_DISK && PH0) begin
                             TRACK_WE <= ~TRACK_BUSY;
                         end
+                        // Advance track address (disk keeps spinning during writes too)
+                        if (track_byte_addr == 13'h19FF) track_byte_addr <= 13'b0;
+                        else track_byte_addr <= track_byte_addr + 1;
                     end
-                    // Advance track address after every operation
-                    if (track_byte_addr == 13'h19FF) track_byte_addr <= 13'b0;
-                    else track_byte_addr <= track_byte_addr + 1;
-`ifdef SIMULATION
-                    if (sample_count < 16'd20) begin
-                        $display("DRIVE%0s: ADVANCE addr %04h -> %04h (TRACK_ADDR will be %04h)", IS_35_INCH?"(3.5)":"(5.25)", track_byte_addr, 
-                                 (track_byte_addr == 13'h19FF) ? 13'b0 : track_byte_addr + 1,
-                                 (track_byte_addr == 13'h19FF) ? 13'b0 : track_byte_addr + 1);
-                    end
-`endif
+                    // NOTE: Track address is advanced in both read and write blocks above.
+                    // DO NOT add another increment here - that was causing double advancement!
                 end
                 
                 // OLD Latch clearing logic (from reference implementation) - COMMENTED OUT, now handled in read mode
@@ -358,7 +344,7 @@ module apple_drive(
         end
     end
 
-    assign D_OUT = data_reg;
+    assign D_OUT = data_ready ? data_reg : {1'b0, data_reg[6:0]};
     assign TRACK_ADDR = track_byte_addr;
     assign TRACK_DI = data_reg;
 
