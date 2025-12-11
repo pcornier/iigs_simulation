@@ -1549,8 +1549,6 @@ always @(posedge CLK_14M) begin
 `ifdef DEBUG_ADB
               $display("ADB C010: Loaded next FIFO char=%02h", next_char);
 `endif
-            end else begin
-              akd <= 1'b0;  // Clear any key down status
             end
           end
         end else if (cen & strobe & c010_processed_this_strobe) begin

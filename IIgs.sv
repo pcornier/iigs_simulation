@@ -199,7 +199,7 @@ localparam CONF_STR = {
 	"IIgs;UART19200:9600:4800:2400:1200:300;",
 	"-;",
 	//"S0,DSK;",
-	"S0,HDV2MG;",
+	"S0,HDVPO ;",
 	"S1,DSK;",
 	"S2,DSK;",
 	"-;",
@@ -208,9 +208,9 @@ localparam CONF_STR = {
 
 	"R0,Warm Reset;",
 	"R1,Cold Reset;",
-	"JA,Fire 1,Fire 2;",
-	"jn,A|P,B;",
-	"jp,Y|P,B;",
+	"JA,Fire 1,Fire 2,Fire 3;",
+	"jn,A|P,B,Y;",
+	"jp,Y|P,B,Y;",
 	"V,v",`BUILD_DATE
 };
 
