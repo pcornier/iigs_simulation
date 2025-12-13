@@ -283,15 +283,19 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
 
 wire clk_mem,clk_sys,clk_vid,locked,clk_28;
 wire clk_57;
+wire clk_114;
+wire clk_71;
+assign clk_mem=clk_114;
 assign clk_vid = clk_28;
 pll pll
 (
 	.refclk(CLK_50M),
 	.rst(0),
-	.outclk_0(clk_57),//57.272728
-	.outclk_1(clk_28),//28.636364
-	.outclk_2(clk_mem),//114.545456
-	.outclk_3(clk_sys),//14.
+	.outclk_0(clk_114),//114.545456
+	.outclk_1(clk_71),//70
+	.outclk_2(clk_57),//57.272728
+	.outclk_3(clk_28),//28.636364
+	.outclk_4(clk_sys),//14.318181
 	.locked(locked)
 );
 
@@ -419,7 +423,22 @@ wire ch0_busy = 1'b0;
 
 wire ch0_busy;
 wire fastram_datafromramback;
-
+/*
+sdram sdram
+(
+	.*,
+	.init(~locked),
+	.clk(clk_mem),
+	.addr({2'b00, fastram_address}),
+	.wtbt(0),
+	.dout(fastram_datafromram),
+	.din(fastram_datatoram),
+	.rd(phi2 & ~fastram_we & fastram_ce),
+	.we(phi2 & fastram_we & fastram_ce),
+	.ready()
+);
+*/
+/*
   sdram sdram
   (
   	.*,  // Connect all SDRAM_* signals automatically
@@ -450,6 +469,37 @@ wire fastram_datafromramback;
   	.ch2_dout(),         // Unconnected
   	.ch2_busy()          // Unconnected
   );
+  */
+ 
+
+ sdram sdram
+  (
+	.sd_clk         ( SDRAM_CLK                ),
+	.sd_data        ( SDRAM_DQ                 ),
+	.sd_addr        ( SDRAM_A                  ),
+	.sd_dqm         ( {SDRAM_DQMH, SDRAM_DQML} ),
+	.sd_cs          ( SDRAM_nCS                ),
+	.sd_ba          ( SDRAM_BA                 ),
+	.sd_we          ( SDRAM_nWE                ),
+	.sd_ras         ( SDRAM_nRAS               ),
+	.sd_cas         ( SDRAM_nCAS               ),
+
+  	.init(~locked),
+  	.clk_64(clk_mem),
+  	.clk_8(clk_sys),
+
+  	// Channel 0: CPU fast RAM
+  	.addr({2'b00, fastram_address}),  // Pad to 25 bits
+  	.oe(phi2 & ~fastram_we & fastram_ce),
+  	.we(phi2 & fastram_we & fastram_ce),
+  	.din(fastram_datatoram),
+  	.dout(fastram_datafromram),
+	.ds(2'b11),
+
+
+  );
+  
+ 
 /*
 
 //wire ch0_busy = 1'b0;

@@ -1,9 +1,9 @@
 //
 // sdram.v
-// This version issues refresh only when 8bit channel reads the same 16bit word 2 times
 //
-// sdram controller implementation
-// Copyright (c) 2018 Sorgelig
+// sdram controller implementation for the MiST board
+// 
+// Copyright (c) 2015 Till Harbaum <till@harbaum.org> 
 // 
 // This source file is free software: you can redistribute it and/or modify 
 // it under the terms of the GNU General Public License as published 
@@ -19,245 +19,157 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>. 
 //
 
-module sdram
+module sdram 
 (
-
 	// interface to the MT48LC16M16 chip
-	inout  reg [15:0] SDRAM_DQ,   // 16 bit bidirectional data bus
-	output reg [12:0] SDRAM_A,    // 13 bit multiplexed address bus
-	output reg        SDRAM_DQML, // byte mask
-	output reg        SDRAM_DQMH, // byte mask
-	output reg  [1:0] SDRAM_BA,   // two banks
-	output reg        SDRAM_nCS,  // a single chip select
-	output reg        SDRAM_nWE,  // write enable
-	output reg        SDRAM_nRAS, // row address select
-	output reg        SDRAM_nCAS, // columns address select
-	output            SDRAM_CLK,
-	output            SDRAM_CKE,
+	output              sd_clk,
+	inout  reg [15:0]   sd_data,    // 16 bit bidirectional data bus
+	output reg [12:0]   sd_addr,    // 13 bit multiplexed address bus
+	output     [1:0]    sd_dqm,     // two byte masks
+	output reg [1:0]    sd_ba,      // two banks
+	output              sd_cs,      // a single chip select
+	output              sd_we,      // write enable
+	output              sd_ras,     // row address select
+	output              sd_cas,     // columns address select
 
 	// cpu/chipset interface
-	input             init,			// init signal after FPGA config to initialize RAM
-	input             clk,			// sdram is accessed at up to 128MHz
+	input               init,       // init signal after FPGA config to initialize RAM
+	input               clk_64,     // sdram is accessed at 64MHz
+	input               clk_8,      // 8MHz chipset clock to which sdram state machine is synchonized
 
-	input      [24:0] ch0_addr,
-	input             ch0_rd,
-	input             ch0_wr,
-	input       [7:0] ch0_din,
-	output reg  [7:0] ch0_dout,
-	output reg        ch0_busy,
-
-	input      [24:0] ch1_addr,
-	input             ch1_rd,
-	input             ch1_wr,
-	input       [7:0] ch1_din,
-	output reg  [7:0] ch1_dout,
-	output reg        ch1_busy,
-
-	input      [24:0] ch2_addr,
-	input             ch2_rd,
-	input             ch2_wr,
-	input       [7:0] ch2_din,
-	output reg  [7:0] ch2_dout,
-	output reg        ch2_busy
+	input [15:0]        din,        // data input from chipset/cpu
+	output reg [15:0]   dout,       // data output to chipset/cpu
+	input [23:0]        addr,       // 24 bit word address
+	input [1:0]         ds,         // upper/lower data strobe
+	input               oe,         // cpu/chipset requests read
+	input               we          // cpu/chipset requests write
 );
 
-assign SDRAM_nCS = 0;
-assign SDRAM_CKE = 1;
-assign {SDRAM_DQMH,SDRAM_DQML} = SDRAM_A[12:11];
-
-localparam RASCAS_DELAY   = 3'd1; // tRCD=20ns -> 2 cycles@85MHz
-localparam BURST_LENGTH   = 3'd0; // 0=1, 1=2, 2=4, 3=8, 7=full page
-localparam ACCESS_TYPE    = 1'd0; // 0=sequential, 1=interleaved
-localparam CAS_LATENCY    = 3'd2; // 2/3 allowed
-localparam OP_MODE        = 2'd0; // only 0 (standard operation) allowed
-localparam NO_WRITE_BURST = 1'd1; // 0=write burst enabled, 1=only single access write
+localparam RASCAS_DELAY   = 3'd2;   // tRCD=20ns -> 3 cycles@128MHz
+localparam BURST_LENGTH   = 3'b000; // 000=1, 001=2, 010=4, 011=8
+localparam ACCESS_TYPE    = 1'b0;   // 0=sequential, 1=interleaved
+localparam CAS_LATENCY    = 3'd2;   // 2/3 allowed
+localparam OP_MODE        = 2'b00;  // only 00 (standard operation) allowed
+localparam NO_WRITE_BURST = 1'b1;   // 0= write burst enabled, 1=only single access write
 
 localparam MODE = { 3'b000, NO_WRITE_BURST, OP_MODE, CAS_LATENCY, ACCESS_TYPE, BURST_LENGTH}; 
 
-localparam STATE_IDLE  = 3'd0;             // state to check the requests
-localparam STATE_START = STATE_IDLE+1'd1;  // state in which a new command is started
-localparam STATE_NEXT  = STATE_START+1'd1; // state in which a new command is started
-localparam STATE_CONT  = STATE_START+RASCAS_DELAY;
-localparam STATE_READY = STATE_CONT+CAS_LATENCY+2'd2;
-localparam STATE_LAST  = STATE_READY;      // last state in cycle
 
-reg  [2:0] state;
-reg [22:0] a;
-reg  [1:0] bank;
-reg [15:0] data;
-reg        we;
-reg        ram_req=0;
+// ---------------------------------------------------------------------
+// ------------------------ cycle state machine ------------------------
+// ---------------------------------------------------------------------
 
-wire [2:0] rd,wr;
+// The state machine runs at 128Mhz synchronous to the 8 Mhz chipset clock.
+// It wraps from T15 to T0 on the rising edge of clk_8
 
-assign rd = {ch2_rd, ch1_rd, ch0_rd};
-assign wr = {ch2_wr, ch1_wr, ch0_wr};
+localparam STATE_FIRST     = 3'd0;   // first state in cycle
+localparam STATE_CMD_START = 3'd0;   // state in which a new command can be started
+localparam STATE_CMD_CONT  = STATE_CMD_START  + RASCAS_DELAY; // command can be continued
+localparam STATE_READ      = STATE_CMD_CONT + CAS_LATENCY + 4'd1;
+localparam STATE_LAST      = 3'd7;  // last state in cycle
 
-// access manager
-always @(posedge clk) begin
-	reg old_ref;
-	reg  [2:0] old_rd,old_wr;//,rd,wr;
-	reg [24:1] last_a[3] = '{'1,'1,'1};
-
-	old_rd <= old_rd & rd;
-	old_wr <= old_wr & wr;
-
-	if(state == STATE_IDLE && mode == MODE_NORMAL) begin
-		ram_req <= 0;
-		we <= 0;
-		ch0_busy <= 0;
-		ch1_busy <= 0;
-		ch2_busy <= 0;
-		if((~old_rd[0] & rd[0]) | (~old_wr[0] & wr[0])) begin
-			old_rd[0] <= rd[0];
-			old_wr[0] <= wr[0];
-			we <= wr[0];
-			{bank,a} <= ch0_addr;
-			data <= {ch0_din,ch0_din};
-			ram_req <= wr[0] || (last_a[0] != ch0_addr[24:1]);
-			last_a[0] <= wr[0] ? '1 : ch0_addr[24:1];
-			ch0_busy <= 1;
-			state <= STATE_START;
-		end
-		else if((~old_rd[1] & rd[1]) | (~old_wr[1] & wr[1])) begin
-			old_rd[1] <= rd[1];
-			old_wr[1] <= wr[1];
-			we <= wr[1];
-			{bank,a} <= ch1_addr;
-			data <= {ch1_din,ch1_din};
-			ram_req <= wr[1] || (last_a[1] != ch1_addr[24:1]);
-			last_a[1] <= wr[1] ? '1 : ch1_addr[24:1];
-			ch1_busy <= 1;
-			state <= STATE_START;
-		end
-		else if((~old_rd[2] & rd[2]) | (~old_wr[2] & wr[2])) begin
-			old_rd[2] <= rd[2];
-			old_wr[2] <= wr[2];
-			we <= wr[2];
-			{bank,a} <= ch2_addr;
-			data <= {ch2_din,ch2_din};
-			ram_req <= wr[2] || (last_a[2] != ch2_addr[24:1]);
-			last_a[2] <= wr[2] ? '1 : ch2_addr[24:1];
-			ch2_busy <= 1;
-			state <= STATE_START;
-		end
-	end
-
-	if (state == STATE_READY) begin
-		ch0_busy <= 0;
-		ch1_busy <= 0;
-		ch2_busy <= 0;
-	end
-
-	if(mode != MODE_NORMAL || state != STATE_IDLE || reset) begin
-		state <= state + 1'd1;
-		if(state == STATE_LAST) state <= STATE_IDLE;
-	end
+reg [2:0] t;
+always @(posedge clk_64) begin
+	// 128Mhz counter synchronous to 8 Mhz clock
+	// force counter to pass state 0 exactly after the rising edge of clk_8
+	if(((t == STATE_LAST)  && ( clk_8 == 0)) ||
+		((t == STATE_FIRST) && ( clk_8 == 1)) ||
+		((t != STATE_LAST) && (t != STATE_FIRST)))
+			t <= t + 3'd1;
 end
 
-localparam MODE_NORMAL = 2'b00;
-localparam MODE_RESET  = 2'b01;
-localparam MODE_LDM    = 2'b10;
-localparam MODE_PRE    = 2'b11;
+// ---------------------------------------------------------------------
+// --------------------------- startup/reset ---------------------------
+// ---------------------------------------------------------------------
 
-// initialization 
-reg [1:0] mode;
-reg [4:0] reset=5'h1f;
-always @(posedge clk) begin
-	reg init_old=0;
-	init_old <= init;
-
-	if(init_old & ~init) reset <= 5'h1f;
-	else if(state == STATE_LAST) begin
-		if(reset != 0) begin
-			reset <= reset - 5'd1;
-			if(reset == 14)     mode <= MODE_PRE;
-			else if(reset == 3) mode <= MODE_LDM;
-			else                mode <= MODE_RESET;
-		end
-		else mode <= MODE_NORMAL;
-	end
+// wait 1ms (32 8Mhz cycles) after FPGA config is done before going
+// into normal operation. Initialize the ram in the last 16 reset cycles (cycles 15-0)
+reg [4:0] reset;
+always @(posedge clk_64) begin
+	if(init)	reset <= 5'h1f;
+	else if((t == STATE_LAST) && (reset != 0))
+		reset <= reset - 5'd1;
 end
 
-localparam CMD_NOP             = 3'b111;
-localparam CMD_ACTIVE          = 3'b011;
-localparam CMD_READ            = 3'b101;
-localparam CMD_WRITE           = 3'b100;
-localparam CMD_BURST_TERMINATE = 3'b110;
-localparam CMD_PRECHARGE       = 3'b010;
-localparam CMD_AUTO_REFRESH    = 3'b001;
-localparam CMD_LOAD_MODE       = 3'b000;
+initial reset = 5'h1F;
 
-wire [1:0] dqm = {we & ~a[0], we & a[0]};
+// ---------------------------------------------------------------------
+// ------------------ generate ram control signals ---------------------
+// ---------------------------------------------------------------------
 
-// SDRAM state machines
-always @(posedge clk) begin
-	reg [15:0] last_data[3];
-	reg [15:0] data_reg;
+// all possible commands
+localparam CMD_INHIBIT         = 4'b1111;
+localparam CMD_NOP             = 4'b0111;
+localparam CMD_ACTIVE          = 4'b0011;
+localparam CMD_READ            = 4'b0101;
+localparam CMD_WRITE           = 4'b0100;
+localparam CMD_BURST_TERMINATE = 4'b0110;
+localparam CMD_PRECHARGE       = 4'b0010;
+localparam CMD_AUTO_REFRESH    = 4'b0001;
+localparam CMD_LOAD_MODE       = 4'b0000;
 
-	if(state == STATE_START) SDRAM_BA <= (mode == MODE_NORMAL) ? bank : 2'b00;
+reg [3:0] sd_cmd;   // current command sent to sd ram
 
-	SDRAM_DQ <= 'Z;
-	casex({ram_req,we,mode,state})
-		{2'b1X, MODE_NORMAL, STATE_START}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_ACTIVE;
-		{2'b11, MODE_NORMAL, STATE_CONT }: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE, SDRAM_DQ} <= {CMD_WRITE, data};
-		{2'b10, MODE_NORMAL, STATE_CONT }: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_READ;
-		{2'b0X, MODE_NORMAL, STATE_START}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_AUTO_REFRESH;
+// drive control signals according to current command
+assign sd_cs  = sd_cmd[3];
+assign sd_ras = sd_cmd[2];
+assign sd_cas = sd_cmd[1];
+assign sd_we  = sd_cmd[0];
+assign sd_dqm = sd_addr[12:11];
 
-		// init
-		{2'bXX,    MODE_LDM, STATE_START}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_LOAD_MODE;
-		{2'bXX,    MODE_PRE, STATE_START}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_PRECHARGE;
+reg oe_latch, we_latch;
 
-		                          default: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_NOP;
-	endcase
+always @(posedge clk_64) begin
+	sd_cmd <= CMD_INHIBIT;  // default: idle
+	sd_data <= 16'bZZZZZZZZZZZZZZZZ;
 
-	casex({ram_req,mode,state})
-		{1'b1,  MODE_NORMAL, STATE_START}: SDRAM_A <= a[13:1];
-		{1'b1,  MODE_NORMAL, STATE_CONT }: SDRAM_A <= {dqm, 2'b10, a[22:14]};
+	if(reset != 0) begin
+		// initialization takes place at the end of the reset phase
+		if(t == STATE_CMD_START) begin
 
-		// init
-		{1'bX,     MODE_LDM, STATE_START}: SDRAM_A <= MODE;
-		{1'bX,     MODE_PRE, STATE_START}: SDRAM_A <= 13'b0010000000000;
-
-		                          default: SDRAM_A <= 13'b0000000000000;
-	endcase
-
-	data_reg <= SDRAM_DQ;
-
-	if(state == STATE_READY) begin
-		if(ch0_busy) begin
-			if(ram_req) begin
-				if(we) ch0_dout <= data[7:0];
-				else begin
-					ch0_dout <= a[0] ? data_reg[15:8] : data_reg[7:0];
-					last_data[0] <= data_reg;
-				end
+			if(reset == 13) begin
+				sd_cmd <= CMD_PRECHARGE;
+				sd_addr[10] <= 1'b1;      // precharge all banks
 			end
-			else ch0_dout <= a[0] ? last_data[0][15:8] : last_data[0][7:0];
-		end
-		if(ch1_busy) begin
-			if(ram_req) begin
-				if(we) ch1_dout <= data[7:0];
-				else begin
-					ch1_dout <= a[0] ? data_reg[15:8] : data_reg[7:0];
-					last_data[1] <= data_reg;
-				end
+
+			if(reset == 2) begin
+				sd_cmd <= CMD_LOAD_MODE;
+				sd_addr <= MODE;
 			end
-			else ch1_dout <= a[0] ? last_data[1][15:8] : last_data[1][7:0];
+
 		end
-		if(ch2_busy) begin
-			if(ram_req) begin
-				if(we) ch2_dout <= data[7:0];
-				else begin
-					ch2_dout <= a[0] ? data_reg[15:8] : data_reg[7:0];
-					last_data[2] <= data_reg;
-				end
+	end else begin
+		// normal operation
+
+		// RAS phase
+		// -------------------  cpu/chipset read/write ----------------------
+		if(t == STATE_CMD_START) begin
+			{oe_latch, we_latch} <= {oe, we};
+			if (we || oe) begin
+				sd_cmd <= CMD_ACTIVE;
+				sd_addr <= { 1'b0, addr[19:8] };
+				sd_ba <= addr[21:20];
 			end
-			else ch2_dout <= a[0] ? last_data[2][15:8] : last_data[2][7:0];
+		// ------------------------ no access --------------------------
+			else begin
+				sd_cmd <= CMD_AUTO_REFRESH;
+			end
 		end
+
+		// CAS phase 
+		if(t == STATE_CMD_CONT && (we_latch || oe_latch)) begin
+			sd_cmd <= we_latch?CMD_WRITE:CMD_READ;
+			if (we_latch) sd_data <= din;
+			// always return both bytes in a read. The cpu may not
+			// need it, but the caches need to be able to store everything
+			sd_addr <= { we_latch ? ~ds : 2'b00, 2'b10, addr[22], addr[7:0] };  // auto precharge
+		end
+
+		// Data ready
+		if (t == STATE_READ && oe_latch) dout <= sd_data;
+
 	end
 end
-
 
 altddio_out
 #(
@@ -274,8 +186,8 @@ sdramclk_ddr
 (
 	.datain_h(1'b0),
 	.datain_l(1'b1),
-	.outclock(clk),
-	.dataout(SDRAM_CLK),
+	.outclock(clk_64),
+	.dataout(sd_clk),
 	.aclr(1'b0),
 	.aset(1'b0),
 	.oe(1'b1),
