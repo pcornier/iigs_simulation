@@ -440,8 +440,8 @@ void SimVideo::Clock(bool hblank, bool vblank, bool hsync, bool vsync, uint32_t 
 	}
 
 	//frame_ready = 1;
-	// Reset on rising vsync
-	if (last_vsync && !vsync) {
+	// Reset on vblank falling edge (start of visible frame at vcount=0)
+	if (vb_falling) {
 		count_frame++;
 		count_line = 0;
 		frame_ready = 1;

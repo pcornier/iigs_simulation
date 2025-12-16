@@ -186,7 +186,7 @@ const int input_menu = 12;
 // Video
 // -----
 #define VGA_WIDTH 704
-#define VGA_HEIGHT 240
+#define VGA_HEIGHT 262  // Full NTSC frame: 32 top + 200 active + 30 bottom = 262
 #define VGA_ROTATE 0  // 90 degrees anti-clockwise
 #define VGA_SCALE_X vga_scale
 #define VGA_SCALE_Y vga_scale
