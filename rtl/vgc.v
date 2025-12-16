@@ -35,8 +35,8 @@ input [7:0] NEWVIDEO
 // if NEWVIDEO[7] == 1 then we are in SHRG mode
 
 assign video_addr = NEWVIDEO[7] ? video_addr_shrg : video_addr_ii;
-//wire linear_mode = ~NEWVIDEO[6];
-wire linear_mode =1'b1;
+wire linear_mode = ~NEWVIDEO[6];
+//wire linear_mode =1'b1;  // BUG: was hardcoded, breaks SCB addressing for non-linear modes
 
 /* SHRG */
 reg [22:0] video_addr_shrg_1;
@@ -121,18 +121,20 @@ begin
 		end
 		else
 		begin
+		// Non-linear mode: odd/even scanlines use different banks
+		// Scanline N maps to: odd->$9D00+N/2, even->$5D00+N/2
+		// Since V=32 is scanline 0, index = (V-32)>>1
 		if (V[0])
-			video_addr_shrg <= 'h19D00+((V-'d32+1)>>1);
+			video_addr_shrg <= 'h19D00+((V-'d32)>>1);  // Odd scanlines
 		else
-			video_addr_shrg <= 'h15D00+((V-'d32+1)>>1);
+			video_addr_shrg <= 'h15D00+((V-'d32)>>1);  // Even scanlines
 		end
 	end
 	else if (H=='h38e) begin
 		scb <= video_data;
-		// might need to move the scanline interrupt..
+		// Check for scanline interrupt: SCB bit 6, SHR mode enabled, valid scanline range
 		if (video_data[6] && NEWVIDEO[7] && V > 'd31 && V < 'd206)
-			scanline_irq<=1;	
-		
+			scanline_irq<=1;
 		//$display("SCB = %x video_addr %x",video_data,video_addr);
 		//video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
 		base_toggle<=0;

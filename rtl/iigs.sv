@@ -831,7 +831,6 @@ module iigs
       if (~cpu_we_n)
         // write
         begin
-          //$display("** IO_WR %x %x",addr[11:0],cpu_dout);
           case (addr[11:0])
             // Apple II compatibility soft switches ($C000-$C00F)
             // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
@@ -898,7 +897,7 @@ module iigs
 `ifdef DEBUG_IO
             12'h023: begin $display("VGCINT 23 2 %x 1 %x",cpu_dout[2],cpu_dout[1]);VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
 `else
-            12'h023: begin VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
+            12'h023: VGCINT <= { VGCINT[7:3],cpu_dout[2:1],VGCINT[0]} ; // code can only modify the enable bits
 `endif
             // C028: ROMBANK register does not exist as a separate register on real Apple IIgs hardware.
             // The Hardware Reference Manual states ROMBANK "must always be 0" and "do not modify this bit".
@@ -909,7 +908,7 @@ module iigs
 `ifdef DEBUG_IO
             12'h029: begin $display("**NEWVIDEO %x",cpu_dout);NEWVIDEO <= cpu_dout; end
 `else
-            12'h029: begin NEWVIDEO <= cpu_dout; end
+            12'h029: NEWVIDEO <= cpu_dout;
 `endif
             12'h02b: C02BVAL <= cpu_dout; // from gsplus
 `ifdef DEBUG_IO
@@ -1264,8 +1263,8 @@ module iigs
               vgc_any_pending = (vgc_scan_pending | vgc_1sec_pending);
               io_dout <= {vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, 2'b00, VGCINT[2], VGCINT[1], 1'b0};
 `ifdef SIMULATION
-              $display("READ C023 (VGC IRQ ctrl/status): any=%0d 1sec_pend=%0d scan_pend=%0d en1s=%0d ensl=%0d -> %02h",
-                       vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, VGCINT[2], VGCINT[1], io_dout);
+              $display("READ C023 (VGC IRQ ctrl/status): any=%0d 1sec_pend=%0d scan_pend=%0d en1s=%0d ensl=%0d RAW_VGCINT=%02x -> %02h",
+                       vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, VGCINT[2], VGCINT[1], VGCINT, io_dout);
 `endif
             end
 
