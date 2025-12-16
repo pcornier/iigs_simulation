@@ -35,8 +35,9 @@ input [7:0] NEWVIDEO
 // if NEWVIDEO[7] == 1 then we are in SHRG mode
 
 assign video_addr = NEWVIDEO[7] ? video_addr_shrg : video_addr_ii;
-wire linear_mode = ~NEWVIDEO[6];
-//wire linear_mode =1'b1;  // BUG: was hardcoded, breaks SCB addressing for non-linear modes
+// NEWVIDEO[6] controls CPU memory mapping, but VGC always uses linear addressing for SHR video
+// When NEWVIDEO[7]=1 (SHR mode), the video buffer is always $2000-$9CFF with SCBs at $9D00
+wire linear_mode = 1'b1;
 
 /* SHRG */
 reg [22:0] video_addr_shrg_1;
@@ -113,11 +114,11 @@ reg [3:0] pal_counter;
 always @(posedge clk_vid) if(ce_pix)
 begin
 //$display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H %x V %x NEWVIDEO[6] %x NEWVIDEO[7]",video_data,video_addr,video_addr_shrg,video_addr_ii,H,V,NEWVIDEO[6],NEWVIDEO[7]);
-	// load SCB
+	// load SCB - SCB[0] at $9D00 for scanline 0 (V=32), SCB[N] at $9D00+N
 	if (H=='h38c) begin
 		if (linear_mode)
 		begin
-			video_addr_shrg <= 'h19D00+(V-'d32+1);
+			video_addr_shrg <= 'h19D00+(V-'d32);
 		end
 		else
 		begin
