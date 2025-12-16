@@ -114,11 +114,12 @@ reg [3:0] pal_counter;
 always @(posedge clk_vid) if(ce_pix)
 begin
 //$display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H %x V %x NEWVIDEO[6] %x NEWVIDEO[7]",video_data,video_addr,video_addr_shrg,video_addr_ii,H,V,NEWVIDEO[6],NEWVIDEO[7]);
-	// load SCB - SCB[0] at $9D00 for scanline 0 (V=32), SCB[N] at $9D00+N
+	// load SCB - For display, V=32 uses SCB[1], V=33 uses SCB[2], etc.
+	// The +1 offset means SCB[0] is read at V=31 (for interrupt check only)
 	if (H=='h38c) begin
 		if (linear_mode)
 		begin
-			video_addr_shrg <= 'h19D00+(V-'d32);
+			video_addr_shrg <= 'h19D00+(V-'d32+1);
 		end
 		else
 		begin
@@ -134,7 +135,8 @@ begin
 	else if (H=='h38e) begin
 		scb <= video_data;
 		// Check for scanline interrupt: SCB bit 6, SHR mode enabled, valid scanline range
-		if (video_data[6] && NEWVIDEO[7] && V > 'd31 && V < 'd206)
+		// V >= 31 allows SCB[0] interrupt to fire at V=31 (just before scanline 0 displays at V=32)
+		if (video_data[6] && NEWVIDEO[7] && V >= 'd31 && V < 'd206)
 			scanline_irq<=1;
 		//$display("SCB = %x video_addr %x",video_data,video_addr);
 		//video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
