@@ -56,7 +56,10 @@ assign hsync = ~((hcount >= HSP) && (hcount < HBP));
 assign vsync = ~((vcount >= VSP) && (vcount < VBP));
 
 assign hblank = hcount >= HFP;
-assign vblank = vcount >= 232;  // VBlank starts at line 232 (after active display)
+// VBlank starts at line 240 to allow 8 lines of bottom border (V=232-239)
+// This matches kegs which has 32 top + 200 active + 30 bottom = 262 total
+// For our 240-line buffer: 32 top + 200 active + 8 bottom = 240 visible
+assign vblank = vcount >= 240;
 
 always @(posedge clk_vid) if (ce_pix) begin
   hcount <= hcount + 11'd1;
