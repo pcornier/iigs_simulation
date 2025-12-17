@@ -486,8 +486,8 @@ sdram sdram
 	.sd_cas         ( SDRAM_nCAS               ),
 
   	.init(~locked),
-  	.clk_64(clk_mem),
-  	.clk_8(clk_sys),
+  	.clk_8x(clk_mem),
+  	.clk(clk_sys),
 
   	// Channel 0: CPU fast RAM
   	.addr({2'b00, fastram_address}),  // Pad to 25 bits

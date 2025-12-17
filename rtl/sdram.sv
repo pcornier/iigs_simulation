@@ -34,8 +34,8 @@ module sdram
 
 	// cpu/chipset interface
 	input               init,       // init signal after FPGA config to initialize RAM
-	input               clk_64,     // sdram is accessed at 64MHz
-	input               clk_8,      // 8MHz chipset clock to which sdram state machine is synchonized
+	input               clk_8x,     // sdram is accessed at 64MHz
+	input               clk,      // 8MHz chipset clock to which sdram state machine is synchonized
 
 	input [15:0]        din,        // data input from chipset/cpu
 	output reg [15:0]   dout,       // data output to chipset/cpu
@@ -69,11 +69,11 @@ localparam STATE_READ      = STATE_CMD_CONT + CAS_LATENCY + 4'd1;
 localparam STATE_LAST      = 3'd7;  // last state in cycle
 
 reg [2:0] t;
-always @(posedge clk_64) begin
+always @(posedge clk_8x) begin
 	// 128Mhz counter synchronous to 8 Mhz clock
 	// force counter to pass state 0 exactly after the rising edge of clk_8
-	if(((t == STATE_LAST)  && ( clk_8 == 0)) ||
-		((t == STATE_FIRST) && ( clk_8 == 1)) ||
+	if(((t == STATE_LAST)  && ( clk == 0)) ||
+		((t == STATE_FIRST) && ( clk == 1)) ||
 		((t != STATE_LAST) && (t != STATE_FIRST)))
 			t <= t + 3'd1;
 end
@@ -85,7 +85,7 @@ end
 // wait 1ms (32 8Mhz cycles) after FPGA config is done before going
 // into normal operation. Initialize the ram in the last 16 reset cycles (cycles 15-0)
 reg [4:0] reset;
-always @(posedge clk_64) begin
+always @(posedge clk_8x) begin
 	if(init)	reset <= 5'h1f;
 	else if((t == STATE_LAST) && (reset != 0))
 		reset <= reset - 5'd1;
@@ -119,7 +119,7 @@ assign sd_dqm = sd_addr[12:11];
 
 reg oe_latch, we_latch;
 
-always @(posedge clk_64) begin
+always @(posedge clk_8x) begin
 	sd_cmd <= CMD_INHIBIT;  // default: idle
 	sd_data <= 16'bZZZZZZZZZZZZZZZZ;
 
@@ -186,7 +186,7 @@ sdramclk_ddr
 (
 	.datain_h(1'b0),
 	.datain_l(1'b1),
-	.outclock(clk_64),
+	.outclock(clk_8x),
 	.dataout(sd_clk),
 	.aclr(1'b0),
 	.aset(1'b0),
