@@ -211,7 +211,11 @@ iigs  iigs(
 
         // Keyboard-triggered reset outputs
         .keyboard_reset(keyboard_reset),
-        .keyboard_cold_reset(keyboard_cold_reset)
+        .keyboard_cold_reset(keyboard_cold_reset),
+
+        // Audio outputs
+        .AUDIO_L(AUDIO_L),
+        .AUDIO_R(AUDIO_R)
 );
 
 /*

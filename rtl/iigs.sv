@@ -31,6 +31,7 @@ module iigs
   output VS,
 
   output [15:0] AUDIO_L,
+  output [15:0] AUDIO_R,
 
   output phi2,
   output phi0,
@@ -233,6 +234,7 @@ module iigs
   //logic [7:0] TEXTCOLOR;
   //logic ;
   logic [7:0]         SPKR;
+  logic               speaker_state;  // Apple II speaker toggle state
   logic [7:0]         DISK35;
   logic [7:0]         C02BVAL;
 
@@ -745,6 +747,7 @@ module iigs
       SLTROMSEL<=0;
       TEXTCOLOR<='hf2;
       SPKR<=0;
+      speaker_state<=0;
       DISK35<=0;
       VGCINT<=0; //23
       INTEN<=0; //41
@@ -924,7 +927,7 @@ module iigs
 `else
             12'h02d: begin SLTROMSEL <= cpu_dout; end
 `endif
-            12'h030: SPKR <= cpu_dout;
+            12'h030: begin SPKR <= cpu_dout; speaker_state <= ~speaker_state; end
             12'h031: begin
               DISK35<= cpu_dout & 8'hc0;
 `ifdef SIMULATION
@@ -1287,7 +1290,7 @@ module iigs
             12'h02d: io_dout <= SLTROMSEL;
             12'h02e: io_dout <= v_adjusted >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
             12'h02f: io_dout <= {v_adjusted[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
-            12'h030: io_dout <= SPKR;
+            12'h030: begin io_dout <= SPKR; speaker_state <= ~speaker_state; end
             12'h031: io_dout <= DISK35;
             // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
             12'h032: begin
@@ -2480,8 +2483,12 @@ wire ready_out;
             .host_data_in(snd_din),
             .host_data_out(snd_dout),
             .sound_out(AUDIO_L),
-            .irq(snd_irq)
+            .irq(snd_irq),
+            .speaker_state(speaker_state)
             );
+
+  // Stereo output - mono for now (both channels same)
+  assign AUDIO_R = AUDIO_L;
 
   // SCC (Serial Communications Controller) - Zilog 8530
   scc_iigs_wrapper scc_inst(

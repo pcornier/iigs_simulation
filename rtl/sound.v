@@ -13,7 +13,9 @@ module sound
     output reg [15:0] sound_out,
     output reg        out_strobe,
     output [3:0]      ca,
-    output            irq);
+    output            irq,
+    // Apple II speaker input
+    input             speaker_state);
 
    wire [16:0]       doc_addr_out;
    wire [15:0]       ram_addr;
@@ -33,9 +35,16 @@ module sound
    assign glu_data_in = ram_select ? ram_data_out : doc_data_out;
    assign ram_addr    = osc_en ? doc_addr_out[15:0] : glu_addr_out;
 
+   // Speaker audio: +/- 8192 centered around 0
+   wire signed [15:0] speaker_audio = speaker_state ? 16'sh2000 : -16'sh2000;
+
+   // Boost DOC output by 4x (<<2) and mix with speaker
+   wire signed [15:0] doc_boosted = doc_sound_out <<< 2;
+
    always @(posedge CLK_14M) begin
       out_strobe <= osc_en;
-      sound_out  <= doc_sound_out;
+      // Mix boosted DOC with speaker audio
+      sound_out  <= doc_boosted + speaker_audio;
    end
 
    // BUGFIX: forward ph0_en into soundglu so doc_enable is clocked correctly
