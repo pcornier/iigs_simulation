@@ -1818,9 +1818,10 @@ bool reset_at_frame_cold = false;  // true = cold reset, false = warm reset
 std::vector<int> memory_dump_frames;
 bool memory_dump_mode = false;
 
-// Disk image support
+// Disk image support (supports 2 HDD units - ProDOS limit)
 // ---------------------------
-std::string disk_image = "";  // Empty by default - only mount if specified via --disk
+std::string disk_image = "";   // HDD unit 0 (--disk)
+std::string disk_image2 = "";  // HDD unit 1 (--disk2)
 std::string floppy_image = "";  // Floppy disk image (NIB format, 5.25" 140K)
 
 // Key injection functionality
@@ -2124,7 +2125,8 @@ void show_help() {
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
 	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
-	printf("  --disk <filename>             Use specified HDD image (slot 7, no disk mounted by default)\n");
+	printf("  --disk <filename>             Use specified HDD image (slot 7 unit 0, no disk mounted by default)\n");
+	printf("  --disk2 <filename>            Use specified HDD image for slot 7 unit 1\n");
 	printf("  --floppy <filename>           Use specified floppy image (5.25\" NIB format, drive 1)\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
@@ -2354,7 +2356,11 @@ int main(int argc, char** argv, char** env) {
             headless = true;
         } else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {
             disk_image = argv[i + 1];
-            printf("Using disk image: %s\n", disk_image.c_str());
+            printf("Using HDD unit 0 image: %s\n", disk_image.c_str());
+            i++; // Skip the next argument since it's the filename
+        } else if (strcmp(argv[i], "--disk2") == 0 && i + 1 < argc) {
+            disk_image2 = argv[i + 1];
+            printf("Using HDD unit 1 image: %s\n", disk_image2.c_str());
             i++; // Skip the next argument since it's the filename
         } else if (strcmp(argv[i], "--floppy") == 0 && i + 1 < argc) {
             floppy_image = argv[i + 1];
@@ -2513,6 +2519,9 @@ int main(int argc, char** argv, char** env) {
 	blockdevice.sd_lba[0] = &top->sd_lba[0];
 	blockdevice.sd_lba[1] = &top->sd_lba[1];
 	blockdevice.sd_lba[2] = &top->sd_lba[2];
+	blockdevice.sd_lba[3] = &top->sd_lba[3];  // HDD unit 1
+	blockdevice.sd_lba[4] = &top->sd_lba[4];  // HDD unit 2
+	blockdevice.sd_lba[5] = &top->sd_lba[5];  // HDD unit 3
 	blockdevice.sd_rd = &top->sd_rd;
 	blockdevice.sd_wr = &top->sd_wr;
 	blockdevice.sd_ack = &top->sd_ack;
@@ -2521,6 +2530,9 @@ int main(int argc, char** argv, char** env) {
 	blockdevice.sd_buff_din[0] = &top->sd_buff_din[0];
 	blockdevice.sd_buff_din[1] = &top->sd_buff_din[1];
 	blockdevice.sd_buff_din[2] = &top->sd_buff_din[2];
+	blockdevice.sd_buff_din[3] = &top->sd_buff_din[3];  // HDD unit 1
+	blockdevice.sd_buff_din[4] = &top->sd_buff_din[4];  // HDD unit 2
+	blockdevice.sd_buff_din[5] = &top->sd_buff_din[5];  // HDD unit 3
 	blockdevice.sd_buff_wr = &top->sd_buff_wr;
 	blockdevice.img_mounted = &top->img_mounted;
 	blockdevice.img_readonly = &top->img_readonly;
@@ -2579,13 +2591,17 @@ int main(int argc, char** argv, char** env) {
         blockdevice.MountDisk(floppy_image.c_str(), 0);
     }
 
-    // Mount HDD image into slot 7 backend (only if specified via --disk)
+    // Mount HDD images into slot 7 backend (only if specified via --disk/--disk2)
     if (!disk_image.empty()) {
-        printf("Mounting disk image: %s to index 1 (HDD slot 7)\n", disk_image.c_str());
+        printf("Mounting disk image: %s to index 1 (HDD slot 7 unit 0)\n", disk_image.c_str());
         blockdevice.MountDisk(disk_image.c_str(), 1);
     }
+    if (!disk_image2.empty()) {
+        printf("Mounting disk image: %s to index 3 (HDD slot 7 unit 1)\n", disk_image2.c_str());
+        blockdevice.MountDisk(disk_image2.c_str(), 3);
+    }
 
-    if (disk_image.empty() && floppy_image.empty()) {
+    if (disk_image.empty() && disk_image2.empty() && floppy_image.empty()) {
         printf("No disk images specified - booting without disk\n");
     }
 

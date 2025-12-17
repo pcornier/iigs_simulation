@@ -84,13 +84,13 @@ module emu (
         input [7:0]		ioctl_index,
         output reg		ioctl_wait=1'b0,
 
-        output [31:0]           sd_lba[3],
+        output [31:0]           sd_lba[6],
         output [9:0]            sd_rd,
         output [9:0]            sd_wr,
         input [9:0]             sd_ack,
         input [8:0]             sd_buff_addr,
         input [7:0]             sd_buff_dout,
-        output [7:0]            sd_buff_din[3],
+        output [7:0]            sd_buff_din[6],
         input                   sd_buff_wr,
         input [9:0]             img_mounted,
         input                   img_readonly,
@@ -155,16 +155,17 @@ iigs  iigs(
         .VBlank(vblank),
         .HS(hsync),
         .VS(vsync),
-        /* hard drive */
+        /* hard drive (supports 2 units - ProDOS limit) */
         .HDD_SECTOR(hdd_sector),
         .HDD_READ(hdd_read),
         .HDD_WRITE(hdd_write),
+        .HDD_UNIT(hdd_unit),
         .HDD_MOUNTED(hdd_mounted),
         .HDD_PROTECT(hdd_protect),
         .HDD_RAM_ADDR(sd_buff_addr),
         .HDD_RAM_DI(sd_buff_dout),
-        .HDD_RAM_DO(sd_buff_din[1]),
-        .HDD_RAM_WE(sd_buff_wr & sd_ack[1]),
+        .HDD_RAM_DO(hdd_ram_do),
+        .HDD_RAM_WE(sd_buff_wr & hdd_ack),
 
     //-- track buffer interface for disk 1
     .TRACK1(TRACK1),
@@ -270,31 +271,54 @@ assign VGA_HB=hblank;
 assign VGA_VB=vblank;
 
 
-// HARD DRIVE PARTS
+// HARD DRIVE PARTS (supports 2 units - ProDOS limit)
 wire [15:0] hdd_sector;
+wire        hdd_unit;           // Which unit (0-1) is being accessed (from bit 7)
 
-assign sd_lba[1] = {16'b0,hdd_sector};
-// NOTE: Don't override the full sd_rd/sd_wr bus here; floppy tracks drive bits 0/2.
-// The legacy HDD mux on bit 2 conflicts with floppy 2 and was forcing bit 0 low.
-// For floppy bring-up, leave the bus driven solely by the emu/floppy_track instances.
-//assign sd_rd = { 7'b0, 1'b0,sd_rd_hd,1'b0};
-//assign sd_wr = { 7'b0, 1'b0,sd_wr_hd,1'b0};
-assign sd_rd[1]=sd_rd_hd;
-assign sd_wr[1]=sd_wr_hd;
-
-reg  hdd_mounted = 0;
+// Per-unit mounted and protect status for 2 HDD units
+// Using img_mounted indices: [1]=unit0, [3]=unit1
+reg  [1:0] hdd_mounted = 2'b0;
 wire hdd_read;
 wire hdd_write;
-reg  hdd_protect;
+reg  [1:0] hdd_protect = 2'b0;
 reg  cpu_wait_hdd = 0;
+
+// HDD unit being served (latched when operation starts)
+reg hdd_active_unit = 1'b0;
+
+// Both HDD units share the same sector (routed to their block device indices)
+assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 0
+assign sd_lba[3] = {16'b0, hdd_sector};  // Unit 1
+assign sd_lba[4] = 32'b0;                // Unused
+assign sd_lba[5] = 32'b0;                // Unused
+
+// Route sd_rd/sd_wr to the correct bit based on active unit
+reg  sd_rd_hd;
+reg  sd_wr_hd;
+assign sd_rd[1] = sd_rd_hd & (hdd_active_unit == 1'b0);
+assign sd_rd[3] = sd_rd_hd & (hdd_active_unit == 1'b1);
+assign sd_rd[4] = 1'b0;  // Unused
+assign sd_rd[5] = 1'b0;  // Unused
+assign sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b0);
+assign sd_wr[3] = sd_wr_hd & (hdd_active_unit == 1'b1);
+assign sd_wr[4] = 1'b0;  // Unused
+assign sd_wr[5] = 1'b0;  // Unused
+
+// Select the ack for the active unit
+wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[1] : sd_ack[3];
+
+// HDD RAM output - shared buffer routed to both HDD unit indices
+wire [7:0] hdd_ram_do;
+assign sd_buff_din[1] = hdd_ram_do;  // Unit 0
+assign sd_buff_din[3] = hdd_ram_do;  // Unit 1
+assign sd_buff_din[4] = 8'h00;       // Unused
+assign sd_buff_din[5] = 8'h00;       // Unused
+
 `ifdef SIMULATION
 // Debug counters to measure how long the CPU is stalled by HDD
 reg [31:0] hdd_wait_14m_cycles;
 reg [31:0] hdd_wait_events;
 `endif
-
-reg  sd_rd_hd;
-reg  sd_wr_hd;
 
 always @(posedge clk_sys) begin
         reg old_ack ;
@@ -302,13 +326,33 @@ always @(posedge clk_sys) begin
         reg hdd_write_pending ;
         reg state;
 
-        old_ack <= sd_ack[1];
+        old_ack <= hdd_ack;  // Use the muxed ack for active unit
         hdd_read_pending <= hdd_read_pending | hdd_read;
         hdd_write_pending <= hdd_write_pending | hdd_write;
 
+        // Latch hdd_unit when a new request arrives (before state machine picks it up)
+`ifdef SIMULATION
+        // Debug: show every time hdd_read or hdd_write pulses
+        if (hdd_read | hdd_write) begin
+                $display("HDD_SIM: Request pulse! hdd_unit=%0d hdd_read=%b hdd_write=%b state=%b hdd_read_pending=%b hdd_write_pending=%b hdd_active_unit=%0d",
+                         hdd_unit, hdd_read, hdd_write, state, hdd_read_pending, hdd_write_pending, hdd_active_unit);
+        end
+`endif
+        if ((hdd_read | hdd_write) & !state & !(hdd_read_pending | hdd_write_pending)) begin
+                hdd_active_unit <= hdd_unit;
+`ifdef SIMULATION
+                $display("HDD_SIM: LATCHING unit: hdd_unit=%0d -> hdd_active_unit", hdd_unit);
+`endif
+        end
+
+        // Handle HDD unit mounts (2 units mapped to img_mounted indices 1, 3)
         if (img_mounted[1]) begin
-                hdd_mounted <= img_size != 0;
-                hdd_protect <= img_readonly;
+                hdd_mounted[0] <= img_size != 0;
+                hdd_protect[0] <= img_readonly;
+        end
+        if (img_mounted[3]) begin
+                hdd_mounted[1] <= img_size != 0;
+                hdd_protect[1] <= img_readonly;
         end
 
         if(reset) begin
@@ -336,16 +380,16 @@ always @(posedge clk_sys) begin
                 end
         end
         else begin
-                if (~old_ack & sd_ack[1]) begin
+                if (~old_ack & hdd_ack) begin
                         sd_rd_hd <= 0;
                         sd_wr_hd <= 0;
 `ifdef SIMULATION
-                        $display("HDD: DMA ack rising (~old_ack -> ack) at t=%0t", $time);
+                        $display("HDD: DMA ack rising (~old_ack -> ack) unit=%0d at t=%0t", hdd_active_unit, $time);
 `endif
                 end
-                else if(old_ack & ~sd_ack[1]) begin
+                else if(old_ack & ~hdd_ack) begin
 `ifdef SIMULATION
-                        $display("HDD: DMA ack falling (transfer complete) at t=%0t", $time);
+                        $display("HDD: DMA ack falling (transfer complete) unit=%0d at t=%0t", hdd_active_unit, $time);
 `endif
                         state <= 0;
                         cpu_wait_hdd <= 0;

@@ -33,6 +33,7 @@ module hdd(
     sector,
     hdd_read,
     hdd_write,
+    hdd_unit,
     hdd_mounted,
     hdd_protect,
     ram_addr,
@@ -52,8 +53,9 @@ module hdd(
     output [15:0]    sector;		// Sector number to read/write
     output reg       hdd_read;
     output reg       hdd_write;
-    input            hdd_mounted;
-    input            hdd_protect;
+    output           hdd_unit;		// Which unit (0-1) is being accessed (directly from bit 7)
+    input [1:0]      hdd_mounted;	// Per-unit mounted status (active high)
+    input [1:0]      hdd_protect;	// Per-unit write protect (active high)
     input [8:0]      ram_addr;		// Address for sector buffer
     input [7:0]      ram_di;		// Data to sector buffer
     output reg [7:0] ram_do;		// Data from sector buffer
@@ -99,8 +101,17 @@ module hdd(
     parameter        PRODOS_STATUS_PROTECT = 8'h2B;
     
     assign sector = {reg_block_h, reg_block_l};
-    
-    
+
+    // Unit selection from reg_unit (ProDOS format: bit 7=drive select)
+    // For slot 7: $70=unit0 (bit7=0), $F0=unit1 (bit7=1)
+    assign hdd_unit = reg_unit[7];
+
+    // Helper wires for checking mounted/protect status of current unit
+    wire current_unit_mounted = hdd_mounted[hdd_unit];
+    wire current_unit_protect = hdd_protect[hdd_unit];
+    // Check if any unit is mounted (for ROM visibility)
+    wire any_unit_mounted = |hdd_mounted;
+
     always @(posedge CLK_14M)
     begin: cpu_interface
         if (prefetch_armed) begin
@@ -139,9 +150,9 @@ module hdd(
                          "READ-MIRROR", {12'h0F0, A[3:0]}, D_OUT, reg_command, reg_unit,
                          {reg_block_h, reg_block_l}, {reg_mem_h, reg_mem_l}, sec_addr);
             end else if (IO_SELECT && RD) begin
-                // Directly drive slot ROM data only if HDD is mounted
+                // Directly drive slot ROM data only if any HDD unit is mounted
                 // Otherwise return $FF (empty slot) so boot search skips this slot
-                D_OUT <= hdd_mounted ? rom_dout : 8'hFF;
+                D_OUT <= any_unit_mounted ? rom_dout : 8'hFF;
             end
 
             // WRITE/CONTROL PATH: gate side-effects to phi0
@@ -186,16 +197,18 @@ module hdd(
 				    $display("HDD: reg_command %x",reg_command);
                                     case (reg_command)
                                       PRODOS_COMMAND_STATUS: begin
-                                        // Report mounted status as ok(0) or error(1)
-                                        reg_status <= hdd_mounted ? 8'h00 : 8'h01;
-                                        D_OUT      <= reg_status;
+                                        // Report mounted status as ok(0) or error(1) for current unit
+                                        // Use direct value for D_OUT to avoid non-blocking assignment delay
+                                        reg_status <= current_unit_mounted ? 8'h00 : 8'h01;
+                                        D_OUT      <= current_unit_mounted ? 8'h00 : 8'h01;
 `ifdef SIMULATION
-                                        $display("HDD RD C0F0: STATUS read -> %02h (mounted=%0d unit=%02h)", reg_status, hdd_mounted, reg_unit);
+                                        $display("HDD RD C0F0: STATUS read -> %02h (mounted=%0d unit=%02h hdd_mounted=%b)",
+                                                 current_unit_mounted ? 8'h00 : 8'h01, current_unit_mounted, reg_unit, hdd_mounted);
 `endif
                                       end
                                       PRODOS_COMMAND_READ: begin
-                                        // Initiate read if mounted; otherwise report error immediately
-                                        if (hdd_mounted) begin
+                                        // Initiate read if current unit is mounted; otherwise report error immediately
+                                        if (current_unit_mounted) begin
                                           if (~select_d) hdd_read <= 1'b1;
                                           // Do not change status here; reg_status should be 0x80 after C0F2
                                           D_OUT <= reg_status;
@@ -204,26 +217,26 @@ module hdd(
                                           D_OUT      <= 8'h01;
                                         end
 `ifdef SIMULATION
-                                        $display("HDD RD C0F0: READ start (blk=%04h) status=%02h mounted=%0d", {reg_block_h,reg_block_l}, reg_status, hdd_mounted);
+                                        $display("HDD RD C0F0: READ start (blk=%04h) status=%02h mounted=%0d unit=%02h", {reg_block_h,reg_block_l}, reg_status, current_unit_mounted, reg_unit);
 `endif
                                       end
                                       PRODOS_COMMAND_WRITE: begin
-                                        if (hdd_protect) begin
+                                        if (current_unit_protect) begin
                                           D_OUT <= PRODOS_STATUS_PROTECT;
                                           reg_status <= 8'h01;
 `ifdef SIMULATION
-                                          $display("HDD RD C0F0: WRITE protect");
+                                          $display("HDD RD C0F0: WRITE protect unit=%02h", reg_unit);
 `endif
                                         end else begin
-                                          if (hdd_mounted) begin
-                                            $display("HDD: WRITE command initiated. Asserting hdd_write.");
+                                          if (current_unit_mounted) begin
+                                            $display("HDD: WRITE command initiated for unit %02h. Asserting hdd_write.", reg_unit);
                                             D_OUT <= reg_status; // report busy
                                             hdd_write <= 1'b1;
                                           end else begin
                                             reg_status <= 8'h01; D_OUT <= 8'h01;
                                           end
 `ifdef SIMULATION
-                                          $display("HDD RD C0F0: WRITE (blk=%04h) status=%02h mounted=%0d", {reg_block_h,reg_block_l}, reg_status, hdd_mounted);
+                                          $display("HDD RD C0F0: WRITE (blk=%04h) status=%02h mounted=%0d unit=%02h", {reg_block_h,reg_block_l}, reg_status, current_unit_mounted, reg_unit);
 `endif
                                         end
                                       end

@@ -74,12 +74,13 @@ module iigs
    input [7:0]        paddle_3,
 
  
-   // HDD control
+   // HDD control (supports 2 units - ProDOS limit)
   output [15:0] HDD_SECTOR,
   output        HDD_READ,
   output        HDD_WRITE,
-  input         HDD_MOUNTED,
-  input         HDD_PROTECT,
+  output        HDD_UNIT,           // Which unit (0-1) is being accessed (from bit 7)
+  input  [1:0]  HDD_MOUNTED,        // Per-unit mounted status
+  input  [1:0]  HDD_PROTECT,        // Per-unit write protect
   input [8:0]   HDD_RAM_ADDR,
   input [7:0]   HDD_RAM_DI,
   output [7:0]  HDD_RAM_DO,
@@ -2419,7 +2420,7 @@ wire ready_out;
   );
   `endif
 
-    // Legacy slot-7 HDD 
+    // Legacy slot-7 HDD (supports 4 units)
     hdd hdd(
         .CLK_14M(CLK_14M),
         .phi0(phi0),
@@ -2435,6 +2436,7 @@ wire ready_out;
         .sector(HDD_SECTOR),
         .hdd_read(HDD_READ),
         .hdd_write(HDD_WRITE),
+        .hdd_unit(HDD_UNIT),
         .hdd_mounted(HDD_MOUNTED),
         .hdd_protect(HDD_PROTECT),
         .ram_addr(HDD_RAM_ADDR),

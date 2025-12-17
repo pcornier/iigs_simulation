@@ -986,21 +986,6 @@ end
 
 always @(posedge clk_vid) if (ce_pix)
 begin
-    // Debug text80 and graphics modes - show initial frames only
-    if (H == 32 && V == 32) begin
-        $display("MODE: H=%d V=%d TEXTG=%b EIGHTYCOL=%b GR=%b HIRES_MODE=%b AN3=%b text80=%b graphics=%b line_type=%d",
-                 H, V, TEXTG, EIGHTYCOL, GR, HIRES_MODE, AN3, text80_mode, graphics_mode, line_type_w);
-        $display("Graphics debug: lores_mode=%b hires_mode=%b graphics_color=%h final_graphics_color=%h graphics_pixel=%b",
-                 lores_mode, hires_mode, graphics_color, final_graphics_color, graphics_pixel);
-        $display("Apple II color: consistent_tint=%b shift_reg=%b color_phase=%d apple2_rgb=%h%h%h",
-                 consistent_tint, apple2_shift_reg, color_phase, apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]);
-        $display("Video data: video_data=%h video_addr=%h chram_x=%d xpos=%d",
-                 video_data, video_addr_ii, chram_x, xpos);
-        $display("Pixel timing: graphics_pix_shift=%b buffer_needs_reload=%b",
-                 graphics_pix_shift, buffer_needs_reload);
-        $display("Text debug: window_y_w=%d chpos_y=%d chrom_addr=%h chrom_data_out=%h textpixel=%b",
-                 window_y_w, chpos_y, chrom_addr, chrom_data_out, textpixel);
-    end
     
     // Debug disabled
     // if (H >= 72 && H <= 130 && V == 56 && !GR && text80_mode) begin
