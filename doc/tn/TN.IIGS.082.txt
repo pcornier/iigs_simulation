@@ -1,0 +1,19 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#82:    Controlling the Control Manager
+
+Revised by:     Matt Deatherage                                 November 1990
+Written by:     Dave Lyons                                           May 1990
+
+This Technical Note describes an anomaly in the NewControl2 call in System
+Software 5.0.2 and provides a solution.
+Changes since May 1990:  Noted that System Software 5.0.3 fixes this anomaly.
+_____________________________________________________________________________
+
+This Note formerly advised of a problem with NewControl2-the current port was
+not set before adding the controls, which gave unpredictable results.  System
+Software 5.0.3 and later fix this problem.

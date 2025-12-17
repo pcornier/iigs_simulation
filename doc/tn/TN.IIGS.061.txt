@@ -1,0 +1,29 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#61:    Window Title Handles
+
+Written by:    Dave Lyons                                           July 1989
+
+This Technical Note discusses extensions to SetWTitle and GetWTitle in System 
+Software 5.0 and later which allow handles to be used as window titles.
+_____________________________________________________________________________
+
+Prior to System Software 5.0, window titles were pointers to Pascal-style 
+strings (with a leading length byte), but now window titles can be stored in 
+handles, with bit 31 of titlePtr set to indicate that the parameter is 
+actually a handle.
+
+Once you call SetWTitle with a handle for the title parameter, the handle 
+belongs to the Window Manager,which will dispose of it when the window is 
+closed or retitled.  You must not dispose of the handle yourself, and you must 
+not change the data it contains.
+
+
+Further Reference
+_____________________________________________________________________________
+    o    Apple IIGS Toolbox Reference, Volume 2

@@ -1,0 +1,22 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#56:    Managing Dynamic Segments
+
+Revised by:    Matt Deatherage                                  November 1990
+Written by:    Eric Soldan                                          July 1989
+
+This Technical Note discusses application difficulties when transferring
+control to dynamic segments during low-memory conditions.
+Changes since July 1989:  The information formerly covered in this Note is now
+discussed in greater detail in Apple IIgs Technical Note #22, Proper Use of
+Dynamic Segments.
+_____________________________________________________________________________
+
+This Note formerly warned of the dangers of using dynamic segments-if memory is
+not available for the dynamic segment, the system crashes.  Apple IIgs
+Technical Note #22, Proper Use of Dynamic Segments, covers this problem and
+strategies for working around it.

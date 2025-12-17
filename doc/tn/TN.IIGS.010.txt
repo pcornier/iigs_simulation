@@ -1,0 +1,40 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#10:    InvalRgn Twist
+
+Revised by:    Steven Glass                                     November 1988
+Written by:    Guillermo Ortiz                                     April 1987
+
+InvalRgn(RgnHandle) accumulates the region to which RgnHandle points into the 
+update region of the current window's port; in the process, it makes the 
+region global, thus causing problems if later calls expect the region to still 
+be local.
+_____________________________________________________________________________
+
+The region you pass to InvalRgn is local to the window to which it is related; 
+however, InvalRgn returns the region in global coordinates.  To preserve the 
+original region for your use after the call to InvalRgn, you should duplicate 
+it and use the copy to make the call then dispose of the copy when InvalRgn 
+returns.  The following example demonstrates the process:
+
+    void MyInvalReg(RegHandle)
+
+    handle RegHandle;
+    {
+    handle AuxHandle;
+
+    AuxHandle = NewRgn();            /* create room */
+    CopyRgn(RegHandle,AuxHandle);    /* make a copy  */
+    InvalRgn(AuxHandle);             /* do it with the copy */
+    DisposeRgn(AuxHandle);           /* now get rid of it! */
+    }
+
+
+Further Reference
+o    Apple IIGS Toolbox Reference, Volume 2
+

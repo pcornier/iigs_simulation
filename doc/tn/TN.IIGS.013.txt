@@ -1,0 +1,21 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#13:    ROM 1.0 Modem Firmware Bug
+
+Revised by:    Matt Deatherage                                  November 1988
+Written by:    Mike Askins                                         April 1986
+
+This Technical Note formerly discussed a bug involving buffering and serial 
+port setting commands in the modem firmware in ROM 1.0.
+_____________________________________________________________________________
+
+Apple IIGS ROM 2.0 fixes a bug involving buffering and serial port setting 
+commands in the modem firmware.  You should not have to write a special case 
+to handle this bug since it is reasonable to expect users to have the updated 
+ROM which is offered as a free upgrade from Apple.
+

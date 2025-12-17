@@ -1,0 +1,31 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#58:    Keyboard Modifiers Register Anomaly
+
+Written by:    Dave Lyons                                           July 1989
+
+This Technical Note discusses an anomaly with the keyboard modifiers register 
+at location $C025 which prevents it from always properly reflecting the state 
+of the Control and Shift keys.
+_____________________________________________________________________________
+
+There are two cases where pressing the Control key turns on the Shift bit 
+instead of the Control bit in the keyboard modifiers register:
+
+  o  An arrow key (or a Control key equivalent to an arrow key) is 
+     being held down and is repeating
+  o  The Space bar or Delete key is being held down and repeating with 
+     the Fast Space/Delete option selected in the Control Panel
+
+Since the Event Manager reads the modifiers byte, desktop applications may be 
+affected by this anomaly.
+
+
+Further Reference
+_____________________________________________________________________________
+    o    Apple IIGS Hardware Reference

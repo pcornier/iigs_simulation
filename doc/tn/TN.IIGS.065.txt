@@ -1,0 +1,60 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#65:    Control-^ is Harder Than It Looks
+
+Written by:    Dave Lyons                                      September 1989
+
+This Technical Note describes a problem using Control-^ to change the text 
+cursor with programs that use GETLN.
+_____________________________________________________________________________
+
+On the Apple IIGS, typing Control-^ changes the cursor to the next character 
+typed.  This feature works properly from the keyboard, but there is a problem 
+when programs print the control sequence.  Try entering the following from 
+AppleSoft to demonstrate this problem:
+
+    NEW
+    PRINT CHR$(30);"_"
+
+It changes the cursor into a blinking underscore, as expected.  But now enter 
+the following:
+
+    12345 HOME
+    LIST
+
+You should see 2345 HOME, which demonstrates that the first character is 
+ignored.  This is a problem with GETLN, which AppleSoft uses to read each line 
+of input.  Even if your program does not use this routine, you should be aware 
+of this problem since it will occur the next time another program uses GETLN.
+
+Since changing the cursor works fine when done from the keyboard, the way to 
+work around this problem is to have your program simulate the appropriate 
+keypresses for GETLN.
+
+    301: CLD                        ; required by BASIC.SYSTEM
+    302: STA ($28),Y                ; remove cursor if present
+    304: LDY $0300                  ; get index into simulated-keys list
+    307: LDA $310,Y                 ; get a simulated keypress
+    30A: INC $0300                  ; point to the next key for next time
+    30B: RTS                        ; return the key to GETLN
+
+    310: 9E DF 8D                   ; Ctrl-^, underscore, return
+
+    100 POKE 768,0:PRINT CHR$(4);"IN#A$301":REM Start getting simulated keys
+    110 INPUT "";A$
+    120 PRINT CHR$(4);"IN#0":REM Get real keys again
+
+From an assembly-language program, the equivalent of IN#A$301 is storing $01 
+and $03 in locations $38 and $39, while the equivalent of INPUT is JSR $FD6A 
+(GETLN).  (Store a harmless prompt character, like $80, into location $33 
+first.)
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIGS Firmware Reference, p. 77

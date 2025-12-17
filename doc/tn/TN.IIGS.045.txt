@@ -1,0 +1,34 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#45:    Parameters for GetFrameColor
+
+Revised by:    Matt Deatherage                                 September 1989
+Written by:    Dan Oliver                                       November 1988
+
+This Technical Note formerly attempted to correct the description of the 
+parameters passed to and returned from the routine GetFrameColor in the Window 
+Manager chapter of the Apple IIGS Toolbox Reference.  This call works as 
+documented since System Software 3.2; therefore, former versions of this Note 
+were incorrect.
+Changes since November 1988:  Corrected our error.  Sorry for any 
+inconvenience.
+_____________________________________________________________________________
+
+This Note formerly stated the following:  "The Apple IIGS Toolbox Reference, 
+Volume 2 incorrectly describes the parameters passed to and returned from 
+GetFrameColor on page 25-57."
+
+However, this is incorrect.  Beginning with System Software 3.2, GetFrameColor 
+works as documented in the Apple IIGS Toolbox Reference, Volume 2.  Prior to 
+System Software 3.2, the call did not work at all.  We apologize for any 
+inconvenience this confusion may have caused.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIGS Toolbox Reference, Volume 2

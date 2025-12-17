@@ -1,0 +1,57 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#32:    /INH Line Anomaly
+
+Revised by:    Glenn A. Baxter & Rob Moore                      November 1988
+Written by:    Glenn A. Baxter                                  December 1986
+
+This Technical Note describes a hardware anomaly which affects the use of the 
+/INH line on the Apple IIGS.
+_____________________________________________________________________________
+
+The Apple IIGS maps logical addresses in main and auxiliary RAM spaces to 
+physical RAM devices in such a way that using the /INH line can cause bus 
+contention under certain conditions.  This Note describes the problem and 
+suggests a solution strategy.
+
+In the Apple IIGS, main memory resides within four physical 64 x 4 DRAMs.  
+Memory is logically mapped into two separate banks of 64K x 8.  The logical 
+map of main memory is slightly different than what one might expect.  Owing to 
+the demands of new video modes on the IIGS, the DRAMs need a greater amount of 
+time to perform their function.  The easiest way to allocate time in  a fixed, 
+time-based system is to use a memory interleaving mechanism, and the IIGS 
+implements its video in this fashion.
+
+As a result of this interleaving scheme, the logical map of main and auxiliary 
+memory does not correspond directly to physical DRAMs, but are split in three 
+places.  The split looks like the following:
+
+    First Physical 64K                   Second Physical 64K
+    Main Memory         $0000 - $5FFF    Auxiliary Memory    $0000 - $5FFF
+    Auxiliary Memory    $6000 - $9FFF    Main Memory         $6000 - $9FFF
+    Main Memory         $A000 - $FFFF    Auxiliary Memory    $A000 - $FFFF
+
+Only part of the first physical bank of RAM is inhibited when /INH is brought 
+low; therefore, the /INH function only works between $0000 - $5FFF and $A000 - 
+$FFFF in main memory and $6000 - $6FFF in auxiliary memory.  If a card 
+attempts to inhibit main memory in the range of $6000 - $9FFF or auxiliary 
+memory in the ranges $0000 - $5FFF or $A000 - $FFFF, bus contention results as 
+both the Mega II and the 74HCT245 buffer device attempt to drive the bus 
+simultaneously (which can damage the Mega II).
+
+Because earlier Apple II systems do not arrange their physical memory as 
+described above, cards which use the /INH line may be compatible with the 
+Apple ][+ and IIe, but not with the IIGS.  To be compatible with all Apple II 
+systems, a card should include an address mask that will prevent /INH from 
+going low when the address in in the sensitive ranges of main or auxiliary 
+memory.  The following logic equation represents an appropriate blocking 
+signal for main memory inhibition:
+
+    BLOCK    =    /A15    *    A14    *    A13    ;BLOCK $6000-$7FFF
+             +    A15    *    /A14    *    /A13   ;BLOCK $8000-$9FFF
+

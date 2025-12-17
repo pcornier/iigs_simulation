@@ -1,0 +1,106 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#31:    Redirecting Output in APW C
+
+Revised by:    Guillermo Ortiz                                  November 1988
+Written by:    Guillermo Ortiz                                  November 1987
+
+This Technical Note presents a sample program which shows how to send output 
+to different devices under the Apple Programmer's Workshop (APW) shell.
+_____________________________________________________________________________
+
+Many programmers find the ability to redirect output an expecially useful 
+feature.  The following is a sample C program which allows this redirection 
+through an APW shell command.  Note that this is not applicable to MPW IIGS C 
+since it is not part of the APW environment.
+
+    /*
+    redirect.c
+    Testing the shell REDIRECT command within APW C
+    Demonstrates how to send the output to different devices,
+    a disk file, the printer, and then back to the screen
+    last modified by Guillermo Ortiz 09/21/87
+
+    NOTE: This program checks no errors whatsoever. It expects to
+    be able to open the file with no problems and expects the
+    printer to be readily available. 
+
+    Also remember that for this test to work the file has to be of
+    the type 'EXE' (executable from the shell only.)
+    */
+
+    #include <types.h>
+    #include <misctool.h>
+    #include <stdio.h>
+    #include <shell.h>
+    #include <string.h>
+
+    char timestrg[20];           /* string to store the ascii time */
+    char myfile[80];             /* string to store the filename */
+    char str[80];                /* dummy string */
+    int dev=0x0001;              /* standard output */
+    int app=0x0000;              /* app=0 file is deleted, other will append */
+
+    PrintToFile()
+    {
+     printf("Please enter the output filename: \n");
+     gets(myfile);
+     if (strlen(myfile)==0) 
+       {
+      printf("Error in entering the filename, quit.\n");
+      exit(0);
+    }
+
+     /* REDIRECT call requires pascal string */
+     c2pstr(myfile);
+
+    /* use the REDIRECT shell command to redirect the output to the file */
+     REDIRECT(dev, app, myfile);
+
+     /* now print a few lines of text */
+     printf("This is my first line of text.\n");
+     printf("And this is the second line.\n");
+     printf("Finally the third and last line of text.\n");
+
+    }
+
+    PrintToPrinter()
+    {
+     /* now redirect to output to the .PRINTER. */
+     REDIRECT(dev, app, "\010.PRINTER.");
+
+     printf("We should now be going to the printer.\n");
+     ReadAsciiTime(timestrg);
+     printf ("The time now is %s\n",timestrg);
+    }
+
+    BackToScreen()
+    {  
+     /* Last REDIRECT the output back to the screen. */
+     REDIRECT(dev, app, "\010.CONSOLE.");
+
+     printf("The testing of REDIRECTing the output is done.\n");
+     ReadAsciiTime(timestrg);
+     printf ("The time now is %s\n",timestrg);
+    }
+
+    main()
+    {
+     ReadAsciiTime(timestrg);
+     printf ("The starting time is %s\n",timestrg);
+
+     PrintToFile();
+     PrintToPrinter();
+     BackToScreen();
+    }
+
+
+Further Reference
+o    Apple IIGS Programmer's Workshop Reference
+o    Apple IIGS Programmer's Workshop C Reference
+

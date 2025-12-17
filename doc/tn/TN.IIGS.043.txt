@@ -1,0 +1,28 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIgs
+#43:         Undocumented Feature of CalcMenuSize
+
+Revised by:  Matt Deatherage                                       March 1991
+Written by:  Dan Oliver                                         November 1988
+
+This Technical Note documents that CalcMenuSize can accept a parameter of 
+$FFFF to recalculate menus with uninitialized heights and widths.
+
+Changes since November 1988:  This Note is now obsolete.
+_____________________________________________________________________________
+
+
+This Note formerly described how CalcMenuSize behaves when menu widths and
+heights are stored as $0000 or $FFFF.  This behavior is now documented in
+Volume 3 of the Apple IIgs Toolbox Reference on page 37-3.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Toolbox Reference, Volume 3
+

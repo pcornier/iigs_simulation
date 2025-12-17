@@ -1,0 +1,50 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#47:    What SetDataSize Does
+
+Written by:    Keith Rollin                                     November 1988
+
+This Technical Note clears up any ambiguity in the description of the 
+SetDataSize call.
+_____________________________________________________________________________
+
+The Apple IIGS supports windows that contain scroll bars in their frames.  
+These scroll bars are handled by TaskMaster and differ from Macintosh scroll 
+bars in that the size of the "thumb" or "elevator" is used to indicate the 
+size of the visible area of the document in relation to the total size of the 
+document (the "data size").  Initially, the visible size and the data size are 
+defined by the parameter list passed to NewWindow; however, either of these 
+can be changed by SizeWindow and SetDataSize, respectively.
+
+SetDataSize is used to not only change the range of scrolling allowed, but 
+also to redraw the size of the thumb to reflect the fact that the data size 
+has changed with respect to the visible area.  However, page 25-97 of the 
+Apple IIGS Toolbox Reference contains the following description of 
+SetDataSize:
+
+     "Sets the height and width of the data area of a specified window.  
+     Setting these values will not change the scroll bars or generate 
+     update events."
+
+When the manual states that SetDataSize "will not change the scroll bars," it 
+is referring to the location, or value, of the thumb.  Assume a situation 
+where you have a word processor that scrolls the page using TaskMaster scroll 
+bars.  If you delete a range of text, you would also shorten the entire size 
+of the document.  Calling SetDataSize to reflect that would indeed change the 
+size of the thumb, but it would not change its location.  If you were already 
+scrolled to the bottom of the document when you called SetDataSize, the thumb 
+would become larger (to reflect the fact the the total data size became 
+smaller with respect to the visible data size) and overwrite the down arrow of 
+the scroll bar.  To prevent this situation from occurring, you should also 
+change the origin of the window with SetContentOrigin before calling 
+SetDataSize.
+
+
+Further Reference
+o    Apple IIGS Toolbox Reference, Volume 2
+

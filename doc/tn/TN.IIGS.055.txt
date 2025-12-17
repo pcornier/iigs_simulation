@@ -1,0 +1,36 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#55:    Avoiding ClrHeartBeat
+
+Written by:    Matt Deatherage                                      July 1989
+
+This Technical Note lists changes to the description for ClrHeartBeat.  This 
+information supersedes the description in the Apple IIGS Toolbox Reference 
+Manual.
+_____________________________________________________________________________
+
+The Apple IIGS Toolbox Reference Manual gives the following cautionary note in 
+the description for the call ClrHeartBeat:
+
+    "A desk accessory may have installed tasks in the Heartbeat 
+    Interrupt Task queue.  If you make a ClrHeartBeat call, you will 
+    remove those tasks.  Therefore, under normal circumstances you 
+    should not make this call."
+
+This isn't rude enough to get the point across to some people, so we'll try 
+again:
+
+The Heartbeat Interrupt Task queue does not belong to the application.  
+Different portions of System Software can, and will, install Heartbeat Tasks.  
+If these tasks are removed, anything from a system crash to media corruption 
+may result.  Nothing but System Software should make this call.
+
+
+Further Reference
+_____________________________________________________________________________
+    o    Apple IIGS Toolbox Reference Manual

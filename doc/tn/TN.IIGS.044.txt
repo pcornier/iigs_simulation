@@ -1,0 +1,28 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIgs
+#44:         GetPenState and SetPenState Record Error
+
+Revised by:  Matt Deatherage                                       March 1991
+Written by:  Keith Rollin                                       November 1988
+
+This Technical Note corrects an error in the record used for GetPenState and
+SetPenState.
+
+Changes since November 1988:  This note is now obsolete.
+_____________________________________________________________________________
+
+
+This Note formerly described an error in the pen state record in Volume 1 of
+the Apple IIgs Toolbox Reference.  This error is corrected on page 43-2 of
+Volume 3 of the Toolbox Reference.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Toolbox Reference, Volume 3
+

@@ -1,0 +1,116 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#66:    ExpressLoad Philosophy
+
+Revised by:    Dave Lyons    September 1990
+Written by:    Matt Deatherage    September 1989
+
+This Technical Note discusses the ExpressLoad feature and how it relates to 
+the standard Loader and your application.
+Changes since September 1989:  Removed the warning about Close with reference 
+number zero.
+_____________________________________________________________________________
+
+
+Speedy the Loader Helper
+
+ExpressLoad is a GS/OS feature which is usually present with System Software 
+5.0.  The system does not load it on machines with 512K or less RAM, and there 
+is always the chance that someone has removed it from the System directory.
+
+ExpressLoad operates on Object Module Format (OMF) files which have been 
+"expressed," using either the APW tool Express (or it's MPW counterpart, 
+ExpressIIgs) or created that way by a linker.  Expressed files contain a 
+dynamic data segment named either ExpressLoad or ~ExpressLoad at the beginning 
+of the file. (Current versions of Express and ExpressIIgs create ~ExpressLoad 
+segments, which is the preferred naming convention; older versions created 
+ExpressLoad segments, and should be re-Expressed for future compatibility.)  
+This segment contains information ExpressLoad uses to load the files more 
+quickly than the System Loader, including such things as file offsets to 
+segment headers, mappings of old segment numbers to new segment numbers (these 
+files may have their segments rearranged for optimal performance), and file 
+offsets to relocation dictionaries.
+
+
+Two Loaders, Two Missions, One Function
+
+The System Loader's function is to interpret OMF.  It takes files on disk (or 
+in memory) and transforms them from load files into relocated 65816 code.  It 
+does this very well, but in a very straightforward way.  For example, when the 
+System Loader sees the instruction to right-shift a value n times, it loads a 
+register with the value and performs a right-shift n times.
+
+ExpressLoad has a different mission.  It relies upon the System Loader to 
+handle OMF in a straightforward fashion so it can concentrate upon handling 
+the most common OMF cases in the fastest possible way.  For example, when 
+asked for a specific segment in a load file, the System Loader "walks" the OMF 
+until it finds the desired segment.  ExpressLoad, however, goes directly to 
+the desired segment since an Expressed file contains precalculated offsets to 
+each segment in the ExpressLoad segment.
+
+Since ExpressLoad focuses on the common things performed by the majority of 
+applications, it may not support those applications which rely upon certain 
+features of OMF or the System Loader.  In these cases, the System Loader loads 
+the file as is expected.
+
+ExpressLoad always gets first crack at loading a file, and if it is an 
+Expressed file that ExpressLoad can handle, it loads it.  If the file is not 
+an Expressed file, the System Loader loads it instead.  It is the same process 
+when working with a file that has already been loaded (i.e., loading or 
+unloading segments).
+
+Because an Expressed file is a standard OMF file with an additional segment, 
+Expressed files are almost fully compatible with the System Loader (although 
+it cannot load them any faster than before).  Refer the following section for 
+potential problems.
+
+
+Working With ExpressLoad
+
+As ExpressLoad is intimate in its relationship with the System Loader, most 
+applications work seamlessly with it; however, there are some potential 
+problems about which you should be aware.
+
+  o  Don't mix Expressed files and normal OMF files with the same user 
+     ID.  For example, if your application uses InitialLoad with a 
+     separate file, make sure that if it and your main application 
+     share the same user ID that they are both either Expressed files 
+     or normal OMF files.
+
+  o  Don't use a user ID of zero.  In the past, use of zero told the 
+     System Loader to use the current user ID; however, now both the 
+     System Loader and ExpressLoad have a current user ID.  Be specific 
+     about user IDs when loading.
+
+  o  Avoid loading and unloading segments by number.  Since Expressed 
+     files may have their segments rearranged, if an Expressed file is 
+     loaded by the System Loader, references to segments by number may 
+     be incorrect.
+
+  o  Avoid using GetLoadSegInfo.  This call returns System Loader data 
+     structures which are not supported by ExpressLoad.
+
+  o  Don't try to load segments in files which have not been loaded 
+     with the call InitialLoad.  This process was never a very good 
+     idea, and it is now apt to cause problems.
+
+  o  Don't have segments that link to other files.  ExpressLoad does 
+     not support this type of link.
+
+
+Close With Reference Number Zero
+
+This Note previously said not to call Close with a reference number of zero, 
+because that could close files out from underneath the Loader.  This is no 
+longer a concern, because the Loaders open files in a way that protects them 
+from being closed.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  GS/OS Reference
+

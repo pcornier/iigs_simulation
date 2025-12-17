@@ -1,0 +1,31 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIGS
+#20:    Catalog of APW Language Numbers
+
+Revised by:    Matt Deatherage                                     March 1990
+Written by:    Jim Merritt                                        August 1987
+
+This Technical Note formerly listed APW Language Number assignments, which 
+correspond to auxiliary type values of file type $B0.
+Changes since November 1988:  This information is now documented in Apple II 
+File Type Notes, specifically Notes of file type $B0.
+_____________________________________________________________________________
+
+The correspondence between APW Language Numbers and auxiliary type values for 
+$B0 files is no longer one-to-one.  Although all APW Language Numbers are 
+stored with their source files in the auxiliary type field, there now exist 
+assignments of auxiliary type values for file type $B0 which are not APW 
+languages.
+
+Therefore, the contents of this Note can now be found in the File Type Note 
+for file type $B0, where all such assignments of either kind are still called 
+"APW Language Numbers."
+
+Further Reference
+_____________________________________________________________________________
+  o  File Type Note for file type $B0, Apple IIGS source code files
+

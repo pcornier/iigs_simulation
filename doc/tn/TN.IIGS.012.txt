@@ -1,0 +1,344 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#12:    Tool Set Interdependencies
+
+Revised by:    Matt Deatherage & Dave Lyons                      January 1990
+Written by:    Jim Merritt                                         April 1987
+
+This Technical Note lists all known interdependencies between system tool sets 
+on the Apple IIGS.
+Changes since July 1989:  Apple now recommends starting the Desk Manager 
+last.
+_____________________________________________________________________________
+
+A tool set is dependent upon another if you must start the latter before 
+starting the former.  You should start tool sets in the order listed below.  
+Names marked with an asterisk (*) indicate a recommendation to start the 
+corresponding tool set, but the order is not required for operation of the 
+dependent tool.  Apple recommends using StartUpTools to start up all the tool 
+sets your application needs.  See the Apple IIGS Toolbox Reference, Volume 3 
+for more details.
+
+
+Tool Set Interdependencies
+
+Tool Locator                                 Tool #1 ($01)
+    No dependencies.  Always start this tool set before any others.
+
+Memory Manager                               Tool #2 ($02)
+    Tool Locator             (#1)
+
+Miscellaneous Tools                          Tool #3 ($03)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+
+QuickDraw II                                 Tool #4 ($04)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+
+Desk Manager                                 Tool #5 ($05)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Control Manager          (#16)
+    Menu Manager             (#15)
+    Line Edit                (#20)
+    Dialog Manager           (#21)
+    Scrap Manager            (#22)
+
+Event Manager                                Tool #6 ($06)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+
+Scheduler                                    Tool #7 ($07)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+
+Sound Tools Set                              Tool #8 ($08)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+
+Apple Desktop Bus (ADB)                      Tool #9 ($09)
+    Tool Locator             (#1)
+
+SANE (Standard Apple Numeric Environment)    Tool #10 ($0A)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+
+Integer Math Tools                           Tool #11 ($0B)
+    Tool Locator             (#1)
+
+Text Tools                                   Tool #12 ($0C)
+    Tool Locator             (#1)
+
+Window Manager                               Tool #14 ($0E)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Control Manager          (#16)
+    Menu Manager             (#15)
+    * Line Edit              (#20)           For AlertWindow call only
+    * Font Manager           (#27)           For AlertWindow call only
+    * Resource Manager       (#30)           For using resources in Window 
+                                             Manager calls.
+
+Menu Manager                                 Tool #15 ($0F)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Control Manager          (#16)
+    * Resource Manager       (#30)           For using resources in Menu 
+                                             Manager calls.
+
+Control Manager                              Tool #16 ($10)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Menu Manager             (#15)
+    * QuickDraw Auxiliary    (#18)           For statText controls.
+    * Line Edit              (#20)           For editLine controls.
+    * Font Manager           (#27)           For statText controls.
+    * List Manager           (#28)           For list controls.
+    * Resource Manager       (#30)           For using resources in Control 
+                                             Manager calls.
+    * Text Edit              (#34)           For editText controls.
+
+Note:  You should consider the Window, Control, and Menu Managers as one unit 
+       and start them in the given order.
+
+System Loader                                Tool #17 ($11)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+
+QuickDraw Auxiliary Routines                 Tool #18 ($12)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    * Font Manager           (#27)
+
+Note:  QuickDraw Auxiliary uses the Font Manager in the picture drawing 
+       routines.  For proper operation, you should start the Font Manager 
+       before using the QuickDraw Auxiliary picture routines; however, the 
+       picture routines do not fail if the Font Manager is not present.
+
+Print Manager                                Tool #19 ($13)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    QuickDraw Auxiliary      (#18)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Control Manager          (#16)
+    Menu Manager             (#15)
+    Line Edit                (#20)
+    Dialog Manager           (#21)
+    List Manager             (#28)
+    Font Manager             (#27)
+
+Line Edit                                    Tool #20 ($14)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    * QuickDraw Auxiliary    (#18)           For Text2 items; see below
+    Scrap Manager            (#22)
+    * Font Manager           (#27)           For Text2 items; see below
+
+Dialog Manager                               Tool #21 ($15)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Control Manager          (#16)
+    Menu Manager             (#15)
+    * QuickDraw Auxiliary    (#18)           For Text2 items; see below
+    Line Edit                (#20)
+    * Font Manager           (#27)           For Text2 items; see below
+
+Note:  Line Edit, the Dialog Manager, and the Control Manager require the 
+       presence of the Font Manager and QuickDraw Auxiliary if you use 
+       LETextBox2, statText controls, or LongStatText2 items which require any 
+       font styling (e.g., outline, boldface, etc.).
+
+Scrap Manager                                Tool #22 ($16)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+
+Standard File Operations                     Tool #23 ($17)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Control Manager          (#16)
+    Menu Manager             (#15)
+    Line Edit                (#20)
+    Dialog Manager           (#21)
+    * List Manager           (#28)    
+    * Resource Manager       (#30)           For using resources in 
+                                             Standard File Operations 
+                                             calls.
+
+Note:  Standard File 3.0 and later use the List Manager for displaying a list 
+       of file names.  Although Standard File functions properly if the 
+       application has not started the List Manager, it saves time if the 
+       application does so.
+
+Note Synthesizer                             Tool #25 ($19)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Sound Tools              (#8)
+
+Note Sequencer                               Tool #26 ($1A)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Sound Tools              (#8)
+    Note Synthesizer         (#25)
+
+Note:  The Note Sequencer automatically handles the start and shutdown of the 
+       Free-Form Sound Tools (#8) and the Note Synthesizer (#25), so programs 
+       that use the Note Sequencer must not execute start or shutdown calls 
+       for those tools.  Automatic start does not imply automatic loading.  
+       If you plan to use the Note Sequencer, you must still load the Free-Form 
+       Sound Tool and the Synthesizer Tool explicitly through calls to the Tool 
+       Locator routines LoadTools or LoadOneTool or by calling the System 
+       Loader and Tool Locator directly in appropriate cases.
+
+Font Manager                                 Tool #27 ($1B)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    * Miscellaneous Tools    (#3)            For ChooseFont call only
+    QuickDraw II             (#4)
+    * Integer Math Tools     (#11)           For ChooseFont call only
+    * Window Manager         (#14)           For ChooseFont call only
+    * Control Manager        (#16)           For ChooseFont call only
+    * Menu Manager           (#15)           For FixFontMenu call only
+    * List Manager           (#28)           For FixFontMenu
+                                             and ChooseFont calls
+    * Line Edit              (#20)           For ChooseFont call only
+    * Dialog Manager         (#21)           For ChooseFont call only
+
+List Manager                                 Tool #28 ($1C)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Control Manager          (#16)
+    Menu Manager             (#15)
+
+Audio Compression and Expansion (ACE)        Tool #29 ($1D)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+
+Resource Manager                             Tool #30 ($1E)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+
+MIDI Tools                                   Tool #32 ($20)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    Sound Manager            (#8)
+    * Note Synthesizer       (#25)
+
+Note:  The MIDI Tools require the Note Synthesizer if you intend to use the 
+       MIDI clock feature.  If you are not using the MIDI clock, the Note 
+       Synthesizer is not required.
+
+Text Edit                                    Tool #34 ($22)
+    Tool Locator             (#1)
+    Memory Manager           (#2)
+    Miscellaneous Tools      (#3)
+    QuickDraw II             (#4)
+    Event Manager            (#6)
+    Window Manager           (#14)
+    Menu Manager             (#15)
+    Control Manager          (#16)
+    QuickDraw Auxiliary      (#18)
+    Scrap Manager            (#22)
+    Font Manager             (#27)
+    * Resource Manager       (#30)           For using resources in Text 
+                                             Edit calls.
+
+
+Recommended Start Order
+
+A close look at the preceding information will reveal apparent "circular 
+dependencies" between various tool sets (i.e., two or more tool sets may 
+depend upon each other).  To resolve the issue of which tool set to start 
+first in such a situation, here is a list of the most commonly used tool sets, 
+given in the order in which an application should start them.  You may start 
+those tools which are indented at a specific level at that time or any time 
+thereafter.
+
+    Tool Locator                  (#1)
+        ADB Tools                 (#9)
+        Integer Math Tools        (#11)
+        Text Tools                (#12)
+    Memory Manager                (#2)
+        SANE                      (#10)
+        ACE                       (#29)
+    Resource Manager              (#30)
+    Miscellaneous Tools           (#3)
+        Scheduler                 (#7)
+        System Loader             (#17)      LoaderStartup does nothing.
+    QuickDraw II                  (#4)
+        QuickDraw II Auxiliary    (#18)
+    Event Manager                 (#6)
+    Window Manager                (#14)
+    Control Manager               (#16)
+    Menu Manager                  (#15)
+    LineEdit                      (#20)
+    Dialog Manager                (#21)
+        either
+            Sound Tools then      (#8)
+            Note Synthesizer      (#25)
+        or
+            Note Sequencer        (#26)
+        MIDI Tools                (#32)
+    Standard File Operations      (#23)
+    Scrap Manager                 (#22)
+    List Manager                  (#28)
+    Font Manager                  (#27)
+    Print Manager                 (#19)
+    Text Edit                     (#34)
+    Desk Manager                  (#5)
+
+Note:  Although you may start the sound-related tools any time after the 
+       Miscellaneous Tools, we recommend you start them after most of the 
+       Desktop-related tools.  We also recommend you start the Desk Manager 
+       last and shut it down first.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIGS Toolbox Reference

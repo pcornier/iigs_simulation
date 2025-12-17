@@ -1,0 +1,334 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#26:    ROM Revision Summary
+
+Revised by:    Matt Deatherage                                 September 1989
+Written by:    Rilla Reynolds                                    October 1987
+
+This Technical Note summarizes revisions to the Apple IIGS ROM.
+Changes since November 1988:  Revised to cover ROM 3.
+_____________________________________________________________________________
+
+Apple currently supports two configurations of the Apple IIGS ROM, ROM 1 and 
+ROM 3.  In August 1989, Apple IIGS computers began shipping with a 256K ROM, 
+referred to as version 3 or ROM 3 (ROM 2 was skipped since there was already 
+enough confusion about the first version, ROM 0, and the second version, ROM 
+1).  System Software continues to support ROM 1, but it no longer supports ROM 
+0.  Authorized Apple dealers can upgrade older systems (i.e., machines with 
+serial numbers lower than E704...) to ROM 1 upon request.
+
+ROM 1 requires System Software 2.0 or later, while ROM 3 requires System 
+Software 5.0 or later.  Although applications may work using older system 
+software releases, they may not function properly due to the coordination of 
+system software and ROM revisions.
+
+
+Changes from ROM 0 to ROM 1
+
+ADB
+
+  o  Absolute ADB devices are now supported correctly.
+  o  ADB fatal system error code is now $0911 instead of $0400.
+  o  ADBReset routine now delays about 160 microseconds before reading 
+     the buttons.
+  o  ADBStatus TRUE is now $FFFF instead of $0001.
+  o  All ADB error codes now include the tool number.
+  o  SRQrmv no longer crashes when you make the call with a command 
+     pending.
+
+AppleDisk 3.5
+
+  o  AppleDisk 3.5 Macintosh block reads and writes now work as 
+     documented.
+  o  Extended status call now returns bit 0 = 1 if AppleDisk 3.5 media 
+     has been switched since the last READ, WRITE, or FORMAT.
+  o  New AppleDisk 3.5 status calls have been implemented to get 
+     internal variable and work buffer starting addresses.
+
+AppleTalk
+
+  o  Link Access Protocol (LAP) inter-packet gap now handles added SCC 
+     delay.
+  o  Name Binding Protocol (NBP) now considers uppercase and lowercase 
+     characters identical.
+  o  A nonexistent protocol no longer hangs the dispatcher.
+
+Desk Manager
+
+  o  SaveScreen and RestoreScreen now work.
+
+Event Manager
+
+  o  Now auto-key events are not posted in the queue unless the queue 
+     is empty.
+  o  EMStartUp and EMShutDown code has been optimized.
+  o  Event Manager now returns an error instead of crashing when there 
+     is an attempt to post an invalid event.
+
+Integer Math
+
+New Changes:
+  o  Optimized the multiply routine.
+RAM patches moved to ROM:
+  o  Changes to FixMul, FixRatio, and SDivide.
+  o  SDivide recovers from a divide by zero operation.
+  o  New calls:  FracMul, FixDiv, FracDiv, FixRound, FracSqrt, FracCos, 
+     FracSin, FixATan2, HiWord, LoWord, Long2Fix, Fix2Long, Fix2Frac, 
+     Frac2Fix, Fix2X, Frac2X, X2Fix, X2Frac.
+
+Memory Manager
+
+  o  Optimized Purge and Compact for banks 0 and 1 and moved from RAM 
+     to ROM.
+  o  RAM patches and enhancements moved to ROM.
+  o  RAMdisk now returns bytes transferred count on DIB call.
+  o  SetHandleSize makes a handle temporarily unpurgeable while 
+     changing handle size.
+
+Miscellaneous Tools
+
+RAM patches and enhancements moved to ROM:
+  o  AbsClamp fixes.
+  o  Battery RAM routines work if data bank is set to a bank other than 
+     bank data is in.
+  o  Firmware entry calls now return processor status in high byte 
+     instead of low byte.
+  o  GetAddr with ref number $000E returns SerFlag address for SCC 
+     interrupts (useful if not using serial firmware).
+  o  ID manager can reuse discarded IDs.
+  o  Keyboard interrupts now enable VBL interrupts.
+  o  Munger now works with 1-char strings and returns with A=0.
+  o  New SysBeep call.
+  o  PackBytes and UnpackBytes return with A=0.
+  o  ReadBParam and ReadBRAM error codes corrected.
+  o  WriteBParam and WriteBRAM do not return error codes (this is a 
+     documentation change).
+  o  WriteTimeHex Bad Parameter error code is now $31.
+
+Monitor
+
+  o  80-column screens maintained if break occurs and Pascal protocol 
+     in effect.
+  o  AppleSoft tabbing in 80-column mode now works correctly.
+  o  Control Panel's Maximum RAM Disk Size increased to 8128K instead 
+     of 4096K.
+  o  Firmware version number returned is $1 instead of $0.
+  o  Interrupts now disabled during paddle read routines.
+  o  Interrupts re-enabled after fatal system error (for debug DAs).
+  o  Mouse clamps with positive minimum and negative maximum works 
+     (e.g., $6000 min, $8000 max).
+  o  New monitor command, pound sign (#), installs monitor entry and 
+     memory peeker classic desk accessories (unless already installed), 
+     accessible via the Control Panel.  Reinstalled automatically on 
+     reset;  disabled by power off only.
+  o  New monitor command, Control-N, clears m, e, and x bits for native 
+     mode.  (Control-R still  switches to 8-bit, emulation mode.)
+  o  RESET entry point at $00FA62 sets state register to $0C and shadow 
+     register to $08.
+  o  Shadowing of the Super Hi-Res area in Bank 1 is no longer enabled 
+     automatically.
+  o  WAIT routine now always exits with C=1.
+
+QuickDraw II
+
+RAM patches and enhancements moved to ROM:
+  o  640-mode pen masks now work when portRect origin not a multiple of 8.
+  o  Arcs, ovals, and round rects can be drawn across bank boundaries.
+  o  Changes to round drawing routines: PPToPort, GetFontLore, 
+     GetROMFont, and InflateTextBuffer.
+  o  Current bank bytes 100...106 no longer modified by scaling and 
+     mapping calls.
+  o  FontFlags 1 and 2 added for pen width and color control.
+  o  FramePoly returns with A=0.
+  o  GetPort returns all four bytes of GrafPort.
+  o  HideCursor and ShowCursor work correctly with obscured cursor.
+  o  MapRgn now works on rectangular regions.
+  o  Pixel painting routines support QuickDraw Auxiliary Tool Set 
+     stretching and shrinking.
+  o  PPToPort now clips correctly to the current portRect.
+  o  QDStartUp and QDShutDown save and restore the scan line interrupt 
+     vector.
+  o  RectInRgn bug fixed.
+  o  ScrollRect works when the ClipRgn and VisRgn are not rectangular.
+  o  SetSysFont works.
+  o  StdPixels now returns with A=0 if the pen is not visible.
+  o  Text underline bug fixed.
+  o  TextBounds works.
+New QuickDraw changes:
+  o  Busy flag now maintained correctly by ClosePort, OffsetRgn, 
+     InsetRgn, KillPoly, FillRect, FrameOval, PaintOval, EraseOval, 
+     InvertOval, FillOval, FrameArc, PaintArc, EraseArc, InvertArc, 
+     FillArc, FrameRRect, PaintRRect, EraseRRect, InvertRRect, and 
+     FillRRect.
+  o  Cursor appears in correct Super Hi-Res mode as determined by the 
+     low byte's bit 7 (320/640) of the MasterSCB.
+
+SANE
+
+  o  Elems now can be called from any part of memory.
+  o  HALT exception jumping through the incorrect vector fixed.
+  o  Integer overflow during conversion reported.
+  o  STATUS call moved to ROM.
+
+Scheduler
+
+  o  Scheduler now accepts a flush function call.
+  o  Task-handling RAM patch (on System Disk 1.0 and later) moved to 
+     ROM.
+
+Serial I/O
+
+  o  First character after an XON is no longer trashed when buffering 
+     is not enabled.
+  o  If serial mode bit 17 = 1, parity and framing error suppression 
+     are defeated.
+  o  Parity, baud, and data format commands work with buffering.
+  o  STATUS call will not report that a character is ready if the 
+     character arrives with a parity or framing error.
+  o  STATUS call works correctly with XON/XOFF protocol.
+
+SmartPort
+
+  o  PR#5, following a PR#5 with I/O error (i.e., no disk in drive), 
+     now boots as expected.
+  o  SmartPort manipulates only Slot 6 motor on detect so the IWM can 
+     run in fast mode.
+
+Sound
+
+  o  Fixed bug in FFStopSound call.
+  o  Fixed low-level RAM read/write bug.
+  o  Interrupts are disabled when the internal bell is active.
+  o  Interrupts no longer need to be disabled when accessing sound RAM.
+  o  New sound diagnostics with the following error codes:  $0C001 = 
+     failed RAM data test, $0C002 = RAM address test, $0C003 = register 
+     data test, and $0C004 = control register test.
+  o  Sound Manager RAM patches and enhancements moved to ROM.
+
+Text Tools
+
+RAM patches moved to ROM:
+  o  RAM patches moved to ROM for Writing and ErrorWriting routines.
+  o  TextInit Illegal device error now is in 16-bit mode instead of 8.
+
+Tool Locator
+
+  o  Optimized tool dispatcher.
+  o  ROM tools present on a memory expansion card are installed.
+
+
+Changes from ROM 1 to ROM 3
+
+ROM 3 is 256K (double the size of ROM 1) and contains several tools which do 
+not exist in ROM 1.  The patch file TS3 fixes known bugs in ROM 3 which were 
+discovered after it was frozen.  ROM 3 tools are basically System Software 5.0 
+tools, and the System Software 5.0 documentation covers these tools in detail.  
+This Note only documents non-tool changes.
+
+AppleDisk 3.5 and SmartPort
+
+  o  Use new routines for all block reads to fast RAM to eliminate 
+     double buffering.
+  o  The extended DIB status call returns the device subtype byte $C1.
+  o  Fixed anomalies described in SmartPort Technical Note #6, Apple 
+     IIGS SmartPort Errata.
+  o  Fixed a ROM 1 bug that caused Write Protected to be returned with 
+     higher priority than Device Offline for the ProDOS STATUS call.
+
+AppleTalk
+
+  o  AppleTalk moved to slots 1 and 2 from slot 7.
+
+Control Panel CDA
+
+  o  The original Options menu is now the Keyboard menu and does not 
+     contain mouse parameters.
+  o  A new Mouse menu is present.  The new keyboard microcontroller 
+     allows finer control of mouse tracking, so a selection procedure 
+     better than yes or no is present.  Parameters are also available 
+     to set the keyboard mouse feature, which allows the numeric keypad 
+     to emulate a mouse.
+  o  Added an option to resize the RAM disk on the next reset in the 
+     RAM Disk menu.  This option resets to No after one reboot and 
+     resizing so the RAM disk is not accidently reformatted on every 
+     boot thereafter.
+  o  If slot 7 is set to AppleTalk, the Control Panel displays a 
+     warning if neither slot 1 nor slot 2 is similarly set.
+  o  The Printer Port and Modem Port menus now display only those 
+     parameters that may be changed if AppleTalk is the selection for 
+     those ports.
+  o  The RAM disk no longer has minimum and maximum settings, but 
+     rather one RAM disk size setting.
+
+Monitor
+
+  o  Enhanced memory searching commands to automatically cross bank 
+     boundaries.
+  o  Added Step and Trace debugging functions.
+  o  Now provide vectors for the same functionality as the GS/OS System 
+     Service calls MEMORY_MOVER, DYN_SLOT_ARBITER and SET_SYS_SPEED in 
+     bank $E1.
+  o  Now resize the RAM disk when the system is rebooted with the 
+     Control-Open Apple-Shift-Reset key combination.
+  o  Handle text page 2 shadowing and power-up bits in the new CYA 
+     chip.
+  o  Flash the border if the sound volume is set to zero and a beep is 
+     necessary.
+  o  In ROM 1 and earlier, the Miscellaneous Tools mouse firmware 
+     called the 8-bit mouse routines in the $C400 space to do the work.  
+     In ROM 3, the 8-bit routines call the 16-bit routines to read the 
+     hardware.  This change effectively means those programs which use 
+     16-bit mouse calls (including desktop applications through the 
+     Event Manager) may use the mouse when slot 4 is set to Your Card.
+  o  Slots 1 and 2 may now be set to Printer, Modem, AppleTalk, or Your 
+     Card.  With System Software 5.0, slot 7 does not need to be set to 
+     AppleTalk to use an AppleTalk network, although one can do it for 
+     compatibility.  There is no transparent printing firmware in slot 7.
+  o  The Alternate Display Mode CDA no longer sets the system to fast 
+     speed when normal speed is selected in the Control Panel.
+  o  Added a new command, {val}=V, to set the video screen display I/O 
+     switches when resuming a program.
+  o  Control-T command now works as a toggle--executing it once changes 
+     to text mode, but now executing it again switches back to the 
+     previous video mode   You may change this saved video mode with 
+     the =V command.
+  o  Battery RAM value $59 now controls the presence of the Visit 
+     Monitor and Memory Peeker CDAs.  If this byte has the high bit set 
+     at boot time, the CDAs are automatically installed.
+  o  The Monitor and Memory Peeker both allow the use of Control-X to 
+     terminate a long display (i.e., a handle list or memory dump).
+
+Serial I/O
+
+  o  XON and XOFF are no longer sent with the high bit set when 
+     buffering is enabled.
+  o  Terminal mode cursor is more consistent with the rest of the 
+     system.
+  o  Extended Interface calls now return errors in the carry and the 
+     accumulator.
+
+Toolbox
+
+The following tools are now in ROM:
+
+  o  Window Manager
+  o  Menu Manager
+  o  Control Manager
+  o  Line Edit
+  o  Dialog Manager
+  o  Scrap Manager
+  o  Font Manager
+  o  List Manager
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIGS Firmware Reference
+  o  Apple IIGS Toolbox Reference
+  o  Apple IIGS Technical Note #52, Loading and Special Memory
+  o  SmartPort Technical Note #6, Apple IIGS SmartPort Errata

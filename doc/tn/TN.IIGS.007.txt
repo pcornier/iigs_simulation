@@ -1,0 +1,23 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#7:    Halt Mechanism in IIGS SANE
+
+Revised by:    Guillermo Ortiz & Matt Deatherage                November 1988
+Written by:    Guillermo Ortiz                                  December 1986
+
+This Technical Note formerly described a bug of SANE on the Apple IIGS which 
+caused it to jump through location $00/0018 instead of through the HALT vector 
+in the SANE direct page.
+_____________________________________________________________________________
+
+The bug which caused SANE on the Apple IIGS to jump through location $00/0018 
+instead of through the HALT vector in the SANE direct page was fixed in the 
+Apple IIGS ROM 2.0.  You should not have to write a special case to handle 
+this bug since it is reasonable to expect users to have the updated ROM which 
+is offered as a free upgrade from Apple.
+

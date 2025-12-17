@@ -1,0 +1,90 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#41:    Font Family Numbers
+
+Revised by:    Matt Deatherage & Keith Rollin                   November 1990
+Written by:    Rilla Reynolds & Jeff Erickson                        May 1988
+
+This Technical Note lists fonts and font family numbers as well as
+considerations when printing to a LaserWriter printer and a word of caution
+about using font family numbers.
+Changes since November 1988:  Added information about the font family numbering
+convention used by those who assign font family numbers.
+_____________________________________________________________________________
+
+The following table lists fonts and their corresponding font family numbers.
+All family numbers are listed in decimal format except the first three.
+
+    ID       Family Name          ID        Family Name
+    $FFFD    Chicago              12        Los Angeles
+    $FFFE    Shaston              13        Zapf Dingbats*
+    $FFFF    (no font)            14        Bookman*
+    0        System Font          15        Helvetica Narrow*
+    1        System Font          16        Palatino*
+    2        New York             18        Zapf Chancery*
+    3        Geneva               20        Times*
+    4        Monaco               21        Helvetica*
+    5        Venice               22        Courier*
+    6        London               23        Symbol*
+    7        Athens               24        Taliesin
+    8        San Francisco        33        Avant Garde*
+    9        Toronto              34        New Century Schoolbook*
+    11       Cairo
+
+Fonts denoted with an asterisk (*) are resident in the ROM on the LaserWriter
+Plus, IINT and IINTX printers.  The name of Times on these printers is actually
+Times-Roman.  The decimal font family ID for Shaston (a modified Helvetica) is
+65534 (-2), not 65524 as documented in the Font Manager chapter of the Apple
+IIGS Toolbox Reference.
+
+When printing to a LaserWriter printer with the font substitution option turned
+on, the system substitutes Times, Helvetica, and Courier for thescreen fonts New
+York, Geneva, and Monaco respectively.
+
+Prior to System Software 3.2, all non-LaserWriter fonts (except New York,
+Geneva, and Shaston) were converted to Courier when printing.  With System
+Software 3.2 and later, the LaserWriter driver prints bitmap versions of the
+screen fonts if they are non-LaserWriter fonts unless it is driving an original
+LaserWriter printer.  In this case, fonts which are in ROM on later LaserWriter
+printers are converted to Courier unless you download a PostScript version of
+the font prior to printing.  This difference is a limitation of the current
+LaserWriter driver and it occurs even if the font substitution option is turned
+off.  With System Software 5.0 and later, the LaserWriter driver uses fonts
+previously downloaded, although it does not download PostScript fonts itself.
+
+
+Font Family Number Conventions
+
+By convention, font family numbers that have the high bit set are designed for
+the 5:12 aspect ratio of the Apple IIgs computer.  Font family numbers with the
+high bit clear are designed for computers with a 1:1 pixel aspect ratio, such as
+the Macintosh.  Fonts designed for a 1:1 pixel aspect ratio appear "tall and
+skinny" when displayed on an Apple IIgs.
+
+Some third-party font packages were released before this convention was defined;
+therefore, font family numbers between 1000 and 1200 (decimal) do not adhere to
+this convention.
+
+
+Caution
+
+Font family numbers can be arbitrary numbers which the system assigns to fonts.
+We recommend that you always ask for a font by name (with the Font Manager call
+GetFamNum), then use the returned family number as input  to those calls which
+require it.  (On the Macintosh, the Font/DA Mover checks to see if a font family
+number is already in use by the system when it installs fonts.  If it finds that
+a number is already in use, it changes the current font number to an unused
+number.  If you move a font from the Macintosh tothe IIGS, the font family
+number is likely to be arbitrary, as is the font family number of any
+user-created fonts.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Toolbox Reference, Volumes 1 & 2
+

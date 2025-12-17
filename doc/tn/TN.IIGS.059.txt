@@ -1,0 +1,25 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIgs
+#59:    Do Not Create Zero-Length Text Scraps
+
+Revised by:    Dave Lyons                                        January 1991
+Written by:    Dave Lyons                                           July 1989
+
+This Technical Note described a problem with zero-length text scraps.
+Changed since July 1989:  This Note is obsolete beginning with System Software
+5.0.3.  There is no longer a problem with creating a text scrap of length zero.
+____________________________________________________________________________
+
+In System Software 5.0.3 and later, LEFromScrap no longer trashes memory if you
+create a text scrap (scrap type 0) with length zero.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Toolbox Reference, Volume 2
+

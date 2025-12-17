@@ -1,0 +1,43 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#40:    VBL Signal
+
+Revised by:    Dave Lyons                                           July 1989
+Written by:    Rob Moore & Rilla Reynolds                            May 1988
+
+This Technical Note discusses reading the VBL signal to accomplish smooth 
+animation.
+Changes since November 1988:  Noted that vertical blanking does not begin 
+when you might expect on the Apple IIGS and removed references to the Apple 
+IIc.
+_____________________________________________________________________________
+
+Applications can accomplish smooth animation on the Apple IIGS and Apple IIe 
+by changing the data on the screen during the time the system is tracing the 
+unusable area of the display.  This time is called "vertical blanking" or 
+"VBL" in this Note.  You can determine the state of the VBL signal by reading 
+location $C019.
+
+On the Apple IIGS, the $C019 sense of the VBL signal differs from the IIe.  On 
+the IIGS, the screen is blanked when the most significant bit of $C019 is 
+high (greater than 127 or $7F), while on the IIe, the screen is blanked when 
+the bit is low (less than 128 or $80).
+
+A VBL interrupt also is available on Apple II systems via the Apple IIGS 
+Miscellaneous Tool Set or mouse firmware, the Apple IIe mouse card, and the 
+Apple IIc mouse firmware.
+
+On the Apple IIGS, vertical blanking begins at scan line 192 regardless of the 
+display mode.  When the Super Hi-Res display is visible, vertical blanking 
+begins eight scan lines before the bottom of the display area.  If the VBL 
+interrupt is enabled, it triggers at scan line 192.
+
+
+Further Reference
+_____________________________________________________________________________
+    o    Apple IIGS Technical Note #39, Mega II Video Counters

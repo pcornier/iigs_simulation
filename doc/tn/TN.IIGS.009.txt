@@ -1,0 +1,34 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#9:    IIGS Sound Expansion Connector:
+       Analog Input/Output Impedances
+
+Revised by:    Jim Merritt & Jim Mensch                         November 1988
+Written by:    Jim Merritt                                      December 1986
+
+This Technical Note discusses the impedances of the analog signal pins on the 
+IIGS sound expansion connector since an interface to this connector must take 
+the impedance of the pins into account to function properly.
+_____________________________________________________________________________
+
+The analog output impedance of pin 3 depends upon the characteristics of the 
+5503 sound synthesis chip in any particular IIGS machine.  Across systems, 
+this impedance may range from 4.5 K ohms to 9 K ohms.
+
+Pin 1, the A/D input, presents a dynamic load to the source, drawing at 10 K 
+ohms for approximately 500 ns during every sample period.  It is reasonable, 
+however, to treat the input pin as if it presents a continuous load of 10 K
+ohms without compromising the interface or the fidelity of the input sample.
+
+Consult the Apple IIGS Hardware Reference for further technical information 
+about the Ensoniq 5503 sound synthesis chip used in the IIGS.
+
+
+Further Reference
+o    Apple IIGS Hardware Reference
+

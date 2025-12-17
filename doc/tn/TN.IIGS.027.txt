@@ -1,0 +1,32 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#27:    Graphics Image File Formats
+
+Revised by:    Matt Deatherage                                  November 1988
+Written by:    Steve Glass, Eagle Berns, Art Cabral,
+               Pete McDonald & Rilla Reynolds                    October 1987
+
+This Technical Note formerly described the file formats for Apple IIGS 
+graphics image files.  File formats are now documented in Apple II File Type 
+Notes under corresponding file types and auxiliary types:
+_____________________________________________________________________________
+
+File Type $C0
+    Auxiliary Type $0000    "PaintWorks" Packed Format
+    Auxiliary Type $0001    PackBytes Packed Format
+    Auxiliary Type $0002    "Apple Preferred" Packed Format
+
+File Type $C1
+    Auxiliary Type $0000    32K unpacked picture image
+    Auxiliary Type $0001    Unpacked QuickDraw II picture
+
+
+Further Reference
+o    Apple II File Type Notes
+
+

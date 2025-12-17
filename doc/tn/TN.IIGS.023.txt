@@ -1,0 +1,51 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#23:    Toolbox Use of DOC RAM
+
+Revised by:    Matthew Denman & Matt Deatherage                 November 1988
+Written by:    Jim Merritt                                       October 1987
+
+This Technical Note explains why you must be careful about which values you 
+store in the first page of the Ensoniq Digital Oscillator Chip (DOC) RAM when 
+using Note Synthesizer and MIDI Tool Sets on the Apple IIGS.
+_____________________________________________________________________________
+
+The Apple IIGS Note Synthesizer uses an oscillator as a free-running timer to 
+clock the update of waveform envelopes when the DOC sounds notes.  To act as a 
+timer, the oscillator "plays" the contents of bytes $00 - $FF in DOC RAM at 
+zero volume.  Once it scans through the entire "waveform buffer," the 
+oscillator generates an interrupt, which the appropriate Note Synthesizer 
+routines service.
+
+When using the Note Synthesizer or the Note Sequencer without the MIDI Tool 
+Set, there is no need to avoid using DOC RAM locations $00 - $FF for general 
+waveform storage.  More than one oscillator can play from the same waveform 
+buffer at the same time, so the function of the timer oscillator does not 
+affect normal use of the DOC for sound generation purposes in any way.  
+However, you should not fill the first page of DOC RAM with waveforms that are 
+delimited by zero bytes (as is sometimes appropriate in special situations, 
+discussion of which is beyond the scope of this Note).  The presence of zero 
+bytes in the first page of DOC RAM can cause serious system performance 
+degradation and can even cause the system to hang.  In particular, it is 
+always inappropriate to store arbitrary, non-waveform data in the first page 
+of DOC RAM since such data often includes zero bytes (which would be corrupted 
+were you to remove or modify them).
+
+The Apple IIGS MIDI Tool Set also uses bytes $00 - $FF of DOC RAM for timing 
+purposes, but it uses a different oscillator than the Note Synthesizer.  If 
+you want MIDI time stamping, you may not use the first page (bytes $00 - $FF) 
+of DOC RAM for your own purposes since the MIDI Tool Set uses the contents of 
+those bytes for time-stamping purposes.
+
+You may use the MIDI, Note Synthesizer, and Note Sequencer Tool Sets together, 
+but you must not use bytes $00 - $FF of DOC RAM for any purpose if using MIDI 
+time stamping, nor store zero bytes in this area when using the Note 
+Synthesizer.  You might consider it appropriate to avoid using the first page 
+of DOC RAM, if possible, to facilitate adding MIDI support to your application 
+at a later date.
+

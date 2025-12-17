@@ -1,0 +1,23 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#48:    All About AlertWindow
+
+Revised by:    Dave Lyons                                           July 1989
+Written by:    Dan Oliver & Keith Rollin                        November 1988
+
+This Technical Note documents a new call in the Window Manager which eases the
+creation of Alert windows.
+Changes since July 1989:  The information on AlertWindow formerly found in this
+Note has been updated and is now included in the Apple IIgs Toolbox Reference,
+Volume 3.
+_____________________________________________________________________________
+
+The information on AlertWindow formerly found in this Note has been updated and
+is now included in the Apple IIgs Toolbox Reference, Volume 3.  This Window
+Manager call was first introduced in System Software 3.2.
+

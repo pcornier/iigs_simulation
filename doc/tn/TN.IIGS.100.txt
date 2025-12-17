@@ -1,0 +1,220 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#100:   VersionVille
+
+Written by:    Matt Deatherage                                   January 1991
+
+This Technical Note is all there is to know about versions, version formats and
+version numbers on the Apple IIgs.
+_____________________________________________________________________________
+
+
+Version Number Formats
+
+There are three kinds of version numbers on the Apple IIgs.  Two of the three
+are documented elsewhere but are repeated here for convenience.
+
+System Tool Set Versions
+
+The Apple IIgs system tools use a one-word version number.  The high-order four
+bits of this word have special meaning.  Bits 8-11 are the major version number
+and bits 0-7 are the minor version number.  This is illustrated in Figure 1.
+
+              +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+              | F| E| D| C| B| A| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0|
+              +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                |  |_____||   Major   |        Minor          |
+                |     |   |  Release  |       Release         |
+                |     |   |___________|_______________________|
+                |     |
+                |     +---- 1 = Special Features
+                +---------- 1 = Prototype
+
+
+                        Figure 1-Toolbox Version Numbers
+
+Note that this definition is different and supersedes the definition in the
+Apple IIgs Toolbox Reference for system tool sets.  Previous documentation
+reserves only bit 15 as the prototype bit; this has been expanded.  Bits 14-12
+of user tool set version words have no special meaning; they are still part of
+the major release.
+
+Note:  When comparing the major and minor release version numbers to check the
+       installed version of a system tool, mask off bits 15-12 first (for
+       example, by using an AND #$0FFF instruction).
+
+SmartPort Or GS/OS Driver Versions
+
+GS/OS drivers and SmartPort firmware drivers use an alternate one-word version
+number, described in Figure 2.
+
+
+              +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+              | F| E| D| C| B| A| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0|
+              +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+              |___________|_______________________|___________|
+                  Major             Minor          $A = Alpha
+                 Release           Release         $B = Beta
+                                                   $E = Experimental
+                                                   $0 = Final
+
+
+              Figure 2-GS/OS Driver And SmartPort Version Numbers
+
+Apple IIgs Long Version Format
+
+Long version format is a 32-bit (two-word) format similar to the standard
+Macintosh version numbering scheme defined in Macintosh Technical Note #189,
+Version Territory, except the four bytes are stored least significant byte
+first, as is standard on the Apple II, and the values of the stage are
+different.  Figure 3 shows the format of a long version.
+
+               High word
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+|1F|1E|1D|1C|1B|1A|19|18|17|16|15|14|13|12|11|10| ...
++--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+|     Major version     | Minor v.  | Bug vers. |
++-----------------------+-----------+-----------+
+ Major version          |Minor      | Bug version
+ (2 digits, BCD)        |version (1 | (2 digits, BCD)
+ Example:               |digit, BCD)| Example:
+ $25 = Version 25       |Example:   | $4 = Version
+                        |$0 = Vers. | x.y.4
+                         x.0
+                                                  Low word
+                            +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                        ... | F| E| D| C| B| A| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0|
+                            +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+                            | Stage  | Must be zero |     Release version   |
+                            +--------+--------------+-----------------------+
+                      Stage:         |              | Release version (2
+                      001 = develop  |              | digits, BCD)
+                      010 = alpha    |              | Example:
+                      011 = beta     |              | Long version value of
+                      100 = final    |              | $25048006 = Version
+                      110 = release                   25.0.4f6
+
+                         Figure 3-Long Version Numbers
+
+Long version format allows for bug versions, unlike toolbox versions.  Also, you
+can do unsigned long comparisons of long versions to determine which revision is
+later.
+
+Note:  If the version stage is 101 (release), the release version must be zero.
+       For example, you may not have version 25.0.4 release 16.  "Release
+       version" implies that the product is no longer under development and has
+       no developmental version numbers.
+
+
+System Version Numbers
+
+The most important of the numerous version numbers in the system are the system
+tool version numbers.  These numbers, passed to LoadTools, LoadOneTool or
+StartUpTools ensure that you're getting at least the version you want, or maybe
+a later one.  This mechanism is your primary defense against old system
+software-by requiring the latest tool versions in your application, you are
+notified by the Tool Locator early in your program if the system has the latest
+system software installed or not.
+
+Note that ROM 1 and ROM 3 have different version numbers for seven tools under
+5.0.4-QuickDraw II, the Scheduler, ADB, SANE, Integer Math, Text Tools and the
+List Manager.  In each case, the ROM 01 version is lower and should be used in
+your LoadOneTool, LoadTools or StartUpTools calls.
+
+The current revision of Apple IIgs System Software is 5.0.4.  The only system
+tool to change from 5.0.3 to 5.0.4 is QuickDraw Auxiliary, which changed to
+version 3.3.  Assuming a correct installation, requiring QuickDraw Auxiliary 3.3
+in effect requires System Software 5.0.4.
+
+System Tool Set Versions
+
+                Number  Tool             ROM 1   ROM 3
+                --------------------------------------------
+                 1      Tool Locator     $0300   $0300
+                 2      Memory Manager   $0301   $0301
+                 3      Misc Tools       $0301   $0301
+                 4      QuickDraw II     $0305   $0306
+                 5      Desk Manager     $0303   $0303
+                 6      Event Manager    $0300   $0300
+                 7      Scheduler        $0200   $0300
+                 8      Sound Tools      $0303   $0303
+                 9      ADB              $0201   $0300
+                10      SANE             $0202   $0300
+                11      Integer Math     $0200   $0300
+                12      Text Tools       $0201   $0300
+                14      Window Manager   $0302   $0302
+                15      Menu Manager     $0302   $0302
+                16      Control Manager  $0302   $0302
+                18      QuickDraw II Aux $0303   $0303
+                19      Print Manager    $0300   $0300
+                20      Line Edit        $0302   $0302
+                21      Dialog Manager   $0303   $0303
+                22      Scrap Manager    $0300   $0300
+                23      Standard File    $0302   $0302
+                25      Note Synthesizer $0104   $0104
+                26      Note Sequencer   $0104   $0104
+                27      Font Manager     $0302   $0302
+                28      List Manager     $0301   $0302
+                29      ACE              $0102   $0102
+                30      Resource Manager $0101   $0101
+                32      MIDI Tools       $0103   $0103
+                33      Video Overlay    $0101   $0101
+                34      Text Edit        $0102   $0102
+                --------------------------------------------
+
+
+GS/OS Version Numbers
+
+                        Component             Version
+                        ------------------------------
+                        GS/OS                 3.3
+                        ProDOS FST            3.7
+                        AppleShare FST        3.4
+                        High Sierra FST       3.1
+                        Character FST         3.0
+                        SCSI HD Driver        1.0
+                        SCSI CD Driver        1.0
+                        AppleDisk 3.5 Driver  3.0
+                        AFP Driver            2.2
+                        RPM Driver            2.2
+                        AppleTalk Main Driver 2.2
+                        Console Driver        3.1
+                        AppleDisk 5.25 Driver 2.4
+                        UniDisk 3.5 Driver    2.22
+                        ------------------------------
+
+CDev Version Numbers
+
+                    CDev                          Version
+                    -------------------------------------
+                    Alphabet                        1.0
+                    AppleShare                      1.0
+                    AppleTalk ImageWriter           1.0.1
+                    AppleTalk ImageWriter LQ        1.0.1
+                    Direct Connect Printer          1.0
+                    General                         1.0
+                    Keyboard                        1.0
+                    LaserWriter                     1.0.1
+                    Modem Port                      1.0
+                    Monitor                         1.0
+                    Mouse                           1.0
+                    Printer Port                    1.0
+                    RAM                             1.0
+                    Slots                           1.1
+                    Sound                           1.0
+                    Time                            1.0
+                    -------------------------------------
+
+
+
+Further Reference
+_____________________________________________________________________________
+  o     Apple IIgs Toolbox Reference
+  o     GS/OS Reference
+  o     GS/OS Technical Note #1, Contents of System Disk and System Tools
+  o     File Type Note for File Type $C7, Control Panel Devices
+

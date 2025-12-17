@@ -1,0 +1,36 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#8:    Elems Functions in IIGS SANE
+
+Revised by:    Matt Deatherage                                  November 1988
+Written by:    Guillermo Ortiz                                  December 1986
+
+This Technical Note discusses a problem which existed with the Elems functions 
+in the IIGS SANE Tool Set 1.0.  Current IIGS System Disks contain a patch 
+which corrects this problem.
+_____________________________________________________________________________
+
+Calls to any of the Elems functions in version 1.0 of the IIGS SANE Tool Set 
+may return an invalid result unless you are evaluating data which resides in 
+bank $00 due to a problem with the Elems parameter passing mechanism.  These 
+results are random because when SANE checks the validity of its input, it uses 
+values that have no relations to the actual ones, and once it completes the 
+validation, it uses the real operands.
+
+All System Disks released on or after December 1, 1986 include a RAM patch 
+which fixes the Elems parameter passing mechanism; therefore, you should not 
+have to write a special case to handle this problem if you are shipping your 
+application with the most recent Apple IIGS System Disk.  You should contact 
+Apple Software Licensing at Apple Computer, Inc.; 20525 Mariani Avenue, M/S 
+38-I; Cupertino, CA 95014 or (408) 974-4667 to obtain the most recent version 
+of the Apple IIGS System Disk.
+
+
+Further Reference
+o    Apple Numerics Manual
+

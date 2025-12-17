@@ -1,0 +1,28 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#57:    Preventing Memory Compacting and Purging
+
+Written by:    Dave Lyons                                           July 1989
+
+This Technical Note discusses a flag byte at location $E100CB that debugging 
+utilities can use to temporarily prevent the Memory Manager from moving or 
+purging memory.
+_____________________________________________________________________________
+
+If the byte at location $E100CB is non-zero, the Memory Manager will not move 
+any memory blocks, and it will not purge any blocks while trying to allocate 
+memory (PurgeHandle and PurgeAll will still purge blocks).
+
+Debugging utilities may temporarily increment this byte to allocate memory in 
+situations when it is not safe for existing memory blocks to be moved or 
+purged.
+
+This flag byte is for use only by debugging aids and System Software.  It 
+would be mind-numbingly stupid for an application to use this flag instead of 
+using HLock and HUnlock, since the advantages of a Memory Manager architecture 
+with relocatable blocks would be lost.

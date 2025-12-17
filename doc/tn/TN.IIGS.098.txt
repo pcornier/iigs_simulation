@@ -1,0 +1,51 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#98:    Aren't Windows a Pane?
+
+Written by:    Dave Lyons                                        January 1991
+
+This Technical Note describes things in the Window Manager that we have to tell
+you even though we shouldn't.
+_____________________________________________________________________________
+
+
+A Warning About Window Color Table Handles And Resources
+
+All versions of the Window Manager that support window color tables specified as
+handles or resources, up to and including System Software 5.0.4, work unreliably
+when a standard window's color table is supplied by handle or resource ID.
+
+The problem is not immediately obvious; only one bit of memory is accidentally
+cleared, but the address is unpredictable in advance.  (When unlocking the color
+table handle, the standard window definition procedure attempts to unlock the
+handle manually by turning off bit 15 of word offset +4 in the master pointer
+record.  But it gets the high and low words of the handle reversed and usually
+turns off bit 15 of the word at offset $80E4 or $80E5 in some bank of RAM
+determined by the low byte of the handle.)
+
+The solution is to avoid supplying color table handles or resource IDs to the
+Window Manager.  Supply color table pointers instead. You can get a color table
+pointer from a color table resource ID by calling LoadResource on the color
+table resource, locking the handle and dereferencing it.  Memory is less
+fragmented if color table resources used in this way are marked as attrFixed.
+
+One method is to put the window color table pointer into the window template
+before calling NewWindow2.  If you are creating the window from an rWindParam1
+resource, you need to use LoadResource to get the template into RAM so that you
+can stuff the color table pointer into the template.  (Be sure to change the
+moreFlags field to indicate that the color table is a pointer, if the template
+indicates it's a resource.)  After you create the window with NewWindow2 (by
+handle), use ReleaseResource to release the rWindParam1 resource.
+
+Another method is to create the window as invisible and pass the window color
+table pointer to SetFrameColor before calling ShowWindow.
+
+
+Further Reference
+_____________________________________________________________________________
+  o     Apple IIgs Toolbox Reference, Volumes 2-3
+

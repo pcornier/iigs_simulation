@@ -1,0 +1,48 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#29:    Monochrome High-Resolution Mode
+
+Revised by:    Rilla Reynolds                                   November 1988
+Written by:    Rilla Reynolds                                    October 1987
+
+This Technical Note discusses a 280 x 192 monochrome high-resolution mode 
+available on the Apple IIGS and useful for clarifying some graphics.
+_____________________________________________________________________________
+
+You can select a 280 x 192 monochrome high-resolution mode on the Apple IIGS 
+with the following steps:
+
+1.    Select Monochrome and 40-column from the Control Panel (which sets 
+      the 40-column soft switch and bit 5 in $C029).
+2.    Select Hi-Res graphics mode (which sets GR and HIRES soft 
+      switches).
+3.    Read from to write to $C05E (AN3).
+
+To deselect the mode, read from or write to $C05F.
+
+A monochrome double high-resolution mode also exists on the IIGS, and you 
+follow the same procedure outlined above to access it.
+
+You can use the monochrome mode to display sharper graphics-mode text and fine 
+lines for applications which do not require color.  Note that Applesoft BASIC 
+also supports the monochrome video mode.
+
+The soft switches you must access in software to enable the monochrome high-
+resolution mode are as follows:
+
+    GR         $C050
+    HIRES      $C057
+    40COL      $C00C (for monochrome double hi-res, use 80COL at $C00D)
+    AN3 OFF    $C05E
+
+In addition, you must set bit 5 of the register at $C029, and you must use a 
+read-modify-write sequence since $C029 is a multi-function register.
+
+You can manipulate all of the soft switches listed above from the IIGS 
+Monitor, except 40COL.
+

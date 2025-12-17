@@ -1,0 +1,237 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#77:    Print Manager & AppleTalk Configuration Files
+
+Written by:    Jim Luther                                        January 1990
+
+This Technical Note describes the Print Manager user configuration file 
+Printer.Setup and the AppleTalk user configuration file ATInit.  This Note 
+also describes a limitation of the Print Manager call PrGetUserName, which is 
+a result of the way configuration information is stored in the Printer.Setup 
+file.
+_____________________________________________________________________________
+
+
+Printer.Setup and ATInit
+
+What Are the Printer.Setup and ATInit Files?
+
+The Print Manager user configuration file Printer.Setup, which is found in the 
+System:Drivers directory of the Apple IIGS boot disk, is used by the Print 
+Manager tool set to keep the name of the printer driver and port driver you've 
+selected between system boots.  In addition, if you've selected a network 
+printer, Printer.Setup contains the selected printer's network address and 
+your machine's User Name.  The file format of Printer.Setup has not been 
+published because revisions have been made, and may be made again, to the 
+Apple IIGS System Software, which can change Printer.Setup's file format.
+
+The AppleTalk user configuration file ATInit, which is found in the 
+System:System.Setup directory of the Apple IIGS boot disk, is used to keep the 
+default AppleShare startup application, the default AppleShare prefix, the 
+default AppleTalk User Name, and the default AppleTalk printer entity name 
+(the network printer entity used by AppleTalk's Remote Print Manager) between 
+system boots.  The file format of the ATInit file was published incorrectly in 
+the AppleShare Programmer's Guide for the Apple IIGS.  The correct file format 
+for ATInit will be discussed later in this Note.
+
+It is important to remember that the Print Manager tool set uses the 
+information from the Printer.Setup file only, and that AppleTalk and 
+AppleShare use the information contained in the ATInit file only.  It is also 
+important to note that the Print Manger tool set, which is used to print 
+QuickDraw II graphics, and AppleTalk's Remote Print Manager (RPM), which is 
+used to print ASCII data to network printers, are not the same thing even 
+though both contain the words "Print Manager."
+
+What Writes to the Printer.Setup and ATInit Files?
+
+Before Apple IIGS System Software 5.0, Printer.Setup and ATInit were handled 
+as completely separate configuration files.  The Print Manager call 
+PrChoosePrinter allowed you to select the printer and port drivers the Print 
+Manager would use and wrote the printer and port driver selections to the 
+Printer.Setup file.  The AppleTalk application Chooser.II let you select the 
+printer AppleTalk's Remote Print Manager would use and wrote the printer 
+entity selection to the ATInit file.
+
+With System Software 5.0 all printer selections for both the Print Manager 
+and AppleTalk are made by using one of the Control Panel NDA's printer CDevs.  
+All printer CDevs (e.g., DirectConnect, ATIWriter, ATLQIWriter, and ATLWriter) 
+write the new printer and port driver selections to the Printer.Setup file.  
+However, if the printer selected uses the AppleTalk port (i.e., the selection 
+is made with the ATIWriter, ATLQIWriter, or ATLWriter printer CDevs), then the 
+selected printer's network address and your User Name are written to both the 
+Printer.Setup and the ATInit files.  The DirectConnect CDev does not write any 
+information to the ATInit file.  If AppleShare is installed, then the 
+AppleShare CDev will also write your User Name to the ATInit file.
+
+On AppleShare file servers with the Apple II Setup option installed, the 
+ATInit file in User folders will also be written to by the AppleShare Admin 
+application when the Apple II startup information is set.
+
+When are the Printer.Setup and ATInit Files Read?
+
+The Printer.Setup file is read by the Print Manager and by the printer CDevs.  
+The Print Manager reads the information contained in the Printer.Setup file 
+whenever the Print Manager needs to load a printer driver or a port driver 
+into memory.  A printer CDev reads the information contained in the 
+Printer.Setup file when that CDev is selected so it can know the current 
+printer and port selections.
+
+Ways the printer driver and the port driver might be unloaded and need to be 
+loaded (which will cause Printer.Setup to be read by the Print Manager) are as 
+follows:
+
+  o  The Print Manager is shut down.
+
+  o  The current printer driver or port driver is changed with a 
+     Control Panel printer CDev.  When a new printer or port is 
+     selected with a printer CDev, the current drivers are unloaded 
+     from memory so the Print Manager will be forced to read the new 
+     printer and port selections from Printer.Setup.
+
+  o  Your application makes the PMUnloadDriver Print Manager call.
+
+An application can load one or both of the drivers (which will cause 
+Printer.Setup to be read by the Print Manager) by making the PMLoadDriver 
+call.  The AppleTalk user configuration information contained in the ATInit 
+file is read during system startup as part of AppleTalk's initialization.
+
+
+Network Booting and Printer.Setup
+
+When Apple IIGS computers are booted over an AppleShare network, they all 
+share a single copy of the Printer.Setup file.  That means all machines must 
+use the same printer and port driver selections that are stored in the 
+Printer.Setup file.  If all machines are expected to be able to print using 
+the Print Manager tool set, then the printer and port selection stored in 
+Printer.Setup must be something that all can use.  The only two options are:
+
+  o  A single shared network printer for all machines (i.e., a 
+     LaserWriter, an AppleTalk ImageWriter, or an AppleTalk ImageWriter 
+     LQ).  In situations where many machines are booted over a single 
+     file server, this may cause the workload on the single shared 
+     printer to be unacceptable.
+
+  o  A direct-connect printer on each machine.  The limitations of this 
+     solution are that the printers must be of the same type (all 
+     ImageWriters, all ImageWriter LQs, or all Epsons) and all machines 
+     must use the same printer port (either printer or modem).
+
+The server administrator should set the default printer selection, which will 
+be used by all machines, by using one of the Control Panel NDA's printer 
+CDevs.  Then, the access privileges to the server's System:Drivers directory 
+should be set to "Bulletin Board" (i.e., Everyone See Folders, Everyone See 
+Files, Owner Make Changes) so other machines cannot change the printer and 
+port selection.
+
+
+Using User Names
+
+The User Name We Use
+
+You may have noticed that you see your AppleTalk User Name in the Control 
+Panel's AppleShare and printer CDevs.  AppleShare allows a machine's User Name 
+to be up to 31 characters long.  The CDevs read the User Name from the ATInit 
+file.  The AppleShare and printer CDevs also store the complete User Name back 
+into the ATInit file.
+
+PrGetUserName (Almost)
+
+The Printer.Setup file sets aside 15 characters for the User Name so the 
+printer CDevs store only the first 15 characters of the User Name in the 
+Printer.Setup file.  This limitation is leftover from early Print Manager 
+implementations of the PrChoosePrinter call, which limited the User Name 
+length to 15 characters.
+
+Since the Print Manager gets the User Name it uses from the Printer.Setup 
+file, the User Name returned by the Print Manager call PrGetUserName will be 
+truncated to 15 characters if the complete AppleTalk User Name is 16 
+characters or longer.
+
+Where to Get the Complete User Name
+
+If your application needs the complete default AppleTalk User Name, it can be 
+read from the ATInit file.  When an Apple IIGS is booted from a local disk 
+volume that has AppleShare or at least one of the AppleTalk network printers 
+installed, ATInit will be found in the System:System.Setup directory of the 
+local boot volume.  When an Apple IIGS is booted over AppleTalk, ATInit will 
+be found in the Users:YourName:Setup directory of the AppleShare boot volume 
+(where YourName is the User Name used to log on to the boot server).
+
+
+The ATInit File Format
+
+The AppleShare Programmer's Guide for the Apple IIGS shows the file format of 
+the ATInit file as it is stored on an AppleShare boot volume.  However, the 
+file format of ATInit is not always as shown in that manual.  In all cases, 
+ATInit will contain the three required data fields UserName, PrinterFlags, and 
+PrinterTuple at the end of the file.  Before those data fields, ATInit may 
+also contain executable code or additional data fields.  Since the three 
+required data fields are directly before ATInit's end-of-file (EOF), you can 
+find them relative to ATInit's EOF using the displacements listed in Table 1.
+
+Displacement to
+ATInit EOF          Size      Field Name    Description
+_____________________________________________________________________________
+133                 33 Bytes  UserName      A Pascal-type string containing 
+                                            the default User Name.  It 
+                                            consists of a length byte 
+                                            followed by up to 31 bytes of 
+                                            ASCII data and a single, unused 
+                                            byte.  This field is always 33 
+                                            bytes long.
+100                 Byte      PrinterFlags  This is the Flags field used by 
+                                            the Remote Print Manager's 
+                                            default network printer.
+99                  99 Bytes  PrinterTuple  This field specifies the name of 
+                                            the default network printer used 
+                                            by the Remote Print Manager.  The 
+                                            PrinterTuple field is in standard 
+                                            Name Binding Protocol (NBP) 
+                                            format.  This field is always 99 
+                                            bytes long.
+_____________________________________________________________________________
+
+                  Table 1-Offsets of Required Data Fields
+
+If the ATInit file is on an AppleShare server, it will have 6 additional data 
+fields (PathVolID, PathDirID, Path, PrefixVolID, PrefixDirID, and Prefix) 
+directly before the three required data fields.  These fields can also be 
+found relative to ATInit's EOF using the displacements listed in Table 2.
+
+Displacement to
+ATInit EOF          Size      Field Name    Description
+_____________________________________________________________________________
+275                 Word      PathVolID     The Volume ID number of the 
+                                            user's AppleTalk startup 
+                                            application.
+273                 Long      PathDirID     The Directory ID number of the 
+                                            user's AppleTalk startup 
+                                            application.
+269                 65 Bytes  Path          The Pathname of the user's 
+                                            AppleTalk startup application.
+204                 Word      PrefixVolID   The Volume ID number of the 
+                                            user's AppleTalk default prefix.
+202                 Long      PrefixDirID   The Directory ID number of the 
+                                            user's AppleTalk default prefix.
+198                 65 Bytes  Prefix        The user's AppleTalk default 
+                                            prefix.
+_____________________________________________________________________________
+
+                  Table 2-Offsets of Optional Data Fields
+
+The displacements in Tables 1 and 2 can be used with the GS/OS SetMark call to 
+move the file mark to the beginning of any of the above fields.  The SetMark 
+call's base field should be set to $0001 so the mark will be set equal to EOF 
+minus the displacement.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIGS Toolbox Reference
+  o  Inside AppleTalk
+  o  AppleShare Programmer's Guide for the Apple IIGS

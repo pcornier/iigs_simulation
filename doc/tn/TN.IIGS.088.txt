@@ -1,0 +1,36 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#88:    The Page One Stack in a 16-Bit World
+
+Written by:    Dave Lyons                                      September 1990
+
+This Technical Note clarifies the protocol for moving the stack pointer in and 
+out of page one.
+_____________________________________________________________________________
+
+On page 13 of the Apple IIgs Firmware Reference, under "Save the value of the 
+native-mode stack pointer," there is a code sample showing how to switch to 
+the page-one stack by setting the stack pointer to $01xx, where xx is the 
+contents of EMULSTACK at $01/0100.
+
+However, the manual does not warn you about moving the stack pointer from page 
+one to another area.  When you do that, you must store the low byte of the 
+stack pointer at EMULSTACK before moving the stack pointer out of page one.  
+If you do not save the page-one stack properly, interrupt routines or some 
+toolbox calls may destroy a part of the page one stack that you go back to 
+later, expecting that return addresses are still there.
+
+Note:  If the auxiliary-memory stack and zero page are in use, you must 
+       use $01/0101 instead of $01/0100.  See the Apple IIe Technical 
+       Reference Manual, pp. 153-154
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Firmware Reference
+  o  Apple IIe Technical Reference Manual
+

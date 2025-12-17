@@ -1,0 +1,31 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#15:    InstallFont and Big Fonts
+
+Revised by:    Eric Soldan & Matt Deatherage                        July 1989
+Written by:    Guillermo Ortiz                                      June 1987
+
+When the Font Manager executes InstallFont, it may try to scale the selected 
+font if bit 15 of the ScaleWord is clear; a font larger than 32K causes this 
+call to fail.
+Changes since November 1988:  Noted System Software 5.0 enhancements.
+_____________________________________________________________________________
+
+The Font Manager cannot scale a font which is larger than 32K, so InstallFont 
+will fail if scaling is required and the desired font exceeds this limit.  If 
+the call fails for this reason, it will report an FMScaleSizeErr ($1B0C) 
+error.
+
+This is not the same situation as when there is not enough memory available to 
+hold a newly scaled font.  The situation will generate Memory Manager errors.
+
+System Software 5.0 can scale fonts to be larger than 32K, so there is no 
+longer the limit imposed by System Disk 4.0 and earlier.  In addition, System 
+Software 5.0 can handle font sizes up to 255 points, if memory is available.  
+Note that this is a different situation than trying to scale a font which was 
+originally larger than 32K, but both work under 5.0.

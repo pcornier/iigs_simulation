@@ -1,0 +1,52 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#6:    QuickDraw II Pattern Data Structure
+
+Revised by:    Dave Lyons                                           July 1989
+Written by:    Guillermo Ortiz                                  December 1986
+
+Some QuickDraw II calls require a pen pattern as input or return one as 
+output; regardless of the drawing mode (320 mode or 640 mode), a pen pattern 
+takes 32 bytes.
+Changed since November 1988:  Starting with System Software 5.0, all 32 
+bytes are significant if bit 15 of the current port's arcRot field is set.  
+Changed wording to cover QuickDraw II patterns in general, instead of pen 
+patterns only.
+_____________________________________________________________________________
+
+Early QuickDraw II documentation described the pattern data structure as 
+follows:
+
+TYPE 
+    nibble  = 0..15;
+    twobit   = 0..3;
+    Pattern = RECORD CASE MODE OF
+            mode320:(PACKED ARRAY [0..63] OF nibble);    { 32 bytes }
+            mode640:(PACKED ARRAY [0..63] OF twobit);    { 16 bytes }
+        END;
+
+This declaration could lead one to believe that 16 bytes are enough when 
+making calls to QuickDraw II in 640 mode.  This is not true.  A pattern 
+always takes 32 bytes; QuickDraw II calls that copy or construct patterns 
+access all 32 bytes.  That means it is never safe to pass the address of a
+16-byte area as a pattern.  Toolbox calls that return data into your buffer 
+overwrite 16 bytes immediately following your buffer.  Calls that copy data 
+from your buffer access those extra 16 bytes, possibly including soft switches 
+or reserved space in the memory map.
+
+The difference between modes is that QuickDraw II normally ignores the second 
+16 bytes if the current port's locInfo indicates 640 mode.  Starting with 
+System Software 5.0, all 32 bytes of patterns are significant in 640 mode when 
+bit 15 of the current port's arcRot field has been set with SetArcRot.  In 
+this case, patterns are 16 pixels wide and 8 pixels high.
+
+
+Further Reference
+_____________________________________________________________________________
+    o    Apple IIGS Toolbox Reference, Volume 2
+    o    System Software 5.0 documentation (APDA)

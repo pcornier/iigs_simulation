@@ -1,0 +1,45 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#19:    Multichannel Output with the Apple IIGS Note Synthesizer
+
+Revised by:    Jim Mensch                                       November 1988
+Written by:    John Worthington & Jim Merritt                       June 1987
+
+This Technical Note discusses multichannel sound with the IIGS Note 
+Synthesizer.
+_____________________________________________________________________________
+
+It is possible to play multichannel sound using the IIGS Note Synthesizer Tool 
+Set.  The Ensoniq Digital Oscillator Chip (DOC) supports 16 independent output 
+channels.  Since only the low three bits of the output channel number are 
+available through the IIGS sound expansion connector, multichannel circuitry 
+may only decode eight output channels (zero through seven).  Output channel 
+eight maps onto channel zero, channel nine onto channel one, etc., and this 
+mapping continues through all 16 channels.
+
+The setting of the high nibble of the DOCMode byte in a waveform of the 
+waveList portion of the instrument definition determines the routing of output 
+from a Note Synthesizer instrument to a particular channel (the actual DOCMode 
+information is in the low nibble of the DOCMode byte).  You may assign each 
+separate element in a waveList to a different output channel to create 
+multisampled instruments in which some samples play on the left speaker and 
+others on the right.
+
+Apple standards require stereo expansion cards to map all even output channels 
+to the right and odd channels to the left.  To be compatible with cards that 
+decode more than two of the chip's output channels, software should use 
+channel zero for right and channel one for left.  This convention ensures that 
+output is always positioned properly in the stereo space with channel zero 
+information going to the right front and channel one information going to the 
+left front.
+
+
+Further Reference
+o    Apple IIGS Toolbox Reference, Volume 2
+o    Apple IIGS Toolbox Reference Update
+

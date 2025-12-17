@@ -1,0 +1,155 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#97:    Picture Comments and Printing
+
+Written by:    Matt Deatherage, Suki Lee & Ben Koning           November 1990
+
+This Technical Note discusses QuickDraw Auxiliary picture comments and how they
+can be used to help control the printing process.
+_____________________________________________________________________________
+
+
+What's a Picture Comment?
+
+Picture comments are a way in which extra information beyond normal QuickDraw II
+calls can be embedded in a QuickDraw II picture.  Comments can contain virtually
+anything; they consist of a length, a handle containing the comment and a "kind"
+that identifies the general type of information in the comment.  Picture comment
+kinds less than or equal to 256 ($100) are reserved for Apple Computer, Inc.
+
+For comments to have any significance, there must be a way that a routine can
+take special action on them.  One of the standard bottleneck procedures is
+called every time a picture comment is encountered, and it is passed the picture
+comment's kind, size, and handle on QuickDraw II's direct page.  You can insert
+the address of a custom picture comment handler into the grafProcs field of a
+grafPort as described in Apple IIgs Technical Note #34, Low-Level QuickDraw II
+Routines.  If no custom comment handler is present in the grafPort, the system
+calls its own StdComment routine, which ignores all comments.
+
+The current picture comment handling routine (either a custom one or the
+system's default one) is called whenever a picture comment is generated (with
+the QuickDraw Auxiliary call PicComment) or played back from a picture (from
+within DrawPicture).  Since the picture comment handling procedure is called
+when the comment is created, a picture does not have to be open for this
+facility to work.
+
+Picture comments are ideal ways for applications to pass information to printer
+drivers as they are generated through toolbox calls and are easily accessible to
+any desktop program.  If the printer driver is printing in immediate mode, it
+can intercept and act on the picture comment when it is generated.  If the
+printer driver is printing in deferred mode and recording page images with
+QuickDraw II pictures, it can intercept and act on the picture comment when the
+picture is played back.
+
+Apple's ImageWriter, ImageWriter LQ and LaserWriter drivers (from System
+Software 5.0.3) all support various kinds of picture comments for controlling
+printed output.  Applications are encouraged to use these picture comments for
+finer control over printing.  Authors of printer drivers are encouraged to act
+on these picture comments where appropriate, so applications which use them
+achieve similar results across printing platforms.
+
+
+The LaserWriter Driver's Picture Comments
+
+Version 2.2 and later of the LaserWriter driver support the following five
+PostScriptr picture comments:
+
+          Name              Kind    Size    Handle
+          ------------------------------------------------------
+          PostScriptBegin   190     0       NIL
+          PostScriptEnd     191     0       NIL
+          PostScriptHandle  192     -       PostScript data
+          PostScriptFile    193     -       PostScript path name
+          TextIsPostScript  194     0       NIL
+          ------------------------------------------------------
+
+                      Table 1-PostScript Picture Comments
+
+The print loop must be completed normally with or without any PostScript picture
+comments that are included.  PostScript transmission must begin with the
+PostScriptBegin picture comment and end with the PostScriptEnd picture comment.
+Never nest PostScriptBegin and PostScriptEnd picture comments.
+
+The PostScriptHandle picture comment takes a handle containing PostScript
+commands (in the form of ASCII data) and sends it to the LaserWriter.  The size
+field must contain the size of the handle.
+
+The PostScriptFile picture comment takes a handle containing the pathname of a
+disk file containing PostScript commands.  The size field must contain the size
+of the pathname.
+
+The TextIsPostScript picture comment takes text drawn through the QuickDraw II
+StdText bottleneck and sends it to the LaserWriter as PostScript.  This picture
+comment has the effect, from the application's point of view, of interpreting
+all strings passed to DrawString and similar calls as PostScript.  This picture
+comment is specific to LaserWriters (idev = $0003).  Other drivers do not
+implement this picture comment; therefore, text drawn through QuickDraw II is
+simply printed-it is neither interpreted as PostScript nor ignored.
+
+The driver does not check for PostScript errors, so the data sent to the
+LaserWriter must be correct.  Always terminate PostScript text with a carriage
+return character.  The transformation the driver uses flips text and prints it
+upside down on the page.  Applications should set their own transformation
+matrices to serve their needs.  Never use the LaserWriter's userdict-define a
+local dictionary for your application's use.  Never use exitserver,
+initgraphics, grestoreall, erasepage, or showpage PostScript commands, as these
+commands can alter the driver's environment.
+
+See Chapter 3 of the LaserWriter Reference Manual for some examples of how to
+use picture comments.
+
+
+The ImageWriter Driver's Picture Comments
+
+ImageWriter driver version 4.0 and later uses three picture comments to control
+alternate color selection:
+
+                  Name            Kind    Size    Handle
+                  -----------------------------------------
+                    Reserved        250     -       Reserved
+                   FillColorTable  251     42      See below
+                   ChangeSCBs      252     14      See below
+                  -----------------------------------------
+
+The structure passed in the handle to FillColorTable looks like the following:
+
+          version     word       must be zero
+          signature   word       must be $A55A
+          tableno     word       the color table to be modified (0-15)
+          table       32 bytes   The new color values for the color table
+          reserved    long       must be zero
+
+The structure passed in the handle to ChangeSCBs looks like the following:
+
+          version     word       must be zero
+          signature   word       must be $A55A
+          Y1          word       line number of first SCB to change (from zero
+                                 to rPage.Y2)
+          Y2          word       line number of last SCB to change (from zero to
+                                 rPage.Y2)
+          SCBvalue    word       the new scan line control byte
+          reserved    long       must be zero
+
+PrOpenPage reinitializes the printing grafPort, so these picture comments should
+be used immediately after PrOpenPage to set custom colors.  Having lines with
+both 320- and 640-mode is not recommended and will probably not be supported in
+the future.
+
+The ImageWriter driver uses picture comment 250 to internally mark the end of a
+page.  Applications must not use this picture comment; use PrClosePage to end a
+page's definition.
+
+
+Further Reference
+_____________________________________________________________________________
+  o     Apple IIgs Toolbox Reference, Volumes 1-3
+  o     Apple IIgs Technical Note #34, Low-Level QuickDraw II Routines
+  o     Apple IIgs Technical Note #35, Printer Driver Specifications
+  o     Apple IIgs Technical Note #93, Compatible Printing
+  o     d e v e l o p, October 1990, Issue 4, "Driving to Print"
+
+PostScript is a registered trademark of Adobe Systems, Incorporated.

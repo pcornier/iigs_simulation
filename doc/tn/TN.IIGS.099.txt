@@ -1,0 +1,98 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIgs
+#99:         Supplemental Scrap Types
+
+Revised by:  Matt Deatherage                                       March 1991
+Written by:  Matt Deatherage & Matthew Reimer                    January 1991
+
+This Technical Note describes public scrap types.
+
+Changes since January 1991:  Added the TextEdit Style Scrap type.
+_____________________________________________________________________________
+
+
+The Apple IIgs Toolbox Reference lists only two known scrap types text 
+($0000) and pictures ($0001).  Other assigned scrap types are documented in 
+this Note.  The format used to describe the scraps is similar to that used in 
+File Type Notes, where the offsets, given in the form (+xxx), determine the 
+offset from the beginning of the scrap handle.
+
+
+Sampled Sound Scrap (Type: $0002)
+
+The following describes the Sampled Sound scrap format.  It consists of a
+ten-byte header followed by the sample data bytes.  This format is identical 
+to the sampled sound resource format.
+
+Format      (+000)  Word    This must always be zero.
+Wave Size   (+002)  Word    Sample size in pages (256 bytes per page).  For
+                            example, an 8K sample takes 32 pages; a 128K 
+                            sample requires $200 pages.
+Rel Pitch   (+004)  Word    The high byte of this word is a semitone value; 
+                            the low byte is a fractional semitone.  These 
+                            values are used to tune the sample to correct 
+                            pitch.
+Stereo      (+006)  Word    The output channel for this sound is in the low
+                            nibble of this word.
+Sample rate (+008)  Word    The sampling rate of the sound, in Hertz (Hz).
+Sound       (+010)  Bytes   The sampled sound data.  The bytes are all 8-bit
+                            samples.  The sample starts here and continues
+                            until the end of the scrap.
+
+
+TextEdit Style Scrap (Type:  $0064)
+
+The TextEdit Style Scrap format is the same as the TEFormat structure defined
+in Volume 3 of the Apple IIgs Toolbox Reference, which is also the same as 
+the rStyleBlock resource format defined in the same volume.
+
+Icon Scrap (Type: $4945)
+
+The Icon scrap format is the same as the format for Finder Icon Data records,
+documented in detail in the File Type Note for File Type $CA, Finder Icon
+Files.  If there is more than one Icon Data record in a scrap, they are
+concatenated together with no intervening space.
+
+
+Mask Scrap (Type: $8001)
+
+The Mask scrap format is exactly the same as the PICT scrap ($0001) format,
+except that the pixel image the picture draws contains only zeroes and ones.
+When drawn, this picture creates a mask.  The mask has zeroes where the image
+can be seen through the mask, and ones where the mask does not allow the
+picture through.  When pasting a Mask scrap, initialize the destination 
+bitmap to zero and draw the picture.
+
+You can create the mask image by using regular QuickDraw II calls (using 
+ovals, rectangles, etc.) or you can create it independently and include it 
+with PaintPixels or other pixel map manipulation routines.
+
+
+Color Table Scrap (Type: $8002)
+
+The following describes the Color Table scrap format.  The scrap contains 
+color tables so that applications can keep custom colors with pictures copied 
+to the clipboard.  The scrap has the same format as the Apple Preferred 
+Format picture PALETTES block:
+
+NumColorTables  (+000)  Word        The count of the number of color tables
+                                    in the scrap
+ColorTableArray (+002)  32 Bytes    The color tables for the scrap.  There 
+                                    are NumColorTables of them, each 32 bytes 
+                                    long.
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Toolbox Reference
+  o  HyperCard IIgs Technical Note #3, Tuning Sampled Sounds
+  o  File Type Note for file type $CA, all auxiliary types, Finder Icons File
+  o  File Type Note for file type $C0, auxiliary type $0002, Apple Preferred 
+     Format
+
+

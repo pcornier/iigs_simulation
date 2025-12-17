@@ -1,0 +1,130 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#67:    LaserWriter Font Mapping
+
+Revised by:    Jim Luther                                       November 1989
+Written by:    Suki Lee & Jim Luther                           September 1989
+
+This Technical Note discusses the methods used by the Apple IIGS Print Manager 
+to map IIGS fonts to the PostScript(R) fonts available with an Apple LaserWriter 
+printer.
+Changes since September 1989:  Moved the registered trademark symbols 
+from Table 2 to the list of trademarks at the end of this Note to avoid 
+confusion about font name spelling.
+_____________________________________________________________________________
+
+Version 2.2 and earlier of the Apple IIGS LaserWriter driver depend solely 
+upon font family numbers as unique font identifiers.  There is a table built 
+into the driver which maps the known font family numbers to the built-in 
+LaserWriter family fonts.  Any fonts which are not built-in are created in the 
+printer from its bitmap font strike.  Under this implementation, all font 
+family numbers not known at the time the driver was written print using bitmap 
+fonts.  This driver knows nothing of any other fonts which may reside in the 
+printer.
+
+There have been many requests for the driver to take advantage of other 
+available PostScript fonts to get high quality output from the LaserWriter.  
+PostScript fonts from Adobe's font library, or from other PostScript font 
+manufacturers, can be downloaded to the printer from a Macintosh and remain in 
+the printer for use until power off.  Currently there is no means to download 
+a PostScript font with an Apple IIGS.
+
+The Apple IIGS LaserWriter driver version 3.0 makes use of most resident 
+PostScript fonts in the LaserWriter when requested.  If the font is not 
+available, then the bitmap font is used.  The driver queries the printer at 
+the start of a job for the font directory listing.  The listing consists of 
+names of all the fonts in the printer, built-in or downloaded.  This 
+information is kept locally for look up using the name of the requested font.
+
+
+Issues
+
+All Apple IIGS fonts contain a family name and a family number.  The Apple 
+IIGS currently identifies fonts using the family number; however, this 
+identification method may change in the future, due to the complexity of 
+tracking unique matches between font family names and font family numbers.
+
+PostScript identifies its fonts by name (case sensitive) and knows nothing of 
+any font family numbering system, Macintosh or Apple IIGS, which might be 
+attached to a particular font.  Most PostScript font families include plain, 
+bold, italic and bold italic fonts.  Some fonts families may also have serif 
+and sans serif fonts or fonts of different weights (line thickness).  These 
+fonts are generally named by adding a style suffix to the base family name.  
+Unfortunately, there is no uniform method for naming fonts, since most fonts 
+were named by their designers and many of the names have historical 
+significance.
+
+The three examples shown in Table 1 show three variations of the plain font, 
+two variations of the bold style, three variations of the italic style, and 
+three variations of the bold italic style.  There are others such as 
+ZapfChancery-MediumItalic, Korinna-KursivRegular, and LetterGothic-Slanted 
+which all denote the italic style of the respective font family.
+
+Style         Font names
+_____________________________________________________________________________
+plain         Helvetica              Times-Roman       AvantGarde-Book
+bold          Helvetica-Bold         Times-Bold        AvantGarde-Demi
+italic        Helvetica-Oblique      Times-Italic      AvantGarde-BookOblique
+bold italic   Helvetica-BoldOblique  Times-BoldItalic  AvantGarde-DemiOblique
+_____________________________________________________________________________
+
+                        Table 1-Example Font Names
+
+The Macintosh LaserWriter driver uses a mapping scheme to compose a full 
+PostScript font name.  It relies on the Font Family Definition Record 'FOND' 
+resource to provide a style mapping table containing the appropriate suffixes.
+
+Since there are no similar resource on the Apple IIGS, the Apple IIGS 
+LaserWriter driver adopts the following approach.  The driver has full 
+knowledge of all LaserWriter family built-in fonts (see Table 2 for a list of 
+these built-in fonts) and uses the correct name for all style variations of 
+the fonts.  For all other fonts, the driver uses a standard set of suffixes 
+for the style modifications.  These suffixes are -Bold, -Italics, and -
+BoldItalics.  The appropriate suffix is appended to the family name of the 
+font, and this name is used to search the font directory table obtained from 
+querying the printer.  If a match is found, the document is printed using the 
+corresponding PostScript font.  If no match is found, then the driver tries to 
+find the plain form of the font and creates the style modification in 
+PostScript.  A bitmap of the font is downloaded to the printer if these two 
+searches fail.
+
+If you are shipping your application with the intention of taking advantage of 
+PostScript fonts when printing to a LaserWriter, please be sure to provide an 
+Apple IIGS font whose family name is identical to the PostScript font family 
+name.
+
+                    LaserWriter     LaserWriter Plus and 
+                                    LaserWriter II
+                    ____________________________________
+                    Courier         AvantGarde
+                    Helvetica       Bookman
+                    Symbol          Courier
+                    Times           Helvetica
+                                    Helvetica-Narrow
+                                    NewCenturySchlbk
+                                    Palatino
+                                    Symbol
+                                    Times
+                                    ZapfChancery
+                                    ZapfDingbats
+                    ____________________________________
+
+                     Table 2-Built-in LaserWriter Fonts
+
+
+Further Reference
+_____________________________________________________________________________
+    o    Apple IIGS Toolbox Reference, Volumes 1 & 2
+    o    Apple LaserWriter Reference
+
+PostScript is a registered trademark of Adobe Systems Incorporated.
+Helvetica(R), Palatino(R), and Times(R) are registered trademarks of 
+Linotype Co.
+ITC Avant Garde(R), ITC Bookman(R), ITC Zapf Chancery(R), and 
+ITC Zapf Dingbats(R) are registered trademarks of 
+International Typeface Corporation.

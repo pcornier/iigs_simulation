@@ -1,0 +1,55 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#5:    Window and Menu Titles
+
+Revised by:    Matt Deatherage                                  November 1990
+Written by:    Dan Oliver                                        October 1986
+
+This Technical Note discusses spacing for both window and menu titles.
+Changes since November 1988:  Revised to include new information on the default
+placement of the Apple menu.
+_____________________________________________________________________________
+
+Strings used for window titles should always have a space as the first and last
+characters.  This spacing is especially important for windows that use a lined
+window title bar since, without the beginning and ending space, theline pattern
+in the title bar runs against the title.  Since there will be window editor desk
+accessories which allow the user to change the title bar pattern without the
+application knowing, you should pad your window titles withspaces even if you
+are using black window title bars.
+
+The Window Manager does not force spaces on either side of titles to optimize
+the window frame drawing speed; it is much faster to let the text punch ahole in
+the title bar pattern than to compute the rectangle, fill it, and draw the text.
+
+To provide the user with a consistent visual interface, you should also pad your
+menu titles with spaces.  If you use either one or two spaces (the Apple IIGS
+Finder has used two) before and after each menu title, your menu titles will be
+consistent and balanced (two spaces work well in 640 mode where one space
+usually suffices for 320 mode).  Although it is true that a menu bar will look
+about the same if the first menu title has two spaces before it and no space
+following it and all the other menu titles have four spaces before them, when
+the user pulls down the menu, the Menu Manager's highlighting will clearly (and
+embarrassingly) show the spaces in the menu titles.
+
+If you would like to place the Apple menu differently, you must use Menu Manager
+calls since you cannot place spaces around the at sign (@) which the Menu
+Manager uses to represent the Apple logo in a menu title.  The easiest way to
+accomplish this is calling SetMTitleStart to set the starting position for the
+leftmost title (usually the Apple menu) within the current menu bar. The Apple
+IIGS Finder has used a value of 10 ($0A) pixels.
+
+Beginning with System Software 5.0, the Apple menu is placed at a default of 10
+pixels from the left edge of the menu bar in 640 mode or five pixels in 320
+mode.  If you use SetMTitleStart to change the default, the value is still
+interpreted as an absolute placement from the left edge of the menu bar.  For
+example, SetMTitleStart(6) moves the Apple menu one pixel to the right of the
+default in 320 mode and four pixels to the left of the default in 640 mode.  Be
+sure not to use SetMTitleStart to set the Apple menu starting place to the left
+of the default, as doing so interferes with the AppleShare activity arrows.
+

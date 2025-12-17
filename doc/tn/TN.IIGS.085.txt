@@ -1,0 +1,48 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#85:    Moving the Mouse
+
+Written by:    Matt Deatherage                                      July 1990
+
+This Technical Note discusses moving the cursor on the screen without touching 
+the mouse.
+_____________________________________________________________________________
+
+It is sometimes desirable to programmatically move the QuickDraw II cursor on 
+the screen without requiring the user to touch the mouse.  This can be 
+effective, for example, in tutorial software that actually shows mouse actions 
+such as pulling down menus and dragging windows.
+
+There is not an easy or obvious way to do this in the toolbox.  This is not a 
+bad thing; it prevents overzealous programmers from zapping the mouse all over 
+the screen for suspicious reasons.  You must remember that the mouse belongs 
+to the user, not to the application.  If the user has put the mouse somewhere, 
+it should only be a user's action that causes the cursor to move elsewhere.  
+Most of the time that action is touching the mouse and physically moving it.  
+Do not move the mouse except in response to a user-initiated command.
+
+The most obvious way to move the mouse position--calling PosMouse with the new 
+mouse position--is not sufficient; PosMouse does not update the current mouse 
+position.  When the mouse is next moved, a mouse interrupt comes through and 
+the new deltas are added to the old mouse position, resulting in correct 
+ReadMouse results after the mouse has been physically moved.  Also, PosMouse 
+does not update the cursor on the screen.
+
+Faking Out the System 
+
+When you wish to move the mouse yourself, you are in effect replacing (or 
+adding to) the standard mouse with a small programmatic mouse substitute--your 
+code.  This qualifies as a "device" and can be considered an Event Manager 
+"device driver."  You can then make the appropriate Event Manager call, 
+FakeMouse.  When calling FakeMouse, you supply all the mouse information 
+yourself, allowing you to move the mouse, simulate button presses, and in 
+general replace the mouse.
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Toolbox Reference, Volumes 1-3
+

@@ -1,0 +1,34 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#62:    No Non-Solid Window Background Patterns
+
+Written by:    Dave Lyons                                           July 1989
+
+This Technical Note discusses why window background patterns should always be 
+solid; non-solid patterns are not always drawn with the expected alignment.
+_____________________________________________________________________________
+
+When the Window Manager erases part of a window's content area to its port's 
+background pattern, it is not always aligned with already-drawn parts of the 
+window.  With a solid background pattern, this has no visible effect; however, 
+if you try to use a grid, for example, the effect is obvious.
+
+To simulate a non-solid background pattern, just erase the desired area to the 
+pattern you want in your update routine.  For best results, use a solid 
+background pattern of the color most common in the pattern you really want.
+
+For example, if you want a white grid on a black background, give the window a 
+solid black background pattern, and use FillRect during the update routine to 
+draw the grid.  If you keep the default white background pattern, the end 
+result will be the same, but your window content will briefly be solid white 
+before your update routine fills it with your pattern.
+
+
+Further Reference
+_____________________________________________________________________________
+    o    Apple IIGS Toolbox Reference, Volume 2

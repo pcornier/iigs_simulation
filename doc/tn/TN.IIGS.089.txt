@@ -1,0 +1,123 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIgs
+#89:    MessageByName--Catchy Messages
+
+Written by:    Dan Strnad & Dave Lyons                         September 1990
+
+This note clarifies MessageByName and provides examples of creating and 
+retrieving a named message.
+_____________________________________________________________________________
+
+
+Did You Say You Want To Get A Message?
+
+All you have to do is ask.  Apple IIgs Toolbox Reference, Volume 3 already 
+tells you how.  Here's what the fine print says:  with the createItFlag set to 
+FALSE and the name of the message you are after in the nameString, you call 
+MessageByName.  What's unclear in the manual is that if the message was found, 
+no error is returned, the createFlag is returned as FALSE, and messageID 
+contains the ID you can pass to MessageCenter to retrieve the contents of the 
+message.  Here's an example of MessageByName in use.
+
+The following code creates a named message.
+
+CreateNamedMessage
+            pha
+            pha
+            pea 1                                     ;create it
+            pushlong #MsgBlock
+            _MessageByName                            ;function $1701
+            pla
+            sta myMsgID                               ;keep the ID if you want
+            pla                                       ;check the createFlag if 
+;                                                      you want
+            ...
+
+MsgBlock    dc.w MsgBlockEnd-MsgBlock
+            dc.b 28,'XYZ Software:My Cool Product'    ;Pascal-style string
+            ... more data goes here
+MsgBlockEnd
+
+The following code retrieves the message.
+
+            pha
+            pha
+            pea 0                                     ;don't create message
+            pushlong #MsgBlock
+            _MessageByName                            ;function $1701
+            ply                                       ;keep id of existing 
+;                                                      message
+            pla                                       ;createFlag (ignore)
+            bcs noMessage                             ;carry set if an error 
+;                                                      occurred
+
+
+            pea 2                                     ;MessageCenter action:GET
+            phy                                       ;message ID for 
+;                                                      MessageCenter, below
+            pha
+            pha                                       ;space for NewHandle 
+;                                                      result
+            lda #0                                    ;size of handle (0)
+            pha
+            pha
+            ldx MyID                                  ;ID for empty
+            phx
+            pha                                       ;handle attributes (0)
+            pha
+            pha                                       ;no special location
+            _NewHandle
+            lda 3,s
+            sta mcHandle+2
+            lda 1,s
+            sta mcHandle                              ;keep a copy of the 
+;                                                      handle for later
+            _MessageCenter                            ;takes Action, Msg ID, 
+;                                                      and Handle
+
+            lda mcHandle+2
+            pha
+            lda mcHandle
+            pha
+            phd
+            tsc
+            tcd
+            ldy #2
+            lda [3],y
+            tax
+            lda [3]
+            sta 3
+            stx 5
+
+* now read data from the message at [3]
+            ldy #$xxxx                                ;index past the name 
+;                                                      string
+            lda [3],y
+            ...
+            pld
+            pla
+            pla
+            
+            lda mcHandle+2
+            pha
+            lda mcHandle
+            pha
+            _DisposeHandle
+
+noMessage   ...
+
+mcHandle    dc.l 0
+myMsgID     dc.w 0
+
+MessageByName is available in Tool Locator versions 3.0 and later (System 
+Software 5.0 and later).
+
+
+Further Reference
+_____________________________________________________________________________
+  o  Apple IIgs Toolbox Reference, Volumes 2-3
+

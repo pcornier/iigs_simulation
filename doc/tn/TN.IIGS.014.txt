@@ -1,0 +1,27 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+
+Apple IIGS
+#14:    Standard File Calls and GrafPort Records
+
+Revised by:    Matt Deatherage                                  November 1988
+Written by:    Guillermo Ortiz                                      June 1987
+
+This Technical Note formerly described how Standard File 1.1 and earlier did 
+not preserve the GrafPort around Standard File calls and recommended that you 
+save and restore the GrafPort around Standard File calls.
+_____________________________________________________________________________
+
+Standard File 2.0 fixes a bug present in earlier versions which did not 
+preserve the GrafPort around Standard File calls.  You should not have to 
+write a special case to handle this bug since it is reasonable to expect users 
+to be running your program from a current System Disk (Standard File 2.0 is 
+available in System Disks after 1.1).
+
+You can still save and restore the GrafPort around Standard File calls as it 
+will still work, but doing so will increase the size of your code and cause 
+unnecessary overhead during execution.
+

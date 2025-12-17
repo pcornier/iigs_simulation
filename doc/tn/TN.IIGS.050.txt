@@ -1,0 +1,55 @@
+Apple II
+Technical Notes
+_____________________________________________________________________________
+                                                  Developer Technical Support
+
+Apple IIGS
+#50:    Extended Serial Interface Error Handling
+
+Written by:    Dan Strnad                                        January 1989
+
+This Technical Note discusses error reporting by the Extended Serial 
+Interface.
+_____________________________________________________________________________
+
+For Apple IIGS ROM 01, the Extended Serial Interface does not return the error 
+condition in the carry bit.  Programs using the Extended Serial Interface 
+should check for a non-zero result value in the result code rather than the 
+carry bit to determine if an error has occurred.  The following eight-bit APW 
+code demonstrates this error checking using the SetDTR command.  The SetDTR 
+routine zeros the result bytes if no error has occurred.
+
+           LONGA    OFF             ;PREPARE ASSEMBLER FOR EMULATION MODE
+           LONGI    OFF
+           65C02    ON
+           KEEP     SETDTR2
+           START
+SLOT       EQU      $01
+           SEC                      ;SET EMULATION MODE
+           XCE
+           JMP      BEGIN
+CMDLST     DC       H'03'           ;PARAMETER COUNT
+           DC       H'0B'           ;SETDTR COMMAND CODE
+RESLT      DC       I'0'            ;RESULT CODE (OUTPUT)
+DTRSTAT    DC       I'0'            ;BIT 7 IS STATE OF DTR (INPUT)
+BEGIN      LDA      #SLOT           ;COMPUTE $CN VALUE TO BE USED
+           ORA      #$C0
+           STA      OFFSET+2        ;MODIFY INSTRUCTIONS LOADING OFFSETS
+           STA      XOFFSET+2
+           STA      ICALL+2         ;MODIFY INSTRUCTIONS CALLING FIRMWARE
+           STA      XCALL+2
+IOFFSET    LDA      $C00D           ;THIS INSTRUCTION MODIFIED AT RUNTIME
+           STA      ICALL+1         ;MODIFY JSR TO INIT
+XOFFSET    LDA      $C012           ;THIS INSTRUCTION MODIFIED AT RUNTIME
+           STA      XCALL+1         ;MODIFY JSR TO EXTENDED SERIAL INTERFACE
+ICALL      JSR      $C000           ;THIS INSTRUCTION MODIFIED AT RUNTIME
+           LDA      #<CMDLST        ;LOW BYTE OF COMMAND LIST
+           LDX      #>CMDLST        ;HIGH BYTE OF COMMAND LIST
+           LDY      #0              ;24-BIT ADDRESS NOT USED BY 8-BIT PROGRAM
+XCALL      JSR      $C000           ;THIS INSTRUCTION MODIFIED AT RUNTIME
+           LDA      RESLT           ;DID AN ERROR OCCUR?
+           BNE      ERROR           ;YES- HANDLE THE ERROR
+           ...
+ERROR    
+           ...
+           END
