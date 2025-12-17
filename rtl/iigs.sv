@@ -367,7 +367,9 @@ module iigs
       end
     end
     // Banks $00/$01 Language Card space (existing logic)
-    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6]) begin
+    // LCBANK2 address translation (D000->C000) only applies when reading RAM (RDROM=0)
+    // When RDROM=1, we read from ROM which doesn't use the bank1/bank2 distinction
+    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6] && ~RDROM) begin
       lcram2_sel = 1;
       if (aux && bank_bef == 8'h00) begin
         addr_bus = addr_bef - 16'h1000 + 24'h10000;
