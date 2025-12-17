@@ -417,7 +417,7 @@ module iigs
   wire txt2_shadow  = ~shadow[5] && (page == 4'h0 && addr_bef[11:8] <= 4'hB && addr_bef[11:8] >= 4'h8);  // $0800-$0BFF
   wire hgr1_shadow  = ~shadow[1] && (page >= 4'h2 && page <= 4'h3);          // $2000-$3FFF
   wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
-  wire shgr_shadow  = ~shadow[3] && (page >= 4'h2 && page <= 4'h9);          // $2000-$9FFF
+  wire shgr_shadow  = ~shadow[3] && (page >= 4'h6 && page <= 4'h9);          // $6000-$9FFF (SHR-only region)
   wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
   
   // Memory Controller - Clean systematic approach
@@ -437,7 +437,7 @@ module iigs
           if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
-          end else if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow) begin
+          end else if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow) begin
             // Shadowed regions: Enable BOTH for compatibility (fastram takes priority in mux)
             fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
             slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)

@@ -182,12 +182,14 @@ begin
 		base_toggle<=~base_toggle;
 		if (linear_mode)
 		begin
+			// Note: Due to address pre-increment at H=0x390, first read is at ODD address
+			// So odd addresses are read first for each color entry
 			if (video_addr_shrg[0]) begin
-		                //$display("R PALETTE = %x addr %x  color index %x color r %x",video_data,video_addr_shrg,pal_counter,video_data[3:0]);
+		                //$display("GB PALETTE = %x addr %x  color index %x",video_data,video_addr_shrg,pal_counter);
 				b_shrg[pal_counter]<=video_data[3:0];
 				g_shrg[pal_counter]<=video_data[7:4];
 			end else begin
-		                //$display("GB PALETTE = %x addr %x color index %x color b %x g %x",video_data,video_addr_shrg,pal_counter,video_data[3:0],video_data[7:4]);
+		                //$display("R PALETTE = %x addr %x color index %x",video_data,video_addr_shrg,pal_counter);
 				r_shrg[pal_counter]<=video_data[3:0];
 				pal_counter<=pal_counter+1;
 			end
@@ -195,6 +197,7 @@ begin
 			video_addr_shrg_1 <= video_addr_shrg_1 +1'b1;
 		end
 		else begin
+			// Non-linear mode palette reading
 			if (~base_toggle) begin
 		                //$display("R PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
 				r_shrg[video_addr_shrg[4:1]]<=video_data[3:0];
