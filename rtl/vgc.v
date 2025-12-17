@@ -105,6 +105,8 @@ end
 reg [3:0] shrg_r_pix;
 reg [3:0] shrg_g_pix;
 reg [3:0] shrg_b_pix;
+// Latched border color - sampled at start of each scanline for consistent raster effects
+reg [3:0] bordercolor_latched;
 // one cycle before the end of the left border, pull down the scp
 reg [7:0] scb;
 reg [1:0] h_counter;
@@ -114,6 +116,10 @@ reg [3:0] pal_counter;
 always @(posedge clk_vid) if(ce_pix)
 begin
 //$display("video_data = %x video_addr = %x video_addr_shrg %x video_addr_ii %x  H %x V %x NEWVIDEO[6] %x NEWVIDEO[7]",video_data,video_addr,video_addr_shrg,video_addr_ii,H,V,NEWVIDEO[6],NEWVIDEO[7]);
+	// Latch border color at start of each scanline for consistent raster effects
+	// This ensures games that cycle BORDERCOLOR mid-scanline get straight horizontal lines
+	if (H == 0)
+		bordercolor_latched <= BORDERCOLOR;
 	// load SCB - For display, V=32 uses SCB[1], V=33 uses SCB[2], etc.
 	// The +1 offset means SCB[0] is read at V=31 (for interrupt check only)
 	if (H=='h38c) begin
@@ -369,7 +375,8 @@ reg [3:0] artifact_r[0:127] = '{
 };
 
 // Color lookup functions using IIgs palette
-wire [11:0] BORGB = palette_rgb_r[BORDERCOLOR];
+// Use latched border color for consistent horizontal lines during raster effects
+wire [11:0] BORGB = palette_rgb_r[bordercolor_latched];
 wire [11:0] TRGB = palette_rgb_r[TEXTCOLOR[7:4]];
 wire [11:0] BRGB = palette_rgb_r[TEXTCOLOR[3:0]];
 // Authentic Apple II NTSC Color Artifacting Algorithm  
