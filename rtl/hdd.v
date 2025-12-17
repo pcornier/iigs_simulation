@@ -139,8 +139,9 @@ module hdd(
                          "READ-MIRROR", {12'h0F0, A[3:0]}, D_OUT, reg_command, reg_unit,
                          {reg_block_h, reg_block_l}, {reg_mem_h, reg_mem_l}, sec_addr);
             end else if (IO_SELECT && RD) begin
-                // Directly drive slot ROM data
-                D_OUT <= rom_dout; // C6xx-C7xx slot ROM reads
+                // Directly drive slot ROM data only if HDD is mounted
+                // Otherwise return $FF (empty slot) so boot search skips this slot
+                D_OUT <= hdd_mounted ? rom_dout : 8'hFF;
             end
 
             // WRITE/CONTROL PATH: gate side-effects to phi0
