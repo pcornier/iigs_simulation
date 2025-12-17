@@ -412,12 +412,14 @@ module iigs
   // Page and shadow detection helpers
   wire [3:0] page = addr_bef[15:12];  // 16 pages per bank (256 bytes each)
   
-  // Shadow region detection (when shadow bit = 0, shadowing is ACTIVE)  
+  // Shadow region detection (when shadow bit = 0, shadowing is ACTIVE)
   wire txt1_shadow  = ~shadow[0] && (page == 4'h0 && addr_bef[11:8] >= 4'h4 && addr_bef[11:8] <= 4'h7);  // $0400-$07FF
   wire txt2_shadow  = ~shadow[5] && (page == 4'h0 && addr_bef[11:8] <= 4'hB && addr_bef[11:8] >= 4'h8);  // $0800-$0BFF
   wire hgr1_shadow  = ~shadow[1] && (page >= 4'h2 && page <= 4'h3);          // $2000-$3FFF
   wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
-  wire shgr_shadow  = ~shadow[3] && (page >= 4'h6 && page <= 4'h9);          // $6000-$9FFF (SHR-only region)
+  // SHR shadow bit 3: When 0, entire $2000-$9FFF shadows (master enable for SHR mode)
+  // When bit 3=1, HGR bits 1-2 control $2000-$5FFF, and $6000-$9FFF does not shadow
+  wire shr_master_shadow = ~shadow[3] && (page >= 4'h2 && page <= 4'h9);     // $2000-$9FFF when bit3=0
   wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
   
   // Memory Controller - Clean systematic approach
@@ -437,8 +439,10 @@ module iigs
           if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
-          end else if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shgr_shadow) begin
+          end else if (txt1_shadow || txt2_shadow || shr_master_shadow || hgr1_shadow || hgr2_shadow) begin
             // Shadowed regions: Enable BOTH for compatibility (fastram takes priority in mux)
+            // shr_master_shadow: When bit3=0, entire $2000-$9FFF shadows
+            // hgr*_shadow: When bit3=1, only HGR pages shadow based on bits 1-2
             fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
             slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)
           end else begin
@@ -452,7 +456,8 @@ module iigs
           if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
-          end else if (shgr_shadow) begin
+          end else if (shr_master_shadow) begin
+            // SHR master shadow (bit3=0): entire $2000-$9FFF shadows to E1
             fastram_ce_int = 1;  // Write to both Bank 01 (FASTRAM) and Bank E1 (SLOWRAM)
             slowram_ce_int = 1;  // Dual write to E1 shadow bank
           end else if (txt1_shadow || txt2_shadow) begin
