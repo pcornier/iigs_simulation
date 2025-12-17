@@ -198,10 +198,10 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 localparam CONF_STR = {
 	"IIgs;UART19200:9600:4800:2400:1200:300;",
 	"-;",
-	//"S0,DSK;",
 	"S0,HDVPO ;",
-	"S1,DSK;",
+	"S1,HDVPO ;",
 	"S2,DSK;",
+	"S3,DSK;",
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
 	"-;",
@@ -218,15 +218,15 @@ wire forced_scandoubler;
 wire  [1:0] buttons;
 wire [31:0] status;
 
-wire [31:0] sd_lba[3];
-reg   [2:0] sd_rd;
-reg   [2:0] sd_wr;
-wire  [2:0] sd_ack;
+wire [31:0] sd_lba[4];
+reg   [3:0] sd_rd;
+reg   [3:0] sd_wr;
+wire  [3:0] sd_ack;
 wire  [8:0] sd_buff_addr;
 wire  [7:0] sd_buff_dout;
-wire  [7:0] sd_buff_din[3];
+wire  [7:0] sd_buff_din[4];
 wire        sd_buff_wr;
-wire  [2:0] img_mounted;
+wire  [3:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;    
 
@@ -242,7 +242,7 @@ wire [10:0] ps2_key;
 wire [24:0] ps2_mouse;
 
 
-hps_io #(.CONF_STR(CONF_STR),.VDNUM(3)) hps_io
+hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 (
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
@@ -340,16 +340,17 @@ iigs iigs (
 	.HS(hsync),
 	.VS(vsync),
 	.AUDIO_L(AUDIO_L),
-	/* hard drive */
+	/* hard drive (supports 2 units - ProDOS limit) */
 	.HDD_SECTOR(hdd_sector),
 	.HDD_READ(hdd_read),
 	.HDD_WRITE(hdd_write),
+	.HDD_UNIT(hdd_unit),
 	.HDD_MOUNTED(hdd_mounted),
 	.HDD_PROTECT(hdd_protect),
 	.HDD_RAM_ADDR(sd_buff_addr),
 	.HDD_RAM_DI(sd_buff_dout),
-	.HDD_RAM_DO(sd_buff_din[0]),
-	.HDD_RAM_WE(sd_buff_wr & sd_ack[0]),
+	.HDD_RAM_DO(hdd_ram_do),
+	.HDD_RAM_WE(sd_buff_wr & hdd_ack),
 	//-- track buffer interface for disk 1
 	.TRACK1(TRACK1),
 	.TRACK1_ADDR(TRACK1_RAM_ADDR),
@@ -546,31 +547,60 @@ assign CLK_VIDEO=clk_vid;
 
 
 
-// HARD DRIVE PARTS
+// HARD DRIVE PARTS (supports 2 units - ProDOS limit)
 wire [15:0] hdd_sector;
+wire        hdd_unit;           // Which unit (0-1) is being accessed (from bit 7)
 
-assign sd_lba[0] = {16'b0,hdd_sector};
-
-
-reg  hdd_mounted = 0;
+// Per-unit mounted and protect status for 2 HDD units
+// Using img_mounted indices: [0]=unit0, [1]=unit1
+reg  [1:0] hdd_mounted = 2'b0;
 wire hdd_read;
 wire hdd_write;
-reg  hdd_protect;
+reg  [1:0] hdd_protect = 2'b0;
 reg  cpu_wait_hdd = 0;
 
-always @(posedge clk_sys) begin
-	reg old_ack =0;
-	reg hdd_read_pending =0;
-	reg hdd_write_pending =0;
-	reg state=0;
+// HDD unit being served (latched when operation starts)
+reg hdd_active_unit = 1'b0;
 
-	old_ack <= sd_ack[0];
+// Both HDD units share the same sector (routed to their block device indices)
+assign sd_lba[0] = {16'b0, hdd_sector};  // Unit 0
+assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 1
+
+// Route sd_rd/sd_wr to the correct bit based on active unit
+reg  sd_rd_hd;
+reg  sd_wr_hd;
+
+// Select the ack for the active unit
+wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[0] : sd_ack[1];
+
+// HDD RAM output - shared buffer routed to both HDD unit indices
+wire [7:0] hdd_ram_do;
+assign sd_buff_din[0] = hdd_ram_do;  // Unit 0
+assign sd_buff_din[1] = hdd_ram_do;  // Unit 1
+
+always @(posedge clk_sys) begin
+	reg old_ack;
+	reg hdd_read_pending;
+	reg hdd_write_pending;
+	reg state;
+
+	old_ack <= hdd_ack;  // Use the muxed ack for active unit
 	hdd_read_pending <= hdd_read_pending | hdd_read;
 	hdd_write_pending <= hdd_write_pending | hdd_write;
 
+	// Latch hdd_unit when a new request arrives (before state machine picks it up)
+	if ((hdd_read | hdd_write) & !state & !(hdd_read_pending | hdd_write_pending)) begin
+		hdd_active_unit <= hdd_unit;
+	end
+
+	// Handle HDD unit mounts (2 units mapped to img_mounted indices 0, 1)
 	if (img_mounted[0]) begin
-		hdd_mounted <= img_size != 0;
-		hdd_protect <= img_readonly;
+		hdd_mounted[0] <= img_size != 0;
+		hdd_protect[0] <= img_readonly;
+	end
+	if (img_mounted[1]) begin
+		hdd_mounted[1] <= img_size != 0;
+		hdd_protect[1] <= img_readonly;
 	end
 
 	if(reset) begin
@@ -578,29 +608,37 @@ always @(posedge clk_sys) begin
 		cpu_wait_hdd <= 0;
 		hdd_read_pending <= 0;
 		hdd_write_pending <= 0;
-		sd_rd[0] <= 0;
-		sd_wr[0] <= 0;
+		sd_rd_hd <= 0;
+		sd_wr_hd <= 0;
 	end
 	else if(!state) begin
 		if (hdd_read_pending | hdd_write_pending) begin
 			state <= 1;
-			sd_rd[0] <= hdd_read_pending;
-			sd_wr[0] <= hdd_write_pending;
+			sd_rd_hd <= hdd_read_pending;
+			sd_wr_hd <= hdd_write_pending;
 			cpu_wait_hdd <= 1;
 		end
 	end
 	else begin
-		if (~old_ack & sd_ack[0]) begin
-			sd_rd[0] <= 0;
-			sd_wr[0] <= 0;
+		if (~old_ack & hdd_ack) begin
+			sd_rd_hd <= 0;
+			sd_wr_hd <= 0;
 		end
-		else if(old_ack & ~sd_ack[0]) begin
+		else if(old_ack & ~hdd_ack) begin
 			state <= 0;
 			cpu_wait_hdd <= 0;
 			hdd_read_pending <= 0;
 			hdd_write_pending <= 0;
 		end
 	end
+end
+
+// Route sd_rd/sd_wr to the correct index based on active unit
+always @(*) begin
+	sd_rd[0] = sd_rd_hd & (hdd_active_unit == 1'b0);
+	sd_rd[1] = sd_rd_hd & (hdd_active_unit == 1'b1);
+	sd_wr[0] = sd_wr_hd & (hdd_active_unit == 1'b0);
+	sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b1);
 end
 
 
@@ -631,14 +669,14 @@ reg [1:0]disk_mount;
 
 
 always @(posedge clk_sys) begin
-        if (img_mounted[1]) begin
+        if (img_mounted[2]) begin
                 disk_mount[0] <= img_size != 0;
                 DISK_CHANGE[0] <= ~DISK_CHANGE[0];
                 //disk_protect <= img_readonly;
         end
 end
 always @(posedge clk_sys) begin
-        if (img_mounted[2]) begin
+        if (img_mounted[3]) begin
                 disk_mount[1] <= img_size != 0;
                 DISK_CHANGE[1] <= ~DISK_CHANGE[1];
                 //disk_protect <= img_readonly;
@@ -659,19 +697,19 @@ floppy_track floppy_track_1
    .track (TRACK1),
    .busy  (TRACK1_RAM_BUSY),
    .change(DISK_CHANGE[0]),
-   .mount (img_mounted[1]),
+   .mount (img_mounted[2]),
    .ready  (DISK_READY[0]),
    .active (fd_disk_1),
 
    .sd_buff_addr (sd_buff_addr),
    .sd_buff_dout (sd_buff_dout),
-   .sd_buff_din  (sd_buff_din[1]),
+   .sd_buff_din  (sd_buff_din[2]),
    .sd_buff_wr   (sd_buff_wr),
 
-   .sd_lba       (sd_lba[1] ),
-   .sd_rd        (sd_rd[1]),
-   .sd_wr       ( sd_wr[1]),
-   .sd_ack       (sd_ack[1])
+   .sd_lba       (sd_lba[2] ),
+   .sd_rd        (sd_rd[2]),
+   .sd_wr       ( sd_wr[2]),
+   .sd_ack       (sd_ack[2])
 );
 
 
@@ -694,13 +732,13 @@ floppy_track floppy_track_2
 
    .sd_buff_addr (sd_buff_addr),
    .sd_buff_dout (sd_buff_dout),
-   .sd_buff_din  (sd_buff_din[2]),
+   .sd_buff_din  (sd_buff_din[3]),
    .sd_buff_wr   (sd_buff_wr),
 
-   .sd_lba       (sd_lba[2] ),
-   .sd_rd        (sd_rd[2]),
-   .sd_wr       ( sd_wr[2]),
-   .sd_ack       (sd_ack[2])
+   .sd_lba       (sd_lba[3] ),
+   .sd_rd        (sd_rd[3]),
+   .sd_wr       ( sd_wr[3]),
+   .sd_ack       (sd_ack[3])
 );
 
 
