@@ -131,8 +131,10 @@ void SimBlockDevice::BeforeEval(int cycles)
            disk[i].seekg(header_size[i]);
            bitset(*img_mounted,i);
            ack_delay=1200;
-    } else if (ack_delay==1 && bitcheck(*img_mounted,i) ) {
-           printf("BLKDEV: Mount flag cleared for drive %d\n", i);
+    } else if (ack_delay==1 && bitcheck(*img_mounted,i) && i == 0) {
+           // Only clear mount flag for floppy (index 0) - floppy uses mount pulse protocol
+           // HDD (index 1) should keep mount flag set permanently
+           printf("BLKDEV: Mount flag cleared for floppy drive %d\n", i);
         bitclear(*img_mounted,i) ;
         //*img_size = 0;
     } else { if (!reading && !writing && ack_delay>0) ack_delay--; }

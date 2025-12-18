@@ -142,6 +142,11 @@ begin
 		scb <= video_data;
 		// Check for scanline interrupt: SCB bit 6, SHR mode enabled, valid scanline range
 		// V >= 31 allows SCB[0] interrupt to fire at V=31 (just before scanline 0 displays at V=32)
+`ifdef SIMULATION
+		if (V >= 'd31 && V < 'd206 && V[4:0] == 5'd0)  // Debug every 32nd line in valid range
+			$display("VGC_SCANIRQ_CHECK: V=%d H=%03x SCB=%02x SCB[6]=%d NEWVIDEO[7]=%d (NEWVIDEO=%02x) -> fire=%d",
+			         V, H, video_data, video_data[6], NEWVIDEO[7], NEWVIDEO, (video_data[6] && NEWVIDEO[7]));
+`endif
 		if (video_data[6] && NEWVIDEO[7] && V >= 'd31 && V < 'd206)
 			scanline_irq<=1;
 		//$display("SCB = %x video_addr %x",video_data,video_addr);

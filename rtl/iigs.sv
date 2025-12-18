@@ -389,7 +389,7 @@ module iigs
     end
     else begin
       // Default address translation
-      if (aux && (bank_bef == 8'h00 || bank_bef == 8'he0)) begin
+      if (aux && (bank_bef == 8'h00 || bank_bef == 8'h01 || bank_bef == 8'he0 || bank_bef == 8'he1)) begin
         addr_bus = addr_bef + 24'h10000;
       end else begin
         addr_bus = cpu_addr;  // Normal mapping (includes ROM code addresses $C000-$FFFF)
@@ -426,7 +426,7 @@ module iigs
   // When bit 3=1, HGR bits 1-2 control $2000-$5FFF, and $6000-$9FFF does not shadow
   wire shr_master_shadow = ~shadow[3] && (page >= 4'h2 && page <= 4'h9);     // $2000-$9FFF when bit3=0
   wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
-  
+
   // Memory Controller - Clean systematic approach
   always_comb begin
     fastram_ce_int = 0;
@@ -554,6 +554,7 @@ module iigs
       $display("CURSOR_POS_DEBUG: addr=E1:%04x we=%b data=%02x slowram_ce=%b slowram_we=%b slowram_dout=%02x",
                addr_bef, we, we ? cpu_dout : slowram_dout, slowram_ce, slowram_we, slowram_dout);
     end
+
   end
 
   // Debug: Clean memory controller verification
@@ -688,9 +689,16 @@ module iigs
                                 ((addr_bef == 16'hFFEE) || (addr_bef == 16'hFFEF) ||
                                  (addr_bef == 16'hFFFE) || (addr_bef == 16'hFFFF));
 
+  // rom2_ce enables reading from ROM bank $FF
+  // Note: Per IIgs documentation, RDROM should only control language card ($D000-$FFFF).
+  // However, for compatibility, we keep the $C000-$CFFF behavior EXCEPT for slot ROM space
+  // ($C100-$C7FF) which must be controlled by INTCXROM/SLTROMSEL instead of RDROM.
+  // This allows slot card ROM (like SmartPort at $C7xx) to work correctly.
   assign rom2_ce = (bank_bef == 8'hff) || vec_fetch_force_rom_ce ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB)) ||
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef <= 16'hcfff && (RDROM|~VPB)) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef < 16'hc100 && (RDROM|~VPB)) ||  // I/O ($C000-$C0FF) - preserve original behavior
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc800 & addr_bef <= 16'hcfff && (RDROM|~VPB)) ||  // Expansion ($C800-$CFFF) - preserve original behavior
+                   // Note: $C100-$C7FF (slot ROM) deliberately NOT included here - handled by slot_internalrom_ce/slot_ce
                    (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB)) ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f);
 
