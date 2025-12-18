@@ -39,7 +39,15 @@ C_SRC = \
 
 VOUT = obj_dir/Vsinglesteptests.cpp
 
-all: $(EXE)
+TESTDATA_DIR = 65816
+TESTDATA_REPO = git@github.com:SingleStepTests/65816.git
+
+all: $(TESTDATA_DIR) $(EXE)
+
+# Check for test data and clone if missing
+$(TESTDATA_DIR):
+	@echo "Test data not found. Cloning $(TESTDATA_REPO)..."
+	git clone $(TESTDATA_REPO) $(TESTDATA_DIR)
 
 $(VOUT): $(V_SRC)  Makefile
 	$V -cc $(V_OPT) -LDFLAGS "$(LDFLAGS) " -exe  --Mdir ./obj_dir $(V_DEFINE) $(V_INC) $(TOP) -CFLAGS "$(CFLAGS)" $(V_SRC) $(C_SRC)
