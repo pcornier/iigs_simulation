@@ -1,10 +1,38 @@
 # Makefile for assembling with Merlin32
 
+# Default target
+.DEFAULT_GOAL := all
+
 # ============================================================================
 # Variables
 # ============================================================================
-ASM = ./Merlin32_v1.2_b2/MacOS/Merlin32
-CP2 = ./cp2_1.1.1_osx-x64_sc/cp2
+
+# Detect OS (Darwin = macOS, Linux = Linux)
+UNAME_S := $(shell uname -s)
+
+# Merlin32 paths based on OS
+MERLIN_ZIP = Merlin32_v1.2.zip
+MERLIN_DIR = Merlin32_v1.2_b2
+MERLIN_URL = https://brutaldeluxe.fr/products/crossdevtools/merlin/Merlin32_v1.2.zip
+
+# CiderPress2 (cp2) paths based on OS
+CP2_VERSION = 1.1.1
+
+ifeq ($(UNAME_S),Darwin)
+    ASM = ./$(MERLIN_DIR)/MacOS/Merlin32
+    CP2_DIR = cp2_$(CP2_VERSION)_osx-x64_sc
+    CP2_ZIP = $(CP2_DIR).zip
+    CP2_URL = https://github.com/fadden/CiderPress2/releases/download/v$(CP2_VERSION)/$(CP2_ZIP)
+    CP2 = ./$(CP2_DIR)/cp2
+else ifeq ($(UNAME_S),Linux)
+    ASM = ./$(MERLIN_DIR)/Unix/Merlin32
+    CP2_DIR = cp2_$(CP2_VERSION)_linux-x64_sc
+    CP2_ZIP = $(CP2_DIR).zip
+    CP2_URL = https://github.com/fadden/CiderPress2/releases/download/v$(CP2_VERSION)/$(CP2_ZIP)
+    CP2 = ./$(CP2_DIR)/cp2
+else
+    $(error Unsupported OS: $(UNAME_S). Only Darwin (macOS) and Linux are supported.)
+endif
 SCC_DISK = scc_test.2mg
 TIMING_DISK = timing_race_test.2mg
 
@@ -18,15 +46,56 @@ TIMING_DISK = timing_race_test.2mg
         scc_rxenable scc_exact scc_repro scc_postloop scc_fifo_test adb_device_enum \
         adb_rom_test09 adb_rom_checksum selftest01 selftest02 selftest03 \
         selftest04 selftest05 selftest06 selftest07 selftest08 selftest09 \
-        selftest0a selftest0b selftest0c time
+        selftest0a selftest0b selftest0c time download-merlin download-cp2 download-tools
+
+# ============================================================================
+# Merlin32 Download Target
+# ============================================================================
+# Download and extract Merlin32 if not present
+$(MERLIN_DIR):
+	@echo "Merlin32 not found. Downloading from $(MERLIN_URL)..."
+	@curl -L -o $(MERLIN_ZIP) $(MERLIN_URL)
+	@echo "Extracting $(MERLIN_ZIP)..."
+	@unzip -q $(MERLIN_ZIP)
+	@rm -f $(MERLIN_ZIP)
+	@chmod +x $(ASM)
+	@echo "Merlin32 installed successfully."
+
+# Convenience target to force download Merlin32
+download-merlin:
+	@rm -rf $(MERLIN_DIR)
+	@$(MAKE) $(MERLIN_DIR)
+
+# ============================================================================
+# CiderPress2 (cp2) Download Target
+# ============================================================================
+# Download and extract cp2 if not present
+$(CP2_DIR):
+	@echo "CiderPress2 (cp2) not found. Downloading from $(CP2_URL)..."
+	@curl -L -o $(CP2_ZIP) $(CP2_URL)
+	@echo "Extracting $(CP2_ZIP)..."
+	@mkdir -p $(CP2_DIR)
+	@unzip -q $(CP2_ZIP) -d $(CP2_DIR)
+	@rm -f $(CP2_ZIP)
+	@chmod +x $(CP2)
+	@echo "CiderPress2 installed successfully."
+
+# Convenience target to force download cp2
+download-cp2:
+	@rm -rf $(CP2_DIR)
+	@$(MAKE) $(CP2_DIR)
+
+# Download all required tools
+download-tools: $(MERLIN_DIR) $(CP2_DIR)
+	@echo "All tools downloaded successfully."
 
 # ============================================================================
 # Default Target
 # ============================================================================
-all: scc_test scc_regtest scc_selftest scc_regptr_test sccauto_test \
+all: $(MERLIN_DIR) $(CP2_DIR) scc_test scc_regtest scc_selftest scc_regptr_test sccauto_test \
      scc_phantom_test serial_selftest plb_test dbr_corruption_test \
      dbr_plb_stage_test dbr_e0_scan_test c034_test timing_test time \
-io_debug_test io_autorun_test
+     io_debug_test io_autorun_test
 
 # ============================================================================
 # SCC Tests
@@ -36,7 +105,7 @@ io_debug_test io_autorun_test
 scc_test: SCC.SYSTEM scc_test.2mg
 
 SCC.SYSTEM: SCC_SLOWMEM_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_test.2mg: SCC.SYSTEM
 	@echo "Creating SCC test disk..."
@@ -50,7 +119,7 @@ scc_test.2mg: SCC.SYSTEM
 time: TIME.SYSTEM time.2mg
 
 TIME.SYSTEM: TIME.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 time.2mg: TIME.SYSTEM
 	@echo "Creating TIME test disk..."
@@ -65,7 +134,7 @@ time.2mg: TIME.SYSTEM
 scc_regtest: SCCREG.SYSTEM scc_regtest.2mg
 
 SCCREG.SYSTEM: SCC_REGTEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_regtest.2mg: SCCREG.SYSTEM
 	@echo "Creating SCC register test disk..."
@@ -80,7 +149,7 @@ scc_regtest.2mg: SCCREG.SYSTEM
 scc_regptr_test: SCCRPTR.SYSTEM scc_regptr_test.2mg
 
 SCCRPTR.SYSTEM: SCC_REGPTR_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_regptr_test.2mg: SCCRPTR.SYSTEM
 	@echo "Creating SCC register pointer test disk..."
@@ -95,7 +164,7 @@ scc_regptr_test.2mg: SCCRPTR.SYSTEM
 scc_selftest: SCCSLF.SYSTEM scc_selftest.2mg
 
 SCCSLF.SYSTEM: SELFTEST_SCC.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_selftest.2mg: SCCSLF.SYSTEM
 	@echo "Creating SCC selftest replica disk..."
@@ -110,7 +179,7 @@ scc_selftest.2mg: SCCSLF.SYSTEM
 scc_txbuf: SCCTXBF.SYSTEM scc_txbuf.2mg
 
 SCCTXBF.SYSTEM: SCC_TXBUF_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_txbuf.2mg: SCCTXBF.SYSTEM
 	@echo "Creating SCC transmit buffer test disk..."
@@ -125,7 +194,7 @@ scc_txbuf.2mg: SCCTXBF.SYSTEM
 scc_loopback: SCCLOOP.SYSTEM scc_loopback.2mg
 
 SCCLOOP.SYSTEM: SCC_LOOPBACK_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_loopback.2mg: SCCLOOP.SYSTEM
 	@echo "Creating SCC loopback test disk..."
@@ -140,7 +209,7 @@ scc_loopback.2mg: SCCLOOP.SYSTEM
 scc_romseq: SCCROM.SYSTEM scc_romseq.2mg
 
 SCCROM.SYSTEM: SCC_ROM_SEQUENCE_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_romseq.2mg: SCCROM.SYSTEM
 	@echo "Creating SCC ROM sequence test disk..."
@@ -155,7 +224,7 @@ scc_romseq.2mg: SCCROM.SYSTEM
 scc_rxenable: SCCRXEN.SYSTEM scc_rxenable.2mg
 
 SCCRXEN.SYSTEM: SCC_RX_ENABLE_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_rxenable.2mg: SCCRXEN.SYSTEM
 	@echo "Creating SCC RX enable test disk..."
@@ -170,7 +239,7 @@ scc_rxenable.2mg: SCCRXEN.SYSTEM
 scc_exact: SCCEXACT.SYSTEM scc_exact.2mg
 
 SCCEXACT.SYSTEM: SCC_EXACT_ROM_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_exact.2mg: SCCEXACT.SYSTEM
 	@echo "Creating SCC exact ROM test disk..."
@@ -185,7 +254,7 @@ scc_exact.2mg: SCCEXACT.SYSTEM
 scc_repro: SCCREPRO.SYSTEM scc_repro.2mg
 
 SCCREPRO.SYSTEM: SCC_ROM_FAIL_REPRO.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_repro.2mg: SCCREPRO.SYSTEM
 	@echo "Creating SCC reproducer disk..."
@@ -200,7 +269,7 @@ scc_repro.2mg: SCCREPRO.SYSTEM
 scc_postloop: SCCPOST.SYSTEM scc_postloop.2mg
 
 SCCPOST.SYSTEM: SCC_POST_LOOPBACK_TX.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_postloop.2mg: SCCPOST.SYSTEM
 	@echo "Creating SCC post-loopback TX test disk..."
@@ -215,7 +284,7 @@ scc_postloop.2mg: SCCPOST.SYSTEM
 scc_fifo_test: SCCFIFO.SYSTEM scc_fifo_test.2mg
 
 SCCFIFO.SYSTEM: SCC_FIFO_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_fifo_test.2mg: SCCFIFO.SYSTEM
 	@echo "Creating SCC FIFO test disk..."
@@ -230,7 +299,7 @@ scc_fifo_test.2mg: SCCFIFO.SYSTEM
 scc_reset: SCCRST.SYSTEM scc_reset.2mg
 
 SCCRST.SYSTEM: SCC_RESET_SIMPLE.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_reset.2mg: SCCRST.SYSTEM
 	@echo "Creating SCC reset test disk..."
@@ -247,7 +316,7 @@ scc_wr2: SCCWR2.SYSTEM scc_wr2.2mg
 scc_both: SCCBOTH.SYSTEM scc_both.2mg
 
 SCCBOTH.SYSTEM: SCC_BOTH_CHANNELS.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_both.2mg: SCCBOTH.SYSTEM
 	@echo "Creating SCC both channels test disk..."
@@ -262,7 +331,7 @@ scc_both.2mg: SCCBOTH.SYSTEM
 sccauto_test: SCCAUTO.SYSTEM sccauto_test.2mg
 
 SCCAUTO.SYSTEM: SCCAUTO.SYSTEM.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 sccauto_test.2mg: SCCAUTO.SYSTEM
 	@echo "Creating SCC auto test disk..."
@@ -277,7 +346,7 @@ sccauto_test.2mg: SCCAUTO.SYSTEM
 scc_phantom_test: SCCTEST.SYSTEM scc_phantom_test.2mg
 
 SCCTEST.SYSTEM: SCC_PHANTOM_READ_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_phantom_test.2mg: SCCTEST.SYSTEM
 	@echo "Creating SCC phantom read test disk..."
@@ -296,7 +365,7 @@ scc_phantom_test.2mg: SCCTEST.SYSTEM
 serial_selftest: SERIAL.SYSTEM serial_selftest.2mg
 
 SERIAL.SYSTEM: SERIAL_SELFTEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 serial_selftest.2mg: SERIAL.SYSTEM
 	@echo "Creating serial selftest disk..."
@@ -315,7 +384,7 @@ serial_selftest.2mg: SERIAL.SYSTEM
 adb_device_enum: ADBENUM.SYSTEM adb_device_enum.2mg
 
 ADBENUM.SYSTEM: ADB_DEVICE_ENUM.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 adb_device_enum.2mg: ADBENUM.SYSTEM
 	@echo "Creating ADB device enumeration test disk..."
@@ -330,7 +399,7 @@ adb_device_enum.2mg: ADBENUM.SYSTEM
 adb_rom_test09: ADBROM09.SYSTEM adb_rom_test09.2mg
 
 ADBROM09.SYSTEM: ADB_ROM_TEST09.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 adb_rom_test09.2mg: ADBROM09.SYSTEM
 	@echo "Creating ADB ROM test 09 disk..."
@@ -345,7 +414,7 @@ adb_rom_test09.2mg: ADBROM09.SYSTEM
 adb_rom_checksum: ADBROMCK.SYSTEM adb_rom_checksum.2mg
 
 ADBROMCK.SYSTEM: ADB_ROM_CHECKSUM.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 adb_rom_checksum.2mg: ADBROMCK.SYSTEM
 	@echo "Creating ADB ROM checksum test disk..."
@@ -360,7 +429,7 @@ adb_rom_checksum.2mg: ADBROMCK.SYSTEM
 adb_rom_simple: ADBSIMPL.SYSTEM adb_rom_simple.2mg
 
 ADBSIMPL.SYSTEM: ADB_ROM_SIMPLE.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 adb_rom_simple.2mg: ADBSIMPL.SYSTEM
 	@echo "Creating simple ADB ROM test disk..."
@@ -379,7 +448,7 @@ adb_rom_simple.2mg: ADBSIMPL.SYSTEM
 selftest01: TEST01.SYSTEM selftest01.2mg
 
 TEST01.SYSTEM: SELFTEST01.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest01.2mg: TEST01.SYSTEM
 	@echo "Creating SELFTEST01 direct launcher disk..."
@@ -394,7 +463,7 @@ selftest01.2mg: TEST01.SYSTEM
 selftest02: TEST02.SYSTEM selftest02.2mg
 
 TEST02.SYSTEM: SELFTEST02.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest02.2mg: TEST02.SYSTEM
 	@echo "Creating SELFTEST02 direct launcher disk..."
@@ -409,7 +478,7 @@ selftest02.2mg: TEST02.SYSTEM
 selftest03: TEST03.SYSTEM selftest03.2mg
 
 TEST03.SYSTEM: SELFTEST03.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest03.2mg: TEST03.SYSTEM
 	@echo "Creating SELFTEST03 direct launcher disk..."
@@ -424,7 +493,7 @@ selftest03.2mg: TEST03.SYSTEM
 selftest04: TEST04.SYSTEM selftest04.2mg
 
 TEST04.SYSTEM: SELFTEST04.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest04.2mg: TEST04.SYSTEM
 	@echo "Creating SELFTEST04 direct launcher disk..."
@@ -439,7 +508,7 @@ selftest04.2mg: TEST04.SYSTEM
 selftest05: TEST05.SYSTEM selftest05.2mg
 
 TEST05.SYSTEM: SELFTEST05.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest05.2mg: TEST05.SYSTEM
 	@echo "Creating SELFTEST05 direct launcher disk..."
@@ -454,7 +523,7 @@ selftest05.2mg: TEST05.SYSTEM
 selftest06: TEST06.SYSTEM selftest06.2mg
 
 TEST06.SYSTEM: SELFTEST06.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest06.2mg: TEST06.SYSTEM
 	@echo "Creating SELFTEST06 direct launcher disk..."
@@ -469,7 +538,7 @@ selftest06.2mg: TEST06.SYSTEM
 selftest07: TEST07.SYSTEM selftest07.2mg
 
 TEST07.SYSTEM: SELFTEST07.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest07.2mg: TEST07.SYSTEM
 	@echo "Creating SELFTEST07 direct launcher disk..."
@@ -484,7 +553,7 @@ selftest07.2mg: TEST07.SYSTEM
 selftest08: TEST08.SYSTEM selftest08.2mg
 
 TEST08.SYSTEM: SELFTEST08.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest08.2mg: TEST08.SYSTEM
 	@echo "Creating SELFTEST08 direct launcher disk..."
@@ -499,7 +568,7 @@ selftest08.2mg: TEST08.SYSTEM
 selftest09: TEST09.SYSTEM selftest09.2mg
 
 TEST09.SYSTEM: SELFTEST09.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest09.2mg: TEST09.SYSTEM
 	@echo "Creating SELFTEST09 direct launcher disk..."
@@ -514,7 +583,7 @@ selftest09.2mg: TEST09.SYSTEM
 selftest0a: TEST0A.SYSTEM selftest0a.2mg
 
 TEST0A.SYSTEM: SELFTEST0A.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest0a.2mg: TEST0A.SYSTEM
 	@echo "Creating SELFTEST0A direct launcher disk..."
@@ -529,7 +598,7 @@ selftest0a.2mg: TEST0A.SYSTEM
 selftest0b: TEST0B.SYSTEM selftest0b.2mg
 
 TEST0B.SYSTEM: SELFTEST0B.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest0b.2mg: TEST0B.SYSTEM
 	@echo "Creating SELFTEST0B direct launcher disk..."
@@ -544,7 +613,7 @@ selftest0b.2mg: TEST0B.SYSTEM
 selftest0c: TEST0C.SYSTEM selftest0c.2mg
 
 TEST0C.SYSTEM: SELFTEST0C.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 selftest0c.2mg: TEST0C.SYSTEM
 	@echo "Creating SELFTEST0C direct launcher disk..."
@@ -563,7 +632,7 @@ selftest0c.2mg: TEST0C.SYSTEM
 plb_test: PLB.SYSTEM plb_test.2mg
 
 PLB.SYSTEM: PLB_DBR_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 plb_test.2mg: PLB.SYSTEM
 	@echo "Creating PLB test disk..."
@@ -578,7 +647,7 @@ plb_test.2mg: PLB.SYSTEM
 dbr_corruption_test: DBRTEST.SYSTEM dbr_corruption_test.2mg
 
 DBRTEST.SYSTEM: DBR_CORRUPTION_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 dbr_corruption_test.2mg: DBRTEST.SYSTEM
 	@echo "Creating DBR corruption test disk..."
@@ -593,7 +662,7 @@ dbr_corruption_test.2mg: DBRTEST.SYSTEM
 dbr_plb_stage_test: DBRPLB.SYSTEM dbr_plb_stage_test.2mg
 
 DBRPLB.SYSTEM: DBR_PLB_STAGE_SCAN_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 dbr_plb_stage_test.2mg: DBRPLB.SYSTEM
 	@echo "Creating DBR PLB stage/scan test disk..."
@@ -608,7 +677,7 @@ dbr_plb_stage_test.2mg: DBRPLB.SYSTEM
 dbr_e0_scan_test: DBRE0.SYSTEM dbr_e0_scan_test.2mg
 
 DBRE0.SYSTEM: DBR_E0_SCAN_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 dbr_e0_scan_test.2mg: DBRE0.SYSTEM
 	@echo "Creating DBR E0 scan test disk..."
@@ -627,7 +696,7 @@ dbr_e0_scan_test.2mg: DBRE0.SYSTEM
 c034_test: C034TEST.SYSTEM c034_test.2mg
 
 C034TEST.SYSTEM: C034_TIMING_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 c034_test.2mg: C034TEST.SYSTEM
 	@echo "Creating C034 bank register test disk..."
@@ -649,13 +718,13 @@ timing_test: YRACE.SYSTEM
 	@echo "Timing race test disk ready: $(TIMING_DISK)"
 
 YRACE.SYSTEM: Y_CORRUPTION_DEMO.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 # IO Debug Test - prints banner and does immediate C0xx reads
 io_debug_test: IODEBUG.SYSTEM io_debug_test.2mg
 
 IODEBUG.SYSTEM: IODEBUG.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 io_debug_test.2mg: IODEBUG.SYSTEM
 	@echo "Creating IO debug test disk..."
@@ -671,7 +740,7 @@ io_debug_test.2mg: IODEBUG.SYSTEM
 io_autorun_test: SCCAUTO_AUTO.SYSTEM io_autorun_test.2mg
 
 SCCAUTO_AUTO.SYSTEM: IODEBUG.AUTO.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 io_autorun_test.2mg: SCCAUTO_AUTO.SYSTEM
 	@echo "Creating IO auto-run disk..."
@@ -698,7 +767,7 @@ clean:
 
 # SCC WR2 Test - reproduces Test 06-01 failure
 SCCWR2.SYSTEM: SCC_WR2_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_wr2.2mg: SCCWR2.SYSTEM
 	@cp blank.2mg scc_wr2.2mg 2>/dev/null || echo "Note: blank.2mg not found"
@@ -713,7 +782,7 @@ scc_wr2.2mg: SCCWR2.SYSTEM
 scc_irq: SCCIRQ.SYSTEM scc_irq.2mg
 
 SCCIRQ.SYSTEM: SCC_IRQ_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ SCC_IRQ_TEST.S
+	$(ASM) -V $(MERLIN_DIR)/Library/ SCC_IRQ_TEST.S
 	@echo "Built SCCIRQ.SYSTEM"
 
 scc_irq.2mg: SCCIRQ.SYSTEM
@@ -728,7 +797,7 @@ scc_irq.2mg: SCCIRQ.SYSTEM
 scc_txempty: SCCTXE.SYSTEM scc_txempty.2mg
 
 SCCTXE.SYSTEM: SCC_TXEMPTY_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_txempty.2mg: SCCTXE.SYSTEM
 	@cp blank.2mg scc_txempty.2mg 2>/dev/null || echo "Note: blank.2mg not found"
@@ -742,7 +811,7 @@ scc_txempty.2mg: SCCTXE.SYSTEM
 scc_vtx: SCCVTX.SYSTEM scc_vtx.2mg
 
 SCCVTX.SYSTEM: SCC_VECTOR_TX_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_vtx.2mg: SCCVTX.SYSTEM
 	@cp blank.2mg scc_vtx.2mg 2>/dev/null || echo "Note: blank.2mg not found"
@@ -757,7 +826,7 @@ scc_vtx.2mg: SCCVTX.SYSTEM
 scc_selftest06: SCC06.SYSTEM scc_selftest06.2mg
 
 SCC06.SYSTEM: SCC_SELFTEST_06.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_selftest06.2mg: SCC06.SYSTEM
 	@cp blank.2mg scc_selftest06.2mg 2>/dev/null || echo "Note: blank.2mg not found"
@@ -772,7 +841,7 @@ scc_selftest06.2mg: SCC06.SYSTEM
 scc_full: SCCFULL.SYSTEM scc_full.2mg
 
 SCCFULL.SYSTEM: SCC_FULL_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_full.2mg: SCCFULL.SYSTEM
 	@cp blank.2mg scc_full.2mg 2>/dev/null || echo "Note: blank.2mg not found"
@@ -787,7 +856,7 @@ scc_full.2mg: SCCFULL.SYSTEM
 scc_wr15: SCCWR15.SYSTEM scc_wr15.2mg
 
 SCCWR15.SYSTEM: SCC_WR15_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_wr15.2mg: SCCWR15.SYSTEM
 	@cp blank.2mg scc_wr15.2mg 2>/dev/null || echo "Note: blank.2mg not found"
@@ -802,7 +871,7 @@ scc_wr15.2mg: SCCWR15.SYSTEM
 scc_baud_test: SCCBAUD.SYSTEM scc_baud_test.2mg
 
 SCCBAUD.SYSTEM: SCC_BAUD_TEST.S
-	$(ASM) -V Merlin32_v1.2_b2/Library/ $<
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
 
 scc_baud_test.2mg: SCCBAUD.SYSTEM
 	@cp blank.2mg scc_baud_test.2mg 2>/dev/null || echo "Note: blank.2mg not found"
