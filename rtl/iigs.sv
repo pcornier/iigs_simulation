@@ -369,14 +369,24 @@ module iigs
       end
     end
     // Banks $00/$01 Language Card space (existing logic)
-    // LCBANK2 address translation (D000->C000) only applies when reading RAM (RDROM=0)
+    // LCBANK1 address translation (D000->C000) only applies when LCRAM2=0 (bank 1 selected)
+    // When LCRAM2=1 (bank 2), use natural $D000-$DFFF addresses
     // When RDROM=1, we read from ROM which doesn't use the bank1/bank2 distinction
-    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6] && ~RDROM) begin
-      lcram2_sel = 1;
+    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && ~LCRAM2 && ~shadow[6] && ~RDROM) begin
+      lcram2_sel = 1;  // Still set lcram2_sel for LC access detection
       if (aux && bank_bef == 8'h00) begin
         addr_bus = addr_bef - 16'h1000 + 24'h10000;
       end else begin
         addr_bus = {bank_bef, 16'h0000} + addr_bef - 16'h1000;
+      end
+    end
+    // LC Bank 2: $D000-$DFFF accessed at natural addresses (no translation)
+    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6] && ~RDROM) begin
+      lcram2_sel = 1;
+      if (aux && bank_bef == 8'h00) begin
+        addr_bus = addr_bef + 24'h10000;  // No offset, just aux bank switch
+      end else begin
+        addr_bus = {bank_bef, 16'h0000} + addr_bef;  // Natural address
       end
     end
     else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'he000 && ~RDROM && ~shadow[6]) begin
