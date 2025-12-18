@@ -179,7 +179,7 @@ assign HDMI_BLACKOUT = 0;
 assign HDMI_BOB_DEINT = 0;
 
 assign AUDIO_S = 1;
-assign AUDIO_R = 0;
+// AUDIO_R now comes from iigs module (was hardcoded to 0)
 assign AUDIO_MIX = 3;
 
 assign LED_DISK = 0;
@@ -340,6 +340,7 @@ iigs iigs (
 	.HS(hsync),
 	.VS(vsync),
 	.AUDIO_L(AUDIO_L),
+	.AUDIO_R(AUDIO_R),
 	/* hard drive (supports 2 units - ProDOS limit) */
 	.HDD_SECTOR(hdd_sector),
 	.HDD_READ(hdd_read),
