@@ -3,7 +3,7 @@
 
 # Check for required disk images
 MISSING_DISKS=0
-for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv; do
+for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv"; do
     if [ ! -f "$disk" ]; then
         echo "ERROR: Missing disk image: $disk"
         MISSING_DISKS=1
@@ -16,6 +16,8 @@ if [ $MISSING_DISKS -eq 1 ]; then
     echo "  - totalreplay.hdv"
     echo "  - Pitch-Dark-20210331.hdv"
     echo "  - gsos.hdv"
+    echo "  - arkanoid.hdv"
+    echo "  - Total Replay II v1.0-alpha.4.hdv"
     exit 1
 fi
 
@@ -65,6 +67,32 @@ if [ -f "regression_images/gsos_screenshot_frame_0315.png" ]; then
     fi
 else
     echo "  SKIP: GS/OS - missing reference image"
+fi
+
+echo "Running Arkanoid test..."
+./obj_dir/Vemu --disk arkanoid.hdv --stop-at-frame 500 --screenshot 500 &> arkanoid.txt
+if [ -f "regression_images/arkanoid_screenshot_frame_0500.png" ]; then
+    if diff screenshot_frame_0500.png regression_images/arkanoid_screenshot_frame_0500.png > /dev/null 2>&1; then
+        echo "  PASS: Arkanoid"
+    else
+        echo "  FAIL: Arkanoid - screenshot differs"
+        FAILED=1
+    fi
+else
+    echo "  SKIP: Arkanoid - missing reference image"
+fi
+
+echo "Running Total Replay II test..."
+./obj_dir/Vemu --disk "Total Replay II v1.0-alpha.4.hdv" --stop-at-frame 200 --screenshot 200 &> totalreplay2.txt
+if [ -f "regression_images/totalreplay2_screenshot_frame_0200.png" ]; then
+    if diff screenshot_frame_0200.png regression_images/totalreplay2_screenshot_frame_0200.png > /dev/null 2>&1; then
+        echo "  PASS: Total Replay II"
+    else
+        echo "  FAIL: Total Replay II - screenshot differs"
+        FAILED=1
+    fi
+else
+    echo "  SKIP: Total Replay II - missing reference image"
 fi
 
 echo ""
