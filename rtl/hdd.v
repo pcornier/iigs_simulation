@@ -112,14 +112,30 @@ module hdd(
     // Check if any unit is mounted (for ROM visibility)
     wire any_unit_mounted = |hdd_mounted;
 
+    // Detect DMA completion: when last byte (addr 511) is written to sector buffer
+    // Use this to arm prefetch AFTER DMA is done, not before
+    reg dma_complete_pending;
+
     always @(posedge CLK_14M)
     begin: cpu_interface
-        if (prefetch_armed) begin
+        // Arm prefetch when DMA is complete (detected by dma_complete_pending flag)
+        // This ensures the sector buffer has valid data before we prefetch
+        if (dma_complete_pending) begin
             prefetch_data  <= sector_cpu_q;
             prefetch_valid <= 1'b1;
+            dma_complete_pending <= 1'b0;
+`ifdef SIMULATION
+            $display("HDD PREFETCH (post-DMA) -> data=%02h at sec_addr=%03d", sector_cpu_q, sec_addr);
+`endif
+        end
+
+        // Detect end of DMA: when last byte is written to sector buffer
+        if (ram_we && ram_addr == 9'd511 && prefetch_armed) begin
+            // DMA just finished writing last byte - arm the actual prefetch for next cycle
+            dma_complete_pending <= 1'b1;
             prefetch_armed <= 1'b0;
 `ifdef SIMULATION
-            $display("HDD PREFETCH armed -> data=%02h at sec_addr=%03d", sector_cpu_q, sec_addr);
+            $display("HDD DMA complete (addr 511 written), scheduling prefetch");
 `endif
         end
 
@@ -173,6 +189,7 @@ module hdd(
                 cpu_c0f8_we <= 1'b0;
                 prefetch_armed <= 1'b0;
                 prefetch_valid <= 1'b0;
+                dma_complete_pending <= 1'b0;
             end
             else
             begin
