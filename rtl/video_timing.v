@@ -42,23 +42,21 @@ parameter HBP = HSP + 64;   // End horizontal sync (816)
 parameter HWL = HBP + 96;   // Total line width (912 pixels)
 
 // Vertical Timing (262 lines total - NTSC standard)
-// Layout: |Top Border(32)|Active Display(200)|Bottom Border(30)| = 262 total
-parameter V_TOP_BORDER = 32;    // Top border lines
+// Layout: |Top Border(16)|Active Display(200)|Bottom Border(16)|Blanking(30)| = 262 total
+parameter V_BORDER = 32;        // Top/bottom border lines (total)
 parameter V_ACTIVE = 200;       // Active display lines (Super Hi-Res)
-parameter V_BOTTOM_BORDER = 30; // Bottom border lines
+parameter V_BLANKING = 30;      // Blanking lines
 
-parameter VFP = V_TOP_BORDER + V_ACTIVE;        // 232 - End of active display
-parameter VSP = VFP + (V_BOTTOM_BORDER/2);     // 247 - Start vertical sync
-parameter VBP = VSP + 3;                       // 250 - End vertical sync  
-parameter VWL = V_TOP_BORDER + V_ACTIVE + V_BOTTOM_BORDER; // 262 - Total frame
+parameter VFP = V_BORDER + V_ACTIVE;              // 232 - End of active display
+parameter VSP = VFP + 3;                          // 247 - Start vertical sync
+parameter VBP = VSP + 3;                          // 250 - End vertical sync
+parameter VWL = V_ACTIVE + V_BORDER + V_BLANKING; // 262 - Total frame
 
 assign hsync = ~((hcount >= HSP) && (hcount < HBP));
 assign vsync = ~((vcount >= VSP) && (vcount < VBP));
 
 assign hblank = hcount >= HFP;
-// VBlank starts at line 262 to capture full visible frame
-// kegs: 32 top + 200 active + 30 bottom = 262 visible lines
-assign vblank = vcount >= 262;
+assign vblank = vcount >= VFP;
 
 always @(posedge clk_vid) if (ce_pix) begin
   hcount <= hcount + 11'd1;

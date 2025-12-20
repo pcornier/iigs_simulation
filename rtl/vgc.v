@@ -120,34 +120,34 @@ begin
 	// This ensures games that cycle BORDERCOLOR mid-scanline get straight horizontal lines
 	if (H == 0)
 		bordercolor_latched <= BORDERCOLOR;
-	// load SCB - For display, V=32 uses SCB[1], V=33 uses SCB[2], etc.
-	// The +1 offset means SCB[0] is read at V=31 (for interrupt check only)
+	// load SCB - For display, V=16 uses SCB[1], V=17 uses SCB[2], etc.
+	// The +1 offset means SCB[0] is read at V=15 (for interrupt check only)
 	if (H=='h38c) begin
 		if (linear_mode)
 		begin
-			video_addr_shrg <= 'h19D00+(V-'d32+1);
+			video_addr_shrg <= 'h19D00+(V-'d16+1);
 		end
 		else
 		begin
 		// Non-linear mode: odd/even scanlines use different banks
 		// Scanline N maps to: odd->$9D00+N/2, even->$5D00+N/2
-		// Since V=32 is scanline 0, index = (V-32)>>1
+		// Since V=16 is scanline 0, index = (V-16)>>1
 		if (V[0])
-			video_addr_shrg <= 'h19D00+((V-'d32)>>1);  // Odd scanlines
+			video_addr_shrg <= 'h19D00+((V-'d16)>>1);  // Odd scanlines
 		else
-			video_addr_shrg <= 'h15D00+((V-'d32)>>1);  // Even scanlines
+			video_addr_shrg <= 'h15D00+((V-'d16)>>1);  // Even scanlines
 		end
 	end
 	else if (H=='h38e) begin
 		scb <= video_data;
 		// Check for scanline interrupt: SCB bit 6, SHR mode enabled, valid scanline range
-		// V >= 31 allows SCB[0] interrupt to fire at V=31 (just before scanline 0 displays at V=32)
+		// V >= 15 allows SCB[0] interrupt to fire at V=15 (just before scanline 0 displays at V=16)
 `ifdef SIMULATION
-		if (V >= 'd31 && V < 'd206 && V[4:0] == 5'd0)  // Debug every 32nd line in valid range
+		if (V >= 'd15 && V < 'd206 && V[4:0] == 5'd0)  // Debug every 32nd line in valid range
 			$display("VGC_SCANIRQ_CHECK: V=%d H=%03x SCB=%02x SCB[6]=%d NEWVIDEO[7]=%d (NEWVIDEO=%02x) -> fire=%d",
 			         V, H, video_data, video_data[6], NEWVIDEO[7], NEWVIDEO, (video_data[6] && NEWVIDEO[7]));
 `endif
-		if (video_data[6] && NEWVIDEO[7] && V >= 'd31 && V < 'd206)
+		if (video_data[6] && NEWVIDEO[7] && V >= 'd15 && V < 'd216)
 			scanline_irq<=1;
 		//$display("SCB = %x video_addr %x",video_data,video_addr);
 		//video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
@@ -235,16 +235,16 @@ begin
 			begin
 				// linear mode
 				//$display("NONWORKING NEWVIDEO 6 MODE - LINEAR");
-				video_addr_shrg_1 <= 'h12000 + ((V-32) * 'd160);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg <= 'h12000 + ((V-32) * 'd160);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg_2 <= 'h11fff + ((V-32) * 'd160);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_2 <= 'h11fff + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
 			end
 			else
 			begin
 				//$display("NONLINEAR NEWVIDEO 6 MODE");
-				video_addr_shrg_1 <= 'h12000 + ((V-32) * 'd80);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg <= 'h12000 + ((V-32) * 'd80);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg_2 <= 'h16000 + ((V-32) * 'd80);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
+				video_addr_shrg_2 <= 'h16000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
 			end
 			h_counter<=0;
 			base_toggle<=0;
@@ -476,7 +476,7 @@ wire [11:0] graphics_rgb = lores_mode ? palette_rgb_r[final_graphics_color] :
                                        {apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]};
 
 reg [12:0] BASEADDR;
-wire  [ 4:0] vert = V[7:3]-5'h04;  // Changed from 5'h02 (V-16) to 5'h04 (V-32)
+wire  [ 4:0] vert = V[7:3]-5'h02;  // (V-16)
 always @(*) begin
 	case (vert)
 		5'h00: BASEADDR= 13'h000;
@@ -766,7 +766,7 @@ begin
 					graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
 					graphics_color <= window_y_w[2] ? video_data[7:4] : video_data[3:0];
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 32) 
+					if (H >= 32 && H <= 100 && V == 16)
 						$display("  LORES RELOAD: H=%d video_data=%h expanded=%b color=%h", H, video_data, {expandLores40(video_data, window_y_w[2]), 1'b0}, window_y_w[2] ? video_data[7:4] : video_data[3:0]);
 `endif
 				end else if (hires_mode) begin
@@ -784,13 +784,13 @@ begin
                     // Shift with last-pixel fill to avoid introducing black seams
                     graphics_pix_shift <= {graphics_pix_shift[0], graphics_pix_shift[7:1]};
 `ifdef VGC_DEBUG
-                    if (H >= 32 && H <= 100 && V == 32) 
+                    if (H >= 32 && H <= 100 && V == 16)
                         $display("  PIXEL SHIFT: H=%d xpos=%d shift_before=%b shift_after=%b pixel_out=%b", H, xpos, graphics_pix_shift, {graphics_pix_shift[0], graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
 `endif
                 end else begin
 					// Hold pixel for doubling in 40-column mode
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 32) 
+					if (H >= 32 && H <= 100 && V == 16)
 						$display("  PIXEL HOLD: H=%d xpos=%d shift=%b pixel_out=%b", H, xpos, graphics_pix_shift, graphics_pix_shift[0]);
 `endif
 				end
@@ -804,13 +804,13 @@ begin
 			// Mode-dependent boundaries: SHRG uses full width, Apple II modes are centered
 			if (NEWVIDEO[7]) begin
 				// SHRG mode: use full 640-pixel width (within 704 visible area)
-				if (H >= 32 && H < 672 && V >= 32 && V < 232)
+				if (H >= 32 && H < 672 && V >= 16 && V < 216)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < 32)
 					pixel_counter <= 11'b0; // Reset at start of each line
 			end else begin
-				// Apple II modes: 192 lines starting at V=32 (scanline 0 to 191)
-				if (H >= 72 && H < 632 && V >= 32 && V < 224)
+				// Apple II modes: 192 lines starting at V=16 (scanline 0 to 191)
+				if (H >= 72 && H < 632 && V >= 16 && V < 208)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < 72)
 					pixel_counter <= 11'b0; // Reset at start of each line
@@ -893,12 +893,12 @@ begin
 //   Graphics has 5-pixel pipeline latency (apple2_shift_reg), shift border right
 // SHRG modes:          |Left Border(32px)|Active Display(640px)|Right Border(32px)| = 704 total
 // Border generation:
-// Apple II TEXT: active display H=72-631 (560 pixels), V=32-223 (192 lines)
-// Apple II GFX:  active display H=77-636 (560 pixels), V=32-223 (192 lines)
-// SHRG modes:    active display H=32-671 (640 pixels), V=32-231 (200 lines)
-if ((!NEWVIDEO[7] && GR && ((H < 'd77 || H > 'd636) || (V < 'd32 || V >= 'd224))) ||
-    (!NEWVIDEO[7] && !GR && ((H < 'd72 || H > 'd631) || (V < 'd32 || V >= 'd224))) ||
-    (NEWVIDEO[7] && ((H < 'd32 || H >= 'd672 || V < 'd32 || V >= 'd232))))
+// Apple II TEXT: active display H=72-631 (560 pixels), V=16-207 (192 lines)
+// Apple II GFX:  active display H=77-636 (560 pixels), V=16-207 (192 lines)
+// SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
+if ((!NEWVIDEO[7] && GR && ((H < 'd77 || H > 'd636) || (V < 'd16 || V >= 'd208))) ||
+    (!NEWVIDEO[7] && !GR && ((H < 'd72 || H > 'd631) || (V < 'd16 || V >= 'd208))) ||
+    (NEWVIDEO[7] && ((H < 'd32 || H >= 'd672 || V < 'd16 || V >= 'd216))))
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -934,7 +934,7 @@ end
 wire [9:0] window_x_w = NEWVIDEO[7] ? 
     ((H >= 32) ? H - 32 : 10'b0) :          // SHRG: start at H=32
     ((H >= 72) ? H - 72 : 10'b0);           // Apple II: start at H=72
-wire [9:0] window_y_w = (V >= 32) ? V - 32 : 10'b0;  // Apple II display starts at V=32 (scanline 0)
+wire [9:0] window_y_w = (V >= 16) ? V - 16 : 10'b0;  // Apple II display starts at V=16 (scanline 0)
 
 // Apple II coordinate mapping: Now properly centered, window_y_w is 0-191 (192 lines)
 // No clamping needed since we're properly centered within the 200-line area
@@ -1018,7 +1018,7 @@ end
 // VBL Pulse Generation
 // Generate a single-cycle pulse at the start of the vertical blanking interval
 // to avoid IRQ storms.
-wire v_blank = (V >= 199);
+wire v_blank = (V >= 208); // 16 border lines + active display line 192, per TN 40
 reg v_blank_d;
 always @(posedge clk_vid) if(ce_pix) v_blank_d <= v_blank;
 assign vbl_irq = v_blank & ~v_blank_d;
