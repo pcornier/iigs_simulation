@@ -95,6 +95,19 @@ else
     echo "  SKIP: Total Replay II - missing reference image"
 fi
 
+echo "Running BASIC boot (reset) test..."
+./obj_dir/Vemu --reset-at-frame 240 --stop-at-frame 301 --screenshot 301 &> basic_boot.txt
+if [ -f "regression_images/basic_boot_screenshot_frame_0301.png" ]; then
+    if diff screenshot_frame_0301.png regression_images/basic_boot_screenshot_frame_0301.png > /dev/null 2>&1; then
+        echo "  PASS: BASIC boot"
+    else
+        echo "  FAIL: BASIC boot - screenshot differs"
+        FAILED=1
+    fi
+else
+    echo "  SKIP: BASIC boot - missing reference image"
+fi
+
 echo ""
 if [ $FAILED -eq 0 ]; then
     echo "All regression tests passed!"
