@@ -31,9 +31,9 @@ fi
 FAILED=0
 
 echo "Running Total Replay test..."
-./obj_dir/Vemu --disk totalreplay.hdv --stop-at-frame 200 --screenshot 200 &> totalreplay.txt
-if [ -f "regression_images/totalreplay_screenshot_frame_0200.png" ]; then
-    if diff screenshot_frame_0200.png regression_images/totalreplay_screenshot_frame_0200.png > /dev/null 2>&1; then
+./obj_dir/Vemu --disk totalreplay.hdv --stop-at-frame 155 --screenshot 155 &> totalreplay.txt
+if [ -f "regression_images/totalreplay_screenshot_frame_0155.png" ]; then
+    if diff screenshot_frame_0155.png regression_images/totalreplay_screenshot_frame_0155.png > /dev/null 2>&1; then
         echo "  PASS: Total Replay"
     else
         echo "  FAIL: Total Replay - screenshot differs"
@@ -44,9 +44,9 @@ else
 fi
 
 echo "Running Pitch Dark test..."
-./obj_dir/Vemu --disk Pitch-Dark-20210331.hdv --stop-at-frame 160 --screenshot 160 &> pitchdark.txt
-if [ -f "regression_images/pitchdark_screenshot_frame_0160.png" ]; then
-    if diff screenshot_frame_0160.png regression_images/pitchdark_screenshot_frame_0160.png > /dev/null 2>&1; then
+./obj_dir/Vemu --disk Pitch-Dark-20210331.hdv --stop-at-frame 159 --screenshot 159 &> pitchdark.txt
+if [ -f "regression_images/pitchdark_screenshot_frame_0159.png" ]; then
+    if diff screenshot_frame_0159.png regression_images/pitchdark_screenshot_frame_0159.png > /dev/null 2>&1; then
         echo "  PASS: Pitch Dark"
     else
         echo "  FAIL: Pitch Dark - screenshot differs"
@@ -57,9 +57,9 @@ else
 fi
 
 echo "Running GS/OS test..."
-./obj_dir/Vemu --disk gsos.hdv --stop-at-frame 315 --screenshot 315 &> gsos.txt
-if [ -f "regression_images/gsos_screenshot_frame_0315.png" ]; then
-    if diff screenshot_frame_0315.png regression_images/gsos_screenshot_frame_0315.png > /dev/null 2>&1; then
+./obj_dir/Vemu --disk gsos.hdv --stop-at-frame 320 --screenshot 320 &> gsos.txt
+if [ -f "regression_images/gsos_screenshot_frame_0320.png" ]; then
+    if diff screenshot_frame_0320.png regression_images/gsos_screenshot_frame_0320.png > /dev/null 2>&1; then
         echo "  PASS: GS/OS"
     else
         echo "  FAIL: GS/OS - screenshot differs"
@@ -70,9 +70,9 @@ else
 fi
 
 echo "Running Arkanoid test..."
-./obj_dir/Vemu --disk arkanoid.hdv --stop-at-frame 500 --screenshot 500 &> arkanoid.txt
-if [ -f "regression_images/arkanoid_screenshot_frame_0500.png" ]; then
-    if diff screenshot_frame_0500.png regression_images/arkanoid_screenshot_frame_0500.png > /dev/null 2>&1; then
+./obj_dir/Vemu --disk arkanoid.hdv --stop-at-frame 485 --screenshot 485 &> arkanoid.txt
+if [ -f "regression_images/arkanoid_screenshot_frame_0485.png" ]; then
+    if diff screenshot_frame_0485.png regression_images/arkanoid_screenshot_frame_0485.png > /dev/null 2>&1; then
         echo "  PASS: Arkanoid"
     else
         echo "  FAIL: Arkanoid - screenshot differs"
@@ -83,9 +83,9 @@ else
 fi
 
 echo "Running Total Replay II test..."
-./obj_dir/Vemu --disk "Total Replay II v1.0-alpha.4.hdv" --stop-at-frame 200 --screenshot 200 &> totalreplay2.txt
-if [ -f "regression_images/totalreplay2_screenshot_frame_0200.png" ]; then
-    if diff screenshot_frame_0200.png regression_images/totalreplay2_screenshot_frame_0200.png > /dev/null 2>&1; then
+./obj_dir/Vemu --disk "Total Replay II v1.0-alpha.4.hdv" --stop-at-frame 156 --screenshot 156 &> totalreplay2.txt
+if [ -f "regression_images/totalreplay2_screenshot_frame_0156.png" ]; then
+    if diff screenshot_frame_0156.png regression_images/totalreplay2_screenshot_frame_0156.png > /dev/null 2>&1; then
         echo "  PASS: Total Replay II"
     else
         echo "  FAIL: Total Replay II - screenshot differs"
@@ -96,9 +96,9 @@ else
 fi
 
 echo "Running BASIC boot (reset) test..."
-./obj_dir/Vemu --reset-at-frame 240 --stop-at-frame 301 --screenshot 301 &> basic_boot.txt
-if [ -f "regression_images/basic_boot_screenshot_frame_0301.png" ]; then
-    if diff screenshot_frame_0301.png regression_images/basic_boot_screenshot_frame_0301.png > /dev/null 2>&1; then
+./obj_dir/Vemu --reset-at-frame 240 --stop-at-frame 295 --screenshot 295 &> basic_boot.txt
+if [ -f "regression_images/basic_boot_screenshot_frame_0295.png" ]; then
+    if diff screenshot_frame_0295.png regression_images/basic_boot_screenshot_frame_0295.png > /dev/null 2>&1; then
         echo "  PASS: BASIC boot"
     else
         echo "  FAIL: BASIC boot - screenshot differs"
