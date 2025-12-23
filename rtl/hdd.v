@@ -149,8 +149,10 @@ module hdd(
                 // Mirror register values without side-effects; phi0-gated path handles semantics
                 case (A[3:0])
                   4'h0: begin
-                    // EXECUTE/STATUS mirror: just return current status (no side-effect here)
-                    D_OUT <= reg_status;
+                    // EXECUTE/STATUS mirror: return 0 for success since DMA completes instantly
+                    // For STATUS command, return mounted status; for READ/WRITE, return 0 (success)
+                    D_OUT <= (reg_command == PRODOS_COMMAND_STATUS) ?
+                             (current_unit_mounted ? 8'h00 : 8'h01) : 8'h00;
                   end
                   4'h1: D_OUT <= reg_status;      // STATUS/ERROR
                   4'h2: D_OUT <= reg_command;     // COMMAND
@@ -227,8 +229,10 @@ module hdd(
                                         // Initiate read if current unit is mounted; otherwise report error immediately
                                         if (current_unit_mounted) begin
                                           if (~select_d) hdd_read <= 1'b1;
-                                          // Do not change status here; reg_status should be 0x80 after C0F2
-                                          D_OUT <= reg_status;
+                                          // Return 0 (success) since our emulation completes the DMA instantly.
+                                          // The slot ROM saves this value and returns it to ProDOS; non-zero = error.
+                                          reg_status <= 8'h00;
+                                          D_OUT <= 8'h00;
                                         end else begin
                                           reg_status <= 8'h01; // error
                                           D_OUT      <= 8'h01;
@@ -247,7 +251,9 @@ module hdd(
                                         end else begin
                                           if (current_unit_mounted) begin
                                             $display("HDD: WRITE command initiated for unit %02h. Asserting hdd_write.", reg_unit);
-                                            D_OUT <= reg_status; // report busy
+                                            // Return 0 (success) since our emulation completes the DMA instantly.
+                                            reg_status <= 8'h00;
+                                            D_OUT <= 8'h00;
                                             hdd_write <= 1'b1;
                                           end else begin
                                             reg_status <= 8'h01; D_OUT <= 8'h01;
