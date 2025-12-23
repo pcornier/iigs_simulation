@@ -35,13 +35,12 @@ input [7:0] NEWVIDEO
 // if NEWVIDEO[7] == 1 then we are in SHRG mode
 
 assign video_addr = NEWVIDEO[7] ? video_addr_shrg : video_addr_ii;
-// NEWVIDEO[6] controls CPU memory mapping, but VGC always uses linear addressing for SHR video
-// When NEWVIDEO[7]=1 (SHR mode), the video buffer is always $2000-$9CFF with SCBs at $9D00
-wire linear_mode = 1'b1;
+// NEWVIDEO[6] controls CPU memory mapping for Double Hi-Res, but per the IIgs Hardware Reference,
+// when NEWVIDEO[7]=1 (SHR mode), bit 6 is overridden and VGC always uses linear addressing.
+// The video buffer is $E1/2000-$9CFF with SCBs at $9D00 and palettes at $9E00.
 
 /* SHRG */
 reg [22:0] video_addr_shrg_1;
-reg [22:0] video_addr_shrg_2;
 reg [22:0] video_addr_shrg;
 reg [3:0] r_shrg[16];
 reg [3:0] g_shrg[16];
@@ -110,7 +109,6 @@ reg [3:0] bordercolor_latched;
 // one cycle before the end of the left border, pull down the scp
 reg [7:0] scb;
 reg [1:0] h_counter;
-reg base_toggle;
 reg [3:0] last_pixel;
 reg [3:0] pal_counter;
 always @(posedge clk_vid) if(ce_pix)
@@ -120,23 +118,12 @@ begin
 	// This ensures games that cycle BORDERCOLOR mid-scanline get straight horizontal lines
 	if (H == 0)
 		bordercolor_latched <= BORDERCOLOR;
-	// load SCB - For display, V=16 uses SCB[1], V=17 uses SCB[2], etc.
-	// The +1 offset means SCB[0] is read at V=15 (for interrupt check only)
+	// Pre-fetch SCB during HBLANK for next scanline's display
+	// At V=15, fetch SCB[0] for scanline 0 (displayed at V=16)
+	// At V=16, fetch SCB[1] for scanline 1 (displayed at V=17), etc.
+	// Formula: at V=N, fetch SCB[N-15] = $9D00 + (V-16+1) = $9D00 + (V-15)
 	if (H=='h38c) begin
-		if (linear_mode)
-		begin
-			video_addr_shrg <= 'h19D00+(V-'d16+1);
-		end
-		else
-		begin
-		// Non-linear mode: odd/even scanlines use different banks
-		// Scanline N maps to: odd->$9D00+N/2, even->$5D00+N/2
-		// Since V=16 is scanline 0, index = (V-16)>>1
-		if (V[0])
-			video_addr_shrg <= 'h19D00+((V-'d16)>>1);  // Odd scanlines
-		else
-			video_addr_shrg <= 'h15D00+((V-'d16)>>1);  // Even scanlines
-		end
+		video_addr_shrg <= 'h19D00+(V-'d15);
 	end
 	else if (H=='h38e) begin
 		scb <= video_data;
@@ -149,128 +136,43 @@ begin
 `endif
 		if (video_data[6] && NEWVIDEO[7] && V >= 'd15 && V < 'd216)
 			scanline_irq<=1;
-		//$display("SCB = %x video_addr %x",video_data,video_addr);
-		//video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
-		base_toggle<=0;
-		if (linear_mode)
-		begin
-			// linear mode
-			//$display("NONWORKING NEWVIDEO 6 MODE - LINEAR data: %x offset: %x", video_data[3:0],{video_data[3:0],5'b0000} );
-			video_addr_shrg_1 <= 'h19E00 + {video_data[3:0],5'b00000};
-			video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
-			video_addr_shrg_2 <= 'h19Dff + {video_data[3:0],5'b00000};
-		end
-		else
-		begin
-			//$display("NONLINEAR NEWVIDEO 6 MODE data: %x newaddroffset: %x",video_data[3:0],{video_data[3:0],4'b0000} );
-			video_addr_shrg_1 <= 'h19F00 + {video_data[3:0],4'b0000};
-			video_addr_shrg <= 'h19F00 + {video_data[3:0],4'b0000};
-			video_addr_shrg_2 <= 'h15F00 + {video_data[3:0],4'b0000};
-		end
+		// Setup palette base address from SCB palette selector (bits 3:0)
+		// Each palette is 32 bytes at $9E00 + (palette * 32)
+		video_addr_shrg_1 <= 'h19E00 + {video_data[3:0],5'b00000};
+		video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
 	end else if (H=='h390) begin
 		pal_counter<=0;
-		scanline_irq<=0;	
-		if (linear_mode)
-		begin
-			video_addr_shrg <= video_addr_shrg + 1'b1;
-			video_addr_shrg_1 <= video_addr_shrg_1 +1'b1;
-		end
-		else begin
-			if (base_toggle)
-			begin
-				video_addr_shrg <= video_addr_shrg_1;
-				video_addr_shrg_2 <= video_addr_shrg_2 +1'b1;
-			end
-			else
-			begin
-				video_addr_shrg <= video_addr_shrg_2;
-				video_addr_shrg_1 <= video_addr_shrg_1 +1'b1;
-			end
-		end
+		scanline_irq<=0;
+		video_addr_shrg <= video_addr_shrg + 1'b1;
+		video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
 	end else if (H < 32) begin
-		//video_data;
-		//$display("PALETTE = %x",video_data);
-		base_toggle<=~base_toggle;
-		if (linear_mode)
-		begin
-			// Note: Due to address pre-increment at H=0x390, first read is at ODD address
-			// So odd addresses are read first for each color entry
-			if (video_addr_shrg[0]) begin
-		                //$display("GB PALETTE = %x addr %x  color index %x",video_data,video_addr_shrg,pal_counter);
-				b_shrg[pal_counter]<=video_data[3:0];
-				g_shrg[pal_counter]<=video_data[7:4];
-			end else begin
-		                //$display("R PALETTE = %x addr %x color index %x",video_data,video_addr_shrg,pal_counter);
-				r_shrg[pal_counter]<=video_data[3:0];
-				pal_counter<=pal_counter+1;
-			end
-			video_addr_shrg <= video_addr_shrg + 1'b1;
-			video_addr_shrg_1 <= video_addr_shrg_1 +1'b1;
+		// Read palette data - due to address pre-increment at H=0x390, first read is at ODD address
+		// Palette format: odd addresses have G[7:4],B[3:0]; even addresses have 0,R[3:0]
+		if (video_addr_shrg[0]) begin
+			b_shrg[pal_counter]<=video_data[3:0];
+			g_shrg[pal_counter]<=video_data[7:4];
+		end else begin
+			r_shrg[pal_counter]<=video_data[3:0];
+			pal_counter<=pal_counter+1;
 		end
-		else begin
-			// Non-linear mode palette reading
-			if (~base_toggle) begin
-		                //$display("R PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
-				r_shrg[video_addr_shrg[4:1]]<=video_data[3:0];
-			end else begin
-		                //$display("GB PALETTE = %x addr %x base_toggle %x",video_data,video_addr_shrg,base_toggle);
-				b_shrg[video_addr_shrg[4:1]]<=video_data[3:0];
-				g_shrg[video_addr_shrg[4:1]]<=video_data[7:4];
-				pal_counter<=pal_counter+1;
-			end
-			if (base_toggle)
-			begin
-				video_addr_shrg <= video_addr_shrg_1;
-				video_addr_shrg_2 <= video_addr_shrg_2 +1'b1;
-			end
-			else
-			begin
-				video_addr_shrg <= video_addr_shrg_2;
-				video_addr_shrg_1 <= video_addr_shrg_1 +1'b1;
-			end
-		end
+		video_addr_shrg <= video_addr_shrg + 1'b1;
+		video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
 		if (H==31)
 		begin
-			if (linear_mode)
-			begin
-				// linear mode
-				//$display("NONWORKING NEWVIDEO 6 MODE - LINEAR");
-				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg <= 'h12000 + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg_2 <= 'h11fff + ((V-16) * 'd160);  // AJS REMOVE MULTIPLY??
-			end
-			else
-			begin
-				//$display("NONLINEAR NEWVIDEO 6 MODE");
-				video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg <= 'h12000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
-				video_addr_shrg_2 <= 'h16000 + ((V-16) * 'd80);  // AJS REMOVE MULTIPLY??
-			end
+			// Setup pixel data address: $2000 + (scanline * 160 bytes/line)
+			// V=16 is scanline 0, so offset = (V-16) * 160
+			video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd160);
+			video_addr_shrg <= 'h12000 + ((V-16) * 'd160);
 			h_counter<=0;
-			base_toggle<=0;
 		end
 	end else if (H < ('d32+640)) begin
 		h_counter<=h_counter+1'b1;
 		// Only advance address for first 159 advances (byte 0->159), skip the 160th
 		// With 1-cycle display shift, advance #159 happens at H=667, so skip advance at H>=668
-		if (h_counter==2'd2 && H < 'd668)
-			begin
-				base_toggle<=~base_toggle;
-				if (linear_mode) begin
-					video_addr_shrg <= video_addr_shrg + 1'b1;
-					video_addr_shrg_1 <= video_addr_shrg_1 +1'b1;
-				end else begin
-					if (base_toggle) begin
-						video_addr_shrg <= video_addr_shrg_1;
-						video_addr_shrg_2 <= video_addr_shrg_2 +1'b1;
-					end
-					else begin
-						video_addr_shrg <= video_addr_shrg_2;
-						video_addr_shrg_1 <= video_addr_shrg_1 +1'b1;
-					end
-				end
-			end
-		//$display("scb[7]= %x h_counter %x video_addr %x video_data %x",scb[7],h_counter,video_addr,video_data);
+		if (h_counter==2'd2 && H < 'd668) begin
+			video_addr_shrg <= video_addr_shrg + 1'b1;
+			video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
+		end
 		if (scb[7]) begin
 			case(h_counter)
 				'b00: 
@@ -354,23 +256,23 @@ reg [22:0] flash_cnt;
 always @(posedge clk_vid) if (ce_pix) flash_cnt <= flash_cnt + 1'b1;
 wire flash_state = flash_cnt[21];
 
-// Apple IIgs color palette (16 colors)
+// Apple IIgs color palette (16 colors) - matches KEGS g_lores_colors
 reg [11:0] palette_rgb_r[0:15] = '{
     12'h000, // 0   Black
     12'hd03, // 1   Deep Red
     12'h009, // 2   Dark Blue
-    12'hd2d, // 3   Purple
-    12'h072, // 4   Dark Green
-    12'h555, // 5   Dark Gray   
+    12'hd0d, // 3   Purple
+    12'h070, // 4   Dark Green
+    12'h555, // 5   Dark Gray
     12'h22f, // 6   Medium Blue
     12'h6af, // 7   Light Blue
-    12'h850, // 8   Brown
+    12'h852, // 8   Brown
     12'hf60, // 9   Orange
     12'haaa, // 10  Light Gray
     12'hf98, // 11  Pink
-    12'h1d0, // 12  Light Green
+    12'h0d0, // 12  Light Green
     12'hff0, // 13  Yellow
-    12'h4f9, // 14  Aquamarine
+    12'h0f9, // 14  Aquamarine
     12'hfff  // 15  White
 };
 
@@ -905,7 +807,7 @@ begin
 //$display("xpos[2:0] %x xpos[3:1] %x xpos %x",xpos[2:0],xpos[3:1],xpos);
 //$display("chram_x[6:1] %x chram_x %x chrom_data_out %x chrom_addr %x",chram_x[6:1],chram_x,chrom_data_out,chrom_addr);
 
-// VBL starts at end of active display (line 232)
+// VBL starts at V=208 (scanline 192), per TN.IIGS.040
 
 
 
@@ -1041,7 +943,7 @@ end
 // VBL Pulse Generation
 // Generate a single-cycle pulse at the start of the vertical blanking interval
 // to avoid IRQ storms.
-wire v_blank = (V >= 208); // 16 border lines + active display line 192, per TN 40
+wire v_blank = (V >= 208); // V=208 is scanline 192 (V-16), where VBL begins per TN.IIGS.040
 reg v_blank_d;
 always @(posedge clk_vid) if(ce_pix) v_blank_d <= v_blank;
 assign vbl_irq = v_blank & ~v_blank_d;
