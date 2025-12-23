@@ -2876,15 +2876,39 @@ int main(int argc, char** argv, char** env) {
 		ImGui::Text("IRQ_n:   0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IRQ_N);
 		ImGui::Spacing();
 		ImGui::Text("PAGE2:   %s", VERTOPINTERN->emu__DOT__iigs__DOT__PAGE2 ? "PAGE2" : "PAGE1");
-		ImGui::Text("TEXTG:   %s", VERTOPINTERN->emu__DOT__iigs__DOT__TEXTG ? "TEXT" : "*GRAPHICS");
-		ImGui::Text("HIRES:   %s", VERTOPINTERN->emu__DOT__iigs__DOT__HIRES_MODE ? "HIGH RES": "LOW RES");
-		ImGui::Text("EIGHTY:   %s", VERTOPINTERN->emu__DOT__iigs__DOT__EIGHTYCOL? "80COL": "40COL");
-		ImGui::Text("MIXG:      0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__MIXG);
-		ImGui::Text("NEWVIDEO:      0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__NEWVIDEO);
-		ImGui::Text("SHADOW:      0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__shadow);
-		ImGui::Text(VERTOPINTERN->emu__DOT__iigs__DOT__shadow&0x08 ? "DON'T SHADOW SHRG" : "SHADOW SHRG");
-		ImGui::Text(VERTOPINTERN->emu__DOT__iigs__DOT__NEWVIDEO&0x80 ? " SHRG VIDEO " : " " );
-		ImGui::Text(VERTOPINTERN->emu__DOT__iigs__DOT__NEWVIDEO&0x20 ? " IIGS monochrome VIDEO " : " " );
+		ImGui::Text("TEXTG:   %s", VERTOPINTERN->emu__DOT__iigs__DOT__TEXTG ? "TEXT" : "GRAPHICS");
+		ImGui::Text("HIRES:   %s", VERTOPINTERN->emu__DOT__iigs__DOT__HIRES_MODE ? "HIRES": "LORES");
+		ImGui::Text("80COL:   %s", VERTOPINTERN->emu__DOT__iigs__DOT__EIGHTYCOL ? "ON": "OFF");
+		ImGui::Text("AN3:     %s", VERTOPINTERN->emu__DOT__iigs__DOT__AN3 ? "SET (40col modes)" : "CLR (double modes)");
+		ImGui::Text("MIXG:    %s", VERTOPINTERN->emu__DOT__iigs__DOT__MIXG ? "ON (mixed text)" : "OFF");
+		ImGui::Text("NEWVIDEO:  0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__NEWVIDEO);
+		ImGui::Text("SHADOW:    0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__shadow);
+		// Synthesize current video mode from soft switches
+		{
+			unsigned char nv = VERTOPINTERN->emu__DOT__iigs__DOT__NEWVIDEO;
+			bool textg = VERTOPINTERN->emu__DOT__iigs__DOT__TEXTG;
+			bool hires = VERTOPINTERN->emu__DOT__iigs__DOT__HIRES_MODE;
+			bool col80 = VERTOPINTERN->emu__DOT__iigs__DOT__EIGHTYCOL;
+			bool an3 = VERTOPINTERN->emu__DOT__iigs__DOT__AN3;
+			const char* mode = "Unknown";
+			if (nv & 0x80) {
+				mode = "Super Hi-Res";  // NEWVIDEO[7]=1 overrides all
+			} else if (textg) {
+				mode = col80 ? "Text 80-col" : "Text 40-col";
+			} else if (hires) {
+				// Graphics + Hi-Res
+				if (!an3 && col80) mode = "Double Hi-Res";
+				else mode = "Hi-Res";
+			} else {
+				// Graphics + Lo-Res
+				if (!an3 && col80) mode = "Double Lo-Res";
+				else mode = "Lo-Res";
+			}
+			ImGui::Text("MODE:    %s", mode);
+		}
+		ImGui::Text(VERTOPINTERN->emu__DOT__iigs__DOT__shadow&0x08 ? "  (no SHRG shadow)" : "  (SHRG shadowed)");
+		if (VERTOPINTERN->emu__DOT__iigs__DOT__NEWVIDEO&0x20)
+			ImGui::Text("  DHIRES: Mono (560x192)");
 		ImGui::Spacing();
 		ImGui::End();
 		//ImGui::Spacing();
