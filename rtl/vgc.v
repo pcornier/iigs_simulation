@@ -104,6 +104,15 @@ end
 reg [3:0] shrg_r_pix;
 reg [3:0] shrg_g_pix;
 reg [3:0] shrg_b_pix;
+
+// First pixel combinational computation - bypasses pipeline latency for H=32
+// At H=32, video_data has first pixel byte, compute color combinationally
+wire [3:0] first_pix_idx_320 = video_data[7:4];  // 320 mode: high nibble is first pixel
+wire [3:0] first_pix_idx_640 = {2'b10, video_data[7:6]};  // 640 mode: bits 7:6, palette colors 8-11
+wire [3:0] first_pix_r = scb[7] ? r_shrg[first_pix_idx_640] : r_shrg[first_pix_idx_320];
+wire [3:0] first_pix_g = scb[7] ? g_shrg[first_pix_idx_640] : g_shrg[first_pix_idx_320];
+wire [3:0] first_pix_b = scb[7] ? b_shrg[first_pix_idx_640] : b_shrg[first_pix_idx_320];
+
 // Latched border color - sampled at start of each scanline for consistent raster effects
 reg [3:0] bordercolor_latched;
 // one cycle before the end of the left border, pull down the scp
@@ -824,7 +833,7 @@ begin
 // SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
 if ((!NEWVIDEO[7] && GR && ((H < 'd77 || H > 'd636) || (V < 'd16 || V >= 'd208))) ||
     (!NEWVIDEO[7] && !GR && ((H < 'd72 || H > 'd631) || (V < 'd16 || V >= 'd208))) ||
-    (NEWVIDEO[7] && ((H < 'd36 || H >= 'd672 || V < 'd16 || V >= 'd216))))  // Left border extended for SHRG pipeline latency
+    (NEWVIDEO[7] && ((H < 'd33 || H >= 'd672 || V < 'd16 || V >= 'd216))))  // SHRG: 33px left border (mem latency), 639px active
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -833,10 +842,20 @@ end
 else
 begin
     if (NEWVIDEO[7]) begin
-        // SHRG mode
-        R <= {shrg_r_pix,shrg_r_pix};
-        G <= {shrg_g_pix,shrg_g_pix};
-        B <= {shrg_b_pix,shrg_b_pix};
+        // SHRG mode - use combinational first_pix to bypass pipeline latency
+        // At H=33, video_data has first pixel byte (addr set H=31, mem latency)
+        // In 320 mode, pixel 0 spans H=33-34. In 640 mode, pixel 0 is at H=33.
+        // Also at H=34, shrg_r_pix has stale data (computed H=32 from wrong video_data)
+        // So bypass H=33-34 for 320 mode, H=33 for 640 mode
+        if (H == 'd33 || (H == 'd34 && !scb[7])) begin
+            R <= {first_pix_r, first_pix_r};
+            G <= {first_pix_g, first_pix_g};
+            B <= {first_pix_b, first_pix_b};
+        end else begin
+            R <= {shrg_r_pix,shrg_r_pix};
+            G <= {shrg_g_pix,shrg_g_pix};
+            B <= {shrg_b_pix,shrg_b_pix};
+        end
     end else if (GR) begin
         // Graphics mode (lores/hires)
         R <= {graphics_rgb[11:8],graphics_rgb[11:8]};
