@@ -760,22 +760,27 @@ begin
 			         H, xpos, chram_x, buffer_needs_reload, graphics_pix_shift, graphics_pix_shift[0], video_data);
 		if (graphics_mode && GR) begin
 			// Reload buffer when chram_x changes (new memory data available)
+			// Only reload if chram_x is within valid range (0-39 for 40-col, 0-79 for 80-col)
 			if (buffer_needs_reload) begin
-				if (lores_mode) begin
-					// Lores: expand nibbles based on line position
-					graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
-					graphics_color <= window_y_w[2] ? video_data[7:4] : video_data[3:0];
+				// Only load valid data if chram_x is within valid range (0-39 for 40-col, 0-79 for 80-col)
+				if ((EIGHTYCOL && chram_x < 80) || (!EIGHTYCOL && chram_x < 40)) begin
+					if (lores_mode) begin
+						// Lores: expand nibbles based on line position
+						graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
+						graphics_color <= window_y_w[2] ? video_data[7:4] : video_data[3:0];
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 16)
-						$display("  LORES RELOAD: H=%d video_data=%h expanded=%b color=%h", H, video_data, {expandLores40(video_data, window_y_w[2]), 1'b0}, window_y_w[2] ? video_data[7:4] : video_data[3:0]);
+						if (H >= 32 && H <= 100 && V == 16)
+							$display("  LORES RELOAD: H=%d video_data=%h expanded=%b color=%h", H, video_data, {expandLores40(video_data, window_y_w[2]), 1'b0}, window_y_w[2] ? video_data[7:4] : video_data[3:0]);
 `endif
-				end else if (hires_mode) begin
-					// Hires: expand pixel bits (0-6), store color bit (7) separately
-					// Always store bit 7 for color phase - even in "DHIRES" mode since
-					// games like 8bit-Slicks run with EIGHTYCOL set but still need color
-					graphics_pix_shift <= expandHires40(video_data);
-					graphics_color <= {3'b0, video_data[7]};  // Store color/palette bit
+					end else if (hires_mode) begin
+						// Hires: expand pixel bits (0-6), store color bit (7) separately
+						// Always store bit 7 for color phase - even in "DHIRES" mode since
+						// games like 8bit-Slicks run with EIGHTYCOL set but still need color
+						graphics_pix_shift <= expandHires40(video_data);
+						graphics_color <= {3'b0, video_data[7]};  // Store color/palette bit
+					end
 				end
+				// Always clear reload flag, even if we skipped loading due to out-of-bounds
 				buffer_needs_reload <= 1'b0;
 			end else begin
 				// Shift pixels out: every clock in 80-col, every 2 clocks in 40-col (pixel doubling)
@@ -871,7 +876,19 @@ begin
             // 40-column mode: wrap xpos at end of character (no chram_x inc here)
             xpos<=0;
         end
-		
+
+		// Clear shift registers at right border to prevent stray pixels
+		// Text mode right border starts at H=632, Graphics at H=637
+		if (!NEWVIDEO[7] && !GR && H > 'd631) begin
+			text_shift_reg <= 7'b0;
+		end
+		if (!NEWVIDEO[7] && GR && H > 'd636) begin
+			graphics_pix_shift <= 8'b0;
+			apple2_shift_reg <= 6'b0;
+			graphics_pixel <= 1'b0;
+			graphics_color <= 4'b0;  // Clear color to prevent stale palette lookups
+		end
+
 		// Use LDPS equivalent for buffer reload timing - but only trigger on edges
 		if (ldps_load && !buffer_needs_reload) begin
 			buffer_needs_reload <= 1'b1;
@@ -917,8 +934,7 @@ begin
         G <= {graphics_rgb[7:4],graphics_rgb[7:4]};
         B <= {graphics_rgb[3:0],graphics_rgb[3:0]};
     end else begin
-        // Text mode - textpixel is inverted at ROM level (like a2fpga)
-        // textpixel=1 means foreground/text color, textpixel=0 means background
+        // Text mode
         R <= textpixel ? {TRGB[11:8],TRGB[11:8]} : {BRGB[11:8],BRGB[11:8]};
         G <= textpixel ? {TRGB[7:4],TRGB[7:4]} : {BRGB[7:4],BRGB[7:4]};
         B <= textpixel ? {TRGB[3:0],TRGB[3:0]} : {BRGB[3:0],BRGB[3:0]};
