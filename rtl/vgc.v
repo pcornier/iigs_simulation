@@ -333,6 +333,13 @@ begin
 
 	end
 
+	// Clear SHRG pixel registers during left border to ensure clean start
+	// Also clear at right border for completeness
+	if (NEWVIDEO[7] && (H < 'd32 || H >= 'd672)) begin
+		shrg_r_pix <= 4'b0;
+		shrg_g_pix <= 4'b0;
+		shrg_b_pix <= 4'b0;
+	end
 
 end
 
@@ -915,7 +922,7 @@ begin
 // SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
 if ((!NEWVIDEO[7] && GR && ((H < 'd77 || H > 'd636) || (V < 'd16 || V >= 'd208))) ||
     (!NEWVIDEO[7] && !GR && ((H < 'd72 || H > 'd631) || (V < 'd16 || V >= 'd208))) ||
-    (NEWVIDEO[7] && ((H < 'd32 || H >= 'd672 || V < 'd16 || V >= 'd216))))
+    (NEWVIDEO[7] && ((H < 'd36 || H >= 'd672 || V < 'd16 || V >= 'd216))))  // Left border extended for SHRG pipeline latency
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
