@@ -318,6 +318,9 @@ reg [1:0] checksum_writes;
 reg [31:0] checksum;
 reg [7:0] counter;
 reg [7:0] clk_reg1;
+
+reg [31:0] timestamp_prev;
+
 always @(posedge CLK_14M) begin
 
 	onesecond_irq<=0;
@@ -334,6 +337,10 @@ if (clock_data==0)
 	clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
 //`endif
 
+if (timestamp_prev!=timestamp)
+	clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
+
+timestamp_prev<= timestamp;
 
 
 // Use real hardware timing for both FPGA and simulation
