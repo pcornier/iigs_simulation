@@ -24,7 +24,7 @@ rom #(8,8,"rtl/roms/nvram.hex") hddrom (
    );
 */
 
-
+/*
 initial begin
 pram[8'h0]=8'h0;
 pram[8'h1]=8'h0;
@@ -291,6 +291,7 @@ c033 = 8'h00;
 c034 = 8'h00;
 `endif
 end
+*/
 
 reg [31:0] clock_data;
 reg [7:0] c033, c034;

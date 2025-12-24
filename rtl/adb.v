@@ -1,5 +1,5 @@
 // Define DEBUG_ADB to enable verbose ADB debug output
-// `define DEBUG_ADB
+//`define DEBUG_ADB
 
 module adb(
   input CLK_14M,
@@ -1158,9 +1158,11 @@ always @(posedge CLK_14M) begin
                 8'h05: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
                 8'h06: begin cmd_len <= 4'd3; initial_cmd_len <= 4'd3; state <= CMD; end
                 8'h07: begin
-                  // SYNC command - length depends on version
-                  cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8;
-                  initial_cmd_len <= (VERSION == 1) ? 4'd4 : 4'd8;
+                  // SYNC command - length depends on ROM version
+                  // ROM1 (VERSION=5): 4 bytes, ROM3 (VERSION=6): 8 bytes
+                  // KEGS: g_rom_version == 1 means ROM01, which maps to our VERSION < 6
+                  cmd_len <= (VERSION < 6) ? 4'd4 : 4'd8;
+                  initial_cmd_len <= (VERSION < 6) ? 4'd4 : 4'd8;
                   state <= CMD;
                 end
                 8'h08: begin
@@ -1302,12 +1304,13 @@ always @(posedge CLK_14M) begin
                           cmd_response_ready <= 1'b1;  // Set response flag
                           state <= IDLE;
                         end else begin
-                          // Device not present - still send response with 0 bytes
-                          cmd_response_ready <= 1'b1;  // Set response flag
-                          pending_data <= 3'd0;        // No data bytes
+                          // Device not present - do NOT send response (per KEGS)
+                          // KEGS doesn't call adb_response_packet for non-present devices
+                          // This allows the ROM to poll multiple devices and only get
+                          // responses from devices that actually exist
                           state <= IDLE;
 `ifdef DEBUG_ADB
-                          $display("ADB TALK device %d (NOT PRESENT): setting cmd_response_ready=1, pending_data=0", din[7:4]);
+                          $display("ADB TALK device %d (NOT PRESENT): no response sent", din[7:4]);
 `endif
                         end
                       end
