@@ -124,24 +124,26 @@ scc scc_inst (
 `endif
     ._irq(scc_internal_irq_n),          // Internal SCC interrupt
     
-    // Serial connections - stubbed for initial implementation
-    // In future, these could connect to actual UART pins
-    .rxd(rxd_a),                        // Use port A receive for single port
-    .txd(txd_a),                        // Use port A transmit  
+    // Serial connections - Channel A
+    .rxd(rxd_a),                        // Channel A receive
+    .txd(txd_a),                        // Channel A transmit
     .cts(cts_a),                        // Clear to send from external device
     .rts(rts_a),                        // Request to send to external device
-    
+
+    // Serial connections - Channel B (for external loopback testing)
+    .rxd_b(rxd_b),                      // Channel B receive
+    .txd_b_out(txd_b),                  // Channel B transmit
+
     // DCD inputs (used for mouse on real IIgs, stubbed high = carrier detect)
-    .dcd_a(1'b1),                       
+    .dcd_a(1'b1),
     .dcd_b(1'b1),
-    
+
     // Write request output (not used in IIgs)
     .wreq()
 );
 `endif
 
-// For now, duplicate port A signals to port B
-assign txd_b = txd_a;
+// Channel B RTS mirrors Channel A for now (could be extended if needed)
 assign rts_b = rts_a;
 
 // Interrupt control: Enable SCC interrupts properly

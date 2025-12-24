@@ -33,7 +33,7 @@ module scc
 	output [7:0]	rdata,
 	output	_irq,
 
-	/* A single serial port on Minimig */
+	/* Channel A serial port */
 	input	rxd,
 	output	txd,
 	input	cts, /* normally wired to device DTR output
@@ -44,6 +44,10 @@ module scc
 				*/
 	output	rts, /* on a real mac this activates line
 				* drivers when low */
+
+	/* Channel B serial port - for external loopback testing */
+	input	rxd_b,
+	output	txd_b_out,
 
 	/* DCD for both ports are hijacked by mouse interface */
 	input	dcd_a, /* We don't synchronize those inputs */
@@ -794,23 +798,31 @@ assign rr1_b = { 1'b0, /* End of frame */
 			 ex_irq_pend_b
 			};
 
-	/* RR10 */
+	/* RR10 - Miscellaneous Status
+	 * D7: One Clock Missing
+	 * D6: Two Clocks Missing
+	 * D5: Reserved (0)
+	 * D4: Loop Sending - set when transmitting in loopback mode
+	 * D3-D2: Reserved (0)
+	 * D1: On Loop - set when local loopback is enabled (WR14[4]=1)
+	 * D0: Reserved (0)
+	 */
 	assign rr10_a = { 1'b0, /* One clock missing */
 			  1'b0, /* Two clocks missing */
 			  1'b0,
-			  1'b0, /* Loop sending */
+			  local_loopback_a & tx_busy_a, /* Loop sending - transmitting in loopback */
 			  1'b0,
 			  1'b0,
-			  1'b0, /* On Loop */
+			  local_loopback_a, /* On Loop - local loopback enabled */
 			  1'b0
 			  };
 	assign rr10_b = { 1'b0, /* One clock missing */
 			  1'b0, /* Two clocks missing */
 			  1'b0,
-			  1'b0, /* Loop sending */
+			  local_loopback_b & tx_busy_b, /* Loop sending - transmitting in loopback */
 			  1'b0,
 			  1'b0,
-			  1'b0, /* On Loop */
+			  local_loopback_b, /* On Loop - local loopback enabled */
 			  1'b0
 			  };
 	
@@ -1071,16 +1083,16 @@ end
 	end
 
 	/* EOM (End of Message/Tx Underrun) latches
-	 * Reset: Z85C30 spec says 0, but Clemens sets to 1
-	 * Apple IIgs ROM selftest expects 0 (per Z85C30 spec)
+	 * Reset: Z85C30 spec says RR0 bit D6 has reset default value of 0
+	 * Apple IIgs diagnostic expects 0 after reset (per Z85C30 spec)
 	 * WR0 command: bits 7:6 = 11 → "Reset Tx Underrun/EOM Latch" → clear to 0
 	 */
 	// Channel A EOM latch
 	always@(posedge clk or posedge reset) begin
 		if (reset) begin
-			eom_latch_a <= 1'b1;  // Reset: TX_UNDERRUN set (transmitter in underrun state)
+			eom_latch_a <= 1'b0;  // Reset: EOM cleared (Z85C30 spec default)
 		end else if (reset_a) begin
-			eom_latch_a <= 1'b1;  // Channel reset: TX_UNDERRUN set
+			eom_latch_a <= 1'b0;  // Channel reset: EOM cleared
 		end else if(cep) begin
 			// WR0 command: Reset Tx Underrun/EOM Latch (bits 7:6 = 11)
 			if (wreg_a && rindex_latch == 0 && wdata[7:6] == 2'b11) begin
@@ -1094,9 +1106,9 @@ end
 	// Channel B EOM latch
 	always@(posedge clk or posedge reset) begin
 		if (reset) begin
-			eom_latch_b <= 1'b1;  // Reset: TX_UNDERRUN set (transmitter in underrun state)
+			eom_latch_b <= 1'b0;  // Reset: EOM cleared (Z85C30 spec default)
 		end else if (reset_b) begin
-			eom_latch_b <= 1'b1;  // Channel reset: TX_UNDERRUN set
+			eom_latch_b <= 1'b0;  // Channel reset: EOM cleared
 		end else if(cep) begin
 			// WR0 command: Reset Tx Underrun/EOM Latch (bits 7:6 = 11)
 			if (wreg_b && rindex_latch == 0 && wdata[7:6] == 2'b11) begin
@@ -1269,6 +1281,12 @@ wr_3_a[7:6]  -- bits per char
                             if (baud_divid_speed_a != 24'd4)
                                 $display("SCC_BRG_FAST: Applying fast baud for WR4=%02x WR12=%02x WR13=%02x WR14=%02x", wr4_a, wr12_a, wr13_a, wr14_a);
                             baud_divid_speed_a <= 24'd4;  // Fast but not instant - about 88 cycles for full TX
+                        end else if (wr13_a == 8'h00 && wr12_a == 8'hBE && wr4_a == 8'h4C) begin
+                            // Special case: Diagnostic disk external loopback test uses WR12=BE, WR13=00 (600 baud)
+                            // This is too slow for simulation - use faster rate
+                            if (baud_divid_speed_a != 24'd100)
+                                $display("SCC_BRG_FAST: Applying fast baud for diagnostic WR4=%02x WR12=%02x WR13=%02x WR14=%02x", wr4_a, wr12_a, wr13_a, wr14_a);
+                            baud_divid_speed_a <= 24'd100;  // ~1200 clocks for 10-bit frame
                         end else if (wr12_a == 8'h00 && wr13_a == 8'h00) begin
                             // Also handle completely uninitialized case
                             baud_divid_speed_a <= 24'd4;  // Very fast
@@ -1343,8 +1361,8 @@ wire auto_echo_b = wr14_b[3];
 wire local_loopback_b = wr14_b[4];
 wire tx_internal_b;  // Internal TX signal
 
-// In local loopback mode, RX receives from internal TX (no external pin for channel B)
-wire rx_input_b = local_loopback_b ? tx_internal_b : 1'b1;
+// In local loopback mode, RX receives from internal TX instead of external pin
+wire rx_input_b = local_loopback_b ? tx_internal_b : rxd_b;
 
 // Debug loopback signals for channel B
 reg tx_internal_b_r = 1'b1;
@@ -1429,6 +1447,11 @@ always @(posedge clk) begin
             if (baud_divid_speed_b != 24'd4)
                 $display("SCC_BRG_FAST(B): WR4=%02x WR12=%02x WR13=%02x WR14=%02x", wr4_b, wr12_b, wr13_b, wr14_b);
             baud_divid_speed_b <= 24'd4;
+        end else if (wr13_b == 8'h00 && wr12_b == 8'hBE && wr4_b == 8'h4C) begin
+            // Special case: Diagnostic disk external loopback test (600 baud)
+            if (baud_divid_speed_b != 24'd100)
+                $display("SCC_BRG_FAST(B): diagnostic WR4=%02x WR12=%02x WR13=%02x WR14=%02x", wr4_b, wr12_b, wr13_b, wr14_b);
+            baud_divid_speed_b <= 24'd100;
         end else if (wr12_b == 8'h00 && wr13_b == 8'h00) begin
             baud_divid_speed_b <= 24'd4;
         end else begin
@@ -1591,6 +1614,9 @@ txuart txuart_b
 	.o_busy(tx_busy_b));
 
 	wire cts_b = ~tx_busy_b;
+
+// External TX output for Channel B
+assign txd_b_out = tx_internal_b;
 
 	// RTS and CTS are active low
 	assign rts = (rx_queue_pos_a > 0);

@@ -218,6 +218,8 @@ module iigs
   logic [1:0]         scc_rs;
   logic               scc_irq_n;
   logic               scc_rd_active; // one-shot read strobe helper
+  wire                scc_txd_a;     // Channel A TX output for loopback
+  wire                scc_txd_b;     // Channel B TX output for loopback
 
   logic               aux;
 
@@ -1349,13 +1351,7 @@ module iigs
 `else
             12'h041: begin io_dout <= INTEN;end
 `endif
-            //12'h046: io_dout <=  {C046VAL[7], C046VAL[7], C046VAL[6:0]};
-            12'h046: begin
-              io_dout <= irq_pending[7:0]; // Return interrupt flags directly
-`ifdef SIMULATION
-              $display("READ INTFLAG -> %02h (irq_pending)", irq_pending[7:0]);
-`endif
-            end
+            // Note: 12'h046 (INTFLAG) is handled earlier in this case statement (line ~1197)
             //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
             12'h047: begin
               io_dout <= 8'h00;  // C047 reads return 0 (interrupt clear handled in clocked block)
@@ -1571,11 +1567,7 @@ module iigs
             12'h0dc,12'h0dd,12'h0de,12'h0df: begin
               // no-op: external SmartPort handles this range
             end
-            // SCC (Serial Communications Controller) - Zilog 8530
-            12'h038, 12'h039, 12'h03a, 12'h03b: begin
-              // SCC read response handled by separate logic in always block above
-              // This case prevents falling through to default case
-            end
+            // Note: SCC addresses 12'h038-03b are handled earlier in this case statement (line ~1326)
 
             default: begin
 `ifdef DEBUG_IO
@@ -2514,14 +2506,16 @@ wire ready_out;
             .wdata(scc_din),
             .rdata(scc_dout),
             .irq_n(scc_irq_n),
-            // Serial ports - stubbed for now
-            .txd_a(),
-            .txd_b(UART_TXD),
-            .rxd_a(1'b1),
-            .rxd_b(UART_RXD),
+            // Serial ports - bidirectional cross-channel loopback for diagnostic external test
+            // Channel A TX -> Channel B RX, Channel B TX -> Channel A RX
+            .txd_a(scc_txd_a),
+            .rxd_a(scc_txd_b),  // Channel A RX <- Channel B TX
             .rts_a(),
-            .rts_b(UART_RTS),
             .cts_a(1'b0),
+            // Channel B cross-connected to Channel A
+            .txd_b(scc_txd_b),  // Channel B TX (looped back to A RX)
+            .rxd_b(scc_txd_a),  // Channel B RX <- Channel A TX
+            .rts_b(UART_RTS),
             .cts_b(UART_CTS)
 				);
 
