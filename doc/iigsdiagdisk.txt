@@ -1,0 +1,179 @@
+Apple IIgs Diagnostic Disk - Simulation Instructions
+====================================================
+
+DIAGNOSTIC TEST STATUS (as of 2025-12-24):
+------------------------------------------
+| Test                       | Status | Notes                                    |
+|----------------------------|--------|------------------------------------------|
+| System Speed/Interrupts    | PASS   | Timing and interrupt tests               |
+| Serial External Test       | PASS   | Uses cross-channel loopback (A TX->B RX) |
+| Serial Crystal Test        | PASS   | Baud rate generator timing check         |
+| Serial Internal Test       | FAIL   | Internal loopback mode (WR14[4]) issue   |
+
+RUNNING SYSTEM SPEED/INTERRUPTS TEST:
+-------------------------------------
+cd vsim
+./obj_dir/Vemu --disk iigsdiag.hdv \
+  --send-keys '170:c\n' \
+  --send-keys '185:b\n' \
+  --send-keys '200:\e' \
+  --send-keys '215:b\n' \
+  --send-keys '600: ' \
+  --screenshot 500,600 \
+  --stop-at-frame 700
+
+RUNNING SERIAL EXTERNAL TEST:
+-----------------------------
+./obj_dir/Vemu --disk iigsdiag.hdv \
+  --send-keys '170:c\n' \
+  --send-keys '185:e\n' \
+  --send-keys '200:b\n' \
+  --send-keys '215:\e' \
+  --send-keys '230:\e' \
+  --send-keys '245:b\n' \
+  --send-keys '410: ' \
+  --screenshot 300,400 \
+  --stop-at-frame 450
+
+Note: The external test uses bidirectional cross-channel loopback:
+  - Channel A TX -> Channel B RX
+  - Channel B TX -> Channel A RX
+This is configured in rtl/iigs.sv at the SCC instantiation.
+
+RUNNING SERIAL CRYSTAL TEST:
+----------------------------
+./obj_dir/Vemu --disk iigsdiag.hdv \
+  --send-keys '170:c\n' \
+  --send-keys '185:e\n' \
+  --send-keys '200:c\n' \
+  --send-keys '215:\e' \
+  --send-keys '230:\e' \
+  --send-keys '245:b\n' \
+  --send-keys '450: ' \
+  --screenshot 300,400,500 \
+  --stop-at-frame 550
+
+RUNNING SERIAL INTERNAL TEST:
+-----------------------------
+./obj_dir/Vemu --disk iigsdiag.hdv \
+  --send-keys '170:c\n' \
+  --send-keys '185:e\n' \
+  --send-keys '200:a\n' \
+  --send-keys '215:\e' \
+  --send-keys '230:\e' \
+  --send-keys '245:b\n' \
+  --screenshot 450,500 \
+  --stop-at-frame 550
+
+Note: This test currently FAILS. It tests the SCC's internal loopback mode
+(WR14 bit 4) which loops TX->RX within the same channel.
+
+KEY SEQUENCE EXPLANATION:
+-------------------------
+Frame 165: Diagnostic main menu appears
+Frame 170: 'c' + Return -> Choose Tests menu
+Frame 185: 'e' + Return -> Serial Ports Tests submenu
+Frame 200: 'a'/'b'/'c' + Return -> Select test (a=Internal, b=External, c=Crystal)
+Frame 215: ESC -> Back to Serial Ports menu
+Frame 230: ESC -> Back to Main Menu
+Frame 245: 'b' + Return -> Execute Selected Tests
+Frame 410+: SPACE -> Continue after test completion
+
+ORIGINAL NOTES:
+---------------
+To use this disk:
+
+go to frame 165 so it boots, then hit a menu choice followed by return, pause, and continue. After you make the test selections, hit escape for each submenu to get back to main, then run selected tests.
+
+
+
+Apple IIgs Diagnostic, V3.0
+
+Main Menu
+
+a. Execute All Diagnostic Tests
+b. Execute Selected Tests
+c. [folder] Choose Tests
+d. [folder] Options
+e. [folder] Special
+f. Exit and Run Workstation Card Diagnostic
+g. Quit
+
+Choose Tests
+
+a. ROM Test
+b. System Speed/ Interrupts Test
+c. MMU/ IOU Test
+d. [folder] RAM Tests
+e. [folder] Serial Ports Tests
+f. [folder] Disk Port Tests
+g. [folder] Sound Circuitry Tests
+h. [folder] Video Pattern Tests
+i. [folder] Keyboard/ Mouse Tests
+
+RAM Tests
+
+a. Main Logic Board RAM Test
+b. Apple IIgs Memory Expansion Card Test
+c. Clock RAM Test
+
+Serial Ports
+
+a. Serial Internal Test
+b. Serial External Test (Loopback cable req'd)
+c. Serial Crystal Test
+
+
+Disk Port
+
+a. Disk Port Test
+
+
+Sound Tests
+a. Sound Circuitry Test
+b. Speaker Tone Test
+
+
+
+Video Tests
+
+a. Color Bar Test
+b. Character Generator Test
+c. 80/40 Column Text Test
+d. Low Resolution Graphics Test
+e. High Resolution Graphics Test
+f. Double High Resolution Graphics Test
+g. Super High Resolution Graphics Test
+h. Screen/Text Color Test
+
+Keyboard/ Mouse
+a. ADB Keyboard Test
+b. Standard IIe Keyboard Test
+c. Extended IIe Keyboard Test
+d. Numeric Keypad IIe Test
+e. [folder] Languages
+f. ADB Mouse Test
+g. Joystick/ Paddle Test
+
+Languages
+a. U.S.A. English
+b. French
+c. Germanb
+d. Italian
+e. Spanish
+f. U.K. English
+
+
+Options
+
+a. Loop Tests Until ESC is Pressed
+b. Continue on Error Until ESC
+
+Special
+
+a. Display Error Log
+b. Clear Error Log
+c. Clear Testing Status Line
+d. Display Current System Status
+e. Load Selected Test Sequence from Disk
+f. Save Selected Test Sequnece to Disk
