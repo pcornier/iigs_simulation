@@ -305,9 +305,9 @@ module iigs
 
 
 
-  assign EXTERNAL_IO =    ((bank_bef == 8'h0 || bank_bef == 8'h1 || bank_bef == 8'he0 || bank_bef == 8'he1) && cpu_addr[15:0] >= 'hc090 && cpu_addr[15:0] < 'hc100 && ~is_internal_io);
+  assign EXTERNAL_IO =    ((((bank_bef == 8'h0 || bank_bef == 8'h1) && !shadow[6]) || bank_bef == 8'he0 || bank_bef == 8'he1) && cpu_addr[15:0] >= 'hc090 && cpu_addr[15:0] < 'hc100 && ~is_internal_io);
 
-  assign inhibit_cxxx = lcram2_sel | ((bank_bef == 8'h0 | bank_bef == 8'h1 | bank_bef == 8'he0 | bank_bef == 8'he1) & shadow[6]);
+  assign inhibit_cxxx = lcram2_sel | ((bank_bef == 8'h0 | bank_bef == 8'h1) & shadow[6]);
 
 // I/O space ($C000-$C0FF) mapping per Apple IIgs Hardware Reference:
 // - Banks E0/E1: I/O always accessible (no shadow register check)
@@ -319,7 +319,7 @@ module iigs
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
 //assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
   assign IO =  ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 &
-               ((bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1) |  // Banks 00/01/E0/E1: always (NOTE: ignoring shadow[6] - see investigation notes)
+               ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
   // Combinational ADB read detection - bypasses io_dout timing issue for ADB reads
