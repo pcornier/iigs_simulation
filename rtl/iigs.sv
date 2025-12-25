@@ -157,8 +157,9 @@ module iigs
    logic [8:0]        V;
    
    // Video counter intermediate calculations for C02E/C02F
+   // Per TN 39, 9'h100 corresponds to the first buffer line.
    logic [8:0] v_adjusted;
-   assign v_adjusted = V + 9'hFA;
+   assign v_adjusted = V + 9'hF0;
 
 
   logic [7:0]         bank_bef;
