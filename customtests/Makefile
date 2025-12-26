@@ -880,3 +880,23 @@ scc_baud_test.2mg: SCCBAUD.SYSTEM
 	$(CP2) add scc_baud_test.2mg "SCCBAUD.SYSTEM"
 	$(CP2) sa scc_baud_test.2mg type=SYS "SCCBAUD.SYSTEM"
 	@echo "SCC Baud Rate test disk ready: scc_baud_test.2mg"
+
+# ============================================================================
+# MMU Tests
+# ============================================================================
+
+# MMU Test - comprehensive memory management unit tests
+.PHONY: mmu_test
+mmu_test: MMUTEST.SYSTEM mmu_test.2mg
+
+MMUTEST.SYSTEM: MMU_TEST.S
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
+
+mmu_test.2mg: MMUTEST.SYSTEM
+	@echo "Creating MMU test disk..."
+	@cp blank.2mg mmu_test.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm mmu_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm mmu_test.2mg "MMUTEST.SYSTEM" 2>/dev/null || true
+	$(CP2) add mmu_test.2mg "MMUTEST.SYSTEM"
+	$(CP2) sa mmu_test.2mg type=SYS "MMUTEST.SYSTEM"
+	@echo "MMU test disk ready: mmu_test.2mg"
