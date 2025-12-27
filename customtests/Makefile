@@ -90,12 +90,17 @@ download-tools: $(MERLIN_DIR) $(CP2_DIR)
 	@echo "All tools downloaded successfully."
 
 # ============================================================================
-# Default Target
+# Default Target - builds all tests
 # ============================================================================
-all: $(MERLIN_DIR) $(CP2_DIR) scc_test scc_regtest scc_selftest scc_regptr_test sccauto_test \
+all: $(MERLIN_DIR) $(CP2_DIR) \
+     scc_test scc_regtest scc_selftest scc_regptr_test sccauto_test \
      scc_phantom_test serial_selftest plb_test dbr_corruption_test \
      dbr_plb_stage_test dbr_e0_scan_test c034_test timing_test time \
-     io_debug_test io_autorun_test
+     io_debug_test io_autorun_test \
+     selftest01 selftest02 selftest03 selftest04 selftest05 selftest06 \
+     selftest07 selftest08 selftest09 selftest0a selftest0b selftest0c \
+     adb_device_enum adb_rom_test09 adb_rom_checksum \
+     mmu_test
 
 # ============================================================================
 # SCC Tests

@@ -1134,8 +1134,57 @@ TEST25
         BNE   TEST25_FAIL
 
         JSR   SHOWPASS
-        JMP   SUMMARY
+        JMP   TEST26
 TEST25_FAIL
+        JSR   SHOWFAIL
+        JMP   TEST26
+
+;=============================================================================
+; TEST 26: LC switches work even with IOLC inhibit (shadow bit 6)
+; This is critical for the ROM RAM address test which sets shadow=$7F
+;=============================================================================
+TEST26
+        INC   TESTNUM
+        JSR   SHOWTEST
+
+        ; First, make sure ROM is enabled
+        LDA   >$E0C082
+
+        ; Enable IOLC inhibit (shadow=$7F - all bits set including bit 6)
+        LDA   #$7F
+        STA   >$E0C035
+
+        ; Now access LC switch - this should STILL work!
+        ; $C08B = Read/Write LC bank 1 (needs two reads)
+        LDA   >$00C08B        ; First read
+        LDA   >$00C08B        ; Second read enables write
+
+        ; Write test pattern to LC area
+        LDA   #$A5
+        STA   >$00D000
+
+        ; Read it back
+        LDA   >$00D000
+        STA   >$E00503        ; Store in known location
+
+        ; Disable IOLC inhibit
+        LDA   #$08
+        STA   >$E0C035
+
+        ; Restore ROM
+        LDA   >$E0C082
+
+        ; Verify we read back what we wrote
+        LDA   >$E00503
+        CMP   #$A5
+        BNE   TEST26_FAIL
+
+        JSR   SHOWPASS
+        JMP   SUMMARY
+TEST26_FAIL
+        LDA   #$08
+        STA   >$E0C035
+        LDA   >$E0C082
         JSR   SHOWFAIL
         JMP   SUMMARY
 
