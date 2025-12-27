@@ -4,12 +4,19 @@
 ; This test directly calls ROM selftest 4 via the test pointer table
 ; at DIAGNOSTICS+2 in ROM bank FF
 ;
+; NOTE: The ROM RAM address test is destructive and overwrites $0400-$BFFF
+; and $D000-$FFFF. We copy our return handler to $0300 (safe area) before
+; calling the test so we can report results afterward.
+;
         ORG   $2000
         TYP   $06
         DSK   TEST04.SYSTEM
 
 ; Screen memory
 SCREEN   EQU   $0400
+
+; Safe area for return handler (below test range)
+SAFE_AREA EQU  $0300
 
 ; DIAGNOSTICS pointer table found at FF:6400 in actual ROM
 ; Table structure: DIAGNOSTICS+2 = size byte, DIAGNOSTICS+3 = first pointer
@@ -18,6 +25,11 @@ DIAGNOSTICS EQU $6400
 TEST_OFFSET EQU 9  ; Test 4
 
 START
+        ; Switch to native mode first
+        CLC
+        XCE
+        SEP #$30        ; 8-bit A and X/Y
+
         ; Clear screen
         LDA #$A0
         LDX #$00
@@ -37,12 +49,24 @@ MSGLP   LDA RUNMSG,X
         JMP MSGLP
 
 SETUP
-        ; Switch to native mode
-        CLC
-        XCE
+        ; Clear TST.STATUS registers at $000315 (5 bytes) BEFORE copying handler
+        ; (Handler code spans $0300-$03B3 which overlaps TST.STATUS at $0315!)
+        LDA #$00
+        STA $0315       ; Clear status byte 1
+        STA $0316       ; Clear status byte 2
+        STA $0317       ; Clear status byte 3
+        STA $0318       ; Clear status byte 4
+        STA $0319       ; Clear status byte 5
+
+        ; Copy return handler to safe area ($0300)
+        LDX #$00
+COPYLP  LDA HANDLER,X
+        STA SAFE_AREA,X
+        INX
+        CPX #HANDLER_END-HANDLER
+        BNE COPYLP
 
         ; Read test pointer from table
-        ; DIAGNOSTICS+2 = size byte, DIAGNOSTICS+3 = first pointer
         REP #$20        ; 16-bit accumulator
         LDA >$FF0000+DIAGNOSTICS+TEST_OFFSET
         STA TEST_ADDR
@@ -56,130 +80,137 @@ SETUP
         PHA
         PLB
 
-        ; Display test address for debugging
-        LDA TEST_ADDR+1
-        JSR PRINTHEX
-        STA SCREEN+$28
-        STX SCREEN+$29
-        LDA TEST_ADDR
-        JSR PRINTHEX
-        STA SCREEN+$2A
-        STX SCREEN+$2B
-
-        ; Clear TST.STATUS registers at $000315 (5 bytes) before calling test
-        LDA #$00
-        STA $0315       ; Clear status byte 1
-        STA $0316       ; Clear status byte 2
-        STA $0317       ; Clear status byte 3
-        STA $0318       ; Clear status byte 4
-        STA $0319       ; Clear status byte 5
-
-        ; Patch JSL instruction with test address
+        ; Patch JSL instruction in the copied handler with test address
+        ; CALLTST is at offset 0 in HANDLER, so patch goes to SAFE_AREA+1
         REP #$20
         LDA TEST_ADDR
-        STA CALLTST+1
+        STA SAFE_AREA+1     ; JSL operand is at offset 1
         SEP #$20
 
+        ; Jump to our safe handler to call the test
+        JMP SAFE_AREA
+
+;=============================================================================
+; HANDLER - This code gets copied to $0300 (safe from RAM test)
+;=============================================================================
+HANDLER
         ; Call test 4 via JSL to ROM
 CALLTST JSL $FF0000     ; Address will be patched above
 
-RETURN
-        ; Test returned - restore data bank (ROM tests leave it in unknown state)
-        PHK
-        PLB
-
-        ; Check carry flag for pass/fail per Apple IIGS Diagnostics documentation
+        ; Test returned - save result
         ; Carry clear = pass, carry set = fail
-        BCS FAIL_BRANCH
-        LDA #$00
-FAIL_BRANCH
-        STA RESULT
+        PHP             ; Save flags
+        PHK
+        PLB             ; Set data bank to our code bank
 
-        ; Display "RESULT:" message
+        ; Restore emulation mode for screen access
+        SEC
+        XCE
+
+        ; Clear screen first
+        LDA #$A0
         LDX #$00
-RESLP   LDA RESMSG,X
-        BEQ SHOWRES
-        STA SCREEN+$50,X
+HCLR    STA SCREEN,X
+        STA SCREEN+$80,X
+        STA SCREEN+$100,X
+        STA SCREEN+$180,X
         INX
-        JMP RESLP
+        BNE HCLR
 
-SHOWRES
-        ; Display the result code in hex
-        LDA RESULT
-        JSR PRINTHEX
-        STA SCREEN+$58
-        STX SCREEN+$59
+        ; Display "TEST 04:" at screen start
+        LDA #'T'+$80
+        STA SCREEN
+        LDA #'E'+$80
+        STA SCREEN+1
+        LDA #'S'+$80
+        STA SCREEN+2
+        LDA #'T'+$80
+        STA SCREEN+3
+        LDA #$A0
+        STA SCREEN+4
+        LDA #'0'+$80
+        STA SCREEN+5
+        LDA #'4'+$80
+        STA SCREEN+6
+        LDA #':'+$80
+        STA SCREEN+7
 
-        ; Check if zero (pass)
-        LDA RESULT
-        CMP #$00
-        BNE TESTFAIL
+        ; Check carry flag from saved flags
+        PLP             ; Restore flags
+        BCS HFAIL
 
-TESTPASS
-        LDX #$00
-PASSLP  LDA PASSMSG,X
-        BEQ HANG
-        STA SCREEN+$5B,X
-        INX
-        JMP PASSLP
+        ; PASS
+        LDA #'P'+$80
+        STA SCREEN+9
+        LDA #'A'+$80
+        STA SCREEN+10
+        LDA #'S'+$80
+        STA SCREEN+11
+        LDA #'S'+$80
+        STA SCREEN+12
+        BRA HHANG       ; Use relative branch (position-independent)
 
-TESTFAIL
-        LDX #$00
-FAILLP  LDA FAILMSG,X
-        BEQ HANG
-        STA SCREEN+$5B,X
-        INX
-        JMP FAILLP
+HFAIL
+        ; FAIL - also display error code from $0315
+        LDA #'F'+$80
+        STA SCREEN+9
+        LDA #'A'+$80
+        STA SCREEN+10
+        LDA #'I'+$80
+        STA SCREEN+11
+        LDA #'L'+$80
+        STA SCREEN+12
 
-HANG    JMP HANG
+        ; Display error code
+        LDA #$A0
+        STA SCREEN+13
+        LDA $0315       ; Error code AA
+        JSR HHEX
+        STA SCREEN+14
+        STX SCREEN+15
+        LDA $0316       ; Error code BB
+        JSR HHEX
+        STA SCREEN+16
+        STX SCREEN+17
 
-; Print hex value in A
+HHANG   BRA HHANG       ; Use relative branch for position-independent infinite loop
+
+; Print hex value in A (inline in handler)
 ; Returns: A=high nibble char, X=low nibble char
-PRINTHEX
+HHEX
         PHA
         LSR
         LSR
         LSR
         LSR
-        JSR HEXCHAR
+        JSR HHEXC
         STA $10
         PLA
         AND #$0F
-        JSR HEXCHAR
+        JSR HHEXC
         TAX
         LDA $10
         RTS
 
-; Convert nibble to hex character
-HEXCHAR
+HHEXC
         CMP #$0A
-        BCC HEXDIGIT
+        BCC HHEXD
         SEC
         SBC #$09
         ORA #$C0
         RTS
-HEXDIGIT
+HHEXD
         ORA #$B0
         RTS
 
+HANDLER_END
+
+;=============================================================================
+; Data in main code area (will be destroyed, but we've already copied handler)
+;=============================================================================
+
 RUNMSG
         ASC "Running Test 04..."
-        HEX 00
-
-RESMSG
-        ASC "RESULT:"
-        HEX 00
-
-PASSMSG
-        ASC " PASS"
-        HEX 00
-
-FAILMSG
-        ASC " FAIL"
-        HEX 00
-
-; Storage for result
-RESULT
         HEX 00
 
 ; Storage for test address read from pointer table

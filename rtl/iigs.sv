@@ -324,6 +324,12 @@ module iigs
                ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
+  // LC_IO: Language Card soft switches ($C080-$C08F) should ALWAYS trigger their side effects,
+  // even when IOLC is inhibited (shadow[6]=1). This is because IOLC inhibit only affects
+  // data routing, not the LC state machine. The ROM RAM address test relies on this.
+  wire LC_IO = ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 & (cpu_addr[7:4] == 4'h8) &
+               (bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1);
+
   // Debug: IOLC inhibit testing
   always @(posedge CLK_14M) begin
     if (phi2 && cpu_addr[15:8] == 8'hC0 && (bank_bef == 8'h00 || bank_bef == 8'h01) && shadow[6]) begin
@@ -1628,6 +1634,90 @@ module iigs
             end
           endcase
         end
+    end
+
+    // LC_IO handling: Language Card soft switches must still work even when IOLC inhibit (shadow[6]=1)
+    // blocks regular I/O. This allows the ROM RAM address test to function correctly.
+    // Only triggers when LC_IO && ~IO (IOLC inhibiting but LC access occurring)
+    if (LC_IO && ~IO) begin
+      if (cpu_we_n) begin
+        // Read access to LC switches (most common case - these trigger LC state changes)
+        case (addr[11:0])
+          12'h080, 12'h084: begin  // Read RAM bank 2, no write
+            if (phi2) begin
+              RDROM <= 1'b0;
+              LCRAM2 <= 1'b1;
+              LC_WE <= 1'b0;
+              LC_WE_PRE <= 1'b0;
+            end
+          end
+          12'h081, 12'h085: begin  // Read ROM, write RAM bank 2 (RR)
+            if (phi2) begin
+              RDROM <= 1'b1;
+              LCRAM2 <= 1'b1;
+            end
+            if (phi0) begin
+              LC_WE <= LC_WE_PRE;
+              LC_WE_PRE <= 1'b1;
+            end
+          end
+          12'h082, 12'h086: begin  // Read ROM, no write
+            if (phi2) begin
+              RDROM <= 1'b1;
+              LCRAM2 <= 1'b0;
+              LC_WE <= 1'b0;
+              LC_WE_PRE <= 1'b0;
+            end
+          end
+          12'h083, 12'h087: begin  // Read RAM bank 2, write bank 2 (RR)
+            if (phi2) begin
+              RDROM <= 1'b0;
+              LCRAM2 <= 1'b1;
+            end
+            if (phi0) begin
+              LC_WE <= LC_WE_PRE;
+              LC_WE_PRE <= 1'b1;
+            end
+          end
+          12'h088, 12'h08C: begin  // Read RAM bank 1, no write
+            if (phi2) begin
+              RDROM <= 1'b0;
+              LCRAM2 <= 1'b0;
+              LC_WE <= 1'b0;
+              LC_WE_PRE <= 1'b0;
+            end
+          end
+          12'h089, 12'h08D: begin  // Read ROM, write RAM bank 1 (RR)
+            if (phi2) begin
+              RDROM <= 1'b1;
+              LCRAM2 <= 1'b0;
+            end
+            if (phi0) begin
+              LC_WE <= LC_WE_PRE;
+              LC_WE_PRE <= 1'b1;
+            end
+          end
+          12'h08A, 12'h08E: begin  // Read ROM, no write
+            if (phi2) begin
+              RDROM <= 1'b1;
+              LCRAM2 <= 1'b0;
+              LC_WE <= 1'b0;
+              LC_WE_PRE <= 1'b0;
+            end
+          end
+          12'h08B, 12'h08F: begin  // Read RAM bank 1, write bank 1 (RR)
+            if (phi2) begin
+              RDROM <= 1'b0;
+              LCRAM2 <= 1'b0;
+            end
+            if (phi0) begin
+              LC_WE <= LC_WE_PRE;
+              LC_WE_PRE <= 1'b1;
+            end
+          end
+          default: ;
+        endcase
+      end
     end
 
     /* *
