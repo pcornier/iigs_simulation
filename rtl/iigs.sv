@@ -405,6 +405,9 @@ module iigs
       // Default address translation
       if (aux && (bank_bef == 8'h00 || bank_bef == 8'h01 || bank_bef == 8'he0 || bank_bef == 8'he1)) begin
         addr_bus = addr_bef + 24'h10000;
+      end else if (bank_bef == 8'he1 && ~NEWVIDEO[0]) begin
+        // Bank latch disabled: E1 redirects to E0 (IIe memory model)
+        addr_bus = {8'he0, addr_bef};
       end else begin
         addr_bus = cpu_addr;  // Normal mapping (includes ROM code addresses $C000-$FFFF)
       end
@@ -1732,14 +1735,14 @@ module iigs
   always @(*)
     begin: aux_ctrl
       aux = 1'b0;
-      if ((bank_bef==0 || bank_bef==8'he0) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
+      if ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
         aux = ALTZP;
       else if ((bank_bef==0 || bank_bef==1 || bank_bef==8'he0 || bank_bef==8'he1) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
-        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
+        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
       else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
-        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0 || bank_bef==8'he0) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
+        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
       else
-        aux = ((bank_bef==1 || bank_bef==8'he1) || ((bank_bef==0||bank_bef==8'he0) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
+        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
     end
 assign     fastram_address = {bank[6:0],addr};
 assign     fastram_datatoram = dout;
@@ -1984,6 +1987,14 @@ wire [7:0] din =
 
   // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
   wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
+
+  // DEBUG: Track what cpu_din is when CPU actually samples (phi2 high)
+  always @(posedge CLK_14M) begin
+    if (phi2 && cpu_we_n && (bank_bef == 8'hE0 || bank_bef == 8'hE1) && addr_bef >= 16'h6100 && addr_bef <= 16'h6105) begin
+      $display("TEST0D_PHI2: bank_bef=%02x addr=%04x cpu_din=%02x slowram_dout=%02x din=%02x",
+               bank_bef, addr_bef, cpu_din, slowram_dout, din);
+    end
+  end
 
 `ifdef DEBUG_BANK
   // Debug: Detect when CPU receives default 0x80 value (potential unhandled I/O)

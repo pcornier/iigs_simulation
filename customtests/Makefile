@@ -25,7 +25,7 @@ ifeq ($(UNAME_S),Darwin)
     CP2_URL = https://github.com/fadden/CiderPress2/releases/download/v$(CP2_VERSION)/$(CP2_ZIP)
     CP2 = ./$(CP2_DIR)/cp2
 else ifeq ($(UNAME_S),Linux)
-    ASM = ./$(MERLIN_DIR)/Unix/Merlin32
+    ASM = ./$(MERLIN_DIR)/Linux/Merlin32
     CP2_DIR = cp2_$(CP2_VERSION)_linux-x64_sc
     CP2_ZIP = $(CP2_DIR).zip
     CP2_URL = https://github.com/fadden/CiderPress2/releases/download/v$(CP2_VERSION)/$(CP2_ZIP)
@@ -900,3 +900,19 @@ mmu_test.2mg: MMUTEST.SYSTEM
 	$(CP2) add mmu_test.2mg "MMUTEST.SYSTEM"
 	$(CP2) sa mmu_test.2mg type=SYS "MMUTEST.SYSTEM"
 	@echo "MMU test disk ready: mmu_test.2mg"
+
+# GSQuared MMU Test - GSQuared emulator's MMU test suite
+.PHONY: gsqmmu_test
+gsqmmu_test: GSQMMU.SYSTEM gsqmmu_test.2mg
+
+GSQMMU.SYSTEM: GSQMMU.S
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
+
+gsqmmu_test.2mg: GSQMMU.SYSTEM
+	@echo "Creating GSQuared MMU test disk..."
+	@cp blank.2mg gsqmmu_test.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm gsqmmu_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm gsqmmu_test.2mg "GSQMMU.SYSTEM" 2>/dev/null || true
+	$(CP2) add gsqmmu_test.2mg "GSQMMU.SYSTEM"
+	$(CP2) sa gsqmmu_test.2mg type=SYS "GSQMMU.SYSTEM"
+	@echo "GSQuared MMU test disk ready: gsqmmu_test.2mg"
