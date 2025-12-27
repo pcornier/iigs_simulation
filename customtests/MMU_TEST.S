@@ -1142,39 +1142,56 @@ TEST25_FAIL
 ;=============================================================================
 ; TEST 26: LC switches work even with IOLC inhibit (shadow bit 6)
 ; This is critical for the ROM RAM address test which sets shadow=$7F
+;
+; Strategy: Use bank 00:D000 for LC verification since E0:D000 is always
+; slow RAM (video bank). RDROM only affects 00/01 D000-FFFF mapping.
+;
+; 1. Enable LC RAM via E0 (always has I/O) and write marker to 00:D000
+; 2. Switch to ROM via E0, verify 00:D000 returns ROM data
+; 3. Set IOLC inhibit (shadow=$7F) - blocks 00/01 I/O
+; 4. Try to enable LC RAM via bank 00 $C08B (needs LC_IO fix!)
+; 5. Read 00:D000 - if LC enabled, get marker; if ROM, get ROM data
 ;=============================================================================
 TEST26
         INC   TESTNUM
         JSR   SHOWTEST
 
-        ; First, make sure ROM is enabled
-        LDA   >$E0C082
+        ; Step 1: Enable LC RAM bank 1 via E0 and write marker to 00:D000
+        LDA   >$E0C08B        ; First read - LC bank 1
+        LDA   >$E0C08B        ; Second read - enable write
+        LDA   #$A5            ; Marker value
+        STA   >$00D000        ; Write to LC RAM (bank 00)
 
-        ; Enable IOLC inhibit (shadow=$7F - all bits set including bit 6)
+        ; Step 2: Switch to ROM via E0
+        LDA   >$E0C082        ; RDROM=1 (ROM mapped, not LC RAM)
+
+        ; Verify ROM is mapped - 00:D000 should return ROM data (not $A5)
+        LDA   >$00D000
+        CMP   #$A5
+        BEQ   TEST26_FAIL     ; If still $A5, ROM not properly enabled
+
+        ; Step 3: Enable IOLC inhibit
         LDA   #$7F
         STA   >$E0C035
 
-        ; Now access LC switch - this should STILL work!
-        ; $C08B = Read/Write LC bank 1 (needs two reads)
+        ; Step 4: Try to enable LC RAM via bank 00 (needs fix!)
+        ; Without fix: IO=0 for bank 00, LC switch ignored, ROM stays mapped
+        ; With fix: LC_IO triggers, LC RAM enabled
         LDA   >$00C08B        ; First read
         LDA   >$00C08B        ; Second read enables write
 
-        ; Write test pattern to LC area
-        LDA   #$A5
-        STA   >$00D000
-
-        ; Read it back
+        ; Step 5: Read 00:D000 to check if LC was enabled
+        ; If LC switch worked: returns $A5 (our marker)
+        ; If LC switch blocked: returns ROM data (not $A5)
         LDA   >$00D000
-        STA   >$E00503        ; Store in known location
+        STA   >$E00503        ; Save result in slow RAM
 
-        ; Disable IOLC inhibit
+        ; Cleanup: disable IOLC inhibit, restore ROM
         LDA   #$08
         STA   >$E0C035
-
-        ; Restore ROM
         LDA   >$E0C082
 
-        ; Verify we read back what we wrote
+        ; Check result
         LDA   >$E00503
         CMP   #$A5
         BNE   TEST26_FAIL

@@ -104,8 +104,21 @@ The `customtests/SELFTEST04.S` test harness required additional fixes:
 
 3. **Position-independent branching**: Use `BRA` instead of `JMP` for the infinite loop, since relative branches work correctly when code is copied to a different address.
 
+## MMU_TEST Test 26
+
+The `customtests/MMU_TEST.S` includes Test 26 which specifically verifies LC switches work with IOLC inhibit. The test strategy uses bank 00:D000 for verification since E0:D000 is always slow RAM (video bank) and not affected by RDROM:
+
+1. Enable LC RAM via E0 (always has I/O) and write marker to 00:D000
+2. Switch to ROM via E0, verify 00:D000 returns ROM data
+3. Set IOLC inhibit (shadow=$7F) - blocks 00/01 I/O
+4. Try to enable LC RAM via bank 00 $C08B (needs LC_IO fix!)
+5. Disable IOLC inhibit, read 00:D000 - if LC enabled, get marker
+
+**Important note**: With IOLC inhibit active (shadow[6]=1), bank 00/01 D000-FFFF accesses also go to fast RAM instead of LC RAM/ROM. Verification must be done after disabling IOLC inhibit.
+
 ## Related Files
 
-- `rtl/iigs.sv`: LC_IO signal and handler (lines 324-329, 1636-1721)
+- `rtl/iigs.sv`: LC_IO signal and handler (lines 327-331, 1639-1721)
 - `customtests/SELFTEST04.S`: Test harness for running selftest 04
+- `customtests/MMU_TEST.S`: Test 26 verifies LC+IOLC inhibit behavior
 - `doc/selftest.md`: Official Vegas ROM Diagnostics documentation
