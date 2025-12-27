@@ -3,7 +3,7 @@
 
 # Check for required disk images
 MISSING_DISKS=0
-for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv"; do
+for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv" ../customtests/mmu_test.2mg; do
     if [ ! -f "$disk" ]; then
         echo "ERROR: Missing disk image: $disk"
         MISSING_DISKS=1
@@ -18,6 +18,7 @@ if [ $MISSING_DISKS -eq 1 ]; then
     echo "  - gsos.hdv"
     echo "  - arkanoid.hdv"
     echo "  - Total Replay II v1.0-alpha.4.hdv"
+    echo "  - ../customtests/mmu_test.2mg"
     exit 1
 fi
 
@@ -106,6 +107,19 @@ if [ -f "regression_images/basic_boot_screenshot_frame_0295.png" ]; then
     fi
 else
     echo "  SKIP: BASIC boot - missing reference image"
+fi
+
+echo "Running MMU test..."
+./obj_dir/Vemu --disk ../customtests/mmu_test.2mg --stop-at-frame 130 --screenshot 130 &> mmutest.txt
+if [ -f "regression_images/mmutest_screenshot_frame_0130.png" ]; then
+    if diff screenshot_frame_0130.png regression_images/mmutest_screenshot_frame_0130.png > /dev/null 2>&1; then
+        echo "  PASS: MMU test"
+    else
+        echo "  FAIL: MMU test - screenshot differs"
+        FAILED=1
+    fi
+else
+    echo "  SKIP: MMU test - missing reference image"
 fi
 
 echo ""

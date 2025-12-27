@@ -193,10 +193,12 @@ always @(posedge clk_14M) begin
              ) ||
              (we_reg && (bank == 8'h00 || bank == 8'h01) &&
                 (
-                    (addr >= 16'h0400 && addr <= 16'h07FF && shadow[0]) ||
-                    (addr >= 16'h0800 && addr <= 16'h0BFF && shadow[5]) ||
-                    (addr >= 16'h2000 && addr <= 16'h3FFF && shadow[1]) ||
-                    (addr >= 16'h4000 && addr <= 16'h5FFF && shadow[2])
+                    // Shadow bits are "inhibit" flags: bit=0 means shadow ENABLED (slow access)
+                    // bit=1 means shadow DISABLED (fast access). Use inverted bits for slowMem.
+                    (addr >= 16'h0400 && addr <= 16'h07FF && ~shadow[0]) ||
+                    (addr >= 16'h0800 && addr <= 16'h0BFF && ~shadow[5]) ||
+                    (addr >= 16'h2000 && addr <= 16'h3FFF && ~shadow[1]) ||
+                    (addr >= 16'h4000 && addr <= 16'h5FFF && ~shadow[2])
                 )
              )
            )

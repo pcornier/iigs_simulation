@@ -1143,44 +1143,59 @@ TEST25_FAIL
 ; SUMMARY: Display pass/fail counts
 ;=============================================================================
 SUMMARY
-        ; Display summary on line 20 (offset $278)
-        LDX   #$00
-SUMLP   LDA   SUMMSG,X
-        BEQ   SHOWSUM
-        STA   SCREEN+$278,X
-        INX
-        JMP   SUMLP
+        ; Display checkboxes on line 2 (offset $80)
+        LDA   #'['+$80
+        STA   SCREEN+$80
+        LDA   #'X'+$80
+        STA   SCREEN+$81
+        LDA   #']'+$80
+        STA   SCREEN+$82
+        LDA   #$A0           ; space
+        STA   SCREEN+$83
+        LDA   #'['+$80
+        STA   SCREEN+$84
+        LDA   #'X'+$80
+        STA   SCREEN+$85
+        LDA   #']'+$80
+        STA   SCREEN+$86
 
-SHOWSUM
-        ; Display pass count
+        ; Display pass count on line 3 (offset $180)
         LDA   PASSCOUNT
         JSR   PRINTHEX
-        STA   SCREEN+$280
-        STX   SCREEN+$281
+        STA   SCREEN+$180     ; High nibble
+        STX   SCREEN+$181     ; Low nibble
 
         ; Display separator
         LDA   #'/'+$80
-        STA   SCREEN+$282
+        STA   SCREEN+$182
 
         ; Display total (PASSCOUNT + FAILCOUNT)
         LDA   PASSCOUNT
         CLC
         ADC   FAILCOUNT
         JSR   PRINTHEX
-        STA   SCREEN+$283
-        STX   SCREEN+$284
+        STA   SCREEN+$183
+        STX   SCREEN+$184
 
         ; Check if all passed
         LDA   FAILCOUNT
         BNE   ALLDONE
 
-        ; All passed!
+        ; Display "*** ALL" on right of line 3
         LDX   #$00
 ALLPLP  LDA   ALLPASS,X
-        BEQ   ALLDONE
-        STA   SCREEN+$2A0,X
+        BEQ   ALLP2
+        STA   SCREEN+$1A0,X
         INX
         JMP   ALLPLP
+
+        ; Display "TESTS PASSED ***" on line 10 ($0528)
+ALLP2   LDX   #$00
+ALLP2LP LDA   ALLPASS2,X
+        BEQ   ALLDONE
+        STA   SCREEN+$128,X
+        INX
+        JMP   ALLP2LP
 
 ALLDONE
         JMP   ALLDONE
@@ -1195,15 +1210,14 @@ TESTCOL  EQU   $F2        ; Current column (0-7)
 TESTROW  EQU   $F3        ; Current row index into LINEADDR
 
 ; Apple II text screen line addresses
-; Using lines 8-15 which start at $0428, $04A8, etc. to avoid test memory conflicts
-; Tests write to $0400-$0403 area, so we use lines that start higher
+; Using lines 5-10 for test results display
 LINEADDR
+        DW    $0680       ; Line 5
+        DW    $0700       ; Line 6
+        DW    $0780       ; Line 7
         DW    $0428       ; Line 8
         DW    $04A8       ; Line 9
         DW    $0528       ; Line 10
-        DW    $05A8       ; Line 11
-        DW    $0628       ; Line 12
-        DW    $06A8       ; Line 13
 
 ; Display current test number
 ; Format: "NN:R " where NN is hex test number, R is result
@@ -1328,15 +1342,18 @@ HEXDIGIT
 ;=============================================================================
 
 TITLE
-        ASC   "MMU TEST - MEMORY MANAGEMENT TESTS"
+        ASC   "GSTEST - MEMORY MANAGEMENT TESTS"
         HEX   00
 
 SUMMSG
-        ASC   "PASSED:"
         HEX   00
 
 ALLPASS
-        ASC   "*** ALL TESTS PASSED ***"
+        ASC   "*** ALL"
+        HEX   00
+
+ALLPASS2
+        ASC   "TESTS PASSED ***"
         HEX   00
 
 ; Variables (in program memory)

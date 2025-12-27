@@ -218,14 +218,17 @@ iigs  iigs(
         .AUDIO_R(AUDIO_R)
 );
 
-/*
+  reg prev_fastram_we;
+  reg [22:0] prev_fastram_addr;
   always @(posedge clk_sys) begin
-    if (fastram_ce) begin
-      if (fastram_we) $display("Writing %x: %x\n", fastram_address, fastram_datatoram);
-      $display("Reading %x: %x\n", fastram_address, fastram_datafromram);
+    prev_fastram_we <= fastram_we;
+    prev_fastram_addr <= fastram_address;
+    // Show all transitions involving C010
+    if (fastram_ce && (fastram_address == 23'h00c010 || prev_fastram_addr == 23'h00c010)) begin
+      $display("FASTRAM C010: addr=%x->%x data_in=%x data_out=%x we=%b->%b ce=%b",
+               prev_fastram_addr, fastram_address, fastram_datatoram, fastram_datafromram, prev_fastram_we, fastram_we, fastram_ce);
     end
   end
-*/
    //dpram #(.widthad_a(23),.prefix("fast")) fastram
 dpram #(.widthad_a(23),.prefix("fast")) fastram
 (

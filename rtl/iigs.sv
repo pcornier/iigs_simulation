@@ -1930,6 +1930,9 @@ vgc vgc(
 
 
 
+// Floating bus: reads from non-existent RAM banks return the bank number
+wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef : 8'h80;
+
 wire [7:0] din =
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
   rom1_ce ? rom1_dout :
@@ -1940,7 +1943,7 @@ wire [7:0] din =
   fastram_ce ? fastram_dout :
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
-  8'h80;
+  floating_bus;
 
   wire [7:0] HDD_DO;
 
