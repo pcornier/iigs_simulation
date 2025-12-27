@@ -14,12 +14,12 @@ Results from running the MMU test suite on different emulators:
 | 04 | Shadow only video pages | **P** | **P** | **P** |
 | 05 | RAMWRT shadowed to E1 | **P** | **P** | **P** |
 | 06 | Aux write non-video not shadowed | **P** | **P** | **P** |
-| 07 | Bank 02 + RAMWRT + all-bank shadow | F | F | F |
+| 07 | Bank 02 + RAMWRT + all-bank shadow | F | F | **P** |
 | 08 | Direct write bank 01 text page | **P** | **P** | **P** |
 | 09 | Bank 03 text + all-bank shadow | F | F | F |
 | 0A | IOLC inhibit (shadow[6]) | **P** | **P** | **P** |
 | 0B | No IOLC in bank 02 normally | **P** | **P** | **P** |
-| 0C | IOLC in bank 02 with all-bank shadow | F | F | F |
+| 0C | IOLC in bank 02 with all-bank shadow | F | F | **P** |
 | 0D | Bank latch disabled (NEWVIDEO[0]) | F | F | **P** |
 | 0E | Bank latch + RAMWRT | **P** | **P** | **P** |
 | 0F | Bank latch + all-bank shadow | **P** | **P** | **P** |
@@ -39,68 +39,54 @@ Results from running the MMU test suite on different emulators:
 |----------|------|------|
 | **Clemens** | 17 | 7 |
 | **GSplus** | 17 | 7 |
-| **Our Sim** | 16 | 3 |
+| **Our Sim** | 18 | 1 |
 
 ### Key Observations
 
-1. **Tests that fail on our simulator**: 07, 0C (+ 1 more in row 01-08)
+1. **Tests that fail on our simulator**: 09 (Bank 03 text + all-bank shadow)
 
 2. **Tests that fail on Clemens/GSplus** (from original testing):
    - 03, 07, 09, 0C: All-bank shadow (CYAREG[4])
    - 0D: Bank latch disabled (NEWVIDEO[0])
    - 10: IOLC inhibit + aux write combination
 
-3. **Our simulator passes test 03** (Shadow all banks) which other emulators fail
-
-4. **Our simulator passes test 0D** (Bank latch) which other emulators fail
+3. **Our simulator passes more tests than Clemens/GSplus**:
+   - Test 03: Shadow all banks
+   - Test 07: Bank 02 + RAMWRT + all-bank shadow
+   - Test 0C: IOLC in bank 02 with all-bank shadow
+   - Test 0D: Bank latch disabled
 
 ---
 
 ## Failing Test Analysis
 
-### TEST 07 - Bank 02 + RAMWRT + All-Bank Shadow (FAIL)
+### TEST 09 - Bank 03 Text + All-Bank Shadow (FAIL)
 
-**What it tests:** With all-bank shadow enabled, RAMWRT should redirect bank 02 writes to bank 03.
-
-**Pseudocode:**
-```
-1. Enable all-bank shadow (CYAREG = $94)
-2. Enable RAMWRT
-3. Write to 02:6000 - should go to bank 03 (RAMWRT affects even banks with all-bank shadow)
-4. EXPECT: 03:6000 has data, 02:6000 is unchanged
-```
-
-**Issue:** CYAREG[4] is never checked. RAMWRT affecting banks other than 00/01 when all-bank shadow is enabled is not implemented.
-
----
-
-### TEST 0C (12) - IOLC in Bank 02 with All-Bank Shadow (FAIL)
-
-**What it tests:** With all-bank shadow enabled, I/O space should appear in bank 02.
+**What it tests:** With all-bank shadow enabled, writes to odd banks should shadow to E1.
 
 **Pseudocode:**
 ```
 1. Enable all-bank shadow (CYAREG = $94)
-2. Write to 02:C010  // should go to I/O (not RAM) with all-bank shadow
-3. EXPECT: 02:C010 reads as $00 (I/O ate the write)
+2. Write to 03:0400 (odd bank, text page)
+3. EXPECT: E1:0400 = data (shadowed to E1 for odd banks)
 ```
 
-**Issue:** All-bank shadow not implemented.
+**Issue:** Odd bank text page writes may not be triggering slowram shadow writes.
 
 ---
 
-## Summary of Issues in iigs.sv
+## Summary of Implemented Fixes
 
-### 1. CYAREG[4] (All-Bank Shadow) - NOT IMPLEMENTED
+### 1. CYAREG[4] (All-Bank Shadow) - FIXED
 
-**Affected tests:** 07, 0C
+**Tests now passing:** 03, 07, 0C
 
-The Speed Register ($C036) bit 4 controls whether shadowing applies to all RAM banks ($00-$7F) or just banks $00/$01. This feature is completely missing from the memory controller.
+The Speed Register ($C036) bit 4 controls whether shadowing applies to all RAM banks ($00-$7F) or just banks $00/$01.
 
-**Required changes:**
-- Check `CYAREG[4]` in the memory controller
-- When set, enable shadow writes for banks $02-$7F (even banks -> E0, odd banks -> E1)
-- When set, enable I/O space in banks $02-$7F
+**Changes implemented:**
+- Added `all_bank_io` wire: When CYAREG[4]=1, I/O space ($C0xx) is active in banks 02-7F
+- Added `all_bank_shadow_even` wire: When CYAREG[4]=1, RAMRD/RAMWRT affects even banks (02-7E)
+- Updated addr_bus translation to redirect even banks to odd banks when aux=1 and CYAREG[4]=1
 
 ### 2. NEWVIDEO[0] (Bank Latch) - FIXED
 

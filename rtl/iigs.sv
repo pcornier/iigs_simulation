@@ -318,8 +318,10 @@ module iigs
 // Old incorrect implementations:
 //wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
 //assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
+  // All-bank shadow: When CYAREG[4]=1, I/O space appears in banks 02-7F too
+  wire all_bank_io = CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7f);
   assign IO =  ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 &
-               ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1) |
+               ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
   // Debug: IOLC inhibit testing
@@ -408,6 +410,9 @@ module iigs
       end else if (bank_bef == 8'he1 && ~NEWVIDEO[0]) begin
         // Bank latch disabled: E1 redirects to E0 (IIe memory model)
         addr_bus = {8'he0, addr_bef};
+      end else if (aux && CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7e) && ~bank_bef[0]) begin
+        // All-bank shadow: aux redirects even bank (02, 04...) to odd bank (03, 05...)
+        addr_bus = {bank_bef | 8'h01, addr_bef};
       end else begin
         addr_bus = cpu_addr;  // Normal mapping (includes ROM code addresses $C000-$FFFF)
       end
@@ -1732,6 +1737,9 @@ module iigs
 `endif
 
 
+  // All-bank shadow: When CYAREG[4]=1, even banks (02-7E) act like bank 00 for RAMRD/RAMWRT
+  wire all_bank_shadow_even = CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7e) && ~bank_bef[0];
+
   always @(*)
     begin: aux_ctrl
       aux = 1'b0;
@@ -1741,6 +1749,9 @@ module iigs
         aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
       else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
         aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
+      else if (all_bank_shadow_even)
+        // All-bank shadow: RAMRD/RAMWRT redirects even banks to odd banks
+        aux = ((RAMRD & cpu_we_n) | (RAMWRT & ~cpu_we_n));
       else
         aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
     end
