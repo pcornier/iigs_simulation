@@ -322,6 +322,14 @@ module iigs
                ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
+  // Debug: IOLC inhibit testing
+  always @(posedge CLK_14M) begin
+    if (phi2 && cpu_addr[15:8] == 8'hC0 && (bank_bef == 8'h00 || bank_bef == 8'h01) && shadow[6]) begin
+      $display("IOLC_DEBUG: bank=%02x addr=%04x we=%b IO=%b fastram_ce=%b shadow=%02x din=%02x cpu_din=%02x",
+               bank_bef, cpu_addr[15:0], ~cpu_we_n, IO, fastram_ce, shadow, din, cpu_din);
+    end
+  end
+
   // Combinational ADB read detection - bypasses io_dout timing issue for ADB reads
   // ADB addresses: $C000, $C010, $C024, $C025, $C026, $C027, $C044, $C045
   // NOTE: $C064-$C067 are paddle timer reads, $C070 is paddle trigger - NOT ADB
@@ -456,8 +464,18 @@ module iigs
             // hgr*_shadow: When bit3=1, only HGR pages shadow based on bits 1-2
             fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
             slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)
+`ifdef DEBUG_IO
+            if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
+              $display("SHADOW_WRITE: bank00 addr=%04x shadow=%02x txt1=%b txt2=%b shr=%b -> DUAL WRITE",
+                       addr_bef, shadow, txt1_shadow, txt2_shadow, shr_master_shadow);
+`endif
           end else begin
             fastram_ce_int = 1;  // Normal Bank 00 RAM (non-shadowed)
+`ifdef DEBUG_IO
+            if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
+              $display("NO_SHADOW: bank00 addr=%04x shadow=%02x txt1=%b txt2=%b shr=%b -> FASTRAM ONLY",
+                       addr_bef, shadow, txt1_shadow, txt2_shadow, shr_master_shadow);
+`endif
           end
         end
         
@@ -477,6 +495,10 @@ module iigs
             fastram_ce_int = 1;
             if (we) begin
               slowram_ce_int = 1;
+`ifdef DEBUG_IO
+              $display("BANK01_SHADOW_WRITE: addr=%04x data=%02x slowram_addr=%05x txt1=%b txt2=%b shadow[0]=%b",
+                       addr_bef, cpu_dout, {1'b1, addr_bef[15:0]}, txt1_shadow, txt2_shadow, shadow[0]);
+`endif
             end
           end else if (!aux_disable && (hgr1_shadow || hgr2_shadow)) begin
             // Hi-Res pages shadow only when aux_disable=0 (bit 4 controls this)
@@ -492,6 +514,11 @@ module iigs
         // Banks E0/E1: Shadow memory - always SLOWRAM
         8'hE0, 8'hE1: begin
           slowram_ce_int = 1;
+`ifdef DEBUG_IO
+          if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
+            $display("SLOWRAM_DIRECT: bank%02x addr=%04x data=%02x we=%b slowram_addr=%05x bank[0]=%b addr_bus=%06x -> SLOWRAM",
+                     bank_bef, addr_bef, we ? cpu_dout : 8'hXX, we, {bank[0], addr}, bank[0], addr_bus);
+`endif
         end
         
         // Banks FC-FF: ROM banks - writes should be discarded
@@ -511,9 +538,23 @@ module iigs
         end
         
         // All other banks: Normal RAM (if within RAMSIZE)
+        // CYAREG bit 4 (shadow all banks): When set, video page writes in ANY bank shadow to E0/E1
         default: begin
           if ((bank_bef < RAMSIZE) && ~rom1_ce && ~rom2_ce) begin
             fastram_ce_int = 1;
+            // CYAREG[4] = FPI shadow enable: shadow video pages from all banks to E0/E1
+            // Even banks shadow to E0, odd banks shadow to E1 (via bank[0] bit in slowram address)
+            // txt1_shadow, hgr*_shadow etc already include shadow register inhibit checks
+            if (CYAREG[4] && we) begin  // All banks when writing (bank[0] determines E0 vs E1)
+              // Check if address is in a shadowable video region
+              if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shr_master_shadow) begin
+                slowram_ce_int = 1;  // Enable shadow write to E0 (even) or E1 (odd)
+`ifdef DEBUG_IO
+                $display("FPI_SHADOW: bank%02x addr=%04x data=%02x -> E%d shadow (CYAREG[4]=1)",
+                         bank_bef, addr_bef, cpu_dout, bank_bef[0]);
+`endif
+              end
+            end
           end
         end
       endcase
@@ -700,13 +741,15 @@ module iigs
   // However, for compatibility, we keep the $C000-$CFFF behavior EXCEPT for slot ROM space
   // ($C100-$C7FF) which must be controlled by INTCXROM/SLTROMSEL instead of RDROM.
   // This allows slot card ROM (like SmartPort at $C7xx) to work correctly.
+  // When shadow[6]=1 (IOLC inhibit), $C000-$CFFF in banks 00/01 becomes RAM, not I/O or ROM
+  wire iolc_inhibit = shadow[6] && (bank_bef == 8'h00 || bank_bef == 8'h01);
   assign rom2_ce = (bank_bef == 8'hff) || vec_fetch_force_rom_ce ||
-                   (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB)) ||
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef < 16'hc100 && (RDROM|~VPB)) ||  // I/O ($C000-$C0FF) - preserve original behavior
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc800 & addr_bef <= 16'hcfff && (RDROM|~VPB)) ||  // Expansion ($C800-$CFFF) - preserve original behavior
+                   (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB) && !shadow[6]) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef < 16'hc100 && (RDROM|~VPB) && !shadow[6]) ||  // I/O ($C000-$C0FF) - only when IOLC not inhibited
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc800 & addr_bef <= 16'hcfff && (RDROM|~VPB) && !shadow[6]) ||  // Expansion ($C800-$CFFF) - only when IOLC not inhibited
                    // Note: $C100-$C7FF (slot ROM) deliberately NOT included here - handled by slot_internalrom_ce/slot_ce
-                   (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB)) ||
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f);
+                   (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB) && !shadow[6]) ||
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f && !shadow[6]);
 
   // driver for io_dout and fake registers
   always_ff @(posedge CLK_14M) begin

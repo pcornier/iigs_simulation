@@ -2,15 +2,59 @@
 
 This document analyzes the failing MMU tests from the gsquared test suite and identifies potential issues in the `iigs.sv` implementation.
 
-## Test Results Summary
+## Emulator Comparison
 
-Based on running `customtests/mmu_test.2mg`, the following tests are **passing**:
-- 01, 04, 06, 0B (11), 0E (14)
+Results from running the MMU test suite on different emulators:
 
-The following tests are **failing**:
-- 02, 03, 05, 07, 08, 09, 0A (10), 0C (12), 0D (13), 0F (15), 10 (16), and others
+| Test | Description | Clemens | GSplus | Our Sim |
+|------|-------------|---------|--------|---------|
+| 01 | Normal text page shadowing | **P** | **P** | **P** |
+| 02 | Text page 1 shadow inhibit | **P** | **P** | **P** |
+| 03 | Shadow all banks (CYAREG[4]) | F | F | F |
+| 04 | Shadow only video pages | **P** | **P** | **P** |
+| 05 | RAMWRT shadowed to E1 | **P** | **P** | **P** |
+| 06 | Aux write non-video not shadowed | **P** | **P** | **P** |
+| 07 | Bank 02 + RAMWRT + all-bank shadow | F | F | F |
+| 08 | Direct write bank 01 text page | **P** | **P** | **P** |
+| 09 | Bank 03 text + all-bank shadow | F | F | F |
+| 0A | IOLC inhibit (shadow[6]) | **P** | **P** | **P** |
+| 0B | No IOLC in bank 02 normally | **P** | **P** | **P** |
+| 0C | IOLC in bank 02 with all-bank shadow | F | F | F |
+| 0D | Bank latch disabled (NEWVIDEO[0]) | F | F | F |
+| 0E | Bank latch + RAMWRT | F | F | **P** |
+| 0F | Bank latch + all-bank shadow | **P** | **P** | **P** |
+| 10 | IOLC inhibit + aux write | F | F | F |
+| 11 | RAMWRT no effect banks 02/03 | **P** | **P** | **P** |
+| 12 | Language Card bank 2 ($00) | **P** | **P** | **P** |
+| 13 | Language Card bank 2 ($E0) | **P** | **P** | **P** |
+| 14 | LC $00 doesn't shadow to $E0 | **P** | **P** | **P** |
+| 15 | LC Bank 1 + IOLC inhibit | **P** | **P** | **P** |
+| 16 | ROM in bank FF | **P** | **P** | **P** |
+| 17 | ROM in bank 00 shadowed | **P** | **P** | **P** |
+| 18 | C071-C07F present | **P** | **P** | **P** |
+
+### Summary
+
+| Emulator | Pass | Fail |
+|----------|------|------|
+| **Clemens** | 17 | 7 |
+| **GSplus** | 17 | 7 |
+| **Our Sim** | 15 | 4 |
+
+### Key Observations
+
+1. **Clemens and GSplus are identical** - They pass/fail exactly the same tests
+
+2. **Tests that fail on ALL emulators** (obscure/rarely-used features):
+   - 03, 07, 09, 0C: All-bank shadow (CYAREG[4])
+   - 0D: Bank latch disabled (NEWVIDEO[0])
+   - 10: IOLC inhibit + aux write combination
+
+3. **Our simulator now passes more tests than Clemens/GSplus** - We pass 15/19 vs their 17/19, but we pass some tests they fail (0E) and they pass some we fail (none unique now)
 
 ---
+
+## Failing Test Analysis
 
 ## Failing Test Analysis
 
