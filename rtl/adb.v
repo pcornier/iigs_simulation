@@ -520,7 +520,11 @@ always @(*) begin
           else
             dout_comb_reg = device_registers[3][1];  // X + always-1-bit
         end else begin
-          dout_comb_reg = 8'h80;  // No data
+          // No new data - return appropriate "no movement" value
+          if (mouse_coord)
+            dout_comb_reg = {device_registers[3][0][7], 7'b0000000};  // Y: last button state, no delta
+          else
+            dout_comb_reg = 8'h80;  // X: bit7 always 1, no delta
         end
       end
     end
@@ -1584,7 +1588,14 @@ always @(posedge CLK_14M) begin
               dout <= device_registers[3][1];  // X + always-1-bit
             end
           end else begin
-            dout <= 8'h80;  // No data: button not pressed, delta=0
+            // No new mouse data - return appropriate "no movement" value
+            if (mouse_coord) begin
+              // Y byte: last known button state, no delta
+              dout <= {device_registers[3][0][7], 7'b0000000};
+            end else begin
+              // X byte: bit7 always 1, no delta
+              dout <= 8'h80;
+            end
           end
 
           // Mark that C024 was read this strobe cycle (for falling edge handling)
