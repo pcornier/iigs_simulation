@@ -574,6 +574,22 @@ always @(posedge CLK_14M) begin
     strobe_prev <= 1'b0;
     c024_was_read <= 1'b0;
 
+    // Initialize command processing registers
+    cmd <= 8'd0;
+    cmd_len <= 4'd0;
+    cmd_data <= 64'd0;
+    initial_cmd_len <= 4'd0;
+
+    // Initialize repeat timing registers
+    repeat_rate <= 8'd0;
+    repeat_delay <= 8'd0;
+
+    // Initialize Apple IIe compatibility register
+    c025 <= 8'd0;
+
+    // Initialize output register
+    dout <= 8'd0;
+
     // Initialize data register with ADB ready status (GSplus-style)
     // Set bit 3 (0x08) = SRQ flag to indicate ADB controller is ready
     data <= 32'h00000008;  // SRQ bit set, indicating ADB ready for keyboard operations
