@@ -321,27 +321,46 @@ reg [7:0] counter;
 reg [7:0] clk_reg1;
 
 reg [31:0] timestamp_prev;
+reg clock_initialized;
 
 always @(posedge CLK_14M) begin
 
-	onesecond_irq<=0;
-    qtrsecond_irq<=0;
+  if (reset) begin
+    // Initialize all registers on reset
+    clock_data <= 32'd0;
+    clock_initialized <= 1'b0;
+    c033 <= 8'd0;
+    c034 <= 8'd0;
+    state <= IDLE;
+    checksum_state <= 2'd0;
+    checksum_writes <= 2'd0;
+    checksum <= 32'd0;
+    counter <= 8'd0;
+    clk_reg1 <= 8'd0;
+    clock_counter <= 25'd0;
+    clock_counter2 <= 25'd0;
+    timestamp_prev <= 32'd0;
+    onesecond_irq <= 1'b0;
+    qtrsecond_irq <= 1'b0;
+    dout <= 8'd0;
+  end
+  else begin
 
-// Initialize clock deterministically under simulation to avoid nondeterministic diffs
-// Otherwise, hook up host timestamp (Mac epoch) on first use
-//`ifdef SIMULATION
-//if (clock_data==0)
-//	clock_data <= 32'h0600_0000; // match Clemens early read of C033 (high byte = $06)
-//`else
-// hook up unix timestamp
-if (clock_data==0)
-	clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
-//`endif
+    onesecond_irq <= 1'b0;
+    qtrsecond_irq <= 1'b0;
 
-if (timestamp_prev!=timestamp)
-	clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
-
-timestamp_prev<= timestamp;
+    // Initialize clock from timestamp once after reset
+    // Use clock_initialized flag instead of checking clock_data==0
+    if (!clock_initialized) begin
+      clock_data <= timestamp[31:0] + 2082844800; // difference between unix epoch and mac epoch
+      timestamp_prev <= timestamp[31:0];
+      clock_initialized <= 1'b1;
+    end
+    // Update clock if timestamp changes (e.g., user sets time)
+    else if (timestamp_prev != timestamp[31:0]) begin
+      clock_data <= timestamp[31:0] + 2082844800;
+      timestamp_prev <= timestamp[31:0];
+    end
 
 
 // Use real hardware timing for both FPGA and simulation
@@ -493,6 +512,8 @@ end
     end
 
   end
+
+  end // else !reset
 
 end
 
