@@ -1,7 +1,7 @@
 Apple IIgs Diagnostic Disk - Simulation Instructions
 ====================================================
 
-DIAGNOSTIC TEST STATUS (as of 2025-12-24):
+DIAGNOSTIC TEST STATUS (as of 2025-12-28):
 ------------------------------------------
 | Test                       | Status | Notes                                    |
 |----------------------------|--------|------------------------------------------|
@@ -9,6 +9,12 @@ DIAGNOSTIC TEST STATUS (as of 2025-12-24):
 | Serial External Test       | PASS   | Uses cross-channel loopback (A TX->B RX) |
 | Serial Crystal Test        | PASS   | Baud rate generator timing check         |
 | Serial Internal Test       | FAIL   | Internal loopback mode (WR14[4]) issue   |
+| Clock RAM Test             | FAIL*  | PRAM default values don't match ROM      |
+| ROM Selftest 07 (Clock)    | PASS   | Basic clock/PRTC read/write works        |
+
+* The diagnostic disk Clock RAM test compares PRAM values against ROM defaults
+  at $FF893D. Our PRAM initialization may not match exactly. The ROM selftest07
+  (which tests basic PRTC functionality) passes, indicating the protocol is correct.
 
 RUNNING SYSTEM SPEED/INTERRUPTS TEST:
 -------------------------------------
@@ -67,6 +73,41 @@ RUNNING SERIAL INTERNAL TEST:
 
 Note: This test currently FAILS. It tests the SCC's internal loopback mode
 (WR14 bit 4) which loops TX->RX within the same channel.
+
+RUNNING CLOCK RAM TEST:
+-----------------------
+./obj_dir/Vemu --disk iigsdiag.hdv \
+  --send-keys '170:c\n' \
+  --send-keys '200:d\n' \
+  --send-keys '230:c\n' \
+  --send-keys '260:\e' \
+  --send-keys '290:\e' \
+  --send-keys '320:b\n' \
+  --send-keys '700: ' \
+  --screenshot 400,500,650 \
+  --stop-at-frame 750
+
+Menu path: Main Menu -> Choose Tests (c) -> RAM Tests (d) -> Clock RAM Test (c)
+Then ESC twice to return to Main Menu, then Execute Selected Tests (b).
+
+Note: The PRTC state machine was fixed on 2025-12-28. The protocol now correctly:
+- Uses two-phase state machine (command setup -> execute on next C034 write)
+- Checks din[6] (C034 bit 6) for read/write direction, not command byte bit 7
+- Supports clock, BRAM 0x00-0x0F, BRAM 0x10-0x13, and extended BRAM 0x00-0xFF
+
+The ROM selftest07 (PRTC test) now PASSES, confirming the protocol is correct.
+The diagnostic disk test still fails because it compares PRAM values against
+ROM defaults at $FF893D, and our PRAM initialization may not match exactly.
+
+What the test does:
+1. ROM routine FF:B53E reads all 256 BRAM locations
+2. Compares against expected default values in ROM at $FF893D
+3. Stores read values at $02C0 for later verification
+4. Also tests read consistency (reading same address twice)
+
+Current status:
+- PRTC protocol: FIXED (selftest07 passes)
+- PRAM default values: May not match ROM expectations (needs verification)
 
 KEY SEQUENCE EXPLANATION:
 -------------------------

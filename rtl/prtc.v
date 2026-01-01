@@ -29,7 +29,7 @@ initial begin
   // Initialize PRAM from hex file - MAME ROM3 nvram/apple2gs/rtc values
   // Bytes 0x00-0x59: ROM defaults, 0x5A-0xFB: 0xFF, 0xFC-0xFF: checksum
   // Checksum 0x2D36, Complement 0x879C (verified: 0x2D36 XOR 0xAAAA = 0x879C)
-  $readmemh("pram_init.hex", pram);
+  $readmemh("rtl/roms/pram_init.hex", pram);
 
 `ifdef DEBUG_PRTC
   // Debug: verify PRAM initialization
