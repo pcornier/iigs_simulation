@@ -40,21 +40,29 @@ module adb(
 
 // ADB microcontroller ROM (4KB for ROM3, loaded from file)
 // This allows the selftest to read and verify the ROM checksum
-reg [7:0] adb_rom [0:4095];
+// Use the rom module which works reliably with Quartus synthesis
+wire [11:0] adb_rom_addr;
+wire [7:0] adb_rom_data;
+reg [11:0] adb_rom_addr_reg;
 
-initial begin
-  // Load ADB ROM - selftest reads this and computes checksum
-  // Path is relative to vsim/ where simulation runs
-  $readmemh("../rtl/roms/adb_rom3.hex", adb_rom);
-end
+rom #(12, 8, "rtl/roms/adb_rom3.hex") adb_rom_inst (
+  .clock(CLK_14M),
+  .ce(1'b1),
+  .address(adb_rom_addr),
+  .q(adb_rom_data)
+);
+
+// ROM address is derived from cmd_data when reading ROM area
+assign adb_rom_addr = {cmd_data[3:0], cmd_data[15:8]};
 
 // State machine states (from working stub)
 parameter
-  IDLE = 2'd0,
-  CMD = 2'd1,
-  DATA = 2'd2;
+  IDLE = 3'd0,
+  CMD = 3'd1,
+  DATA = 3'd2,
+  CMD_EXEC = 3'd3;  // Wait state for ROM read latency
 
-reg [1:0] state;
+reg [2:0] state;
 reg soft_reset;
 
 // Core ADB registers (minimal set from stub)
@@ -905,10 +913,17 @@ always @(posedge CLK_14M) begin
     
     // Key repeat moved back to $C000 reads - no background repeat generation
 
-    // CMD state machine: Execute command when all bytes have been received
-    // This runs every cycle, independent of strobe, to execute commands after the last byte is stored
-    // Handle all commands that need data bytes (SYNC, READ_MEM, etc.)
+    // CMD state machine: When all bytes received, transition to CMD_EXEC for 1-cycle delay
+    // This delay is needed because ROM reads are synchronous (1-cycle latency)
     if (state == CMD && cmd_len == 4'd0) begin
+`ifdef DEBUG_ADB
+      $display("ADB CMD: All bytes received, transitioning to CMD_EXEC for cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
+`endif
+      state <= CMD_EXEC;  // Wait one cycle for ROM data to be ready
+    end
+
+    // CMD_EXEC state: Execute command after ROM data is ready
+    if (state == CMD_EXEC) begin
 `ifdef DEBUG_ADB
       $display("ADB CMD EXEC: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
 `endif
@@ -994,12 +1009,14 @@ always @(posedge CLK_14M) begin
             // ROM area (0x1000-0x1FFF): Read from loaded ADB ROM
             // Address = {high, low} = {cmd_data[7:0], cmd_data[15:8]}
             // Index = address - 0x1000 = low 12 bits
-            data <= { 24'd0, adb_rom[{cmd_data[3:0], cmd_data[15:8]}] };
+            // ROM data is available via adb_rom_data (synchronous, 1-cycle latency)
+            // Address was set combinationally, data is ready on this clock edge
+            data <= { 24'd0, adb_rom_data };
 `ifdef DEBUG_ADB
             $display("ADB READ_MEM: ROM addr 0x%04h idx=0x%03h -> 0x%02h",
                      {cmd_data[7:0], cmd_data[15:8]},
                      {cmd_data[3:0], cmd_data[15:8]},
-                     adb_rom[{cmd_data[3:0], cmd_data[15:8]}]);
+                     adb_rom_data);
 `endif
           end else begin
             // Out of range

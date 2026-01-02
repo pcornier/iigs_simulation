@@ -142,7 +142,7 @@ always @(posedge CLK_14M) begin
     timestamp_prev <= 32'd0;
     onesecond_irq <= 1'b0;
     qtrsecond_irq <= 1'b0;
-    dout <= 8'd0;
+    // Note: dout is driven by combinational always block, not reset here
   end
   else begin
 
