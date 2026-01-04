@@ -159,7 +159,7 @@ module es5503
       end // else: !if(wr)
 
       if (osc_en) begin
-	 if (!r_control[current_osc][0]) begin
+	 if (!r_control[current_osc][0] && !refreshing) begin
 	    //$display("Osc %d running", current_osc);
 	    // Accumulator/halt update
 	    accumulator[current_osc] <= accumulator_sum[23:0];
