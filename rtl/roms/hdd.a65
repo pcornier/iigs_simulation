@@ -208,19 +208,19 @@ cmdproc
  lda $42
  sta hd_command
  cmp #2
- bne skipSwrite
- jsr swrite
-skipSwrite
+ beq swrite
+
+doexec
  lda hd_execute
 
 ; check for error
  pha
+ ror hd_error	; Post: C=0 or 1
+ bcs skipSread
  lda command
  cmp #1
- bne skipSread
- jsr sread
+ beq sread
 skipSread
- ror hd_error	; Post: C=0 or 1
  pla
  rts
 
@@ -254,7 +254,8 @@ loop2
  dec memblock+1		; restore memblock+1 ($45) to original value (for Epyx's California Games)
  pla
  tay
- rts
+ clc
+ jmp skipSread
 
 swrite
  tya
@@ -275,7 +276,7 @@ wloop2
  dec memblock+1		; restore memblock+1 ($45) to original value (for Epyx's California Games)
  pla
  tay
- rts
+ jmp doexec
 
 ;======================================
 ; 18
