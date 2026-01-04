@@ -51,3 +51,4 @@ vsim/imgui.ini
 *.vcd
 *.fst
 *.fst.hier
+*.hdv

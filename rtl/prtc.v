@@ -1,3 +1,5 @@
+// Uncomment to enable detailed PRTC protocol tracing
+// `define DEBUG_PRTC
 
 module prtc(
   input CLK_14M,
@@ -15,286 +17,37 @@ module prtc(
 
 reg old_strobe;
 reg [7:0] pram [255:0];
-/*
-rom #(8,8,"rtl/roms/nvram.hex") hddrom (
-           .clock(clk),
-           .ce(1'b1),
-           .address(A[7:0]),
-           .q(rom_dout)
-   );
-*/
-
-/*
-initial begin
-pram[8'h0]=8'h0;
-pram[8'h1]=8'h0;
-pram[8'h2]=8'h0;
-pram[8'h3]=8'h1;
-pram[8'h4]=8'h0;
-pram[8'h5]=8'h0;
-pram[8'h6]=8'hd;
-pram[8'h7]=8'h6;
-pram[8'h8]=8'h2;
-pram[8'h9]=8'h1;
-pram[8'ha]=8'h1;
-pram[8'hb]=8'h0;
-pram[8'hc]=8'h1;
-pram[8'hd]=8'h0;
-pram[8'he]=8'h0;
-pram[8'hf]=8'h0;
-pram[8'h10]=8'h0;
-pram[8'h11]=8'h0;
-pram[8'h12]=8'h7;
-pram[8'h13]=8'h6;
-pram[8'h14]=8'h2;
-pram[8'h15]=8'h1;
-pram[8'h16]=8'h1;
-pram[8'h17]=8'h0;
-pram[8'h18]=8'h0;
-pram[8'h19]=8'h0;
-pram[8'h1a]=8'hf;
-pram[8'h1b]=8'h5;
-pram[8'h1c]=8'h1;
-pram[8'h1d]=8'h0;
-pram[8'h1e]=8'h5;
-pram[8'h1f]=8'h6;
-pram[8'h20]=8'h1;
-pram[8'h21]=8'h0;
-pram[8'h22]=8'h0;
-pram[8'h23]=8'h0;
-pram[8'h24]=8'h0;
-pram[8'h25]=8'h1;
-pram[8'h26]=8'h1;
-pram[8'h27]=8'h1;
-pram[8'h28]=8'h7;
-pram[8'h29]=8'h0;
-pram[8'h2a]=8'h0;
-pram[8'h2b]=8'h0;
-pram[8'h2c]=8'h3;
-pram[8'h2d]=8'h2;
-pram[8'h2e]=8'h2;
-pram[8'h2f]=8'h2;
-pram[8'h30]=8'h0;
-pram[8'h31]=8'h0;
-pram[8'h32]=8'h0;
-pram[8'h33]=8'h0;
-pram[8'h34]=8'h0;
-pram[8'h35]=8'h0;
-pram[8'h36]=8'h0;
-pram[8'h37]=8'h0;
-pram[8'h38]=8'h0;
-pram[8'h39]=8'h0;
-pram[8'h3a]=8'h1;
-pram[8'h3b]=8'h2;
-pram[8'h3c]=8'h3;
-pram[8'h3d]=8'h4;
-pram[8'h3e]=8'h5;
-pram[8'h3f]=8'h6;
-pram[8'h40]=8'h7;
-pram[8'h41]=8'h0;
-pram[8'h42]=8'h0;
-pram[8'h43]=8'h1;
-pram[8'h44]=8'h2;
-pram[8'h45]=8'h3;
-pram[8'h46]=8'h4;
-pram[8'h47]=8'h5;
-pram[8'h48]=8'h6;
-pram[8'h49]=8'h7;
-pram[8'h4a]=8'h8;
-pram[8'h4b]=8'h9;
-pram[8'h4c]=8'ha;
-pram[8'h4d]=8'hb;
-pram[8'h4e]=8'hc;
-pram[8'h4f]=8'hd;
-pram[8'h50]=8'he;
-pram[8'h51]=8'hf;
-pram[8'h52]=8'hff;
-pram[8'h53]=8'hff;
-pram[8'h54]=8'hff;
-pram[8'h55]=8'hff;
-pram[8'h56]=8'hff;
-pram[8'h57]=8'hff;
-pram[8'h58]=8'hff;
-pram[8'h59]=8'h0;
-pram[8'h5a]=8'hff;
-pram[8'h5b]=8'hff;
-pram[8'h5c]=8'hff;
-pram[8'h5d]=8'hff;
-pram[8'h5e]=8'hff;
-pram[8'h5f]=8'h81;
-pram[8'h60]=8'hff;
-pram[8'h61]=8'hff;
-pram[8'h62]=8'hff;
-pram[8'h63]=8'hff;
-pram[8'h64]=8'hff;
-pram[8'h65]=8'hff;
-pram[8'h66]=8'hff;
-pram[8'h67]=8'hff;
-pram[8'h68]=8'hff;
-pram[8'h69]=8'hff;
-pram[8'h6a]=8'hff;
-pram[8'h6b]=8'hff;
-pram[8'h6c]=8'hff;
-pram[8'h6d]=8'hff;
-pram[8'h6e]=8'hff;
-pram[8'h6f]=8'hff;
-pram[8'h70]=8'hff;
-pram[8'h71]=8'hff;
-pram[8'h72]=8'hff;
-pram[8'h73]=8'hff;
-pram[8'h74]=8'hff;
-pram[8'h75]=8'hff;
-pram[8'h76]=8'hff;
-pram[8'h77]=8'hff;
-pram[8'h78]=8'hff;
-pram[8'h79]=8'hff;
-pram[8'h7a]=8'hff;
-pram[8'h7b]=8'hff;
-pram[8'h7c]=8'hff;
-pram[8'h7d]=8'hff;
-pram[8'h7e]=8'hff;
-pram[8'h7f]=8'hff;
-pram[8'h80]=8'hff;
-pram[8'h81]=8'hff;
-pram[8'h82]=8'hff;
-pram[8'h83]=8'hff;
-pram[8'h84]=8'hff;
-pram[8'h85]=8'hff;
-pram[8'h86]=8'hff;
-pram[8'h87]=8'hff;
-pram[8'h88]=8'hff;
-pram[8'h89]=8'hff;
-pram[8'h8a]=8'hff;
-pram[8'h8b]=8'hff;
-pram[8'h8c]=8'hff;
-pram[8'h8d]=8'hff;
-pram[8'h8e]=8'hff;
-pram[8'h8f]=8'hff;
-pram[8'h90]=8'hff;
-pram[8'h91]=8'hff;
-pram[8'h92]=8'hff;
-pram[8'h93]=8'hff;
-pram[8'h94]=8'hff;
-pram[8'h95]=8'hff;
-pram[8'h96]=8'hff;
-pram[8'h97]=8'hff;
-pram[8'h98]=8'hff;
-pram[8'h99]=8'hff;
-pram[8'h9a]=8'hff;
-pram[8'h9b]=8'hff;
-pram[8'h9c]=8'hff;
-pram[8'h9d]=8'hff;
-pram[8'h9e]=8'hff;
-pram[8'h9f]=8'hff;
-pram[8'ha0]=8'hff;
-pram[8'ha1]=8'hff;
-pram[8'ha2]=8'hff;
-pram[8'ha3]=8'hff;
-pram[8'ha4]=8'hff;
-pram[8'ha5]=8'hff;
-pram[8'ha6]=8'hff;
-pram[8'ha7]=8'hff;
-pram[8'ha8]=8'hff;
-pram[8'ha9]=8'hff;
-pram[8'haa]=8'hff;
-pram[8'hab]=8'hff;
-pram[8'hac]=8'hff;
-pram[8'had]=8'hff;
-pram[8'hae]=8'hff;
-pram[8'haf]=8'hff;
-pram[8'hb0]=8'hff;
-pram[8'hb1]=8'hff;
-pram[8'hb2]=8'hff;
-pram[8'hb3]=8'hff;
-pram[8'hb4]=8'hff;
-pram[8'hb5]=8'hff;
-pram[8'hb6]=8'hff;
-pram[8'hb7]=8'hff;
-pram[8'hb8]=8'hff;
-pram[8'hb9]=8'hff;
-pram[8'hba]=8'hff;
-pram[8'hbb]=8'hff;
-pram[8'hbc]=8'hff;
-pram[8'hbd]=8'hff;
-pram[8'hbe]=8'hff;
-pram[8'hbf]=8'hff;
-pram[8'hc0]=8'hff;
-pram[8'hc1]=8'hff;
-pram[8'hc2]=8'hff;
-pram[8'hc3]=8'hff;
-pram[8'hc4]=8'hff;
-pram[8'hc5]=8'hff;
-pram[8'hc6]=8'hff;
-pram[8'hc7]=8'hff;
-pram[8'hc8]=8'hff;
-pram[8'hc9]=8'hff;
-pram[8'hca]=8'hff;
-pram[8'hcb]=8'hff;
-pram[8'hcc]=8'hff;
-pram[8'hcd]=8'hff;
-pram[8'hce]=8'hff;
-pram[8'hcf]=8'hff;
-pram[8'hd0]=8'hff;
-pram[8'hd1]=8'hff;
-pram[8'hd2]=8'hff;
-pram[8'hd3]=8'hff;
-pram[8'hd4]=8'hff;
-pram[8'hd5]=8'hff;
-pram[8'hd6]=8'hff;
-pram[8'hd7]=8'hff;
-pram[8'hd8]=8'hff;
-pram[8'hd9]=8'hff;
-pram[8'hda]=8'hff;
-pram[8'hdb]=8'hff;
-pram[8'hdc]=8'hff;
-pram[8'hdd]=8'hff;
-pram[8'hde]=8'hff;
-pram[8'hdf]=8'hff;
-pram[8'he0]=8'hff;
-pram[8'he1]=8'hff;
-pram[8'he2]=8'hff;
-pram[8'he3]=8'hff;
-pram[8'he4]=8'hff;
-pram[8'he5]=8'hff;
-pram[8'he6]=8'hff;
-pram[8'he7]=8'hff;
-pram[8'he8]=8'hff;
-pram[8'he9]=8'hff;
-pram[8'hea]=8'hff;
-pram[8'heb]=8'hff;
-pram[8'hec]=8'hff;
-pram[8'hed]=8'hff;
-pram[8'hee]=8'hff;
-pram[8'hef]=8'hff;
-pram[8'hf0]=8'hff;
-pram[8'hf1]=8'hff;
-pram[8'hf2]=8'hff;
-pram[8'hf3]=8'hff;
-pram[8'hf4]=8'hff;
-pram[8'hf5]=8'hff;
-pram[8'hf6]=8'hff;
-pram[8'hf7]=8'hff;
-pram[8'hf8]=8'hff;
-pram[8'hf9]=8'hff;
-pram[8'hfa]=8'hff;
-pram[8'hfb]=8'hff;
-pram[8'hfc]=8'h71;
-pram[8'hfd]=8'h53;
-pram[8'hfe]=8'hdb;
-pram[8'hff]=8'hf9;
-`ifdef SIMULATION
-// Seed to deterministic values; CTL starts at 0x00 to match early read
-c033 = 8'h06;   // DATA
-c034 = 8'h00;   // CTL initial read returns 0x00
-`else
-c033 = 8'h00;
-c034 = 8'h00;
-`endif
-end
-*/
-
 reg [31:0] clock_data;
 reg [7:0] c033, c034;
+
+// Debug: transaction counter for tracing
+`ifdef DEBUG_PRTC
+reg [15:0] prtc_txn_count = 0;
+`endif
+
+initial begin
+  // Initialize PRAM from hex file - MAME ROM3 nvram/apple2gs/rtc values
+  // Bytes 0x00-0x59: ROM defaults, 0x5A-0xFB: 0xFF, 0xFC-0xFF: checksum
+  // Checksum 0x2D36, Complement 0x879C (verified: 0x2D36 XOR 0xAAAA = 0x879C)
+  $readmemh("rtl/roms/pram_init.hex", pram);
+
+`ifdef DEBUG_PRTC
+  // Debug: verify PRAM initialization
+  $display("PRTC INIT: pram[00]=%02x pram[03]=%02x pram[06]=%02x pram[07]=%02x",
+           pram[8'h00], pram[8'h03], pram[8'h06], pram[8'h07]);
+  $display("PRTC INIT: pram[F0]=%02x pram[F7]=%02x pram[FC]=%02x pram[FF]=%02x",
+           pram[8'hF0], pram[8'hF7], pram[8'hFC], pram[8'hFF]);
+`endif
+
+`ifdef SIMULATION
+  // Seed to deterministic values; CTL starts at 0x00 to match early read
+  c033 = 8'h06;   // DATA
+  c034 = 8'h00;   // CTL initial read returns 0x00
+`else
+  c033 = 8'h00;
+  c034 = 8'h00;
+`endif
+end
 
 // calculate checksum, not tested!!
 // it will start when checksum_state = 1;
@@ -319,6 +72,53 @@ reg [1:0] checksum_writes;
 reg [31:0] checksum;
 reg [7:0] counter;
 reg [7:0] clk_reg1;
+
+// Flag to indicate a read result is pending (needs one cycle to propagate to c033)
+reg read_pending = 1'b0;
+reg [7:0] read_result = 8'h00;
+
+// Combinational signals to detect read-in-progress and provide immediate data
+wire pram_read_now = strobe && cen && (addr == 1'b1) && ~rw && din[7] && (state == PRAM) && din[6];
+wire clock_read_now = strobe && cen && (addr == 1'b1) && ~rw && din[7] && (state == CLOCK) && din[6];
+wire [7:0] pram_read_data = pram[clk_reg1];
+wire [7:0] clock_read_data = clock_data[clk_reg1[1:0]*8+:8];
+
+// Combinational output for dout - must be available immediately, not registered
+always @(*) begin
+  if (addr == 1'b0 && rw) begin
+    // Reading C033 (CLOCKDATA)
+    if (pram_read_now)
+      dout = pram_read_data;
+    else if (clock_read_now)
+      dout = clock_read_data;
+    else if (read_pending)
+      dout = read_result;
+    else
+      dout = c033;
+  end else if (addr == 1'b1 && rw) begin
+    // Reading C034 (CLOCKCTL)
+    dout = c034;
+  end else begin
+    dout = 8'h00;
+  end
+end
+
+// State name decoder for debug
+`ifdef DEBUG_PRTC
+function [7*8:1] state_name;
+  input [2:0] st;
+  begin
+    case (st)
+      3'd0: state_name = "IDLE   ";
+      3'd1: state_name = "WAIT   ";
+      3'd2: state_name = "PRAM   ";
+      3'd3: state_name = "CLOCK  ";
+      3'd4: state_name = "INTERNAL";
+      default: state_name = "UNKNOWN";
+    endcase
+  end
+endfunction
+`endif
 
 reg [31:0] timestamp_prev;
 reg clock_initialized;
@@ -372,17 +172,13 @@ begin
 	clock_counter<=0;
 	onesecond_irq<=1;
 	clock_data<=clock_data+1;
-`ifdef SIMULATION
-	$display("PRTC: One-second interrupt fired");
-`endif
+	// Note: One-second IRQ fires - omitting log to reduce noise
 end
 if (clock_counter2=='d3818186)
 begin
 	clock_counter2<=0;
 	qtrsecond_irq<=1;
-`ifdef SIMULATION
-	$display("PRTC: Quarter-second interrupt fired");
-`endif
+	// Note: Quarter-second IRQ fires - omitting log to reduce noise
 end
 
 
@@ -411,21 +207,54 @@ end
   endcase
 
 
-  // c033 (DATA)
+  // c033 (DATA) - dout is now combinationally driven, only handle state updates here
+  // Note: read_pending is cleared ONLY when CPU actually reads C033 (strobe && cen)
   if (addr == 1'b0) begin
-    if (rw)
-      dout <= c033;
-    else
+    if (rw) begin
+      // When reading C033, check for pending read result
+`ifdef DEBUG_PRTC
+      if (strobe && cen)
+        $display("PRTC [%0d] C033 READ: state=%s read_pending=%d pram_read_now=%d clock_read_now=%d | read_result=%02x c033=%02x -> dout=%02x",
+                 prtc_txn_count, state_name(state), read_pending, pram_read_now, clock_read_now, read_result, c033, dout);
+`endif
+      // Clear read_pending on actual read transaction (strobe && cen)
+      if (read_pending && strobe && cen) begin
+`ifdef DEBUG_PRTC
+        $display("PRTC [%0d] C033 READ clears read_pending, updating c033 <- %02x", prtc_txn_count, read_result);
+`endif
+        c033 <= read_result;      // Also update c033 for consistency
+        read_pending <= 1'b0;     // Clear ONLY after CPU reads it
+      end
+    end else begin
+`ifdef DEBUG_PRTC
+      if (strobe && cen)
+        $display("PRTC [%0d] C033 WRITE: %02x (was %02x) state=%s", prtc_txn_count, din, c033, state_name(state));
+`endif
       c033 <= din;
+    end
   end
 
-  // c034
+  // c034 - dout is now combinationally driven, only handle state updates here
   if (addr == 1'b1) begin
-    if (rw)
-      dout <= c034;
-    else
+    if (rw) begin
+`ifdef DEBUG_PRTC
+      if (strobe && cen)
+        $display("PRTC [%0d] C034 READ: %02x state=%s", prtc_txn_count, c034, state_name(state));
+`endif
+    end else begin
+`ifdef DEBUG_PRTC
+      if (strobe && cen)
+        $display("PRTC [%0d] C034 WRITE: %02x (bit7=%d bit6=%d) state=%s c033=%02x",
+                 prtc_txn_count, din, din[7], din[6], state_name(state), c033);
+`endif
       c034 <= din[6:0];
+    end
   end
+
+`ifdef DEBUG_PRTC
+  if (strobe && cen)
+    prtc_txn_count <= prtc_txn_count + 1;
+`endif
 
   // old_strobe <= strobe;
   if (strobe && cen) begin
@@ -433,80 +262,151 @@ end
     // write c034 (CTL)
     if (addr == 1'b1 && ~rw) begin
 
-      if (din[7]) begin // start transaction
+      if (din[7]) begin // start transaction (bit 7 = 1)
+`ifdef DEBUG_PRTC
+        $display("PRTC [%0d] === EXECUTE: C034 write with bit7=1, c033=%02x, din=%02x (bit6=%d==%s) state=%s ===",
+                 prtc_txn_count, c033, din, din[6], din[6] ? "READ" : "WRITE", state_name(state));
+`endif
+        // FIX: Execute single-step operations immediately in the same cycle.
+        // The original code used state transitions (IDLE->PRAM->IDLE) with
+        // non-blocking assignments, which meant the target state logic wouldn't
+        // execute until another strobe came (which the ROM never sends).
+        // Now we execute the operation directly when the command is received.
 
         case (state)
 
           IDLE: begin
-
+            // Command byte decoding (based on KEGS/Clemens implementation):
+            // - bits 6:4 = operation type (op)
+            // - bits 3:2 = register index (for clock) or address (for BRAM)
+            // - bit 7 = read flag (z: 1=read, 0=write)
+            //
+            // op=0 (000): Clock/time registers
+            // op=2 (010): BRAM 0x10-0x13
+            // op=3 (011): Internal regs (bit3=0) or Extended BRAM (bit3=1)
+            // op=4,5,6,7 (1xx): BRAM 0x00-0x0F
+`ifdef DEBUG_PRTC
+            $display("PRTC [%0d] IDLE: cmd byte c033=%02x (%08b) op[6:4]=%d",
+                     prtc_txn_count, c033, c033, (c033>>4)&7);
+`endif
             casez (c033)
-              8'b?000??01: begin // clock
+              8'b?000????: begin // op=0: clock register
+                // Two-phase protocol: save register index, transition to CLOCK state
+                // The actual read/write happens in CLOCK state based on din[6]
+                clk_reg1[1:0] <= c033[3:2]; // clock register index (0-3)
+`ifdef DEBUG_PRTC
+                $display("PRTC [%0d]   -> CLOCK cmd: reg=%d (seconds byte %0d), next C034 will %s",
+                         prtc_txn_count, c033[3:2], c033[3:2], din[6] ? "READ" : "be ignored (need 2nd C034)");
+`endif
                 state <= CLOCK;
-                clk_reg1 <= { 6'd0, c033[3:2] }; // save clk register
               end
-              8'b00110?01: begin // internal registers
+              8'b?010????: begin // op=2: BRAM 0x10-0x13
+                // Two-phase: save address, transition to PRAM state
+                clk_reg1 <= {6'b000100, c033[3:2]}; // address 0x10-0x13
+`ifdef DEBUG_PRTC
+                $display("PRTC [%0d]   -> PRAM 0x10-0x13 cmd: addr=$%02x, next C034 will %s",
+                         prtc_txn_count, {6'b000100, c033[3:2]}, din[6] ? "READ" : "be ignored");
+`endif
+                state <= PRAM;
+              end
+              8'b?0110???: begin // op=3, bit3=0: internal registers
+`ifdef DEBUG_PRTC
+                $display("PRTC [%0d]   -> INTERNAL cmd: c033=%02x (test/write-protect)", prtc_txn_count, c033);
+`endif
+                // Internal registers are mostly no-ops (test reg, write protect)
                 state <= INTERNAL;
-                clk_reg1[0] <= c033[2]; // save internal register
               end
-              8'b?010??01: begin // BRAM 100ab
-                clk_reg1 <= { 6'b000100, c033[3:2] };
-                state <= PRAM;
-              end
-              8'b?1????01: begin // BRAM 0abcd
-                clk_reg1 <= { 4'b0, c033[3:0] };
-                state <= PRAM;
-              end
-              8'b?0111???: begin // BRAM { abc, ????? }
+              8'b?0111???: begin // op=3, bit3=1: BRAM extended (first byte)
+`ifdef DEBUG_PRTC
+                $display("PRTC [%0d]   -> EXTENDED PRAM (phase 1): high_addr[7:5]=%d, waiting for phase 2",
+                         prtc_txn_count, c033[2:0]);
+`endif
+                // Three-phase: save high address bits, wait for second byte
                 clk_reg1[7:5] <= c033[2:0];
                 state <= WAIT;
               end
+              8'b?1??????: begin // op=4,5,6,7: BRAM 0x00-0x0F
+                // Two-phase: save address, transition to PRAM state
+                clk_reg1 <= {4'b0, c033[5:2]}; // address 0x00-0x0F
+`ifdef DEBUG_PRTC
+                $display("PRTC [%0d]   -> PRAM 0x00-0x0F cmd: addr=$%02x, next C034 will %s",
+                         prtc_txn_count, {4'b0, c033[5:2]}, din[6] ? "READ" : "be ignored");
+`endif
+                state <= PRAM;
+              end
             endcase
           end
 
-          WAIT: begin // BRAM { ???, defgh }
-            clk_reg1[4:0] <= c033[6:2];
-            state <= PRAM;
+          WAIT: begin // BRAM extended address - second byte received
+            // Three-phase protocol:
+            // Phase 1: First cmd byte -> WAIT state, save high addr bits
+            // Phase 2: Second cmd byte -> PRAM state, save low addr bits (DON'T execute yet)
+            // Phase 3: Final C034 write with bit6=read flag -> PRAM state executes read/write
+            //
+            // Save the full address and transition to PRAM state for final execution
+            clk_reg1 <= {clk_reg1[7:5], c033[6:2]}; // full 8-bit address
+`ifdef DEBUG_PRTC
+            $display("PRTC [%0d] WAIT (phase 2): low_addr from c033=%02x -> full_addr=$%02x, next C034 will execute",
+                     prtc_txn_count, c033, {clk_reg1[7:5], c033[6:2]});
+`endif
             state <= PRAM;
           end
 
+          // PRAM state: execute the extended BRAM read/write
+          // din[6] (c034 bit 6): 1=read, 0=write
           PRAM: begin
-
-            // gsplus has logic here for boot slot
-            // it will need checksum calculation (checksum_state <= 2'b1)
-
             state <= IDLE;
-
-            if (c034[6]) // read
-              c033 <= pram[clk_reg1];
-            else
+            if (din[6]) begin // read (c034 bit 6 = 1)
+              // Set read_result and flag so CPU can read immediately
+              read_result <= pram[clk_reg1];
+              read_pending <= 1'b1;
+`ifdef DEBUG_PRTC
+              $display("PRTC [%0d] PRAM EXECUTE READ: addr=$%02x -> data=$%02x (setting read_pending=1)",
+                       prtc_txn_count, clk_reg1, pram[clk_reg1]);
+`endif
+            end else begin
+`ifdef DEBUG_PRTC
+              $display("PRTC [%0d] PRAM EXECUTE WRITE: addr=$%02x <- data=$%02x (was $%02x)",
+                       prtc_txn_count, clk_reg1, c033, pram[clk_reg1]);
+`endif
               pram[clk_reg1] <= c033;
-
+            end
           end
 
           CLOCK: begin
-
+            // Execute clock read/write based on din[6] (c034 bit 6)
             state <= IDLE;
-
-            if (c034[6]) // read
-              c033 <= clock_data[clk_reg1*8+:8];
-            else // write
-              clock_data[clk_reg1*8+:8] <= c033;
-
+            if (din[6]) begin // read (c034 bit 6 = 1)
+              // Set read_result and flag so CPU can read immediately
+              read_result <= clock_data[clk_reg1[1:0]*8+:8];
+              read_pending <= 1'b1;
+`ifdef DEBUG_PRTC
+              $display("PRTC [%0d] CLOCK EXECUTE READ: reg=%d -> data=$%02x (setting read_pending=1)",
+                       prtc_txn_count, clk_reg1[1:0], clock_data[clk_reg1[1:0]*8+:8]);
+`endif
+            end else begin // write (c034 bit 6 = 0)
+`ifdef DEBUG_PRTC
+              $display("PRTC [%0d] CLOCK EXECUTE WRITE: reg=%d <- data=$%02x",
+                       prtc_txn_count, clk_reg1[1:0], c033);
+`endif
+              clock_data[clk_reg1[1:0]*8+:8] <= c033;
+            end
           end
 
           INTERNAL: begin
-
+`ifdef DEBUG_PRTC
+            $display("PRTC [%0d] INTERNAL: no-op, returning to IDLE", prtc_txn_count);
+`endif
             state <= IDLE;
-
-            case (clk_reg1[0])
-              1'b0: ; // test register
-              1'b1: ; // write protect register
-            endcase
-
+            // Internal registers are no-ops
           end
 
         endcase
 
+      end else begin
+`ifdef DEBUG_PRTC
+        $display("PRTC [%0d] C034 write with bit7=0 (no execute), just updating border/ctrl bits", prtc_txn_count);
+`endif
       end
 
     end

@@ -1,5 +1,5 @@
 ;
-; SELFTEST09.S - Direct launcher for ROM selftest 9
+; SELFTEST09.S - Direct launcher for ROM selftest 9 (ADB Test)
 ;
 ; This test directly calls ROM selftest 9 via the test pointer table
 ; at DIAGNOSTICS+2 in ROM bank FF
@@ -88,14 +88,21 @@ RETURN
         PHK
         PLB
 
+        ; Switch back to emulation mode for screen output
+        SEC
+        XCE
+
         ; Check carry flag for pass/fail per Apple IIGS Diagnostics documentation
         ; Carry clear = pass, carry set = fail
         BCS FAIL_BRANCH
         LDA #$00
+        JMP SHOWRESULT
 FAIL_BRANCH
+        LDA #$01
+SHOWRESULT
         STA RESULT
 
-        ; Display "RESULT:" message
+        ; Display "TEST 09:" message
         LDX #$00
 RESLP   LDA RESMSG,X
         BEQ SHOWRES
@@ -104,12 +111,6 @@ RESLP   LDA RESMSG,X
         JMP RESLP
 
 SHOWRES
-        ; Display the result code in hex
-        LDA RESULT
-        JSR PRINTHEX
-        STA SCREEN+$58
-        STX SCREEN+$59
-
         ; Check if zero (pass)
         LDA RESULT
         CMP #$00
@@ -126,10 +127,31 @@ PASSLP  LDA PASSMSG,X
 TESTFAIL
         LDX #$00
 FAILLP  LDA FAILMSG,X
-        BEQ HANG
+        BEQ SHOWERR
         STA SCREEN+$5B,X
         INX
         JMP FAILLP
+
+SHOWERR
+        ; Display error code from TST.STATUS ($0315-$0318)
+        LDA #$A0
+        STA SCREEN+$61
+        LDA $0315       ; Error code byte 1
+        JSR PRINTHEX
+        STA SCREEN+$62
+        STX SCREEN+$63
+        LDA $0316       ; Error code byte 2
+        JSR PRINTHEX
+        STA SCREEN+$64
+        STX SCREEN+$65
+        LDA $0317       ; Error code byte 3
+        JSR PRINTHEX
+        STA SCREEN+$66
+        STX SCREEN+$67
+        LDA $0318       ; Error code byte 4
+        JSR PRINTHEX
+        STA SCREEN+$68
+        STX SCREEN+$69
 
 HANG    JMP HANG
 
@@ -167,15 +189,15 @@ RUNMSG
         HEX 00
 
 RESMSG
-        ASC "RESULT:"
+        ASC "TEST 09: "
         HEX 00
 
 PASSMSG
-        ASC " PASS"
+        ASC "PASS"
         HEX 00
 
 FAILMSG
-        ASC " FAIL"
+        ASC "FAIL"
         HEX 00
 
 ; Storage for result

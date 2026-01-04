@@ -919,7 +919,7 @@ assign chrom_addr = {1'b0, chrom_bit10, chrom_bit9, video_data[5:0], chpos_y};
 
 // Debug: trace MouseText character rendering
 // Uncomment to see what's happening with specific characters
-`define DEBUG_MOUSETEXT 1
+// `define DEBUG_MOUSETEXT 1
 `ifdef DEBUG_MOUSETEXT
 always @(posedge clk_vid) if (ce_pix) begin
     // Trace any MouseText character (0x40-0x5F range with ALTCHARSET)
