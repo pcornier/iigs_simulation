@@ -84,6 +84,7 @@ V_SRC = \
 	$(RTL)/rom.v \
 	$(RTL)/prtc.v \
 	$(RTL)/adb.v \
+	$(RTL)/../sys/iir_filter.v \
 	$(RTL)/sound.v \
 	$(RTL)/soundglu.v \
 	$(RTL)/es5503.v \

@@ -10,8 +10,7 @@ module sound
     input [1:0]       host_addr,
     input [7:0]       host_data_in,
     output [7:0]      host_data_out,
-    output reg [15:0] sound_out,
-    output reg        out_strobe,
+    output [15:0]     sound_out,
     output [3:0]      ca,
     output            irq,
     // Apple II speaker input
@@ -31,17 +30,13 @@ module sound
    wire              ram_select;
    wire              osc_en;
    wire [15:0]       doc_sound_out;
+   wire [15:0]       iir_sound_out;
 
    assign glu_data_in = ram_select ? ram_data_out : doc_data_out;
    assign ram_addr    = osc_en ? doc_addr_out[15:0] : glu_addr_out;
 
-   // Speaker audio: +/- 8192 centered around 0
-   wire signed [15:0] speaker_audio = speaker_state ? 16'sh2000 : -16'sh2000;
-
-   always @(posedge CLK_14M) begin
-      out_strobe <= osc_en;
-      sound_out  <= doc_sound_out;
-   end
+   wire signed [15:0] iir_boosted = iir_sound_out <<< 2;
+   assign sound_out = iir_boosted;
 
    // BUGFIX: forward ph0_en into soundglu so doc_enable is clocked correctly
    soundglu glu
@@ -85,4 +80,32 @@ module sound
       .ca(ca),
       .irq(irq),
       .osc_en(osc_en));
+
+   // TODO: This filter is from the MegaDrive core. Should be
+   // reasonable for modeling the internal speaker in mono, but needs
+   // to be replaced with a more LiteSound-like filter for stereo.
+
+   //  8KHz 2tap
+   IIR_filter
+     #(
+       .use_params(1),
+       .stereo(0),
+       .coeff_x (0.0000943),
+       .coeff_x0(2),
+       .coeff_x1(1),
+       .coeff_x2(0),
+       .coeff_y0(-1.98992552008492529225),
+       .coeff_y1( 0.98997601394542067421),
+       .coeff_y2(0))
+   psg_iir
+     (
+      .clk(CLK_14M),
+      .reset(reset),
+
+      .ce(osc_en),
+      .sample_ce(1),
+
+      .input_l(doc_sound_out),
+      .output_l(iir_sound_out));
+
 endmodule
