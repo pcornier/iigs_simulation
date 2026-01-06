@@ -125,6 +125,8 @@ module es5503
 	      r_control[reg_addr[4:0]] <= reg_data_in;
 	      if (r_control[reg_addr[4:0]][0] && !reg_data_in[0]) begin
 		 accumulator[reg_addr[4:0]] <= 0;
+		 // Don't halt on the next scan in case this was 8'h00
+		 r_sample_data[reg_addr[4:0]] <= 'h80;
 		 //log_keyon(reg_addr[4:0]);
 	      end
 	   end
@@ -209,7 +211,8 @@ module es5503
       end // if (osc_en)
       else if (osc_en_d) begin
 	 // We're using a synchronous sound RAM, so the data comes in one cycle later
-	 r_sample_data[current_osc] <= sample_data_in;
+	 if (!r_control[current_osc][0])
+	   r_sample_data[current_osc] <= sample_data_in;
 
 	 if (current_osc == oscs_enabled && !refreshing) begin
 	    refreshing <= 1;
