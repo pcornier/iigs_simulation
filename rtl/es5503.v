@@ -231,7 +231,6 @@ module es5503
       end // if (osc_en_d)
 
       if (reset) begin
-	 oscs_enabled <= 0;
 	 current_osc <= 0;
 	 refreshing <= 0;
 	 current_refresh <= 0;
