@@ -38,13 +38,9 @@ module sound
    // Speaker audio: +/- 8192 centered around 0
    wire signed [15:0] speaker_audio = speaker_state ? 16'sh2000 : -16'sh2000;
 
-   // Boost DOC output by 4x (<<2) and mix with speaker
-   wire signed [15:0] doc_boosted = doc_sound_out <<< 2;
-
    always @(posedge CLK_14M) begin
       out_strobe <= osc_en;
-      // Mix boosted DOC with speaker audio
-      sound_out  <= doc_boosted + speaker_audio;
+      sound_out  <= doc_sound_out;
    end
 
    // BUGFIX: forward ph0_en into soundglu so doc_enable is clocked correctly
