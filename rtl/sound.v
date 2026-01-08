@@ -36,7 +36,11 @@ module sound
    assign ram_addr    = osc_en ? doc_addr_out[15:0] : glu_addr_out;
 
    wire signed [15:0] iir_boosted = iir_sound_out <<< 2;
-   assign sound_out = iir_boosted;
+
+   // TODO: Better speaker click modeling; for now just toggle a bit like the IIe core
+   wire signed [15:0] speaker_audio = speaker_state ? 16'sh0800 : -16'h0800;
+
+   assign sound_out = iir_boosted + speaker_audio;
 
    // BUGFIX: forward ph0_en into soundglu so doc_enable is clocked correctly
    soundglu glu
