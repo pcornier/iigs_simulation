@@ -30,6 +30,7 @@
 #include "sim_audio.h"
 #include "sim_input.h"
 #include "sim_clock.h"
+#include "sim/po_to_nib35.h"
 // parallel_clemens.h removed
 
 #define FMT_HEADER_ONLY
@@ -1823,6 +1824,8 @@ bool memory_dump_mode = false;
 std::string disk_image = "";   // HDD unit 0 (--disk)
 std::string disk_image2 = "";  // HDD unit 1 (--disk2)
 std::string floppy_image = "";  // Floppy disk image (NIB format, 5.25" 140K)
+std::string floppy35_image = "";  // 3.5" floppy disk image (PO/2MG format, 800K)
+std::string woz_image = "";  // WOZ disk image (flux-based, 5.25" or 3.5")
 
 // Key injection functionality
 // ---------------------------
@@ -2128,6 +2131,8 @@ void show_help() {
 	printf("  --disk <filename>             Use specified HDD image (slot 7 unit 0, no disk mounted by default)\n");
 	printf("  --disk2 <filename>            Use specified HDD image for slot 7 unit 1\n");
 	printf("  --floppy <filename>           Use specified floppy image (5.25\" NIB format, drive 1)\n");
+	printf("  --floppy35 <filename>         Use specified 3.5\" floppy image (PO/2MG format, 800K)\n");
+	printf("  --woz <filename>              Use specified WOZ disk image (flux-based, 5.25\" or 3.5\")\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
 	printf("  --dump-vcd-after <frame>      Start dumping vsim.vcd after a frame number\n");
@@ -2366,6 +2371,14 @@ int main(int argc, char** argv, char** env) {
             floppy_image = argv[i + 1];
             printf("Using floppy image: %s (will mount to drive 1, 5.25\" 140K)\n", floppy_image.c_str());
             i++; // Skip the next argument since it's the filename
+        } else if (strcmp(argv[i], "--floppy35") == 0 && i + 1 < argc) {
+            floppy35_image = argv[i + 1];
+            printf("Using 3.5\" floppy image: %s (will mount to 3.5\" drive 1)\n", floppy35_image.c_str());
+            i++; // Skip the next argument since it's the filename
+        } else if (strcmp(argv[i], "--woz") == 0 && i + 1 < argc) {
+            woz_image = argv[i + 1];
+            printf("Using WOZ disk image: %s (flux-based floppy)\n", woz_image.c_str());
+            i++; // Skip the next argument since it's the filename
         } else if (strcmp(argv[i], "--send-keys") == 0 && i + 1 < argc) {
             // Parse frame:keys format
             std::string arg = argv[i + 1];
@@ -2538,6 +2551,21 @@ int main(int argc, char** argv, char** env) {
 	blockdevice.img_readonly = &top->img_readonly;
 	blockdevice.img_size = &top->img_size;
 
+	// WOZ bit interface connections
+	// 3.5" drive 1
+	blockdevice.woz3_track = &top->woz3_track_out;
+	blockdevice.woz3_bit_addr = &top->woz3_bit_addr_out;
+	blockdevice.woz3_bit_data = &top->woz3_bit_data;
+	blockdevice.woz3_bit_count = &top->woz3_bit_count;
+	// 5.25" drive 1
+	blockdevice.woz1_track = &top->woz1_track_out;
+	blockdevice.woz1_bit_addr = &top->woz1_bit_addr_out;
+	blockdevice.woz1_bit_data = &top->woz1_bit_data;
+	blockdevice.woz1_bit_count = &top->woz1_bit_count;
+	// WOZ disk ready signals
+	blockdevice.woz3_ready = &top->woz3_ready;
+	blockdevice.woz1_ready = &top->woz1_ready;
+
 	send_clock();
 
 #ifndef DISABLE_AUDIO
@@ -2591,6 +2619,64 @@ int main(int argc, char** argv, char** env) {
         blockdevice.MountDisk(floppy_image.c_str(), 0);
     }
 
+    // Mount 3.5" floppy image to index 4 (3.5" drive 1) if specified via --floppy35
+    static std::vector<uint8_t> nib35_data;  // Keep in scope for lifetime of program
+    static std::string nib35_temp_file;
+    if (!floppy35_image.empty()) {
+        printf("Loading 3.5\" floppy image: %s\n", floppy35_image.c_str());
+
+        // Read the raw .po file
+        std::ifstream po_file(floppy35_image, std::ios::binary | std::ios::ate);
+        if (!po_file) {
+            fprintf(stderr, "ERROR: Failed to open 3.5\" floppy image: %s\n", floppy35_image.c_str());
+        } else {
+            size_t po_size = po_file.tellg();
+            po_file.seekg(0);
+
+            std::vector<uint8_t> po_data(po_size);
+            po_file.read(reinterpret_cast<char*>(po_data.data()), po_size);
+            po_file.close();
+
+            // Check for 2MG header and skip it
+            size_t header_size = 0;
+            if (po_size >= 64 && memcmp(po_data.data(), "2IMG", 4) == 0) {
+                header_size = 64;
+                printf("Detected 2MG header, skipping %zu bytes\n", header_size);
+            }
+
+            // Convert to nibblized format
+            if (convert_po_to_nib35(po_data.data() + header_size, po_size - header_size, nib35_data)) {
+                // Write to temp file
+                nib35_temp_file = "/tmp/vsim_floppy35.nib";
+                std::ofstream nib_file(nib35_temp_file, std::ios::binary);
+                if (nib_file) {
+                    nib_file.write(reinterpret_cast<char*>(nib35_data.data()), nib35_data.size());
+                    nib_file.close();
+                    printf("Wrote nibblized 3.5\" image to %s (%zu bytes)\n",
+                           nib35_temp_file.c_str(), nib35_data.size());
+
+                    // Mount the nibblized file
+                    printf("Mounting 3.5\" floppy to index 4 (3.5\" drive 1)\n");
+                    blockdevice.MountDisk(nib35_temp_file.c_str(), 4);
+                } else {
+                    fprintf(stderr, "ERROR: Failed to write temp nibblized file\n");
+                }
+            } else {
+                fprintf(stderr, "ERROR: Failed to convert 3.5\" floppy image\n");
+            }
+        }
+    }
+
+    // Mount WOZ disk image (flux-based) if specified via --woz
+    if (!woz_image.empty()) {
+        printf("Loading WOZ disk image: %s\n", woz_image.c_str());
+        if (!blockdevice.MountWOZ(woz_image, 0)) {
+            fprintf(stderr, "ERROR: Failed to mount WOZ image\n");
+        } else {
+            printf("WOZ image mounted successfully (flux-based floppy emulation)\n");
+        }
+    }
+
     // Mount HDD images into slot 7 backend (only if specified via --disk/--disk2)
     if (!disk_image.empty()) {
         printf("Mounting disk image: %s to index 1 (HDD slot 7 unit 0)\n", disk_image.c_str());
@@ -2601,7 +2687,7 @@ int main(int argc, char** argv, char** env) {
         blockdevice.MountDisk(disk_image2.c_str(), 3);
     }
 
-    if (disk_image.empty() && disk_image2.empty() && floppy_image.empty()) {
+    if (disk_image.empty() && disk_image2.empty() && floppy_image.empty() && floppy35_image.empty() && woz_image.empty()) {
         printf("No disk images specified - booting without disk\n");
     }
 
