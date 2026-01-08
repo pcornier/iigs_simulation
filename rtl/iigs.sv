@@ -998,7 +998,7 @@ module iigs
 `else
             12'h02d: begin SLTROMSEL <= cpu_dout; end
 `endif
-            12'h030: begin SPKR <= cpu_dout; speaker_state <= ~speaker_state; end
+            12'h030: begin SPKR <= cpu_dout; if (phi2) speaker_state <= ~speaker_state; end
             12'h031: begin
               DISK35<= cpu_dout & 8'hc0;
 `ifdef SIMULATION
@@ -1361,7 +1361,7 @@ module iigs
             12'h02d: io_dout <= SLTROMSEL;
             12'h02e: io_dout <= v_adjusted >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
             12'h02f: io_dout <= {v_adjusted[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
-            12'h030: begin io_dout <= SPKR; speaker_state <= ~speaker_state; end
+            12'h030: begin io_dout <= SPKR; if (phi2) speaker_state <= ~speaker_state; end
             12'h031: io_dout <= DISK35;
             // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
             12'h032: begin
