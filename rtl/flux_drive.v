@@ -472,6 +472,9 @@ module flux_drive (
     // At each bit cell boundary, we check if the current bit is 1.
     // If so, a flux transition occurs (FLUX_TRANSITION pulses high for 1 cycle).
 
+    // Edge detection for motor-on in rotation block
+    reg         prev_motor_for_position;
+
     always @(posedge CLK_14M or posedge RESET) begin
         if (RESET) begin
             bit_position <= 17'd0;
@@ -483,11 +486,23 @@ module flux_drive (
             current_track <= 8'd0;
             track_valid <= 1'b0;
             rotation_complete <= 1'b0;
+            prev_motor_for_position <= 1'b0;
         end else begin
             // Default: no flux transition this cycle, no rotation complete
             FLUX_TRANSITION <= 1'b0;
             SD_TRACK_STROBE <= 1'b0;
             rotation_complete <= 1'b0;
+
+            // MAME behavior: Reset disk position when motor turns on
+            // This matches MAME's m_revolution_start_time = machine().time() in mon_w()
+            if (!prev_motor_for_position && motor_spinning) begin
+                bit_position <= 17'd0;
+                bit_timer <= bit_cell_cycles;
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: Motor ON - resetting bit_position to 0", DRIVE_ID);
+`endif
+            end
+            prev_motor_for_position <= motor_spinning;
 
             // Only rotate when motor is spinning and track is loaded
             if (motor_spinning && TRACK_LOADED) begin

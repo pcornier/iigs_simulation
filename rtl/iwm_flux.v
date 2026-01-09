@@ -180,10 +180,13 @@ module iwm_flux (
             // MAME async_update logic (must happen BEFORE read handling):
             // In async mode, m_data is cleared 14 cycles after a valid byte was read.
             // This happens BEFORE the next read is processed, so the read sees 0x00.
+            // IMPORTANT: Don't clear if a new byte is completing in this same cycle,
+            // otherwise the byte_complete assignment at line 312 would win anyway,
+            // and we'd incorrectly log "clearing m_data" when it isn't being cleared.
             if (async_update != 0) begin
                 if (async_update == 1) begin
-                    // Counter about to hit 0 - clear m_data NOW
-                    if (is_async) begin
+                    // Counter about to hit 0 - clear m_data NOW (unless byte completing)
+                    if (is_async && !byte_completing) begin
                         m_data <= 8'h00;
                         bit7_acknowledged <= 1'b0;
 `ifdef SIMULATION
@@ -312,11 +315,9 @@ module iwm_flux (
                     m_data <= m_rsh;
                     m_rsh <= 8'h00;
                     m_data_read <= 1'b0;
-                    // Reset async_update for new byte, UNLESS CPU is reading valid data
-                    // in this same cycle (read handler will set async_update)
-                    if (!cpu_reading_valid_data) begin
-                        async_update <= 4'd0;
-                    end
+                    // MAME behavior: Do NOT reset async_update when new byte completes.
+                    // The async_update countdown is ONLY started when CPU reads a valid byte.
+                    // This allows the timeout to clear m_data between CPU reads.
                     // Clear bit7_acknowledged for new byte, UNLESS CPU is reading
                     // in this same cycle (read handler will set bit7_acknowledged)
                     if (!cpu_reading_data) begin
@@ -378,10 +379,10 @@ module iwm_flux (
     wire byte_completing = (m_rsh >= 8'h80) && MOTOR_SPINNING && DISK_READY;
     wire [7:0] effective_data_raw = byte_completing ? m_rsh : m_data;
 
-    // MAME async mode: m_data keeps its full value (including bit7=1) until async_update
-    // expires and clears m_data to 0x00. Unlike our previous approach, we do NOT mask
-    // bit7 on output - multiple reads can see bit7=1 until the data is cleared.
-    wire [7:0] effective_data = effective_data_raw;
+    // MAME async mode bit7 masking: after the first read of a valid byte,
+    // subsequent reads see bit7=0 until a new byte completes. This causes
+    // the polling loop to continue waiting, matching MAME behavior.
+    wire [7:0] effective_data = bit7_acknowledged ? (effective_data_raw & 8'h7F) : effective_data_raw;
 
     // Helper wires for byte completion logic to avoid race conditions
     wire cpu_reading_data = RD && !immediate_q7 && !immediate_q6;
