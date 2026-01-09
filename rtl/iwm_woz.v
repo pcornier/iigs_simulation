@@ -70,9 +70,14 @@ module iwm_woz (
     // Soft Switch Handling
     //=========================================================================
 
-    // Access strobes
+    // Access strobes (active for entire CPU bus cycle)
     wire cpu_rd = DEVICE_SELECT && WR_CYCLE;
     wire cpu_wr = DEVICE_SELECT && !WR_CYCLE;
+    wire cpu_accessing = cpu_rd || cpu_wr;
+
+    // Edge detection for soft switch updates - process once per CPU access
+    reg  cpu_access_latched;
+    wire cpu_access_edge = cpu_accessing && PH2 && !cpu_access_latched;
 
     // Immediate Q6/Q7 values for mode register write detection
     // When accessing the Q6/Q7 switch, use the NEW value from A[0], not the latched value
@@ -104,7 +109,7 @@ module iwm_woz (
     wire access_phase1 = (A[3:1] == 3'b001);
     wire access_phase2 = (A[3:1] == 3'b010);
     wire access_phase3 = (A[3:1] == 3'b011);
-    wire cpu_accessing = cpu_rd || cpu_wr;
+    // Note: cpu_accessing is defined above with edge detection
     wire [3:0] immediate_phases = {
         (cpu_accessing && access_phase3) ? A[0] : motor_phase[3],
         (cpu_accessing && access_phase2) ? A[0] : motor_phase[2],
@@ -137,7 +142,16 @@ module iwm_woz (
             q7 <= 1'b0;
             mode_reg <= 8'h00;
             latched_sense_reg <= 3'b000;
-        end else if (cpu_rd || cpu_wr) begin
+            cpu_access_latched <= 1'b0;
+        end else begin
+            // Edge detection: clear latch when access ends
+            if (!cpu_accessing) begin
+                cpu_access_latched <= 1'b0;
+            end
+
+            // Process soft switch updates once per CPU access
+            if (cpu_access_edge) begin
+                cpu_access_latched <= 1'b1;
             // Any access to soft switch latches the bit from A[0]
             case (A[3:1])
                 3'b000: motor_phase[0] <= A[0];  // $C0E0/$C0E1: Phase 0
@@ -195,8 +209,9 @@ module iwm_woz (
                 $display("IWM_WOZ: Q7 <= %0d (addr=%04h is_35=%0d)", A[0], A, is_35_inch);
             end
 `endif
-        end
-    end
+            end  // end of cpu_access_edge block
+        end  // end of else (not reset)
+    end  // end of always
 
     //=========================================================================
     // Motor Spinup/Spindown State
@@ -266,6 +281,7 @@ module iwm_woz (
     wire        drive35_wp;
     wire        drive35_sense;
     wire        drive35_motor_spinning;
+    wire        drive35_ready;          // Drive ready after spinup
     wire [6:0]  drive35_track;
     wire [16:0] drive35_bit_position;
     wire [13:0] drive35_bram_addr;
@@ -280,7 +296,7 @@ module iwm_woz (
         .RESET(RESET),
         .PHASES(motor_phase),
         .IMMEDIATE_PHASES(immediate_phases),
-        .LATCHED_SENSE_REG(latched_sense_reg),
+        .LATCHED_SENSE_REG(immediate_latched_sense_reg),  // Use immediate for same-cycle visibility
         .MOTOR_ON(motor_spinning && DISK_READY[2]),
         .SW_MOTOR_ON(drive_on),         // Immediate motor state for direction gating
         .DISKREG_SEL(diskreg_sel),
@@ -293,6 +309,7 @@ module iwm_woz (
         .WRITE_PROTECT(drive35_wp),
         .SENSE(drive35_sense),
         .MOTOR_SPINNING(drive35_motor_spinning),
+        .DRIVE_READY(drive35_ready),
         .TRACK(drive35_track),
         .BIT_POSITION(drive35_bit_position),
         .TRACK_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
@@ -316,6 +333,7 @@ module iwm_woz (
     wire        drive35_2_wp;
     wire        drive35_2_sense;
     wire        drive35_2_motor_spinning;
+    wire        drive35_2_ready;
 
     flux_drive drive35_2 (
         .IS_35_INCH(1'b1),
@@ -337,6 +355,7 @@ module iwm_woz (
         .WRITE_PROTECT(drive35_2_wp),
         .SENSE(drive35_2_sense),
         .MOTOR_SPINNING(drive35_2_motor_spinning),
+        .DRIVE_READY(drive35_2_ready),
         .TRACK(),
         .BIT_POSITION(),
         .TRACK_BIT_COUNT(32'd0),
@@ -356,6 +375,7 @@ module iwm_woz (
     wire        drive525_wp;
     wire        drive525_sense;
     wire        drive525_motor_spinning;
+    wire        drive525_ready;
     wire [6:0]  drive525_track_7bit;
     wire [5:0]  drive525_track = drive525_track_7bit[5:0];
     wire [16:0] drive525_bit_position;
@@ -384,6 +404,7 @@ module iwm_woz (
         .WRITE_PROTECT(drive525_wp),
         .SENSE(drive525_sense),
         .MOTOR_SPINNING(drive525_motor_spinning),
+        .DRIVE_READY(drive525_ready),
         .TRACK(drive525_track_7bit),
         .BIT_POSITION(drive525_bit_position),
         .TRACK_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
@@ -414,6 +435,8 @@ module iwm_woz (
 
     // Any disk spinning - used for IWM MOTOR_SPINNING independent of is_35_inch
     wire any_disk_spinning = drive35_motor_spinning || drive35_2_motor_spinning || drive525_motor_spinning;
+    // Any disk ready - use disk mounted status, NOT spinup completion
+    // The state machine must run as soon as motor is spinning (like MAME), not wait for spinup
     wire any_disk_ready = DISK_READY[2] || DISK_READY[0];
 
     //=========================================================================
@@ -443,6 +466,7 @@ module iwm_woz (
     iwm_flux iwm (
         .CLK_14M(CLK_14M),
         .RESET(RESET),
+        .CEN(PH2),              // Clock enable (phi2) for CPU bus timing
         .ADDR(A[3:0]),
         .RD(cpu_rd),
         .WR(cpu_wr),
@@ -464,7 +488,7 @@ module iwm_woz (
         .DISK_MOUNTED(disk_mounted),
         .IS_35_INCH(flux_is_35_inch),
         .SENSE_BIT(current_sense),
-        .LATCHED_SENSE_REG(latched_sense_reg),
+        .LATCHED_SENSE_REG(immediate_latched_sense_reg),  // Use immediate for same-cycle visibility
         .DISKREG_SEL(diskreg_sel),
         .FLUX_WRITE(),
         .DEBUG_RSH(),

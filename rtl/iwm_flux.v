@@ -17,6 +17,7 @@ module iwm_flux (
     // Global signals
     input  wire        CLK_14M,         // 14MHz master clock
     input  wire        RESET,
+    input  wire        CEN,             // Clock enable (phi2) for CPU bus timing
 
     // CPU interface
     input  wire [3:0]  ADDR,            // $C0E0-$C0EF offset (for register read mux)
@@ -71,6 +72,7 @@ module iwm_flux (
     reg        m_motor_was_on; // Track motor state for edge detection
     reg [5:0]  async_update;   // MAME: countdown to clear m_data in async mode (increased to 50 cycles)
     reg        bit7_acknowledged; // MAME: bit 7 was read, mask it for subsequent reads
+    reg        rd_latched;  // Edge detection: tracks if current RD has been processed
 
     // Async mode: mode bit 1 = 1 means async (MAME: is_sync() = !(mode & 0x02))
     wire       is_async = SW_MODE[1];
@@ -133,6 +135,7 @@ module iwm_flux (
             prev_flux      <= 1'b0;
             prev_sm_active <= 1'b0;
             flux_pending   <= 1'b0;
+            rd_latched     <= 1'b0;
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
 `endif
@@ -191,10 +194,18 @@ module iwm_flux (
                 async_update <= async_update - 1'b1;
             end
 
+            // CPU read edge detection: clear latch when RD goes low
+            if (!RD) begin
+                rd_latched <= 1'b0;
+            end
+
             // Set data_read flag when CPU reads data register (Q7=0, Q6=0)
             // Use immediate Q6/Q7 values from current address
             // Also handle MAME async mode handshake: clear bit7 immediately on read
-            if (RD) begin
+            // IMPORTANT: Only process ONCE per CPU read cycle using edge detection
+            // CEN (phi2) ensures we're in the valid part of the bus cycle
+            if (RD && CEN && !rd_latched) begin
+                rd_latched <= 1'b1;  // Mark this read as processed
                 // Calculate immediate Q6/Q7 inline
                 if ((((ADDR[3:1] == 3'b111) ? ADDR[0] : SW_Q7) == 1'b0) &&
                     (((ADDR[3:1] == 3'b110) ? ADDR[0] : SW_Q6) == 1'b0)) begin
@@ -406,9 +417,9 @@ module iwm_flux (
         prev_state <= rw_state;
     end
 
-    // Debug: log register reads
+    // Debug: log register reads (only on CEN/PH2 to log once per CPU access)
     always @(posedge CLK_14M) begin
-        if (RD) begin
+        if (RD && CEN) begin
             case ({immediate_q7, immediate_q6})
                 2'b00: $display("IWM_FLUX: READ DATA @%01h -> %02h (motor=%0d rsh=%02h data=%02h bc=%0d dr=%0d q6=%0d q7=%0d)",
                                ADDR, data_out_mux, MOTOR_ACTIVE, m_rsh, m_data, byte_completing, DISK_READY, SW_Q6, SW_Q7);

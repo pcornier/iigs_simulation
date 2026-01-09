@@ -45,6 +45,7 @@ module flux_drive (
 
     // Status outputs
     output wire        MOTOR_SPINNING,  // Physical motor state (includes spindown)
+    output wire        DRIVE_READY,     // Drive is ready (motor at speed after spinup)
     output wire [6:0]  TRACK,           // Current track number (head position)
 
     // Track data interface (SD block or BRAM)
@@ -160,6 +161,7 @@ module flux_drive (
     //=========================================================================
 
     assign MOTOR_SPINNING = motor_spinning;
+    assign DRIVE_READY = drive_ready;           // Ready after 2 rotation spinup
     assign TRACK = head_phase[8:2];             // Quarter-track to full track
     assign BIT_POSITION = bit_position;
     assign BRAM_ADDR = byte_index;
@@ -493,7 +495,10 @@ module flux_drive (
                 // This ensures flux transitions occur in the first half of the IWM's window
                 if (bit_timer == bit_cell_cycles) begin
                     // Start of new bit cell - generate flux if this bit is 1
-                    if (current_bit) begin
+                    // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
+                    // During spinup, the IWM shouldn't receive flux transitions
+                    // This matches MAME behavior where m_data stays 0x00 during spinup
+                    if (current_bit && drive_ready) begin
                         FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                         if (bit_position < 100) begin
