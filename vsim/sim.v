@@ -111,7 +111,7 @@ module emu (
 
         // WOZ track/address outputs (to C++ for data lookup)
         // 3.5" drive 1
-        output [6:0]            woz3_track_out,
+        output [7:0]            woz3_track_out,
         output [13:0]           woz3_bit_addr_out,
         // 5.25" drive 1
         output [5:0]            woz1_track_out,
@@ -167,7 +167,7 @@ wire FD_DISK_3;
 
 // WOZ bit interfaces for flux-based IWM
 // 3.5" drive 1 WOZ bit interface
-wire [6:0]  WOZ_TRACK3;           // Track number being read
+wire [7:0]  WOZ_TRACK3;           // Track number being read
 wire [13:0] WOZ_TRACK3_BIT_ADDR;  // Byte address in track bit buffer
 wire [7:0]  WOZ_TRACK3_BIT_DATA;  // Byte from track bit buffer
 wire [31:0] WOZ_TRACK3_BIT_COUNT; // Total bits in track

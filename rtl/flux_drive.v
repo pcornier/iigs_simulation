@@ -508,9 +508,9 @@ module flux_drive (
 
             // Only rotate when motor is spinning and track is loaded
             if (motor_spinning && TRACK_LOADED) begin
-                // Generate flux at the START of each bit cell (not the end)
-                // This ensures flux transitions occur in the first half of the IWM's window
-                if (bit_timer == bit_cell_cycles) begin
+                // Generate flux in the middle of each bit cell
+                // This ensures flux transitions occur well within the IWM's window
+                if (bit_timer == (bit_cell_cycles >> 1)) begin
                     // Start of new bit cell - generate flux if this bit is 1
                     // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
                     // During spinup, the IWM shouldn't receive flux transitions
