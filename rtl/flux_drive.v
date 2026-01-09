@@ -126,7 +126,15 @@ module flux_drive (
 
     // Sony 3.5" drive command interface (MAME floppy.cpp mac_floppy_device::seek_phase_w)
     // Commands execute on rising edge of strobe (phases[3])
-    wire sony_cmd_strobe = IS_35_INCH && SW_MOTOR_ON && (DRIVE_SELECT == DRIVE_SLOT) && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT] && (DISKREG_SEL == 1'b0);
+    // MAME computes: m_reg = (phases & 7) | (m_actual_ss ? 8 : 0)
+    // where m_actual_ss is set from DISKREG_SEL (bit 7 of $C031)
+    // This means when DISKREG_SEL=1 (side 1), command 6 becomes 14 (not motor off)
+    //
+    // Critical: Use LATCHED_SENSE_REG for command code, not IMMEDIATE_PHASES[2:0]
+    // because phases may be cleared before strobe fires. Also, don't gate by
+    // SW_MOTOR_ON because motor ON command needs to execute when motor is off.
+    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT];
+    wire [3:0] sony_cmd_reg = {DISKREG_SEL, LATCHED_SENSE_REG};
 
     //=========================================================================
     // Computed Values
@@ -266,29 +274,36 @@ module flux_drive (
             // MAME behavior: devsel=0 when motor is off, so seek_phase_w() isn't called.
             // Use SW_MOTOR_ON (immediate soft switch state) not MOTOR_ON (with inertia).
             if (sony_cmd_strobe) begin
-                case (IMMEDIATE_PHASES[2:0])
-                    3'd0: begin
+                // Use 4-bit command register like MAME: {DISKREG_SEL, LATCHED_SENSE_REG}
+                // When DISKREG_SEL=1 (side 1), commands 0-7 become 8-15
+                case (sony_cmd_reg)
+                    4'd0: begin
                         step_direction_slot[DRIVE_SELECT] <= 1'b0;  // "step dir +1" → m_dir=0
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd step dir +1 (m_dir=0)", DRIVE_ID);
 `endif
                     end
-                    3'd4: begin
+                    4'd4: begin
                         step_direction_slot[DRIVE_SELECT] <= 1'b1;  // "step dir -1" → m_dir=1
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd step dir -1 (m_dir=1)", DRIVE_ID);
 `endif
                     end
-                    3'd2: begin
-                        if (DISK_MOUNTED) sony_motor_on <= 1'b1;
+                    4'd2: begin
+                        if (DISK_MOUNTED) begin
+                            sony_motor_on <= 1'b1;
+`ifdef SIMULATION
+                            $display("FLUX_DRIVE[%0d]: cmd motor ON", DRIVE_ID);
+`endif
+                        end
                     end
-                    3'd6: begin
+                    4'd6: begin
                         sony_motor_on <= 1'b0;
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd motor OFF", DRIVE_ID);
 `endif
                     end
-                    default: ;  // Other commands don't change state
+                    default: ;  // Commands 8-15 (DISKREG_SEL=1) don't match motor/step commands
                 endcase
             end
             prev_strobe_slot[DRIVE_SELECT] <= IMMEDIATE_PHASES[3];
