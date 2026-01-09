@@ -162,11 +162,9 @@ module iwm_woz (
                 // Writing to phase 0-3 ($C0E0-$C0E7)
                 latched_sense_reg <= latched_immediate_phases[2:0];
 `ifdef SIMULATION
-                // Always log latch updates for 3.5" drive to debug early boot
-                if (is_35_inch) begin
-                    $display("IWM_WOZ: LATCH phases=%04b -> latched=%03b (A=%04h phase[%0d]<=%0d motor=%0d)",
-                             latched_immediate_phases, latched_immediate_phases[2:0], A, A[3:1], A[0], motor_spinning);
-                end
+                // Debug ALL phase accesses to trace command flow
+                $display("IWM_WOZ: PHASE_ACCESS A=%04h A31=%03b A0=%0d is_35=%0d drv_sel=%0d phases=%04b imm_phases=%04b",
+                         A, A[3:1], A[0], is_35_inch, drive_sel, motor_phase, immediate_phases);
 `endif
             end
 `ifdef SIMULATION
@@ -287,7 +285,7 @@ module iwm_woz (
         .SW_MOTOR_ON(drive_on),         // Immediate motor state for direction gating
         .DISKREG_SEL(diskreg_sel),
         .DRIVE_SELECT(drive_sel),       // Pass drive selection for per-slot direction tracking
-        .DRIVE_SLOT(1'b0),              // This drive is slot 0
+        .DRIVE_SLOT(1'b0),              // This drive is slot 0 (drive 1 - internal drive)
         .DISK_MOUNTED(DISK_READY[2]),
         .DISK_WP(1'b1),
         .DOUBLE_SIDED(1'b1),
@@ -331,7 +329,7 @@ module iwm_woz (
         .SW_MOTOR_ON(drive_on),         // Immediate motor state for command processing
         .DISKREG_SEL(diskreg_sel),
         .DRIVE_SELECT(drive_sel),
-        .DRIVE_SLOT(1'b1),              // This drive is slot 1
+        .DRIVE_SLOT(1'b1),              // This drive is slot 1 (external drive, typically empty)
         .DISK_MOUNTED(1'b0),            // No disk
         .DISK_WP(1'b1),                 // Write protected if no disk
         .DOUBLE_SIDED(1'b1),

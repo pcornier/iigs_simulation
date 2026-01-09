@@ -10,6 +10,7 @@ module clock_divider (
     input wire [15:0] addr,            // CPU ADDR
     input wire IO,
     input wire we,                     // NEW: Write enable signal
+    input wire floppy_motor_on,        // Floppy motor active (force slow mode)
 
     input  wire        stretch,        // Stretch signal for extended cycles
     
@@ -32,6 +33,7 @@ reg [3:0]  ph0_counter;        // PH0 cycle counter (0-13 for full cycle)
 reg [3:0]  ph2_counter;        // PH2 cycle counter
 reg [3:0]  refresh_counter;    // Refresh cycle counter (every 9th cycle)
 reg        clk_7M_div;         // 7M divider flip-flop
+reg [3:0]  ph2_gap_count;      // Ticks since last ph2_en (for mode transition safety)
 
 // PH2 cycle state machine
 localparam CYCLE_FAST         = 4'd0;  // Normal fast cycle (5 ticks: 2 low, 3 high)
@@ -90,7 +92,8 @@ always @(posedge clk_14M) begin
     end
 end
 
-wire slow_request = (cyareg[7] == 1'b0) || waitforC0C8 || waitforC0D8 || waitforC0E8 || waitforC0F8 || waitforC041;
+// Slow mode: CYAREG bit 7 = 0, OR waiting for slot motor-on detect, OR floppy motor is running
+wire slow_request = (cyareg[7] == 1'b0) || waitforC0C8 || waitforC0D8 || waitforC0E8 || waitforC0F8 || waitforC041 || floppy_motor_on;
 
 `ifdef SIMULATION
 // Debug: track previous states and counters (module scope to avoid
@@ -155,6 +158,7 @@ always @(posedge clk_14M) begin
         ph2_sync_pulse <= 1'b0;
         ph2_en_prev <= 1'b0;
         we_reg <= 1'b0;
+        ph2_gap_count <= 4'd6;  // Start with gap satisfied
 `ifdef SIMULATION
         prev_slow <= 1'b0;
         prev_slowMem <= 1'b0;
@@ -236,13 +240,20 @@ always @(posedge clk_14M) begin
         q3_en <= (ph0_counter_next == 4'd0) || (ph0_counter_next == 4'd7);
         
         ph0_counter_prev <= ph0_counter;
-        ph0_en_prev <= ph0_en; 
+        ph0_en_prev <= ph0_en;
         ph0_state_prev <= ph0_state;
         slow_prev <= slow;
-      
+
+        // Track gap since last ph2_en (for mode transition safety)
+        if (ph2_en)
+            ph2_gap_count <= 4'd0;
+        else if (ph2_gap_count < 4'd14)
+            ph2_gap_count <= ph2_gap_count + 4'd1;
+
 	if (slow==1'b1 || slowMem==1'b1) begin
 		// Sync cycle: ph2_en pulses once per ph0 cycle (every 14 ticks)
-		if (ph0_counter_next == 4'd0) begin
+		// Check gap to prevent back-to-back pulses on fast->slow transition
+		if (ph0_counter_next == 4'd0 && ph2_gap_count >= 4'd5) begin
 			ph2_en <= 1'b1;  // Single enable pulse
 			ph2_counter <= 4'd1;
 			ph2_sync_pulse <= 1'b1;
@@ -254,9 +265,9 @@ always @(posedge clk_14M) begin
 			ph2_sync_pulse <= 1'b0;
 		end
 	end else if (slow==1'b0 && slowMem==1'b0) begin
-        // Fast mode: 6-tick cycles to better match expected selftest timing
+        // Fast mode: 5-tick cycles (2.86 MHz) matching standard IIgs timing
         ph2_counter <= ph2_counter + 1'b1;
-        if (ph2_counter >= 4'd5) begin
+        if (ph2_counter >= 4'd4) begin
             ph2_counter <= 4'd0;
         end
 

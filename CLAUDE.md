@@ -46,10 +46,29 @@ make clean             # Clean build artifacts
 # With debug output to file
 ./obj_dir/Vemu > debug.log 2>&1
 
-# use a disk image
+# use a disk image (HDD slot 7)
 ./Vemu --disk totalreplay.hdv
 ./Vemu --disk pd.hdv --screenshot 50 --stop-at-frame 100
+
+# use floppy disk images
+./Vemu --floppy game.nib                # 5.25" floppy (NIB format, 140K)
+./Vemu --floppy35 Pirates.po            # 3.5" floppy (PO/2MG format, 800K)
+./Vemu --floppy35 "Bards Tale.2mg"      # 3.5" floppy with 2MG header
+./Vemu --woz ArkanoidIIgs.woz           # WOZ format flux-level disk image
 ```
+
+### Disk Image Options
+
+| Option | Description | Formats |
+|--------|-------------|---------|
+| `--disk <file>` | HDD slot 7 unit 0 | HDV, PO, 2MG |
+| `--disk2 <file>` | HDD slot 7 unit 1 | HDV, PO, 2MG |
+| `--floppy <file>` | 5.25" floppy drive 1 | NIB (140K) |
+| `--floppy35 <file>` | 3.5" floppy drive 1 | PO, 2MG (800K) |
+| `--woz <file>` | WOZ flux-level disk image | WOZ 1.x/2.x (3.5"/5.25") |
+
+**Note:** 3.5" floppy images (PO/2MG) are automatically converted to nibblized format at load time.
+**Note:** WOZ format provides flux-level accuracy but boot support is work-in-progress (see `doc/woz_floppy_debugging.md`).
 
 ### Keyboard Input (--send-keys)
 Send keyboard input at specific frames for automated testing:

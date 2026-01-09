@@ -120,6 +120,11 @@ module flux_drive (
     // Internal motor state for 3.5" Sony drives (controlled by commands)
     reg         sony_motor_on;
 
+    // Motor sense signal - for sense register 0x2 (MAME m_mon equivalent)
+    // This follows the Sony command state, NOT the IWM motor bit
+    // Decoupled from motor_spinning which controls flux generation
+    wire        motor_on_sense = sony_motor_on;
+
 `ifdef SIMULATION
     reg [3:0]   prev_imm_phases_debug;  // For tracking phase changes
 `endif
@@ -190,7 +195,7 @@ module flux_drive (
 `endif
             end
             4'h1: sense_35 = 1'b1;              // Step signal (always 1 in MAME, no delay)
-            4'h2: sense_35 = ~motor_spinning;   // Motor: 0=ON, 1=OFF (MAME m_mon)
+            4'h2: sense_35 = ~motor_on_sense;    // Motor: 0=ON, 1=OFF (MAME m_mon, based on Sony command)
             4'h3: sense_35 = 1'b1;              // Disk change: 1=No Change (Simplified)
             4'h4: sense_35 = 1'b0;              // Index: 0 for GCR drives (no MFM index)
             4'h5: sense_35 = 1'b0;              // MFM Capable: 0 for 800K GCR drive
@@ -273,6 +278,13 @@ module flux_drive (
             //   - Command 6: "motor off"
             // MAME behavior: devsel=0 when motor is off, so seek_phase_w() isn't called.
             // Use SW_MOTOR_ON (immediate soft switch state) not MOTOR_ON (with inertia).
+`ifdef SIMULATION
+            // Debug: trace strobe conditions
+            if (IS_35_INCH && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT]) begin
+                $display("FLUX_DRIVE[%0d]: STROBE! DRIVE_SELECT=%0d DRIVE_SLOT=%0d sel_match=%0d cmd_reg=%0d DISK_MOUNTED=%0d",
+                         DRIVE_ID, DRIVE_SELECT, DRIVE_SLOT, (DRIVE_SELECT == DRIVE_SLOT), sony_cmd_reg, DISK_MOUNTED);
+            end
+`endif
             if (sony_cmd_strobe) begin
                 // Use 4-bit command register like MAME: {DISKREG_SEL, LATCHED_SENSE_REG}
                 // When DISKREG_SEL=1 (side 1), commands 0-7 become 8-15
@@ -405,10 +417,12 @@ module flux_drive (
             prev_motor_spinning <= motor_spinning;
 
             if (IS_35_INCH) begin
-                // 3.5" Sony drives: controlled by commands
-                // Must effectively be "enabled" by IWM (SW_MOTOR_ON) to receive commands,
-                // but once ON via command, it stays ON until command OFF.
-                motor_spinning <= sony_motor_on;
+                // 3.5" Sony drives: motor_spinning controls flux generation
+                // MAME calls mon_w(false) immediately when IWM motor bit is set,
+                // which starts the motor spinning. The Sony motor command also
+                // calls mon_w(), but the IWM motor bit provides the initial trigger.
+                // This decouples flux generation timing from sense register timing.
+                motor_spinning <= SW_MOTOR_ON || sony_motor_on;
             end else begin
                 // 5.25" drives: controlled by IWM enable line + inertia (handled in iwm_woz)
                 motor_spinning <= MOTOR_ON;

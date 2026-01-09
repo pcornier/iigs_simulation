@@ -90,7 +90,7 @@ module iigs
 
       // --- 5.25" floppy track interfaces (Drive 1/2) ---
    output [5:0]       TRACK1,
-   output [12:0]      TRACK1_ADDR,
+   output [13:0]      TRACK1_ADDR,   // 14-bit for consistency with 3.5" drives
    output [7:0]       TRACK1_DI,
    input  [7:0]       TRACK1_DO,
    output             TRACK1_WE,
@@ -98,12 +98,35 @@ module iigs
    output             FD_DISK_1,     // Drive 1 active (for track buffer coordination)
 
    output [5:0]       TRACK2,
-   output [12:0]      TRACK2_ADDR,
+   output [13:0]      TRACK2_ADDR,   // 14-bit for consistency with 3.5" drives
    output [7:0]       TRACK2_DI,
    input  [7:0]       TRACK2_DO,
    output             TRACK2_WE,
    input              TRACK2_BUSY,
    output             FD_DISK_2,     // Drive 2 active (for track buffer coordination)
+
+   // --- 3.5" floppy track interfaces (Drive 3/4) ---
+   output [6:0]       TRACK3,        // 7-bit for 80 tracks per side
+   output [13:0]      TRACK3_ADDR,   // 14-bit for up to 10240-byte tracks
+   output             TRACK3_SIDE,   // Side select (0/1)
+   output [7:0]       TRACK3_DI,
+   input  [7:0]       TRACK3_DO,
+   output             TRACK3_WE,
+   input              TRACK3_BUSY,
+   output             FD_DISK_3,     // Drive 3 active (for track buffer coordination)
+
+   // --- WOZ bit interfaces (for flux-based IWM) ---
+   // 3.5" drive 1 WOZ bit interface
+   output [6:0]       WOZ_TRACK3,           // Track number being read
+   output [13:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer
+   input  [7:0]       WOZ_TRACK3_BIT_DATA,  // Byte from track bit buffer
+   input  [31:0]      WOZ_TRACK3_BIT_COUNT, // Total bits in track
+
+   // 5.25" drive 1 WOZ bit interface
+   output [5:0]       WOZ_TRACK1,           // Track number being read
+   output [12:0]      WOZ_TRACK1_BIT_ADDR,  // Byte address in track bit buffer
+   input  [7:0]       WOZ_TRACK1_BIT_DATA,  // Byte from track bit buffer
+   input  [31:0]      WOZ_TRACK1_BIT_COUNT, // Total bits in track
 
    input [3:0]        DISK_READY,
    input              FLOPPY_WP,
@@ -203,6 +226,8 @@ module iigs
   logic [7:0]         iwm_dout;
   logic [7:0]         iwm_addr;
   logic               iwm_rw, iwm_strobe;
+  logic               floppy_motor_on;  // From IWM for clock slowdown
+  logic               iwm_rd_active;    // One-shot guard for IWM data register reads
 
   // Slot HDD handled externally in top.v; no internal state here
 
@@ -351,6 +376,29 @@ module iigs
     cpu_addr[7:0] == 8'h44 |  // $C044 - Mouse X (alternate)
     cpu_addr[7:0] == 8'h45    // $C045 - Mouse Y (alternate)
   );
+
+  // Combinational IWM read detection - bypasses io_dout timing issue for IWM reads
+  // BUG FIX: The registered iwm_strobe is set on one clock edge but the CPU samples
+  // D_IN on the SAME edge, before the strobe takes effect. This caused the CPU to read
+  // stale io_dout values instead of fresh iwm_dout. The combinational bypass ensures
+  // cpu_din = iwm_dout immediately when the address matches, without waiting for the
+  // registered strobe. This is critical for 5.25" floppy boot - without it, the ROM
+  // would miss D5 AA 96 sync bytes because bit 7 was sampled from old data.
+  //
+  // BUG FIX 2: Expand to ALL addresses in $C0Ex range ($C0E0-$C0EF).
+  // The IIgs ROM reads data from alternate addresses (e.g., $C0E6) during boot.
+  // Previous restriction to $C0EC or only even addresses caused many reads to miss
+  // the bypass and return garbage (0x80).
+  // BUG FIX 3: Remove DISK_READY check. The IWM status register must be readable even when
+  // no disk is mounted - the ROM reads status to detect disk presence and for mode register
+  // handshaking (writes mode to $C0EF, reads back from $C0EE to verify).
+  wire iwm_read = IO & cpu_we_n & (cpu_addr[7:4] == 4'hE);
+
+  // Combinational IWM device select - covers ALL IWM addresses $C0E0-$C0EF
+  // This stays high during the entire CPU access, ensuring DEVICE_SELECT is high
+  // when PH2 fires. Critical for data_read_strobe to work in slow mode where
+  // the registered iwm_strobe (high for only 1 clock) may not coincide with PH2.
+  wire iwm_device_select = IO & (cpu_addr[7:4] == 4'hE);
 
   // Use combinational logic but add debug to detect timing issues
   assign { bank_bef, addr_bef } = cpu_addr;
@@ -855,11 +903,12 @@ module iigs
     // interrupt_clear_pulse is managed in IO section to avoid race condition
 
     // Default pass-through for unhandled IO: feed external bus data
-    // BUT: Don't override SCC, ADB, or other peripheral responses
+    // BUT: Don't override SCC, ADB, IWM, or other peripheral responses
     // NOTE: Only do this when actually handling I/O, not every cycle
-    // NEVER use default for SCC address range C038-C03B
+    // NEVER use default for SCC range C038-C03B or IWM range C0E0-C0EF
     if (IO && ~(scc_cs & cpu_we_n) && ~(adb_strobe & cpu_we_n) && ~(snd_strobe & cpu_we_n) &&
-        ~((addr[11:8] == 4'h0) && (addr[7:2] == 6'h0e))) begin // Exclude C038-C03B
+        ~((addr[11:8] == 4'h0) && (addr[7:2] == 6'h0e)) && // Exclude C038-C03B (SCC)
+        ~((addr[11:4] == 8'h0e))) begin // Exclude C0E0-C0EF (IWM)
       io_dout <= din;
 `ifdef DEBUG_BANK
       // DEBUG: Warn when CPU receives default 0x80 value from unhandled I/O
@@ -886,6 +935,12 @@ module iigs
     end
     prtc_strobe <= 1'b0;
 
+    // Track active read cycle for IWM data register ($C0EC) to one-shot strobe
+    // This ensures data_ready is cleared exactly once per CPU read
+    if (!(IO && cpu_we_n && (addr[11:0] == 12'h0ec))) begin
+      iwm_rd_active <= 1'b0;
+    end
+
     // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & cpu_we_n & phi2) begin
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
@@ -907,12 +962,25 @@ module iigs
     end
 
     scc_cs <= 1'b0;
+`ifdef SIMULATION
+    // Debug: Track any CPU write attempt to $C031 area
+    if (cpu_addr[15:0] == 16'hC031 && ~cpu_we_n) begin
+      $display("C031_DEBUG: cpu_addr=%06x bank_bef=%02x addr_bef=%04x addr=%04x IO=%b cpu_we_n=%b cpu_dout=%02x",
+               cpu_addr, bank_bef, addr_bef, addr, IO, cpu_we_n, cpu_dout);
+    end
+`endif
     if (IO) begin
       // interrupt_clear_pulse is now auto-cleared after use, no need to clear here
-      
+
       if (~cpu_we_n)
         // write
         begin
+`ifdef SIMULATION
+          // Debug: Show which address the case will match
+          if (addr[11:8] == 4'h0 && addr[7:4] == 4'h3) begin
+            $display("IO_WRITE_C03x: addr[11:0]=%03x bank_bef=%02x cpu_dout=%02x", addr[11:0], bank_bef, cpu_dout);
+          end
+`endif
           case (addr[11:0])
             // Apple II compatibility soft switches ($C000-$C00F)
             // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
@@ -2090,7 +2158,9 @@ wire [7:0] din =
     8'h00;
 
   // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
-  wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
+  // cpu_din mux: Use iwm_read (combinational) for immediate IWM data bypass instead of
+  // registered iwm_strobe. This ensures the CPU gets fresh disk data on the same cycle.
+  wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_read ? iwm_dout : io_dout))) : din;
 
   // DEBUG: Track what cpu_din is when CPU actually samples (phi2 high)
   always @(posedge CLK_14M) begin
@@ -2545,46 +2615,82 @@ wire ready_out;
           .strobe(iwm_strobe),
           .DISK35(DISK35)
           );
+  // Stub outputs for old nibble-based track interfaces
+  assign TRACK1 = 6'd0;
+  assign TRACK1_ADDR = 14'd0;
+  assign TRACK1_DI = 8'd0;
+  assign TRACK1_WE = 1'b0;
+  assign FD_DISK_1 = 1'b0;
+  assign TRACK2 = 6'd0;
+  assign TRACK2_ADDR = 14'd0;
+  assign TRACK2_DI = 8'd0;
+  assign TRACK2_WE = 1'b0;
+  assign FD_DISK_2 = 1'b0;
+  assign TRACK3 = 7'd0;
+  assign TRACK3_ADDR = 14'd0;
+  assign TRACK3_SIDE = 1'b0;
+  assign TRACK3_DI = 8'd0;
+  assign TRACK3_WE = 1'b0;
+  assign FD_DISK_3 = 1'b0;
+  assign floppy_motor_on = 1'b0;
+  // Stub WOZ bit interfaces
+  assign WOZ_TRACK3 = 7'd0;
+  assign WOZ_TRACK3_BIT_ADDR = 14'd0;
+  assign WOZ_TRACK1 = 6'd0;
+  assign WOZ_TRACK1_BIT_ADDR = 13'd0;
   `else
-        iwm_controller iwmc (
+  // Hardware-accurate IWM with WOZ/flux-based disk interface
+  iwm_woz iwmc (
       // Global clocks/resets
       .CLK_14M(CLK_14M),
       .CLK_7M_EN(clk_7M_en),
       .Q3(q3_en),
       .PH0(phi0),
+      .PH2(phi2),
       .RESET(reset),
       // Bus interface
-      .IO_SELECT(iwm_strobe),
-      .DEVICE_SELECT(iwm_strobe),
-      .WR_CYCLE(iwm_rw),
-      //.ACCESS_STROBE(iwm_strobe),
-      .A(iwm_addr),
-      .D_IN(iwm_din),
+      .IO_SELECT(iwm_device_select),
+      .DEVICE_SELECT(iwm_device_select),
+      .WR_CYCLE(cpu_we_n),  // 1 = read, 0 = write (matches cpu_we_n)
+      .VDA(cpu_vda),
+      .A(cpu_addr[7:0]),    // Combinational address
+      .D_IN(cpu_dout),      // Combinational data
       .D_OUT(iwm_dout),
       // Drive status and control
       .DISK_READY(DISK_READY),
       .DISK35(DISK35),
       .WRITE_PROTECT(floppy_wp),
-      // 5.25" Drive 1
-      .TRACK1(TRACK1),
-      .TRACK1_ADDR(TRACK1_ADDR),
-      .TRACK1_DI(TRACK1_DI),
-      .TRACK1_DO(TRACK1_DO),
-      .TRACK1_WE(TRACK1_WE),
-      .TRACK1_BUSY(TRACK1_BUSY),
-      .FD_DISK_1(FD_DISK_1),
-      // 5.25" Drive 2
-      .TRACK2(TRACK2),
-      .TRACK2_ADDR(TRACK2_ADDR),
-      .TRACK2_DI(TRACK2_DI),
-      .TRACK2_DO(TRACK2_DO),
-      .TRACK2_WE(TRACK2_WE),
-      .TRACK2_BUSY(TRACK2_BUSY),
-      .FD_DISK_2(FD_DISK_2),
-      // 3.5" not yet wired
-      .TRACK3(), .TRACK3_ADDR(), .TRACK3_SIDE(), .TRACK3_DI(), .TRACK3_DO(8'h00), .TRACK3_WE(), .TRACK3_BUSY(1'b0),
-      .TRACK4(), .TRACK4_ADDR(), .TRACK4_SIDE(), .TRACK4_DI(), .TRACK4_DO(8'h00), .TRACK4_WE(), .TRACK4_BUSY(1'b0)
+      // WOZ bit interface for 3.5" drive 1
+      .WOZ_TRACK3(WOZ_TRACK3),
+      .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+      .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
+      .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+      // WOZ bit interface for 5.25" drive 1
+      .WOZ_TRACK1(WOZ_TRACK1),
+      .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
+      .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
+      .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
+      // Motor status for clock slowdown
+      .FLOPPY_MOTOR_ON(floppy_motor_on)
   );
+  // Old nibble-based track interfaces are not used with flux-based IWM
+  // Tie to defaults since floppy_track modules in sim.v may still be instantiated
+  assign TRACK1 = 6'd0;
+  assign TRACK1_ADDR = 14'd0;
+  assign TRACK1_DI = 8'd0;
+  assign TRACK1_WE = 1'b0;
+  assign FD_DISK_1 = 1'b0;
+  assign TRACK2 = 6'd0;
+  assign TRACK2_ADDR = 14'd0;
+  assign TRACK2_DI = 8'd0;
+  assign TRACK2_WE = 1'b0;
+  assign FD_DISK_2 = 1'b0;
+  assign TRACK3 = 7'd0;
+  assign TRACK3_ADDR = 14'd0;
+  assign TRACK3_SIDE = 1'b0;
+  assign TRACK3_DI = 8'd0;
+  assign TRACK3_WE = 1'b0;
+  assign FD_DISK_3 = 1'b0;
   `endif
 
     // Legacy slot-7 HDD (supports 4 units)
@@ -2746,6 +2852,7 @@ clock_divider clk_div_inst (
     .shadow(shadow),
     .IO(IO),
     .we(we),
+    .floppy_motor_on(floppy_motor_on),  // Force slow mode when floppy motor is on
     .reset(reset),
     .stretch(1'b0),  // TODO: Connect to VGC stretch signal
     .clk_14M_en(),

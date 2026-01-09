@@ -91,6 +91,10 @@ V_SRC = \
 	$(RTL)/paddle_timer.v \
 	$(RTL)/iwm_core_ref.v \
 	$(RTL)/iwm_controller.v \
+	$(RTL)/iwm_woz.v \
+	$(RTL)/iwm_flux.v \
+	$(RTL)/flux_drive.v \
+	$(RTL)/woz_track.sv \
 	$(RTL)/apple_drive.v \
 	$(RTL)/floppy_track.sv \
 	$(RTL)/iwm.v \

@@ -69,7 +69,7 @@ module iwm_flux (
     reg        m_data_read; // Flag: data register has been read since last byte loaded
     reg        m_rw_mode;   // 0 = read mode, 1 = write mode (tracks Q7 for mode changes)
     reg        m_motor_was_on; // Track motor state for edge detection
-    reg [3:0]  async_update;   // MAME: countdown to clear m_data in async mode
+    reg [5:0]  async_update;   // MAME: countdown to clear m_data in async mode (increased to 50 cycles)
     reg        bit7_acknowledged; // MAME: bit 7 was read, mask it for subsequent reads
 
     // Async mode: mode bit 1 = 1 means async (MAME: is_sync() = !(mode & 0x02))
@@ -211,7 +211,7 @@ module iwm_flux (
                         // Start countdown if not already running, OR if this is a new byte
                         // completing (in which case the old countdown is obsolete)
                         if (async_update == 0 || byte_completing) begin
-                            async_update <= 4'd14;
+                            async_update <= 6'd50; // Approx 3.5us at 14MHz
 `ifdef SIMULATION
                             $display("IWM_FLUX: async_update started (byte_completing=%0d)", byte_completing);
 `endif
@@ -367,12 +367,10 @@ module iwm_flux (
     wire byte_completing = (m_rsh >= 8'h80) && MOTOR_SPINNING && DISK_READY;
     wire [7:0] effective_data_raw = byte_completing ? m_rsh : m_data;
 
-    // MAME async mode handshake: bit 7 is cleared IMMEDIATELY on read (m_data &= 0x7f)
-    // We track this with bit7_acknowledged flag. When acknowledged AND not a new byte
-    // completing, mask off bit 7.
-    wire [7:0] effective_data = (is_async && bit7_acknowledged && !byte_completing)
-                               ? {1'b0, effective_data_raw[6:0]}
-                               : effective_data_raw;
+    // MAME async mode: m_data keeps its full value (including bit7=1) until async_update
+    // expires and clears m_data to 0x00. Unlike our previous approach, we do NOT mask
+    // bit7 on output - multiple reads can see bit7=1 until the data is cleared.
+    wire [7:0] effective_data = effective_data_raw;
 
     // Helper wires for byte completion logic to avoid race conditions
     wire cpu_reading_data = RD && !immediate_q7 && !immediate_q6;
@@ -413,7 +411,7 @@ module iwm_flux (
         if (RD) begin
             case ({immediate_q7, immediate_q6})
                 2'b00: $display("IWM_FLUX: READ DATA @%01h -> %02h (motor=%0d rsh=%02h data=%02h bc=%0d dr=%0d q6=%0d q7=%0d)",
-                               ADDR, data_out_mux, MOTOR_SPINNING, m_rsh, m_data, byte_completing, DISK_READY, SW_Q6, SW_Q7);
+                               ADDR, data_out_mux, MOTOR_ACTIVE, m_rsh, m_data, byte_completing, DISK_READY, SW_Q6, SW_Q7);
                 2'b01: $display("IWM_FLUX: READ STATUS @%01h -> %02h (sense=%0d m_reg=%01h latched=%01h sel=%0d phases=%04b is_35=%0d motor_active=%0d mounted=%0d)",
                                ADDR, data_out_mux, SENSE_BIT, {DISKREG_SEL, LATCHED_SENSE_REG}, LATCHED_SENSE_REG, DISKREG_SEL, SW_PHASES, IS_35_INCH, MOTOR_ACTIVE, DISK_MOUNTED);
                 2'b10: $display("IWM_FLUX: READ HANDSHAKE @%01h -> %02h", ADDR, data_out_mux);

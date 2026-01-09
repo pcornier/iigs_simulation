@@ -99,7 +99,27 @@ module emu (
 
         // Keyboard-triggered reset outputs (from Ctrl+F11 or Ctrl+OpenApple+F11)
         output keyboard_reset,
-        output keyboard_cold_reset
+        output keyboard_cold_reset,
+
+        // WOZ bit data inputs (from C++ sim_main.cpp)
+        // 3.5" drive 1
+        input [7:0]             woz3_bit_data,
+        input [31:0]            woz3_bit_count,
+        // 5.25" drive 1
+        input [7:0]             woz1_bit_data,
+        input [31:0]            woz1_bit_count,
+
+        // WOZ track/address outputs (to C++ for data lookup)
+        // 3.5" drive 1
+        output [6:0]            woz3_track_out,
+        output [13:0]           woz3_bit_addr_out,
+        // 5.25" drive 1
+        output [5:0]            woz1_track_out,
+        output [12:0]           woz1_bit_addr_out,
+
+        // WOZ disk ready inputs (from C++)
+        input                   woz3_ready,
+        input                   woz1_ready
 
 );
   initial begin
@@ -122,20 +142,53 @@ wire UART_DSR;
     wire fastram_ce;
 
     wire TRACK1_RAM_BUSY;
-wire [12:0] TRACK1_RAM_ADDR;
+wire [13:0] TRACK1_RAM_ADDR;  // 14-bit for consistency with 3.5" drives
 wire [7:0] TRACK1_RAM_DI;
 wire [7:0] TRACK1_RAM_DO;
 wire TRACK1_RAM_WE;
 wire [5:0] TRACK1;
 
 wire TRACK2_RAM_BUSY;
-wire [12:0] TRACK2_RAM_ADDR;
+wire [13:0] TRACK2_RAM_ADDR;  // 14-bit for consistency with 3.5" drives
 wire [7:0] TRACK2_RAM_DI;
 wire [7:0] TRACK2_RAM_DO;
 wire TRACK2_RAM_WE;
 wire [5:0] TRACK2;
 
+// 3.5" floppy drive 1 (drive 3 in IWM terms)
+wire TRACK3_RAM_BUSY;
+wire [13:0] TRACK3_RAM_ADDR;  // 14-bit for 10240-byte tracks
+wire [7:0] TRACK3_RAM_DI;
+wire [7:0] TRACK3_RAM_DO;
+wire TRACK3_RAM_WE;
+wire [6:0] TRACK3;            // 7-bit for 80 tracks per side
+wire TRACK3_SIDE;
+wire FD_DISK_3;
 
+// WOZ bit interfaces for flux-based IWM
+// 3.5" drive 1 WOZ bit interface
+wire [6:0]  WOZ_TRACK3;           // Track number being read
+wire [13:0] WOZ_TRACK3_BIT_ADDR;  // Byte address in track bit buffer
+wire [7:0]  WOZ_TRACK3_BIT_DATA;  // Byte from track bit buffer
+wire [31:0] WOZ_TRACK3_BIT_COUNT; // Total bits in track
+
+// 5.25" drive 1 WOZ bit interface
+wire [5:0]  WOZ_TRACK1;           // Track number being read
+wire [12:0] WOZ_TRACK1_BIT_ADDR;  // Byte address in track bit buffer
+wire [7:0]  WOZ_TRACK1_BIT_DATA;  // Byte from track bit buffer
+wire [31:0] WOZ_TRACK1_BIT_COUNT; // Total bits in track
+
+// Connect WOZ bit data from C++ inputs
+assign WOZ_TRACK3_BIT_DATA = woz3_bit_data;
+assign WOZ_TRACK3_BIT_COUNT = woz3_bit_count;
+assign WOZ_TRACK1_BIT_DATA = woz1_bit_data;
+assign WOZ_TRACK1_BIT_COUNT = woz1_bit_count;
+
+// Export WOZ track/address to C++ for data lookup
+assign woz3_track_out = WOZ_TRACK3;
+assign woz3_bit_addr_out = WOZ_TRACK3_BIT_ADDR;
+assign woz1_track_out = WOZ_TRACK1;
+assign woz1_bit_addr_out = WOZ_TRACK1_BIT_ADDR;
 
 wire clk_sys=CLK_14M;
 iigs  iigs(
@@ -183,8 +236,28 @@ iigs  iigs(
     .TRACK2_WE(TRACK2_RAM_WE),
     .TRACK2_BUSY(TRACK2_RAM_BUSY),
     .FD_DISK_2(fd_disk_2),
-    // Disk ready to IWM (pad to 4 bits)
-    .DISK_READY({2'b00, DISK_READY}),
+    //-- track buffer interface for 3.5" disk 1 (drive 3)
+    .TRACK3(TRACK3),
+    .TRACK3_ADDR(TRACK3_RAM_ADDR),
+    .TRACK3_SIDE(TRACK3_SIDE),
+    .TRACK3_DO(TRACK3_RAM_DO),
+    .TRACK3_DI(TRACK3_RAM_DI),
+    .TRACK3_WE(TRACK3_RAM_WE),
+    .TRACK3_BUSY(TRACK3_RAM_BUSY),
+    .FD_DISK_3(FD_DISK_3),
+    //-- WOZ bit interfaces for flux-based IWM
+    // 3.5" drive 1
+    .WOZ_TRACK3(WOZ_TRACK3),
+    .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+    .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
+    .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+    // 5.25" drive 1
+    .WOZ_TRACK1(WOZ_TRACK1),
+    .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
+    .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
+    .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
+    // Disk ready to IWM (all 4 drives)
+    .DISK_READY(DISK_READY),
 
 
         .fastram_address(fastram_address),
@@ -304,11 +377,11 @@ reg  sd_rd_hd;
 reg  sd_wr_hd;
 assign sd_rd[1] = sd_rd_hd & (hdd_active_unit == 1'b0);
 assign sd_rd[3] = sd_rd_hd & (hdd_active_unit == 1'b1);
-assign sd_rd[4] = 1'b0;  // Unused
+// sd_rd[4] driven by floppy35_track_1
 assign sd_rd[5] = 1'b0;  // Unused
 assign sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b0);
 assign sd_wr[3] = sd_wr_hd & (hdd_active_unit == 1'b1);
-assign sd_wr[4] = 1'b0;  // Unused
+// sd_wr[4] driven by floppy35_track_1
 assign sd_wr[5] = 1'b0;  // Unused
 
 // Select the ack for the active unit
@@ -318,7 +391,7 @@ wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[1] : sd_ack[3];
 wire [7:0] hdd_ram_do;
 assign sd_buff_din[1] = hdd_ram_do;  // Unit 0
 assign sd_buff_din[3] = hdd_ram_do;  // Unit 1
-assign sd_buff_din[4] = 8'h00;       // Unused
+// sd_buff_din[4] driven by floppy35_track_1
 assign sd_buff_din[5] = 8'h00;       // Unused
 
 `ifdef SIMULATION
@@ -417,11 +490,19 @@ end
 
 wire fd_disk_1;
 wire fd_disk_2;
+// FD_DISK_3 comes from iigs module for 3.5" drive 1
 
-wire [1:0] DISK_READY;
-reg  [1:0] DISK_CHANGE;
-reg  [1:0] disk_mount;
-reg        img_mounted0_d, img_mounted2_d;
+wire [3:0] DISK_READY_internal;  // From floppy_track modules
+reg  [3:0] DISK_CHANGE;
+reg  [3:0] disk_mount;
+reg        img_mounted0_d, img_mounted2_d, img_mounted4_d;
+
+// Combined DISK_READY: use WOZ ready if WOZ is mounted, else use track module ready
+wire [3:0] DISK_READY;
+assign DISK_READY[0] = woz1_ready | DISK_READY_internal[0];  // 5.25" drive 1
+assign DISK_READY[1] = DISK_READY_internal[1];               // 5.25" drive 2
+assign DISK_READY[2] = woz3_ready | DISK_READY_internal[2];  // 3.5" drive 1
+assign DISK_READY[3] = DISK_READY_internal[3];               // 3.5" drive 2
 
 
 
@@ -430,7 +511,9 @@ always @(posedge clk_sys) begin
         // Latch previous mount flags to detect rising edges
         img_mounted0_d <= img_mounted[0];
         img_mounted2_d <= img_mounted[2];
+        img_mounted4_d <= img_mounted[4];
 
+        // Index 0: 5.25" drive 1
         // Only toggle change on rising edge to avoid continuous bouncing
         if (~img_mounted0_d & img_mounted[0]) begin
                 disk_mount[0]   <= (img_size != 0);
@@ -439,11 +522,20 @@ always @(posedge clk_sys) begin
                 $display("FLOPPY: mount event drive0 (size=%0d)", img_size);
 `endif
         end
+        // Index 2: 5.25" drive 2
         if (~img_mounted2_d & img_mounted[2]) begin
                 disk_mount[1]   <= (img_size != 0);
                 DISK_CHANGE[1]  <= ~DISK_CHANGE[1];
 `ifdef SIMULATION
                 $display("FLOPPY: mount event drive1 (size=%0d)", img_size);
+`endif
+        end
+        // Index 4: 3.5" drive 1 (drive 3 in IWM terms)
+        if (~img_mounted4_d & img_mounted[4]) begin
+                disk_mount[2]   <= (img_size != 0);
+                DISK_CHANGE[2]  <= ~DISK_CHANGE[2];
+`ifdef SIMULATION
+                $display("FLOPPY35: mount event drive2/3.5\" drive1 (size=%0d)", img_size);
 `endif
         end
 end
@@ -462,7 +554,7 @@ floppy_track floppy_track_1
    .busy  (TRACK1_RAM_BUSY),
    .change(DISK_CHANGE[0]),
    .mount (disk_mount[0]),   // Use disk_mount (persists) not img_mounted (gets cleared)
-   .ready  (DISK_READY[0]),
+   .ready  (DISK_READY_internal[0]),
    .active (fd_disk_1),
 
    .sd_buff_addr (sd_buff_addr),
@@ -490,7 +582,7 @@ floppy_track floppy_track_2
    .busy  (TRACK2_RAM_BUSY),
    .change(DISK_CHANGE[1]),
    .mount (disk_mount[1]),
-   .ready  (DISK_READY[1]),
+   .ready  (DISK_READY_internal[1]),
    .active (fd_disk_2),
 
    .sd_buff_addr (sd_buff_addr),
@@ -504,7 +596,35 @@ floppy_track floppy_track_2
    .sd_ack       (sd_ack[2])
 );
 
+// 3.5" floppy drive 1 (drive 3 in IWM terms)
+floppy35_track floppy35_track_1
+(
+   .clk(clk_sys),
+   .reset(reset),
 
+   .ram_addr(TRACK3_RAM_ADDR),
+   .ram_di(TRACK3_RAM_DI),
+   .ram_do(TRACK3_RAM_DO),
+   .ram_we(TRACK3_RAM_WE),
+
+   .track (TRACK3),
+   .side  (TRACK3_SIDE),
+   .busy  (TRACK3_RAM_BUSY),
+   .change(DISK_CHANGE[2]),
+   .mount (disk_mount[2]),
+   .ready (DISK_READY_internal[2]),
+   .active(FD_DISK_3),
+
+   .sd_buff_addr (sd_buff_addr),
+   .sd_buff_dout (sd_buff_dout),
+   .sd_buff_din  (sd_buff_din[4]),
+   .sd_buff_wr   (sd_buff_wr),
+
+   .sd_lba       (sd_lba[4]),
+   .sd_rd        (sd_rd[4]),
+   .sd_wr        (sd_wr[4]),
+   .sd_ack       (sd_ack[4])
+);
 
 
 endmodule
