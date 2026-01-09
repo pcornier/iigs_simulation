@@ -36,7 +36,7 @@ module iwm_woz (
     input           WRITE_PROTECT,
 
     // WOZ Track bit interface for 3.5" drive 1 (directly to sim.v)
-    output [6:0]    WOZ_TRACK3,
+    output [7:0]    WOZ_TRACK3,
     output [13:0]   WOZ_TRACK3_BIT_ADDR,
     input  [7:0]    WOZ_TRACK3_BIT_DATA,
     input  [31:0]   WOZ_TRACK3_BIT_COUNT,
@@ -321,7 +321,7 @@ module iwm_woz (
         .SD_TRACK_ACK(1'b0)
     );
 
-    assign WOZ_TRACK3 = drive35_track;
+    assign WOZ_TRACK3 = {1'b0, drive35_track} + (diskreg_sel ? 8'd80 : 8'd0);
     assign WOZ_TRACK3_BIT_ADDR = drive35_bram_addr;
 
     //=========================================================================

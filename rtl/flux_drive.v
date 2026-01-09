@@ -164,7 +164,9 @@ module flux_drive (
     assign DRIVE_READY = drive_ready;           // Ready after 2 rotation spinup
     assign TRACK = head_phase[8:2];             // Quarter-track to full track
     assign BIT_POSITION = bit_position;
-    assign BRAM_ADDR = byte_index;
+    // Look-ahead for BRAM address to handle simulation/C++ update latency
+    wire [16:0] next_bit_pos = (TRACK_BIT_COUNT > 0 && bit_position + 1 >= TRACK_BIT_COUNT) ? 17'd0 : bit_position + 1'd1;
+    assign BRAM_ADDR = (bit_timer == 6'd1) ? next_bit_pos[16:3] : byte_index;
     assign WRITE_PROTECT = DISK_WP;
 
     //=========================================================================
