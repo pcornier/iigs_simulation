@@ -45,12 +45,18 @@ class IWMEvent:
     m_reg: Optional[int] = None   # Sense register index {sel, phases[2:0]}
     latched: Optional[int] = None # Latched sense register (phases & 7)
     sel: Optional[int] = None     # SEL bit from $C031
+    position: Optional[int] = None  # Disk position for flux debugging
 
 def parse_mame_log(filename: str) -> List[IWMEvent]:
     """Parse MAME IWM log entries"""
     events = []
 
     # Patterns for MAME log lines
+    # New format with position: IWM_DATA @<time> pos=<pos>: result=...
+    # Old format without position: IWM_DATA @<time>: result=...
+    iwm_data_pattern_with_pos = re.compile(
+        r'\[:fdc\] IWM_DATA @([^ ]+) pos=(\d+): result=([0-9a-f]{2}) active=(\d) data=([0-9a-f]{2}) status=([0-9a-f]{2}) mode=([0-9a-f]{2}) floppy=(.+)'
+    )
     iwm_data_pattern = re.compile(
         r'\[:fdc\] IWM_DATA @([^:]+): result=([0-9a-f]{2}) active=(\d) data=([0-9a-f]{2}) status=([0-9a-f]{2}) mode=([0-9a-f]{2}) floppy=(.+)'
     )
@@ -75,7 +81,24 @@ def parse_mame_log(filename: str) -> List[IWMEvent]:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
 
-                # IWM_DATA
+                # IWM_DATA - try new format with position first
+                m = iwm_data_pattern_with_pos.search(line)
+                if m:
+                    events.append(IWMEvent(
+                        source='mame',
+                        event_type='DATA',
+                        timestamp=m.group(1),
+                        position=int(m.group(2)),
+                        result=int(m.group(3), 16),
+                        active=int(m.group(4)),
+                        status=int(m.group(6), 16),
+                        mode=int(m.group(7), 16),
+                        extra=m.group(8),
+                        line_num=line_num
+                    ))
+                    continue
+
+                # IWM_DATA - old format without position
                 m = iwm_data_pattern.search(line)
                 if m:
                     events.append(IWMEvent(
@@ -173,7 +196,11 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
     events = []
 
     # Patterns for vsim log lines
-    # IWM_FLUX: READ DATA @1 -> ff (motor=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0)
+    # New format with position: IWM_FLUX: READ DATA @1 -> ff pos=12345 (motor=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0)
+    # Old format: IWM_FLUX: READ DATA @1 -> ff (motor=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0)
+    iwm_flux_pattern_with_pos = re.compile(
+        r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) pos=(\d+) \(motor=(\d) rsh=([0-9a-f]{2}) data=([0-9a-f]{2}) bc=(\d+) dr=(\d) q6=(\d) q7=(\d)\)'
+    )
     iwm_flux_pattern = re.compile(
         r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) \(motor=(\d) rsh=([0-9a-f]{2}) data=([0-9a-f]{2}) bc=(\d+) dr=(\d) q6=(\d) q7=(\d)\)'
     )
@@ -262,7 +289,27 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                 ))
                 continue
 
-            # IWM_FLUX READ DATA
+            # IWM_FLUX READ DATA - try new format with position first
+            m = iwm_flux_pattern_with_pos.search(line)
+            if m:
+                # m.group(6) is the 'data' field - the assembled byte
+                assembled_data = int(m.group(6), 16)
+                events.append(IWMEvent(
+                    source='vsim',
+                    event_type='DATA',
+                    timestamp=m.group(1),  # phase number
+                    result=int(m.group(2), 16),  # what's actually returned
+                    position=int(m.group(3)),  # disk position
+                    motor=int(m.group(4)),
+                    shift_reg=int(m.group(5), 16),
+                    status=assembled_data,  # store assembled data in status field
+                    q6=int(m.group(9)),
+                    q7=int(m.group(10)),
+                    line_num=line_num
+                ))
+                continue
+
+            # IWM_FLUX READ DATA - old format without position
             m = iwm_flux_pattern.search(line)
             if m:
                 # m.group(5) is the 'data' field - the assembled byte
@@ -314,8 +361,9 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
 
     return events
 
-def extract_data_bytes(events: List[IWMEvent], motor_on_only: bool = False) -> List[Tuple[int, int]]:
-    """Extract just the data byte reads (result values with bit 7 set)"""
+def extract_data_bytes(events: List[IWMEvent], motor_on_only: bool = False) -> List[Tuple[int, int, Optional[int]]]:
+    """Extract just the data byte reads (result values with bit 7 set)
+    Returns list of (byte_value, line_num, position)"""
     bytes_read = []
     motor_on = not motor_on_only  # Start active if not filtering
 
@@ -330,12 +378,13 @@ def extract_data_bytes(events: List[IWMEvent], motor_on_only: bool = False) -> L
                 continue
             # Only count valid data bytes (bit 7 set means valid data)
             if event.result & 0x80:
-                bytes_read.append((event.result, event.line_num))
+                bytes_read.append((event.result, event.line_num, event.position))
 
     return bytes_read
 
 def compare_data_streams(mame_events: List[IWMEvent], vsim_events: List[IWMEvent],
-                         start: int = 0, limit: int = 0, motor_on_only: bool = False):
+                         start: int = 0, limit: int = 0, motor_on_only: bool = False,
+                         show_positions: bool = False):
     """Compare the data byte streams between MAME and vsim"""
 
     mame_bytes = extract_data_bytes(mame_events, motor_on_only)
@@ -355,13 +404,18 @@ def compare_data_streams(mame_events: List[IWMEvent], vsim_events: List[IWMEvent
     if limit > 0:
         max_len = min(max_len, start + limit)
 
-    print(f"{'Idx':>6}  {'MAME':>6} {'Line':>8}  {'vsim':>6} {'Line':>8}  {'Match':>6}")
-    print("-" * 60)
+    if show_positions:
+        # Show positions - MAME uses 0-200M, vsim uses bit position
+        print(f"{'Idx':>6}  {'MAME':>6} {'MAMEpos':>12} {'Line':>8}  {'vsim':>6} {'vsimPos':>8} {'Line':>8}  {'Match':>6}")
+        print("-" * 90)
+    else:
+        print(f"{'Idx':>6}  {'MAME':>6} {'Line':>8}  {'vsim':>6} {'Line':>8}  {'Match':>6}")
+        print("-" * 60)
 
     mismatches = 0
     for i in range(start, max_len):
-        mame_val = mame_bytes[i] if i < len(mame_bytes) else (None, 0)
-        vsim_val = vsim_bytes[i] if i < len(vsim_bytes) else (None, 0)
+        mame_val = mame_bytes[i] if i < len(mame_bytes) else (None, 0, None)
+        vsim_val = vsim_bytes[i] if i < len(vsim_bytes) else (None, 0, None)
 
         mame_str = f"0x{mame_val[0]:02X}" if mame_val[0] is not None else "----"
         vsim_str = f"0x{vsim_val[0]:02X}" if vsim_val[0] is not None else "----"
@@ -378,10 +432,23 @@ def compare_data_streams(mame_events: List[IWMEvent], vsim_events: List[IWMEvent
         elif vsim_val[0] is None:
             match = "vsim-"
 
-        print(f"{i:>6}  {mame_str:>6} {mame_val[1]:>8}  {vsim_str:>6} {vsim_val[1]:>8}  {match:>6}")
+        if show_positions:
+            mame_pos = f"{mame_val[2]:>12}" if mame_val[2] is not None else "----"
+            vsim_pos = f"{vsim_val[2]:>8}" if vsim_val[2] is not None else "----"
+            print(f"{i:>6}  {mame_str:>6} {mame_pos} {mame_val[1]:>8}  {vsim_str:>6} {vsim_pos} {vsim_val[1]:>8}  {match:>6}")
+        else:
+            print(f"{i:>6}  {mame_str:>6} {mame_val[1]:>8}  {vsim_str:>6} {vsim_val[1]:>8}  {match:>6}")
 
-    print("-" * 60)
+    if show_positions:
+        print("-" * 90)
+    else:
+        print("-" * 60)
     print(f"Total compared: {max_len - start}, Mismatches: {mismatches}")
+
+    # If showing positions, also show position conversion info
+    if show_positions and mame_bytes and vsim_bytes:
+        print(f"\nPosition conversion: MAME uses 0-200M per revolution, vsim uses bit position")
+        print(f"For a track with ~75000 bits: MAME_pos / 2666 ≈ vsim_bit_pos")
 
 def show_event_stream(events: List[IWMEvent], source: str, data_only: bool = False,
                       start: int = 0, limit: int = 50):
@@ -490,6 +557,7 @@ def main():
     parser.add_argument('--status', action='store_true', help='Compare IWM status/sense line reads')
     parser.add_argument('--status-motor', action='store_true', help='Compare status reads only when motor is on')
     parser.add_argument('--cpu-bytes', action='store_true', help='Show CPU accesses with returned byte values')
+    parser.add_argument('--positions', action='store_true', help='Show disk positions in byte comparison')
 
     args = parser.parse_args()
 
@@ -1049,8 +1117,8 @@ def main():
 
         return
 
-    if args.show_bytes:
-        compare_data_streams(mame_events, vsim_events, args.start, args.limit, args.motor_on)
+    if args.show_bytes or args.positions:
+        compare_data_streams(mame_events, vsim_events, args.start, args.limit, args.motor_on, args.positions)
         return
 
     if args.mame_only:

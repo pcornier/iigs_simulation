@@ -443,7 +443,6 @@ module iwm_woz (
     // Sense Mux - Select active drive's status sense
     //=========================================================================
     // Select between Drive 1 and Drive 2 based on drive_sel.
-
     wire drive_sense = (is_35_inch) ? ((drive_sel == 0) ? drive35_sense : drive35_2_sense) :
                                      ((drive_sel == 0) ? drive525_sense : 1'b1);
 
@@ -463,8 +462,12 @@ module iwm_woz (
                        DISK_READY[0] ? 1'b1 :
                        (is_35_inch ? DISK_READY[2] : DISK_READY[0]);
 
+    // Muxed bit position for debug logging
+    wire [16:0] current_bit_position = is_35_inch ? drive35_bit_position : drive525_bit_position;
+
     iwm_flux iwm (
         .CLK_14M(CLK_14M),
+        .CLK_7M_EN(CLK_7M_EN),  // 7M clock enable for IWM timing (matches real hardware)
         .RESET(RESET),
         .CEN(PH2),              // Clock enable (phi2) for CPU bus timing
         .ADDR(A[3:0]),
@@ -490,6 +493,7 @@ module iwm_woz (
         .SENSE_BIT(current_sense),
         .LATCHED_SENSE_REG(immediate_latched_sense_reg),  // Use immediate for same-cycle visibility
         .DISKREG_SEL(diskreg_sel),
+        .DISK_BIT_POSITION(current_bit_position),
         .FLUX_WRITE(),
         .DEBUG_RSH(),
         .DEBUG_STATE()

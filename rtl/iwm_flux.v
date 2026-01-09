@@ -16,6 +16,7 @@
 module iwm_flux (
     // Global signals
     input  wire        CLK_14M,         // 14MHz master clock
+    input  wire        CLK_7M_EN,       // 7MHz clock enable (IWM runs at 7M like real hardware)
     input  wire        RESET,
     input  wire        CEN,             // Clock enable (phi2) for CPU bus timing
 
@@ -50,6 +51,9 @@ module iwm_flux (
     input  wire        SENSE_BIT,       // Status sense from selected drive
     input  wire [2:0]  LATCHED_SENSE_REG, // Latched sense register index (for debug logging)
     input  wire        DISKREG_SEL,     // SEL bit from $C031 (for debug logging)
+
+    // Disk position for debug logging (to compare with MAME)
+    input  wire [16:0] DISK_BIT_POSITION, // Current bit position on track
 
     // Write output (future use)
     output wire        FLUX_WRITE,      // Pulse when writing flux transition
@@ -96,12 +100,15 @@ module iwm_flux (
     // Window Timing (from MAME iwm.cpp half_window_size/window_size)
     //=========================================================================
     // Window timing depends on drive type:
-    // - 3.5" drives: 28-cycle windows (2µs bit cells)
-    // - 5.25" drives: 56-cycle windows (4µs bit cells), or 28 in fast mode
+    // Window timing in 7M cycles (since state machine runs at CLK_7M_EN)
+    // flux_drive generates at 28 14M-cycles = 14 7M-equivalent cycles per bit
+    // So windows should be 14 7M-cycles (half_window = 7) to match
+    // - 3.5" drives: 14-cycle windows (matches 28 14M-cycle bit cells)
+    // - 5.25" drives: 28-cycle windows (matches 56 14M-cycle bit cells), or 14 in fast mode
 
     wire        fast_mode = SW_MODE[3];
-    wire [5:0]  full_window = IS_35_INCH ? 6'd28 : (fast_mode ? 6'd28 : 6'd56);
-    wire [5:0]  half_window = IS_35_INCH ? 6'd14 : (fast_mode ? 6'd14 : 6'd28);
+    wire [5:0]  full_window = IS_35_INCH ? 6'd14 : (fast_mode ? 6'd14 : 6'd28);
+    wire [5:0]  half_window = IS_35_INCH ? 6'd7 : (fast_mode ? 6'd7 : 6'd14);
 
     //=========================================================================
     // Flux Edge Detection
@@ -110,6 +117,7 @@ module iwm_flux (
     reg        prev_flux;
     reg        prev_sm_active;  // For debug: track state machine activation
     reg        flux_pending;    // Latched when flux arrives during EDGE_1
+    reg        flux_seen;       // Latched at 14M when flux edge detected, cleared at 7M
     wire       flux_edge = FLUX_TRANSITION && !prev_flux;
 
 `ifdef SIMULATION
@@ -135,6 +143,7 @@ module iwm_flux (
             prev_flux      <= 1'b0;
             prev_sm_active <= 1'b0;
             flux_pending   <= 1'b0;
+            flux_seen      <= 1'b0;
             rd_latched     <= 1'b0;
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
@@ -197,9 +206,16 @@ module iwm_flux (
                 async_update <= async_update - 1'b1;
             end
 
+            // Always track flux edges at 14M (so we don't miss any)
             prev_flux <= FLUX_TRANSITION;
 
-            // State machine runs when motor is spinning and disk is ready
+            // Latch flux edge at 14M for processing at 7M
+            if (flux_edge) begin
+                flux_seen <= 1'b1;
+            end
+
+            // State machine runs at 7M clock rate (like real IWM hardware)
+            // This matches MAME which clocks the IWM at 7.159 MHz
 `ifdef SIMULATION
             if ((MOTOR_SPINNING && DISK_READY) != prev_sm_active) begin
                 $display("IWM_FLUX: State machine %s (MOTOR_SPINNING=%0d DISK_READY=%0d)",
@@ -207,24 +223,26 @@ module iwm_flux (
                          MOTOR_SPINNING, DISK_READY);
             end
 `endif
-            if (MOTOR_SPINNING && DISK_READY) begin
+            if (CLK_7M_EN && MOTOR_SPINNING && DISK_READY) begin
                 case (rw_state)
                     S_IDLE: begin
                         rw_state <= SR_WINDOW_EDGE_0;
                         window_counter <= full_window;
                         m_rsh <= 8'h00;
+                        flux_seen <= 1'b0;  // Clear on state machine start
                     end
 
                     SR_WINDOW_EDGE_0: begin
-                        // Check for current flux edge OR pending flux from EDGE_1
-                        if (flux_edge || flux_pending) begin
+                        // Check for flux edge (latched at 14M) OR pending flux from EDGE_1
+                        if (flux_seen || flux_pending) begin
                             rw_state <= SR_WINDOW_EDGE_1;
                             window_counter <= half_window;
                             flux_pending <= 1'b0;  // Clear pending flag
+                            flux_seen <= 1'b0;     // Clear seen flag after processing
 `ifdef SIMULATION
                             if (m_rsh < 8'h10) begin
-                                $display("IWM_FLUX: @%0d Flux edge, rsh=%02h win=%0d FLUX=%0d prev=%0d pend=%0d",
-                                         debug_cycle, m_rsh, window_counter, FLUX_TRANSITION, prev_flux, flux_pending);
+                                $display("IWM_FLUX: @%0d Flux edge, rsh=%02h win=%0d seen=%0d pend=%0d",
+                                         debug_cycle, m_rsh, window_counter, flux_seen, flux_pending);
                             end
 `endif
                         end else if (window_counter == 6'd1) begin
@@ -246,8 +264,9 @@ module iwm_flux (
                         // latch it so we detect it immediately when we go to EDGE_0.
                         // This handles consecutive 1-bits where flux arrives before
                         // the half-window completes.
-                        if (flux_edge) begin
+                        if (flux_seen) begin
                             flux_pending <= 1'b1;  // Latch for use in EDGE_0
+                            flux_seen <= 1'b0;     // Clear seen flag
                         end
 
                         if (window_counter == 6'd1) begin
@@ -273,8 +292,8 @@ module iwm_flux (
                 // Byte complete when MSB is set
                 if (m_rsh >= 8'h80) begin
 `ifdef SIMULATION
-                    $display("IWM_FLUX: @%0d BYTE COMPLETE - m_data <= %02h state=%0d win=%0d FLUX=%0d prev=%0d",
-                             debug_cycle, m_rsh, rw_state, window_counter, FLUX_TRANSITION, prev_flux);
+                    $display("IWM_FLUX: @%0d BYTE COMPLETE - m_data <= %02h state=%0d win=%0d",
+                             debug_cycle, m_rsh, rw_state, window_counter);
 `endif
                     m_data <= m_rsh;
                     m_rsh <= 8'h00;
@@ -291,6 +310,7 @@ module iwm_flux (
                 rw_state <= S_IDLE;
                 window_counter <= 6'd0;
                 flux_pending <= 1'b0;
+                flux_seen <= 1'b0;
                 bit7_acknowledged <= 1'b0;
                 async_update <= 4'd0;
             end
@@ -420,8 +440,8 @@ module iwm_flux (
     always @(posedge CLK_14M) begin
         if (RD && CEN) begin
             case ({immediate_q7, immediate_q6})
-                2'b00: $display("IWM_FLUX: READ DATA @%01h -> %02h (motor=%0d rsh=%02h data=%02h bc=%0d dr=%0d q6=%0d q7=%0d)",
-                               ADDR, data_out_mux, MOTOR_ACTIVE, m_rsh, m_data, byte_completing, DISK_READY, SW_Q6, SW_Q7);
+                2'b00: $display("IWM_FLUX: READ DATA @%01h -> %02h pos=%0d (motor=%0d rsh=%02h data=%02h bc=%0d dr=%0d q6=%0d q7=%0d)",
+                               ADDR, data_out_mux, DISK_BIT_POSITION, MOTOR_ACTIVE, m_rsh, m_data, byte_completing, DISK_READY, SW_Q6, SW_Q7);
                 2'b01: $display("IWM_FLUX: READ STATUS @%01h -> %02h (sense=%0d m_reg=%01h latched=%01h sel=%0d phases=%04b is_35=%0d motor_active=%0d mounted=%0d)",
                                ADDR, data_out_mux, SENSE_BIT, {DISKREG_SEL, LATCHED_SENSE_REG}, LATCHED_SENSE_REG, DISKREG_SEL, SW_PHASES, IS_35_INCH, MOTOR_ACTIVE, DISK_MOUNTED);
                 2'b10: $display("IWM_FLUX: READ HANDSHAKE @%01h -> %02h", ADDR, data_out_mux);

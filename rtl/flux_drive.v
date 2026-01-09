@@ -73,8 +73,8 @@ module flux_drive (
     localparam MAX_PHASE_35  = 319;     // 80 tracks * 4 steps/track - 1
 
     // Bit cell timing in 14MHz cycles
-    // 5.25": 4µs per bit = 56 cycles
-    // 3.5":  2µs per bit = 28 cycles
+    // 5.25": 4µs per bit = 56 cycles @14M
+    // 3.5":  2µs per bit = 28 cycles @14M
     localparam BIT_CELL_525 = 6'd56;
     localparam BIT_CELL_35  = 6'd28;
 
@@ -115,8 +115,16 @@ module flux_drive (
     //   - Command 4: step toward track 0 → m_dir = 1
     // Track per drive slot since MAME tracks m_dir per physical drive
     reg [1:0]   step_direction_slot;    // One per drive slot (0 and 1)
-    wire        step_direction = step_direction_slot[DRIVE_SELECT]; // Use current drive's direction
     reg [1:0]   prev_strobe_slot;       // Previous strobe state per drive slot
+
+    // Immediate step direction for sense calculation
+    // When a strobe fires, the sense read should see the NEW direction value immediately,
+    // not wait for the clock edge. This matches MAME where m_dir updates synchronously
+    // in seek_phase_w() before wpt_r() can return it.
+    // Note: sony_cmd_strobe and sony_cmd_reg are defined below, but we need them here
+    // for the immediate calculation. Using forward references works in Verilog.
+    wire        step_direction_immediate;
+    wire        step_direction_registered = step_direction_slot[DRIVE_SELECT];
 
     // Internal motor state for 3.5" Sony drives (controlled by commands)
     reg         sony_motor_on;
@@ -141,6 +149,14 @@ module flux_drive (
     // SW_MOTOR_ON because motor ON command needs to execute when motor is off.
     wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT];
     wire [3:0] sony_cmd_reg = {DISKREG_SEL, LATCHED_SENSE_REG};
+
+    // Compute immediate step direction: if strobe is firing with a direction command,
+    // use the NEW value; otherwise use the registered value.
+    // cmd_reg 0 = DirNext (m_dir=0, toward higher tracks)
+    // cmd_reg 4 = DirPrev (m_dir=1, toward track 0)
+    assign step_direction_immediate = (sony_cmd_strobe && sony_cmd_reg == 4'd0) ? 1'b0 :
+                                      (sony_cmd_strobe && sony_cmd_reg == 4'd4) ? 1'b1 :
+                                      step_direction_registered;
 
     //=========================================================================
     // Computed Values
@@ -193,9 +209,11 @@ module flux_drive (
     always @(*) begin
         case (status_reg)
             4'h0: begin
-                sense_35 = step_direction;    // Step direction (0=in, 1=out)
+                // Use immediate value so sense read in same cycle as direction command sees new value
+                // This matches MAME where m_dir updates synchronously in seek_phase_w() before wpt_r()
+                sense_35 = step_direction_immediate;
 `ifdef SIMULATION
-                if (sense_35) $display("FLUX_DRIVE[%0d]: Case 0 returning 1! step_dir=%0d sel=%0d", DRIVE_ID, step_direction, DRIVE_SELECT);
+                if (sense_35) $display("FLUX_DRIVE[%0d]: Case 0 returning 1! step_dir_imm=%0d step_dir_reg=%0d sel=%0d", DRIVE_ID, step_direction_immediate, step_direction_registered, DRIVE_SELECT);
 `endif
             end
             4'h1: sense_35 = 1'b1;              // Step signal (always 1 in MAME, no delay)
@@ -292,6 +310,18 @@ module flux_drive (
             if (sony_cmd_strobe) begin
                 // Use 4-bit command register like MAME: {DISKREG_SEL, LATCHED_SENSE_REG}
                 // When DISKREG_SEL=1 (side 1), commands 0-7 become 8-15
+                // Sony 3.5" drive command set (from MAME floppy.cpp mac_floppy_device::seek_phase_w):
+                //   0x0: DirNext   - Set direction toward higher tracks (m_dir=0)
+                //   0x1: StepOn    - Execute one step in current direction
+                //   0x2: MotorOn   - Turn motor on
+                //   0x3: EjectOff  - End eject sequence (no-op)
+                //   0x4: DirPrev   - Set direction toward track 0 (m_dir=1)
+                //   0x5: StepOff   - (not used)
+                //   0x6: MotorOff  - Turn motor off
+                //   0x7: EjectOn   - Start eject sequence
+                //   0x9: MFMModeOn - Switch to MFM mode (1.44MB)
+                //   0xC: DskchgClear - Clear disk change flag
+                //   0xD: GCRModeOn - Switch to GCR mode (800K)
                 case (sony_cmd_reg)
                     4'd0: begin
                         step_direction_slot[DRIVE_SELECT] <= 1'b0;  // "step dir +1" → m_dir=0
@@ -299,12 +329,38 @@ module flux_drive (
                         $display("FLUX_DRIVE[%0d]: cmd step dir +1 (m_dir=0)", DRIVE_ID);
 `endif
                     end
-                    4'd4: begin
-                        step_direction_slot[DRIVE_SELECT] <= 1'b1;  // "step dir -1" → m_dir=1
+
+                    4'd1: begin
+                        // StepOn: Execute one step using previously set direction
+                        // MAME does: stp_w(0); stp_w(1); which pulses the step line
+                        // Direction: m_dir=0 means toward higher tracks, m_dir=1 means toward track 0
+                        if (step_direction_slot[DRIVE_SELECT] == 1'b0) begin
+                            // Step toward higher tracks (inward)
+                            if (head_phase < max_phase)
+                                head_phase <= head_phase + 4'd4;  // 4 quarter-tracks = 1 full track
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd step dir -1 (m_dir=1)", DRIVE_ID);
+                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=+1) head_phase=%0d->%0d track=%0d->%0d",
+                                     DRIVE_ID, head_phase,
+                                     (head_phase < max_phase) ? head_phase + 4 : head_phase,
+                                     head_phase >> 2,
+                                     (head_phase < max_phase) ? (head_phase + 4) >> 2 : head_phase >> 2);
 `endif
+                        end else begin
+                            // Step toward track 0 (outward)
+                            if (head_phase >= 4'd4)
+                                head_phase <= head_phase - 4'd4;
+                            else
+                                head_phase <= 9'd0;
+`ifdef SIMULATION
+                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=-1) head_phase=%0d->%0d track=%0d->%0d",
+                                     DRIVE_ID, head_phase,
+                                     (head_phase >= 4) ? head_phase - 4 : 0,
+                                     head_phase >> 2,
+                                     (head_phase >= 4) ? (head_phase - 4) >> 2 : 0);
+`endif
+                        end
                     end
+
                     4'd2: begin
                         if (DISK_MOUNTED) begin
                             sony_motor_on <= 1'b1;
@@ -313,43 +369,70 @@ module flux_drive (
 `endif
                         end
                     end
+
+                    4'd3: begin
+                        // EjectOff: End eject sequence (no-op in MAME)
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd eject off (not implemented)", DRIVE_ID);
+`endif
+                    end
+
+                    4'd4: begin
+                        step_direction_slot[DRIVE_SELECT] <= 1'b1;  // "step dir -1" → m_dir=1
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd step dir -1 (m_dir=1)", DRIVE_ID);
+`endif
+                    end
+
                     4'd6: begin
                         sony_motor_on <= 1'b0;
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd motor OFF", DRIVE_ID);
 `endif
                     end
-                    default: ;  // Commands 8-15 (DISKREG_SEL=1) don't match motor/step commands
+
+                    4'd7: begin
+                        // EjectOn: Start eject sequence - MAME calls unload()
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd eject on (not implemented)", DRIVE_ID);
+`endif
+                    end
+
+                    4'd9: begin
+                        // MFMModeOn: Switch to MFM mode for 1.44MB disks
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd MFM mode on (not implemented)", DRIVE_ID);
+`endif
+                    end
+
+                    4'd12: begin
+                        // DskchgClear: Clear disk change flag
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd disk change clear (not implemented)", DRIVE_ID);
+`endif
+                    end
+
+                    4'd13: begin
+                        // GCRModeOn: Switch to GCR mode for 800K disks
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd GCR mode on (not implemented)", DRIVE_ID);
+`endif
+                    end
+
+                    default: begin
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd %0d (unknown)", DRIVE_ID, sony_cmd_reg);
+`endif
+                    end
                 endcase
             end
             prev_strobe_slot[DRIVE_SELECT] <= IMMEDIATE_PHASES[3];
 
             if (motor_spinning) begin  // Only step when motor is on
-            if (IS_35_INCH) begin
-                // 3.5" Sony drive stepping:
-                // CA0 (PHASES[0]) = direction: 0=toward track 0, 1=toward track 79
-                // CA1 (PHASES[1]) = step pulse: falling edge triggers step
-                prev_step <= PHASES[1];
-                if (prev_step && !PHASES[1]) begin  // Falling edge on CA1
-                    if (PHASES[0]) begin
-                        // Step inward (toward higher tracks)
-                        if (head_phase < max_phase)
-                            head_phase <= head_phase + 4'd4;  // 4 quarter-tracks = 1 full track
-                    end else begin
-                        // Step outward (toward track 0)
-                        if (head_phase >= 4'd4)
-                            head_phase <= head_phase - 4'd4;
-                        else
-                            head_phase <= 9'd0;
-                    end
-`ifdef SIMULATION
-                    $display("FLUX_DRIVE[%0d]: 3.5\" STEP dir=%0d head_phase=%0d->%0d track=%0d",
-                             DRIVE_ID, PHASES[0], head_phase,
-                             PHASES[0] ? head_phase + 4 : (head_phase >= 4 ? head_phase - 4 : 0),
-                             PHASES[0] ? (head_phase + 4) >> 2 : (head_phase >= 4 ? (head_phase - 4) >> 2 : 0));
-`endif
-                end
-            end else begin
+            // NOTE: 3.5" Sony drives use command-based stepping (cmd 1 = step on)
+            // implemented in the sony_cmd_strobe handler above.
+            // Only 5.25" drives use the traditional 4-phase stepper logic below.
+            if (!IS_35_INCH) begin
                 // 5.25" 4-phase stepper logic
                 phase_change = 0;
                 new_phase = head_phase;
