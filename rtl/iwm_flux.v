@@ -230,6 +230,10 @@ module iwm_flux (
                         window_counter <= full_window;
                         m_rsh <= 8'h00;
                         flux_seen <= 1'b0;  // Clear on state machine start
+`ifdef SIMULATION
+                        $display("IWM_FLUX: START_READ cycle=%0d win=%0d mode=%02h",
+                                 debug_cycle, full_window, SW_MODE);
+`endif
                     end
 
                     SR_WINDOW_EDGE_0: begin
@@ -240,20 +244,16 @@ module iwm_flux (
                             flux_pending <= 1'b0;  // Clear pending flag
                             flux_seen <= 1'b0;     // Clear seen flag after processing
 `ifdef SIMULATION
-                            if (m_rsh < 8'h10) begin
-                                $display("IWM_FLUX: @%0d Flux edge, rsh=%02h win=%0d seen=%0d pend=%0d",
-                                         debug_cycle, m_rsh, window_counter, flux_seen, flux_pending);
-                            end
+                            $display("IWM_FLUX: EDGE_0->EDGE_1 flux_at=%0d rsh=%02h win=%0d half=%0d",
+                                     debug_cycle, m_rsh, full_window, half_window);
 `endif
                         end else if (window_counter == 6'd1) begin
+`ifdef SIMULATION
+                            $display("IWM_FLUX: SHIFT bit=0 rsh=%02h->%02h state=EDGE_0 endw=%0d",
+                                     m_rsh, {m_rsh[6:0], 1'b0}, debug_cycle);
+`endif
                             m_rsh <= {m_rsh[6:0], 1'b0};
                             window_counter <= full_window;
-`ifdef SIMULATION
-                            if (m_rsh < 8'h10 && m_rsh > 8'h00) begin
-                                $display("IWM_FLUX: @%0d Window timeout, rsh=%02h -> %02h",
-                                         debug_cycle, m_rsh, {m_rsh[6:0], 1'b0});
-                            end
-`endif
                         end else begin
                             window_counter <= window_counter - 1'd1;
                         end
@@ -270,15 +270,13 @@ module iwm_flux (
                         end
 
                         if (window_counter == 6'd1) begin
+`ifdef SIMULATION
+                            $display("IWM_FLUX: SHIFT bit=1 rsh=%02h->%02h state=EDGE_1 endw=%0d",
+                                     m_rsh, {m_rsh[6:0], 1'b1}, debug_cycle);
+`endif
                             m_rsh <= {m_rsh[6:0], 1'b1};
                             rw_state <= SR_WINDOW_EDGE_0;
                             window_counter <= full_window;
-`ifdef SIMULATION
-                            if (m_rsh < 8'h08) begin
-                                $display("IWM_FLUX: @%0d EDGE_1 complete, shift 1, rsh=%02h->%02h pend=%0d",
-                                         debug_cycle, m_rsh, {m_rsh[6:0], 1'b1}, flux_pending);
-                            end
-`endif
                         end else begin
                             window_counter <= window_counter - 1'd1;
                         end
@@ -292,8 +290,8 @@ module iwm_flux (
                 // Byte complete when MSB is set
                 if (m_rsh >= 8'h80) begin
 `ifdef SIMULATION
-                    $display("IWM_FLUX: @%0d BYTE COMPLETE - m_data <= %02h state=%0d win=%0d",
-                             debug_cycle, m_rsh, rw_state, window_counter);
+                    $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d @cycle=%0d",
+                             m_rsh, DISK_BIT_POSITION, debug_cycle);
 `endif
                     m_data <= m_rsh;
                     m_rsh <= 8'h00;
@@ -426,16 +424,6 @@ module iwm_flux (
     assign DEBUG_STATE  = rw_state;
 
 `ifdef SIMULATION
-    // Debug: log state transitions
-    reg [2:0] prev_state;
-    always @(posedge CLK_14M) begin
-        if (rw_state != prev_state && prev_state != S_IDLE) begin
-            $display("IWM_FLUX: State %0d -> %0d (window=%0d rsh=%02h data=%02h)",
-                     prev_state, rw_state, window_counter, m_rsh, m_data);
-        end
-        prev_state <= rw_state;
-    end
-
     // Debug: log register reads (only on CEN/PH2 to log once per CPU access)
     always @(posedge CLK_14M) begin
         if (RD && CEN) begin

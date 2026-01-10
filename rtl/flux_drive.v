@@ -578,13 +578,16 @@ module flux_drive (
             SD_TRACK_STROBE <= 1'b0;
             rotation_complete <= 1'b0;
 
-            // MAME behavior: Reset disk position when motor turns on
-            // This matches MAME's m_revolution_start_time = machine().time() in mon_w()
+            // Don't reset bit_position when motor turns on - let the disk continue
+            // from wherever it was (like a real disk). MAME calculates position from
+            // elapsed time, which naturally gives varying start positions.
+            // Resetting to 0 causes the first few bytes to differ because we always
+            // start at the same track position.
             if (!prev_motor_for_position && motor_spinning) begin
-                bit_position <= 17'd0;
+                // Just reset the bit timer, not the position
                 bit_timer <= bit_cell_cycles;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: Motor ON - resetting bit_position to 0", DRIVE_ID);
+                $display("FLUX_DRIVE[%0d]: Motor ON - keeping bit_position at %0d", DRIVE_ID, bit_position);
 `endif
             end
             prev_motor_for_position <= motor_spinning;

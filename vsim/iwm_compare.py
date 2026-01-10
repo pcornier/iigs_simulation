@@ -16,6 +16,7 @@ Options:
     --cpu            Compare CPU instruction sequences at IWM accesses
     --cpu-bytes      Show CPU data reads ($C0EC) with returned byte values
     --status         Compare IWM status/sense line reads
+    --flux           Compare bit-level flux decoding (SHIFT operations)
 """
 
 import re
@@ -23,6 +24,20 @@ import sys
 import argparse
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+@dataclass
+class FluxEvent:
+    """Represents a flux decoding event (SHIFT or BYTE_COMPLETE)"""
+    source: str  # 'mame' or 'vsim'
+    event_type: str  # 'SHIFT', 'BYTE_COMPLETE', 'EDGE', 'START_READ'
+    bit: Optional[int] = None  # 0 or 1 for SHIFT events
+    rsh_before: Optional[int] = None  # Shift register before
+    rsh_after: Optional[int] = None  # Shift register after
+    state: Optional[str] = None  # 'EDGE_0' or 'EDGE_1'
+    endw: Optional[int] = None  # End of window time
+    data: Optional[int] = None  # Completed byte value
+    position: Optional[int] = None  # Disk position
+    line_num: int = 0
 
 @dataclass
 class IWMEvent:
@@ -538,6 +553,207 @@ def show_sector_headers(mame_events: List[IWMEvent], vsim_events: List[IWMEvent]
             hex_str = ' '.join(f'{b:02X}' for b in header)
             print(f"  [{line:>7}] {hex_str}")
 
+def parse_flux_events(filename: str, source: str) -> List[FluxEvent]:
+    """Parse flux-level debug events (SHIFT, BYTE_COMPLETE) from log file"""
+    events = []
+
+    # Patterns for flux events (both MAME and vsim use similar format now)
+    # MAME: IWM_FLUX: SHIFT bit=1 rsh=00->01 state=EDGE_1 endw=9311338
+    # vsim: IWM_FLUX: SHIFT bit=1 rsh=00->01 state=EDGE_1 endw=12345
+    shift_pattern = re.compile(
+        r'IWM_FLUX: SHIFT bit=(\d) rsh=([0-9a-f]{2})->([0-9a-f]{2}) state=(EDGE_[01]) endw=(\d+)'
+    )
+
+    # MAME: IWM_FLUX: BYTE_COMPLETE_ASYNC data=de pos=50475987 @timestamp
+    # vsim: IWM_FLUX: BYTE_COMPLETE_ASYNC data=de pos=12345 @cycle=12345
+    byte_complete_pattern = re.compile(
+        r'IWM_FLUX: BYTE_COMPLETE_(?:ASYNC|SYNC) data=([0-9a-f]{2}) pos=(\d+)'
+    )
+
+    # MAME: IWM_FLUX: EDGE_0->EDGE_1 flux_at=9311331 rsh=00 win=14 half=7
+    # vsim: IWM_FLUX: EDGE_0->EDGE_1 flux_at=12345 rsh=00 win=14 half=7
+    edge_pattern = re.compile(
+        r'IWM_FLUX: EDGE_0->EDGE_1 flux_at=(\d+) rsh=([0-9a-f]{2})'
+    )
+
+    # START_READ events
+    start_read_pattern = re.compile(
+        r'IWM_FLUX: START_READ'
+    )
+
+    try:
+        with open(filename, 'rb') as f:
+            content = f.read().decode('utf-8', errors='replace')
+
+        for line_num, line in enumerate(content.split('\n'), 1):
+            # SHIFT events
+            m = shift_pattern.search(line)
+            if m:
+                events.append(FluxEvent(
+                    source=source,
+                    event_type='SHIFT',
+                    bit=int(m.group(1)),
+                    rsh_before=int(m.group(2), 16),
+                    rsh_after=int(m.group(3), 16),
+                    state=m.group(4),
+                    endw=int(m.group(5)),
+                    line_num=line_num
+                ))
+                continue
+
+            # BYTE_COMPLETE events
+            m = byte_complete_pattern.search(line)
+            if m:
+                events.append(FluxEvent(
+                    source=source,
+                    event_type='BYTE_COMPLETE',
+                    data=int(m.group(1), 16),
+                    position=int(m.group(2)),
+                    line_num=line_num
+                ))
+                continue
+
+            # EDGE events (flux detected)
+            m = edge_pattern.search(line)
+            if m:
+                events.append(FluxEvent(
+                    source=source,
+                    event_type='EDGE',
+                    endw=int(m.group(1)),
+                    rsh_before=int(m.group(2), 16),
+                    line_num=line_num
+                ))
+                continue
+
+            # START_READ events
+            m = start_read_pattern.search(line)
+            if m:
+                events.append(FluxEvent(
+                    source=source,
+                    event_type='START_READ',
+                    line_num=line_num
+                ))
+                continue
+
+    except FileNotFoundError:
+        print(f"Error: Could not open {filename}", file=sys.stderr)
+        sys.exit(1)
+
+    return events
+
+def compare_flux_events(mame_file: str, vsim_file: str, start: int = 0, limit: int = 100,
+                        show_all: bool = False, byte_context: int = 0):
+    """Compare flux-level decoding between MAME and vsim"""
+
+    print(f"Parsing MAME flux events from {mame_file}...")
+    mame_events = parse_flux_events(mame_file, 'mame')
+    print(f"  Found {len(mame_events)} flux events")
+
+    print(f"Parsing vsim flux events from {vsim_file}...")
+    vsim_events = parse_flux_events(vsim_file, 'vsim')
+    print(f"  Found {len(vsim_events)} flux events")
+
+    # Filter to just SHIFT events for bit-by-bit comparison
+    mame_shifts = [e for e in mame_events if e.event_type == 'SHIFT']
+    vsim_shifts = [e for e in vsim_events if e.event_type == 'SHIFT']
+
+    mame_bytes = [e for e in mame_events if e.event_type == 'BYTE_COMPLETE']
+    vsim_bytes = [e for e in vsim_events if e.event_type == 'BYTE_COMPLETE']
+
+    print(f"\nMAME: {len(mame_shifts)} SHIFT events, {len(mame_bytes)} BYTE_COMPLETE events")
+    print(f"vsim: {len(vsim_shifts)} SHIFT events, {len(vsim_bytes)} BYTE_COMPLETE events")
+
+    if not mame_shifts or not vsim_shifts:
+        print("No SHIFT events found in one or both logs.")
+        return
+
+    # Find the first byte that differs
+    print(f"\n=== Byte-level comparison ===")
+    print(f"{'#':>4}  {'MAME':>6} {'Line':>10}  {'vsim':>6} {'Line':>10}  {'Match':>6}")
+    print("-" * 55)
+
+    max_bytes = min(len(mame_bytes), len(vsim_bytes))
+    if limit > 0:
+        max_bytes = min(max_bytes, start + limit)
+
+    first_diff_idx = -1
+    for i in range(start, max_bytes):
+        m_byte = mame_bytes[i]
+        v_byte = vsim_bytes[i]
+
+        match = "OK" if m_byte.data == v_byte.data else "DIFF"
+        if match == "DIFF" and first_diff_idx < 0:
+            first_diff_idx = i
+
+        print(f"{i:>4}  0x{m_byte.data:02X}  {m_byte.line_num:>10}  0x{v_byte.data:02X}  {v_byte.line_num:>10}  {match:>6}")
+
+    print("-" * 55)
+
+    if first_diff_idx >= 0:
+        print(f"\nFirst difference at byte #{first_diff_idx}")
+        print(f"  MAME: 0x{mame_bytes[first_diff_idx].data:02X} at line {mame_bytes[first_diff_idx].line_num}")
+        print(f"  vsim: 0x{vsim_bytes[first_diff_idx].data:02X} at line {vsim_bytes[first_diff_idx].line_num}")
+
+        # Show the bit sequence leading to this byte
+        if byte_context > 0 or show_all:
+            context_bytes = byte_context if byte_context > 0 else 1
+            print(f"\n=== Bit sequence comparison for bytes {max(0, first_diff_idx - context_bytes)} to {first_diff_idx} ===")
+
+            # Find SHIFT events that belong to bytes around the difference
+            # We need to count backwards from BYTE_COMPLETE events
+
+            # Build a mapping of byte index to SHIFT events
+            def get_shifts_for_byte(shifts, bytes_list, byte_idx):
+                """Get the SHIFT events that formed a specific byte"""
+                if byte_idx >= len(bytes_list):
+                    return []
+
+                byte_line = bytes_list[byte_idx].line_num
+                # Find shifts between previous byte and this byte
+                prev_line = bytes_list[byte_idx - 1].line_num if byte_idx > 0 else 0
+
+                return [s for s in shifts if prev_line < s.line_num <= byte_line]
+
+            for bidx in range(max(0, first_diff_idx - context_bytes), first_diff_idx + 1):
+                mame_byte_shifts = get_shifts_for_byte(mame_shifts, mame_bytes, bidx)
+                vsim_byte_shifts = get_shifts_for_byte(vsim_shifts, vsim_bytes, bidx)
+
+                m_byte_val = mame_bytes[bidx].data if bidx < len(mame_bytes) else None
+                v_byte_val = vsim_bytes[bidx].data if bidx < len(vsim_bytes) else None
+
+                m_hex = f"0x{m_byte_val:02X}" if m_byte_val is not None else "None"
+                v_hex = f"0x{v_byte_val:02X}" if v_byte_val is not None else "None"
+                print(f"\n--- Byte #{bidx}: MAME={m_hex}, vsim={v_hex} ---")
+
+                # Show bit sequences side by side
+                mame_bits = ''.join([str(s.bit) for s in mame_byte_shifts])
+                vsim_bits = ''.join([str(s.bit) for s in vsim_byte_shifts])
+
+                print(f"  MAME bits ({len(mame_byte_shifts)}): {mame_bits}")
+                print(f"  vsim bits ({len(vsim_byte_shifts)}): {vsim_bits}")
+
+                # Show detailed shift comparison
+                max_shifts = max(len(mame_byte_shifts), len(vsim_byte_shifts))
+                if max_shifts > 0 and show_all:
+                    print(f"\n  {'#':>3}  {'MAME bit':>8} {'rsh':>10} {'state':>8}  {'vsim bit':>8} {'rsh':>10} {'state':>8}  {'Match':>6}")
+                    print("  " + "-" * 80)
+                    for si in range(max_shifts):
+                        m_shift = mame_byte_shifts[si] if si < len(mame_byte_shifts) else None
+                        v_shift = vsim_byte_shifts[si] if si < len(vsim_byte_shifts) else None
+
+                        m_bit = str(m_shift.bit) if m_shift else "-"
+                        m_rsh = f"{m_shift.rsh_before:02X}->{m_shift.rsh_after:02X}" if m_shift else "----"
+                        m_state = m_shift.state if m_shift else "----"
+
+                        v_bit = str(v_shift.bit) if v_shift else "-"
+                        v_rsh = f"{v_shift.rsh_before:02X}->{v_shift.rsh_after:02X}" if v_shift else "----"
+                        v_state = v_shift.state if v_shift else "----"
+
+                        match = "OK" if m_shift and v_shift and m_shift.bit == v_shift.bit else "DIFF"
+                        print(f"  {si:>3}  {m_bit:>8} {m_rsh:>10} {m_state:>8}  {v_bit:>8} {v_rsh:>10} {v_state:>8}  {match:>6}")
+    else:
+        print(f"\nAll {max_bytes} bytes match!")
+
 def main():
     parser = argparse.ArgumentParser(description='Compare IWM logs between MAME and vsim')
     parser.add_argument('mame_log', help='MAME log file')
@@ -558,8 +774,17 @@ def main():
     parser.add_argument('--status-motor', action='store_true', help='Compare status reads only when motor is on')
     parser.add_argument('--cpu-bytes', action='store_true', help='Show CPU accesses with returned byte values')
     parser.add_argument('--positions', action='store_true', help='Show disk positions in byte comparison')
+    parser.add_argument('--flux', action='store_true', help='Compare bit-level flux decoding (SHIFT operations)')
+    parser.add_argument('--flux-detail', action='store_true', help='Show detailed bit-by-bit comparison for differing bytes')
+    parser.add_argument('--byte-context', type=int, default=2, help='Number of bytes before diff to show in flux mode (default: 2)')
 
     args = parser.parse_args()
+
+    # Handle --flux mode separately (doesn't need IWMEvent parsing)
+    if args.flux:
+        compare_flux_events(args.mame_log, args.vsim_log, args.start, args.limit,
+                           args.flux_detail, args.byte_context)
+        return
 
     print(f"Loading MAME log: {args.mame_log}")
     mame_events = parse_mame_log(args.mame_log)
