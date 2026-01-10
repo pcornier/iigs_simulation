@@ -942,7 +942,7 @@ module iigs
     end
 
     // Check iwm_strobe BEFORE resetting it
-    if (iwm_strobe & cpu_we_n & phi2) begin
+    if (iwm_strobe & cpu_we_n) begin
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
       io_dout <= iwm_dout;
     end
@@ -978,7 +978,10 @@ module iigs
 `ifdef SIMULATION
           // Debug: Show which address the case will match
           if (addr[11:8] == 4'h0 && addr[7:4] == 4'h3) begin
-            $display("IO_WRITE_C03x: addr[11:0]=%03x bank_bef=%02x cpu_dout=%02x", addr[11:0], bank_bef, cpu_dout);
+            $display("IO_WRITE_C03x: addr[11:0]=%03x bank_bef=%02x cpu_dout=%02x phi2=%b", addr[11:0], bank_bef, cpu_dout, phi2);
+            if (addr[11:0] == 12'h036) begin
+                $display("CYAREG_MATCH_CHECK: addr=036 dout=%02x", cpu_dout);
+            end
           end
 `endif
           case (addr[11:0])
@@ -1070,7 +1073,12 @@ module iigs
             12'h031: begin
               DISK35<= cpu_dout & 8'hc0;
 `ifdef SIMULATION
-              $display("IWM DBG: WR $C031 <= %02h (DISK35 bit6=%0d bit7=%0d)", cpu_dout, (cpu_dout>>6)&1'b1, (cpu_dout>>7)&1'b1);
+              $display("IWM DBG: WR $C031 <= %02h (DISK35 bit6=%0d bit7=%0d) cpu_addr=%06x addr=%04x bank=%02x phi2=%0d",
+                       cpu_dout, (cpu_dout>>6)&1'b1, (cpu_dout>>7)&1'b1, cpu_addr, addr, bank, phi2);
+              // Extra check: warn if DISK35 is changing unexpectedly
+              if ((cpu_dout & 8'hc0) != DISK35) begin
+                $display("IWM DBG: *** DISK35 ACTUALLY CHANGING: old=%02h new=%02h ***", DISK35, cpu_dout & 8'hc0);
+              end
 `endif
             end
             12'h032:
@@ -1108,7 +1116,10 @@ module iigs
 `ifdef DEBUG_IO
             12'h036: begin $display("__CYAREG %x",cpu_dout);CYAREG <= cpu_dout; end
 `else
-            12'h036: begin CYAREG <= cpu_dout; end
+            12'h036: begin 
+                $display("CYAREG_WRITE: old=%02x new=%02x bank=%02x", CYAREG, cpu_dout, bank_bef);
+                CYAREG <= cpu_dout; 
+            end
 `endif
             // SCC (Serial Communications Controller) - Zilog 8530
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
@@ -1430,7 +1441,14 @@ module iigs
             12'h02e: io_dout <= v_adjusted >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
             12'h02f: io_dout <= {v_adjusted[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
             12'h030: begin io_dout <= SPKR; speaker_state <= ~speaker_state; end
-            12'h031: io_dout <= DISK35;
+            12'h031: begin
+              io_dout <= DISK35;
+`ifdef SIMULATION
+              // Only log once per phi2 cycle to reduce noise
+              if (phi2)
+                $display("IWM DBG: RD $C031 = %02h cpu_addr=%06x bank=%02x", DISK35, cpu_addr, bank);
+`endif
+            end
             // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
             12'h032: begin
               io_dout <= VGCINT;
@@ -1894,6 +1912,17 @@ module iigs
   end
 `endif
 
+`ifdef SIMULATION
+  // Monitor DISK35 changes to catch oscillation bug
+  reg [7:0] prev_DISK35;
+  always @(posedge CLK_14M) begin
+    if (prev_DISK35 != DISK35) begin
+      $display("DISK35_MONITOR: *** DISK35 CHANGED: %02h -> %02h *** cpu_addr=%06x addr=%04x IO=%0d cpu_we_n=%0d cpu_dout=%02x phi2=%0d",
+               prev_DISK35, DISK35, cpu_addr, addr, IO, cpu_we_n, cpu_dout, phi2);
+    end
+    prev_DISK35 <= DISK35;
+  end
+`endif
 
   // All-bank shadow: When CYAREG[4]=1, even banks (02-7E) act like bank 00 for RAMRD/RAMWRT
   wire all_bank_shadow_even = CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7e) && ~bank_bef[0];

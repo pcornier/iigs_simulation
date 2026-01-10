@@ -101,6 +101,25 @@ module iwm_woz (
     wire mode_write_active = cpu_wr && !drive_on && immediate_q7 && immediate_q6 && A[0];
     wire [7:0] immediate_mode = mode_write_active ? {3'b000, D_IN[4:0]} : mode_reg;
 
+`ifdef SIMULATION
+    // Debug: track immediate_mode during status reads
+    reg [7:0] prev_immediate_mode;
+    reg       prev_cpu_rd;
+    always @(posedge CLK_14M) begin
+        // Log status reads where mode might be 0
+        if (cpu_rd && PH2 && immediate_q6 && !immediate_q7) begin
+            $display("IWM_WOZ: STATUS_READ mode_reg=%02h immediate_mode=%02h mode_write_active=%0d cpu_wr=%0d drive_on=%0d imm_q6=%0d imm_q7=%0d A=%04h D_IN=%02h",
+                     mode_reg, immediate_mode, mode_write_active, cpu_wr, drive_on, immediate_q6, immediate_q7, A, D_IN);
+        end
+        // Log when mode_reg changes
+        if (prev_immediate_mode != mode_reg) begin
+            $display("IWM_WOZ: MODE_REG_CHANGED %02h -> %02h", prev_immediate_mode, mode_reg);
+        end
+        prev_immediate_mode <= mode_reg;
+        prev_cpu_rd <= cpu_rd;
+    end
+`endif
+
     // Immediate phase values for sense calculation
     // When the ROM accesses a phase register (e.g., bit $C0E3), the sense value
     // should use the NEW phase value immediately, not wait for the next cycle.
@@ -321,8 +340,36 @@ module iwm_woz (
         .SD_TRACK_ACK(1'b0)
     );
 
-    assign WOZ_TRACK3 = {1'b0, drive35_track} + (diskreg_sel ? 8'd80 : 8'd0);
+    // WOZ_TRACK3: Register the track output to synchronize with C++ data updates.
+    // The C++ BeforeEval() runs before Verilog eval, so if we changed WOZ_TRACK3
+    // combinationally, the C++ would provide the OLD track's data while Verilog
+    // is already reading from the NEW track position. By registering WOZ_TRACK3,
+    // the track change is delayed by one cycle to match the C++ timing.
+    wire [7:0] woz_track3_comb = {1'b0, drive35_track} + (diskreg_sel ? 8'd80 : 8'd0);
+    reg [7:0] woz_track3_reg;
+
+    always @(posedge CLK_14M or posedge RESET) begin
+        if (RESET) begin
+            woz_track3_reg <= 8'd0;
+        end else begin
+            woz_track3_reg <= woz_track3_comb;
+        end
+    end
+
+    assign WOZ_TRACK3 = woz_track3_reg;
     assign WOZ_TRACK3_BIT_ADDR = drive35_bram_addr;
+
+`ifdef SIMULATION
+    // Debug: track diskreg_sel changes to detect oscillation bug
+    reg prev_diskreg_sel;
+    always @(posedge CLK_14M) begin
+        if (prev_diskreg_sel != diskreg_sel) begin
+            $display("IWM_WOZ: *** diskreg_sel CHANGED: %0d -> %0d (DISK35=%02h drive35_track=%0d WOZ_TRACK3_comb=%0d WOZ_TRACK3_reg=%0d)",
+                     prev_diskreg_sel, diskreg_sel, DISK35, drive35_track, woz_track3_comb, woz_track3_reg);
+        end
+        prev_diskreg_sel <= diskreg_sel;
+    end
+`endif
 
     //=========================================================================
     // 3.5" Drive 2 - Empty (No Disk)

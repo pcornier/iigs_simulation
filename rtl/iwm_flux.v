@@ -318,13 +318,32 @@ module iwm_flux (
             prev_sm_active <= MOTOR_SPINNING && DISK_READY;
 
             // CPU read edge detection: clear latch when RD goes low
-            if (!RD) begin
+            if (!RD || !CEN) begin
+                if (rd_latched) begin
+                    // CPU read just finished - NOW acknowledge bit 7
+                    // This ensures the FIRST read sees bit 7=1, but subsequent ones see 0
+                    // CRITICAL: Only set if this was a DATA register read (m_data_read was set)
+                    // AND a new byte is NOT currently completing!
+                    if (MOTOR_ACTIVE && is_async && effective_data_raw[7] && m_data_read && !byte_completing) begin
+                        bit7_acknowledged <= 1'b1;
+                        
+                        // MAME async mode behavior:
+                        // Start countdown to clear the entire byte after 14 cycles (2us).
+                        // By starting it here (at the end of the read), we ensure the 
+                        // data remains valid for the full duration of the CPU access.
+                        if (async_update == 0) begin
+                            async_update <= 6'd14; // 14 cycles at 7MHz = 2µs (matches MAME)
+`ifdef SIMULATION
+                            $display("IWM_FLUX: async_update started at end of read");
+`endif
+                        end
+                    end
+                end
                 rd_latched <= 1'b0;
             end
 
             // Set data_read flag when CPU reads data register (Q7=0, Q6=0)
             // Use immediate Q6/Q7 values from current address
-            // Also handle MAME async mode handshake: clear bit7 immediately on read
             // IMPORTANT: Only process ONCE per CPU read cycle using edge detection
             // CEN (phi2) ensures we're in the valid part of the bus cycle
             if (RD && CEN && !rd_latched) begin
@@ -333,24 +352,7 @@ module iwm_flux (
                 if ((((ADDR[3:1] == 3'b111) ? ADDR[0] : SW_Q7) == 1'b0) &&
                     (((ADDR[3:1] == 3'b110) ? ADDR[0] : SW_Q6) == 1'b0)) begin
                     m_data_read <= 1'b1;
-                    // MAME async mode behavior:
-                    // When reading a valid byte (bit7=1), immediately clear bit7 so
-                    // subsequent reads see "not ready". Also start countdown to clear
-                    // the entire byte after 14 cycles.
-                    // Note: check effective_data_raw[7] (raw bit7), not effective_data[7]
-                    // (which may be masked if already acknowledged)
-                    if (MOTOR_ACTIVE && is_async && effective_data_raw[7]) begin
-                        // Always acknowledge when reading valid byte
-                        bit7_acknowledged <= 1'b1;
-                        // Start countdown if not already running, OR if this is a new byte
-                        // completing (in which case the old countdown is obsolete)
-                        if (async_update == 0 || byte_completing) begin
-                            async_update <= 6'd14; // 14 cycles at 7MHz = 2µs (matches MAME)
-`ifdef SIMULATION
-                            $display("IWM_FLUX: async_update started (byte_completing=%0d)", byte_completing);
-`endif
-                        end
-                    end
+                    // Note: async_update now started at END of read (see above)
                 end
             end
         end
@@ -395,10 +397,12 @@ module iwm_flux (
     wire byte_completing = (m_rsh >= 8'h80) && MOTOR_SPINNING && DISK_READY;
     wire [7:0] effective_data_raw = byte_completing ? m_rsh : m_data;
 
-    // MAME behavior: return m_data directly without masking. The async mechanism
-    // clears m_data to 0 after 14 cycles, which causes subsequent reads to see 0x00.
-    // No bit7 masking needed - just use effective_data_raw directly.
-    wire [7:0] effective_data = effective_data_raw;
+    // MAME behavior: mask bit 7 after it has been acknowledged by a CPU read.
+    // The bit 7 remains 0 until the next byte completes (clearing bit7_acknowledged).
+    // In async mode, the entire byte eventually clears after 14 cycles (2us).
+    // CRITICAL: Never mask if a new byte is just completing!
+    wire [7:0] effective_data = (MOTOR_ACTIVE && is_async && bit7_acknowledged && !byte_completing) ? 
+                                 (effective_data_raw & 8'h7F) : effective_data_raw;
 
     // Helper wires for byte completion logic to avoid race conditions
     wire cpu_reading_data = RD && !immediate_q7 && !immediate_q6;

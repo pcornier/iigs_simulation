@@ -98,12 +98,20 @@ void SimBlockDevice::BeforeEval(int cycles)
                  *woz3_bit_data = 0xFF;  // Out of range padding
              }
              // Debug: log first few data accesses and when track/addr changes
-             if (woz3_debug_count < 30 || track != woz3_last_track) {
-                 if (track != woz3_last_track || byte_addr != woz3_last_addr) {
+             if (track != woz3_last_track) {
+                 printf("WOZ3 DATA: Track %d loaded (bit_count=%u)\n", track, woz_track->bit_count);
+                 printf("WOZ3 DATA: First 32 bytes: ");
+                 for (int i = 0; i < 32 && i < (int)woz_track->bits.size(); i++) {
+                     printf("%02X ", woz_track->bits[i]);
+                 }
+                 printf("\n");
+                 woz3_last_track = track;
+                 woz3_last_addr = byte_addr;
+             } else if (woz3_debug_count < 30) {
+                 if (byte_addr != woz3_last_addr) {
                      printf("WOZ3 DATA: track=%d addr=%d data=0x%02X bit_count=%u (access #%d)\n",
                             track, byte_addr, *woz3_bit_data, woz_track->bit_count, woz3_debug_count);
                      woz3_debug_count++;
-                     woz3_last_track = track;
                      woz3_last_addr = byte_addr;
                  }
              }

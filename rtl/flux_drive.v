@@ -128,6 +128,10 @@ module flux_drive (
 
     // Internal motor state for 3.5" Sony drives (controlled by commands)
     reg         sony_motor_on;
+    
+    // Disk switched flag (set on mount/reset, cleared by command)
+    reg         disk_switched;
+    reg         prev_disk_mounted;
 
     // Motor sense signal - for sense register 0x2 (MAME m_mon equivalent)
     // This follows the Sony command state, NOT the IWM motor bit
@@ -136,6 +140,8 @@ module flux_drive (
 
 `ifdef SIMULATION
     reg [3:0]   prev_imm_phases_debug;  // For tracking phase changes
+    reg [31:0]  prev_track_bit_count;   // Track changes in TRACK_BIT_COUNT
+    reg         side_transition_logged; // One-shot for side transition logging
 `endif
 
     // Sony 3.5" drive command interface (MAME floppy.cpp mac_floppy_device::seek_phase_w)
@@ -166,7 +172,12 @@ module flux_drive (
     wire [5:0]  bit_cell_cycles = IS_35_INCH ? BIT_CELL_35 : BIT_CELL_525;
 
     // Current byte and bit within that byte
-    wire [13:0] byte_index = bit_position[16:3];    // bit_position / 8
+    // Clamp byte_index to prevent out-of-bounds reads during track transitions
+    // When TRACK_BIT_COUNT changes, bit_position might exceed the new track's size
+    // for one cycle before it gets wrapped. This clamp ensures we don't read garbage.
+    wire [13:0] raw_byte_index = bit_position[16:3];    // bit_position / 8
+    wire [13:0] max_byte_index = (TRACK_BIT_COUNT > 0) ? ((TRACK_BIT_COUNT - 1) >> 3) : 14'd0;
+    wire [13:0] byte_index = (raw_byte_index > max_byte_index) ? 14'd0 : raw_byte_index;
     wire [2:0]  bit_shift = 3'd7 - bit_position[2:0]; // MSB first (bit 7 = first bit)
 
     // Get current bit from BRAM data
@@ -182,7 +193,11 @@ module flux_drive (
     assign BIT_POSITION = bit_position;
     // Look-ahead for BRAM address to handle simulation/C++ update latency
     wire [16:0] next_bit_pos = (TRACK_BIT_COUNT > 0 && bit_position + 1 >= TRACK_BIT_COUNT) ? 17'd0 : bit_position + 1'd1;
-    assign BRAM_ADDR = (bit_timer == 6'd1) ? next_bit_pos[16:3] : byte_index;
+    // Clamp BRAM_ADDR to prevent out-of-bounds reads during track transitions.
+    // Both next_bit_pos[16:3] and byte_index need protection because bit_position
+    // may exceed the new track's size for one cycle before wrapping occurs.
+    wire [13:0] unclamped_bram_addr = (bit_timer == 6'd1) ? next_bit_pos[16:3] : byte_index;
+    assign BRAM_ADDR = (unclamped_bram_addr > max_byte_index) ? 14'd0 : unclamped_bram_addr;
     assign WRITE_PROTECT = DISK_WP;
 
     //=========================================================================
@@ -218,7 +233,7 @@ module flux_drive (
             end
             4'h1: sense_35 = 1'b1;              // Step signal (always 1 in MAME, no delay)
             4'h2: sense_35 = ~motor_on_sense;    // Motor: 0=ON, 1=OFF (MAME m_mon, based on Sony command)
-            4'h3: sense_35 = 1'b1;              // Disk change: 1=No Change (Simplified)
+            4'h3: sense_35 = ~disk_switched;    // Disk change: 0=Changed, 1=No Change
             4'h4: sense_35 = 1'b0;              // Index: 0 for GCR drives (no MFM index)
             4'h5: sense_35 = 1'b0;              // MFM Capable: 0 for 800K GCR drive
             4'h6: sense_35 = 1'b1;              // Double Sided: 1 for 800K drive
@@ -277,7 +292,15 @@ module flux_drive (
             step_direction_slot <= 2'b00;  // Default: toward higher tracks (matches MAME m_dir=0)
             prev_strobe_slot <= 2'b00;     // No strobe active initially
             sony_motor_on <= 1'b0;         // Default: motor off
+            disk_switched <= 1'b1;         // Assume disk switched on reset
+            prev_disk_mounted <= 1'b0;
         end else begin
+            // Track disk insertion
+            if (DISK_MOUNTED && !prev_disk_mounted) begin
+                disk_switched <= 1'b1;
+            end
+            prev_disk_mounted <= DISK_MOUNTED;
+
             // Track step direction commands (like MAME's m_dir)
             // These work even when motor is off - they just set direction for next step
             // Use IMMEDIATE_PHASES since MAME's seek_phase_w() sets direction immediately
@@ -407,8 +430,9 @@ module flux_drive (
 
                     4'd12: begin
                         // DskchgClear: Clear disk change flag
+                        disk_switched <= 1'b0;
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd disk change clear (not implemented)", DRIVE_ID);
+                        $display("FLUX_DRIVE[%0d]: cmd disk change clear", DRIVE_ID);
 `endif
                     end
 
@@ -572,6 +596,11 @@ module flux_drive (
             track_valid <= 1'b0;
             rotation_complete <= 1'b0;
             prev_motor_for_position <= 1'b0;
+            prev_track_bit_count <= 32'd0;
+`ifdef SIMULATION
+            side_transition_logged <= 1'b1;  // Start as logged to avoid spam at startup
+            debug_read_count <= 5'd16;       // Disable log until first track change
+`endif
         end else begin
             // Default: no flux transition this cycle, no rotation complete
             FLUX_TRANSITION <= 1'b0;
@@ -591,6 +620,42 @@ module flux_drive (
 `endif
             end
             prev_motor_for_position <= motor_spinning;
+
+            // Handle TRACK_BIT_COUNT changes (side selection transitions)
+            // When switching sides, the new track may have fewer bits than the old one.
+            // If bit_position exceeds the new track's bit count, wrap it to avoid
+            // reading garbage data. This is critical for correct side selection.
+            if (prev_track_bit_count != TRACK_BIT_COUNT && TRACK_BIT_COUNT > 0) begin
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: *** TRACK_BIT_COUNT CHANGED: %0d -> %0d (bit_pos=%0d, byte_idx=%0d)",
+                         DRIVE_ID, prev_track_bit_count, TRACK_BIT_COUNT, bit_position, byte_index);
+`endif
+                // If bit_position exceeds new track size, wrap it to start of track
+                // This prevents reading beyond the track's valid data
+                if (bit_position >= TRACK_BIT_COUNT) begin
+`ifdef SIMULATION
+                    $display("FLUX_DRIVE[%0d]: *** WRAPPING bit_position %0d to 0 (new track size %0d)",
+                             DRIVE_ID, bit_position, TRACK_BIT_COUNT);
+`endif
+                    bit_position <= 17'd0;  // Reset to start of new track
+                    bit_timer <= bit_cell_cycles;  // Reset bit timer too
+                end
+`ifdef SIMULATION
+                side_transition_logged <= 1'b0;  // Reset to allow logging of data
+`endif
+            end
+            prev_track_bit_count <= TRACK_BIT_COUNT;
+
+`ifdef SIMULATION
+            // Log first 10 bytes after a side transition
+            if (motor_spinning && TRACK_LOADED && TRACK_BIT_COUNT > 0 && !side_transition_logged) begin
+                $display("FLUX_DRIVE[%0d]: Side transition data: bit_pos=%0d byte_idx=%0d BRAM_DATA=0x%02X bit_shift=%0d current_bit=%0d",
+                         DRIVE_ID, bit_position, byte_index, BRAM_DATA, bit_shift, current_bit);
+                if (byte_index > 10) begin
+                    side_transition_logged <= 1'b1;  // Stop logging after a few samples
+                end
+            end
+`endif
 
             // Only rotate when motor is spinning and track is loaded
             if (motor_spinning && TRACK_LOADED) begin
@@ -639,16 +704,31 @@ module flux_drive (
             // (For now, just track the current track for debugging)
             if (head_phase[8:2] != current_track) begin
                 current_track <= head_phase[8:2];
+                debug_read_count <= 5'd0;
 `ifdef SIMULATION
                 $display("FLUX_DRIVE[%0d]: Head moved to track %0d", DRIVE_ID, head_phase[8:2]);
 `endif
             end
+
+`ifdef SIMULATION
+            // Log first 16 bytes read from BRAM after track change to verify data
+            if (motor_spinning && TRACK_LOADED && debug_read_count < 16) begin
+                // Log when we start processing a new byte (bit_shift == 7)
+                // Use bit_timer check to log only once per bit cell
+                if (bit_timer == bit_cell_cycles && bit_shift == 7) begin
+                    $display("FLUX_DRIVE[%0d]: BRAM[%04h] = %02h (track=%0d byte_%0d)", 
+                             DRIVE_ID, BRAM_ADDR, BRAM_DATA, current_track, debug_read_count);
+                    debug_read_count <= debug_read_count + 1'd1;
+                end
+            end
+`endif
         end
     end
 
 `ifdef SIMULATION
     // Debug output
     reg [8:0] prev_head_phase;
+    reg [4:0] debug_read_count;  // Counter for track dump logging
     reg [31:0] flux_count_debug;
     reg [31:0] cycle_count_debug;
     reg [31:0] rotate_cycles;    // Cycles where disk is rotating
