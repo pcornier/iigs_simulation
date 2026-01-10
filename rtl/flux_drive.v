@@ -142,6 +142,7 @@ module flux_drive (
     reg [3:0]   prev_imm_phases_debug;  // For tracking phase changes
     reg [31:0]  prev_track_bit_count;   // Track changes in TRACK_BIT_COUNT
     reg         side_transition_logged; // One-shot for side transition logging
+    reg [4:0]   side_transition_byte_count; // Counter for post-transition byte logging
 `endif
 
     // Sony 3.5" drive command interface (MAME floppy.cpp mac_floppy_device::seek_phase_w)
@@ -600,6 +601,7 @@ module flux_drive (
 `ifdef SIMULATION
             side_transition_logged <= 1'b1;  // Start as logged to avoid spam at startup
             debug_read_count <= 5'd16;       // Disable log until first track change
+            side_transition_byte_count <= 5'd16;  // Start above threshold to avoid spam
 `endif
         end else begin
             // Default: no flux transition this cycle, no rotation complete
@@ -627,8 +629,10 @@ module flux_drive (
             // reading garbage data. This is critical for correct side selection.
             if (prev_track_bit_count != TRACK_BIT_COUNT && TRACK_BIT_COUNT > 0) begin
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: *** TRACK_BIT_COUNT CHANGED: %0d -> %0d (bit_pos=%0d, byte_idx=%0d)",
-                         DRIVE_ID, prev_track_bit_count, TRACK_BIT_COUNT, bit_position, byte_index);
+                $display("FLUX_DRIVE[%0d]: *** TRACK_BIT_COUNT CHANGED: %0d -> %0d (bit_pos=%0d, byte_idx=%0d, head_phase=%0d, track=%0d)",
+                         DRIVE_ID, prev_track_bit_count, TRACK_BIT_COUNT, bit_position, byte_index, head_phase, head_phase[8:2]);
+                $display("FLUX_DRIVE[%0d]: *** TRACK_TRANSITION: BRAM_ADDR=%0d BRAM_DATA=0x%02X current_bit=%0d motor_spin=%0d drive_ready=%0d",
+                         DRIVE_ID, BRAM_ADDR, BRAM_DATA, current_bit, motor_spinning, drive_ready);
 `endif
                 // If bit_position exceeds new track size, wrap it to start of track
                 // This prevents reading beyond the track's valid data
@@ -642,17 +646,19 @@ module flux_drive (
                 end
 `ifdef SIMULATION
                 side_transition_logged <= 1'b0;  // Reset to allow logging of data
+                side_transition_byte_count <= 5'd0;  // Reset byte counter for post-transition logging
 `endif
             end
             prev_track_bit_count <= TRACK_BIT_COUNT;
 
 `ifdef SIMULATION
-            // Log first 10 bytes after a side transition
-            if (motor_spinning && TRACK_LOADED && TRACK_BIT_COUNT > 0 && !side_transition_logged) begin
-                $display("FLUX_DRIVE[%0d]: Side transition data: bit_pos=%0d byte_idx=%0d BRAM_DATA=0x%02X bit_shift=%0d current_bit=%0d",
-                         DRIVE_ID, bit_position, byte_index, BRAM_DATA, bit_shift, current_bit);
-                if (byte_index > 10) begin
-                    side_transition_logged <= 1'b1;  // Stop logging after a few samples
+            // Log first 16 bytes after a side transition to verify data
+            if (motor_spinning && TRACK_LOADED && TRACK_BIT_COUNT > 0 && side_transition_byte_count < 16) begin
+                // Log once per byte boundary (when starting a new byte)
+                if (bit_position[2:0] == 3'd0 && bit_timer == bit_cell_cycles) begin
+                    $display("FLUX_DRIVE[%0d]: SIDE_DATA[%0d]: byte_idx=%0d BRAM_DATA=0x%02X bit_pos=%0d",
+                             DRIVE_ID, side_transition_byte_count, byte_index, BRAM_DATA, bit_position);
+                    side_transition_byte_count <= side_transition_byte_count + 1'd1;
                 end
             end
 `endif

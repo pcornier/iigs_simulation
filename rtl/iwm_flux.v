@@ -122,6 +122,7 @@ module iwm_flux (
 
 `ifdef SIMULATION
     reg [31:0] debug_cycle;
+    reg [31:0] byte_counter;  // Sequential byte counter for comparison with MAME
 `endif
 
     //=========================================================================
@@ -147,6 +148,7 @@ module iwm_flux (
             rd_latched     <= 1'b0;
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
+            byte_counter   <= 32'd0;
 `endif
         end else begin
 `ifdef SIMULATION
@@ -205,11 +207,12 @@ module iwm_flux (
                     if (async_update == 1) begin
                         // Counter about to hit 0 - clear m_data NOW (unless byte completing)
                         if (is_async && !byte_completing) begin
+`ifdef SIMULATION
+                            $display("IWM_FLUX: ASYNC_UPDATE_EXPIRED clearing m_data (was %02h) @cycle=%0d",
+                                     m_data, debug_cycle);
+`endif
                             m_data <= 8'h00;
                             bit7_acknowledged <= 1'b0;
-`ifdef SIMULATION
-                            $display("IWM_FLUX: async_update expired, clearing m_data to 0");
-`endif
                         end
                     end
                     async_update <= async_update - 1'b1;
@@ -292,8 +295,9 @@ module iwm_flux (
                 // Byte complete when MSB is set
                 if (m_rsh >= 8'h80) begin
 `ifdef SIMULATION
-                    $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d @cycle=%0d",
-                             m_rsh, DISK_BIT_POSITION, debug_cycle);
+                    byte_counter <= byte_counter + 1;
+                    $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d byte#=%0d @cycle=%0d",
+                             m_rsh, DISK_BIT_POSITION, byte_counter + 1, debug_cycle);
 `endif
                     m_data <= m_rsh;
                     m_rsh <= 8'h00;
@@ -326,15 +330,18 @@ module iwm_flux (
                     // AND a new byte is NOT currently completing!
                     if (MOTOR_ACTIVE && is_async && effective_data_raw[7] && m_data_read && !byte_completing) begin
                         bit7_acknowledged <= 1'b1;
-                        
+`ifdef SIMULATION
+                        $display("IWM_FLUX: BIT7_ACKNOWLEDGED set (data=%02h) @cycle=%0d", effective_data_raw, debug_cycle);
+`endif
+
                         // MAME async mode behavior:
                         // Start countdown to clear the entire byte after 14 cycles (2us).
-                        // By starting it here (at the end of the read), we ensure the 
+                        // By starting it here (at the end of the read), we ensure the
                         // data remains valid for the full duration of the CPU access.
                         if (async_update == 0) begin
                             async_update <= 6'd14; // 14 cycles at 7MHz = 2µs (matches MAME)
 `ifdef SIMULATION
-                            $display("IWM_FLUX: async_update started at end of read");
+                            $display("IWM_FLUX: async_update started (14 7M-cycles) @cycle=%0d", debug_cycle);
 `endif
                         end
                     end

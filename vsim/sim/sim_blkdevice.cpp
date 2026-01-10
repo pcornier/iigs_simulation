@@ -99,14 +99,36 @@ void SimBlockDevice::BeforeEval(int cycles)
              }
              // Debug: log first few data accesses and when track/addr changes
              if (track != woz3_last_track) {
-                 printf("WOZ3 DATA: Track %d loaded (bit_count=%u)\n", track, woz_track->bit_count);
+                 printf("WOZ3 DATA: Track %d loaded (bit_count=%u, side=%d, physical_track=%d)\n",
+                        track, woz_track->bit_count, track >= 80 ? 1 : 0, track >= 80 ? track - 80 : track);
                  printf("WOZ3 DATA: First 32 bytes: ");
                  for (int i = 0; i < 32 && i < (int)woz_track->bits.size(); i++) {
                      printf("%02X ", woz_track->bits[i]);
                  }
                  printf("\n");
+                 // Extra debugging for side 1 tracks (track >= 80)
+                 if (track >= 80) {
+                     printf("WOZ3 SIDE1: Track %d (side1/track%d) - detailed dump:\n", track, track - 80);
+                     printf("WOZ3 SIDE1: bits.size()=%zu bit_count=%u initialized=%d\n",
+                            woz_track->bits.size(), woz_track->bit_count, woz_track->initialized ? 1 : 0);
+                     // Show first 64 bytes in hex dump format
+                     printf("WOZ3 SIDE1: First 64 bytes:\n");
+                     for (int row = 0; row < 4; row++) {
+                         printf("WOZ3 SIDE1: %04X: ", row * 16);
+                         for (int col = 0; col < 16; col++) {
+                             int idx = row * 16 + col;
+                             if (idx < (int)woz_track->bits.size()) {
+                                 printf("%02X ", woz_track->bits[idx]);
+                             } else {
+                                 printf("-- ");
+                             }
+                         }
+                         printf("\n");
+                     }
+                 }
                  woz3_last_track = track;
                  woz3_last_addr = byte_addr;
+                 woz3_debug_count = 0;  // Reset counter on track change
              } else if (woz3_debug_count < 30) {
                  if (byte_addr != woz3_last_addr) {
                      printf("WOZ3 DATA: track=%d addr=%d data=0x%02X bit_count=%u (access #%d)\n",

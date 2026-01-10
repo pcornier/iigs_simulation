@@ -553,6 +553,96 @@ def show_sector_headers(mame_events: List[IWMEvent], vsim_events: List[IWMEvent]
             hex_str = ' '.join(f'{b:02X}' for b in header)
             print(f"  [{line:>7}] {hex_str}")
 
+def find_headers_with_context(events: List[IWMEvent], context_before: int = 5, context_after: int = 15) -> List[Tuple[int, int, List[int], List[int]]]:
+    """Find D5 AA 96 headers with context bytes before and after.
+    Returns list of (byte_index, line_num, bytes_before, header_and_after)"""
+    headers = []
+    bytes_list = extract_data_bytes(events)
+
+    for i in range(len(bytes_list) - 2):
+        if (bytes_list[i][0] == 0xD5 and
+            bytes_list[i+1][0] == 0xAA and
+            bytes_list[i+2][0] == 0x96):
+            # Found address field header
+            before_start = max(0, i - context_before)
+            after_end = min(len(bytes_list), i + context_after)
+
+            bytes_before = [b[0] for b in bytes_list[before_start:i]]
+            header_and_after = [b[0] for b in bytes_list[i:after_end]]
+
+            headers.append((i, bytes_list[i][1], bytes_before, header_and_after))
+
+    return headers
+
+def compare_headers_detailed(mame_events: List[IWMEvent], vsim_events: List[IWMEvent], limit: int = 10):
+    """Detailed comparison of sector headers between MAME and vsim"""
+    mame_headers = find_headers_with_context(mame_events)
+    vsim_headers = find_headers_with_context(vsim_events)
+
+    print(f"\n=== Detailed Sector Header Comparison (D5 AA 96) ===")
+    print(f"MAME: {len(mame_headers)} headers found")
+    print(f"vsim: {len(vsim_headers)} headers found")
+
+    if not mame_headers:
+        print("No headers found in MAME log!")
+        return
+    if not vsim_headers:
+        print("No headers found in vsim log!")
+        return
+
+    # Compare headers side by side
+    max_compare = min(limit, len(mame_headers), len(vsim_headers))
+    print(f"\nComparing first {max_compare} headers:\n")
+
+    for i in range(max_compare):
+        m_idx, m_line, m_before, m_header = mame_headers[i]
+        v_idx, v_line, v_before, v_header = vsim_headers[i]
+
+        print(f"=== Header #{i} ===")
+        print(f"  MAME: byte_idx={m_idx:>6}, line={m_line}")
+        print(f"  vsim: byte_idx={v_idx:>6}, line={v_line}")
+
+        # Show sync bytes before header
+        m_sync = ' '.join(f'{b:02X}' for b in m_before[-5:] if m_before)
+        v_sync = ' '.join(f'{b:02X}' for b in v_before[-5:] if v_before)
+        print(f"  MAME sync (before): {m_sync}")
+        print(f"  vsim sync (before): {v_sync}")
+
+        # Show header + data (should be D5 AA 96 + encoded track/sector/checksum)
+        m_data = ' '.join(f'{b:02X}' for b in m_header[:15])
+        v_data = ' '.join(f'{b:02X}' for b in v_header[:15])
+        print(f"  MAME data: {m_data}")
+        print(f"  vsim data: {v_data}")
+
+        # Check if header data matches
+        match_len = min(len(m_header), len(v_header))
+        if m_header[:match_len] == v_header[:match_len]:
+            print(f"  Status: MATCH ✓")
+        else:
+            # Find first difference
+            for j in range(match_len):
+                if m_header[j] != v_header[j]:
+                    print(f"  Status: DIFFER at position {j} (MAME=0x{m_header[j]:02X}, vsim=0x{v_header[j]:02X})")
+                    break
+        print()
+
+    # Summary: do headers match overall?
+    if len(mame_headers) != len(vsim_headers):
+        print(f"\nWARNING: Different number of headers ({len(mame_headers)} vs {len(vsim_headers)})")
+
+    # Look for first completely matching header sequence
+    print("\nLooking for matching header sequence...")
+    for i in range(min(20, len(mame_headers), len(vsim_headers))):
+        m_header = mame_headers[i][3][:10]
+        v_header = vsim_headers[i][3][:10]
+        if m_header == v_header:
+            print(f"  Header #{i}: MATCH")
+        else:
+            print(f"  Header #{i}: DIFFER")
+            print(f"    MAME: {' '.join(f'{b:02X}' for b in m_header)}")
+            print(f"    vsim: {' '.join(f'{b:02X}' for b in v_header)}")
+            break
+
 def parse_flux_events(filename: str, source: str) -> List[FluxEvent]:
     """Parse flux-level debug events (SHIFT, BYTE_COMPLETE) from log file"""
     events = []
@@ -767,6 +857,7 @@ def main():
     parser.add_argument('--vsim-only', action='store_true', help='Only show vsim events')
     parser.add_argument('--summary', action='store_true', help='Show summary statistics only')
     parser.add_argument('--sectors', action='store_true', help='Find and show GCR sector headers')
+    parser.add_argument('--headers', action='store_true', help='Detailed D5 AA 96 header comparison with context')
     parser.add_argument('--vsim-bug', action='store_true', help='Show vsim result vs assembled data discrepancy')
     parser.add_argument('--repeats', action='store_true', help='Analyze repeated byte returns (handshake issue)')
     parser.add_argument('--cpu', action='store_true', help='Compare CPU instruction sequences')
@@ -839,6 +930,10 @@ def main():
 
     if args.sectors:
         show_sector_headers(mame_events, vsim_events)
+        return
+
+    if args.headers:
+        compare_headers_detailed(mame_events, vsim_events, args.limit if args.limit > 0 else 10)
         return
 
     if args.vsim_bug:
