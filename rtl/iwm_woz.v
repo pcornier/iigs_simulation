@@ -435,9 +435,12 @@ module iwm_woz (
 
     // Any disk spinning - used for IWM MOTOR_SPINNING independent of is_35_inch
     wire any_disk_spinning = drive35_motor_spinning || drive35_2_motor_spinning || drive525_motor_spinning;
-    // Any disk ready - use disk mounted status, NOT spinup completion
-    // The state machine must run as soon as motor is spinning (like MAME), not wait for spinup
-    wire any_disk_ready = DISK_READY[2] || DISK_READY[0];
+    // Any disk ready - drive must be spun up AND have track data loaded
+    // The state machine should wait until drive_ready is true (spinup complete)
+    // This prevents decoding garbage during motor spin-up period
+    wire any_disk_ready = (drive35_ready && DISK_READY[2]) ||
+                          (drive35_2_ready && DISK_READY[2]) ||
+                          (drive525_ready && DISK_READY[0]);
 
     //=========================================================================
     // Sense Mux - Select active drive's status sense

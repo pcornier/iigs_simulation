@@ -74,7 +74,7 @@ module iwm_flux (
     reg        m_data_read; // Flag: data register has been read since last byte loaded
     reg        m_rw_mode;   // 0 = read mode, 1 = write mode (tracks Q7 for mode changes)
     reg        m_motor_was_on; // Track motor state for edge detection
-    reg [5:0]  async_update;   // MAME: countdown to clear m_data in async mode (increased to 50 cycles)
+    reg [5:0]  async_update;   // MAME: countdown to clear m_data in async mode (14 cycles at 7MHz = 2µs)
     reg        bit7_acknowledged; // MAME: bit 7 was read, mask it for subsequent reads
     reg        rd_latched;  // Edge detection: tracks if current RD has been processed
 
@@ -186,25 +186,9 @@ module iwm_flux (
             end
             m_motor_was_on <= MOTOR_ACTIVE;
 
-            // MAME async_update logic (must happen BEFORE read handling):
-            // In async mode, m_data is cleared 14 cycles after a valid byte was read.
+            // MAME async_update logic - NOTE: Countdown runs at 7MHz (see CLK_7M_EN block below)
+            // In async mode, m_data is cleared 14 cycles (at 7MHz, ~2µs) after a valid byte was read.
             // This happens BEFORE the next read is processed, so the read sees 0x00.
-            // IMPORTANT: Don't clear if a new byte is completing in this same cycle,
-            // otherwise the byte_complete assignment at line 312 would win anyway,
-            // and we'd incorrectly log "clearing m_data" when it isn't being cleared.
-            if (async_update != 0) begin
-                if (async_update == 1) begin
-                    // Counter about to hit 0 - clear m_data NOW (unless byte completing)
-                    if (is_async && !byte_completing) begin
-                        m_data <= 8'h00;
-                        bit7_acknowledged <= 1'b0;
-`ifdef SIMULATION
-                        $display("IWM_FLUX: async_update expired, clearing m_data to 0");
-`endif
-                    end
-                end
-                async_update <= async_update - 1'b1;
-            end
 
             // Always track flux edges at 14M (so we don't miss any)
             prev_flux <= FLUX_TRANSITION;
@@ -212,6 +196,24 @@ module iwm_flux (
             // Latch flux edge at 14M for processing at 7M
             if (flux_edge) begin
                 flux_seen <= 1'b1;
+            end
+
+            // MAME async_update countdown at 7MHz (matches iwm.cpp update_phases logic)
+            // After CPU reads valid byte, m_data is cleared after 14 7M-cycles (~2µs)
+            if (CLK_7M_EN) begin
+                if (async_update != 0) begin
+                    if (async_update == 1) begin
+                        // Counter about to hit 0 - clear m_data NOW (unless byte completing)
+                        if (is_async && !byte_completing) begin
+                            m_data <= 8'h00;
+                            bit7_acknowledged <= 1'b0;
+`ifdef SIMULATION
+                            $display("IWM_FLUX: async_update expired, clearing m_data to 0");
+`endif
+                        end
+                    end
+                    async_update <= async_update - 1'b1;
+                end
             end
 
             // State machine runs at 7M clock rate (like real IWM hardware)
@@ -343,7 +345,7 @@ module iwm_flux (
                         // Start countdown if not already running, OR if this is a new byte
                         // completing (in which case the old countdown is obsolete)
                         if (async_update == 0 || byte_completing) begin
-                            async_update <= 6'd50; // Approx 3.5us at 14MHz
+                            async_update <= 6'd14; // 14 cycles at 7MHz = 2µs (matches MAME)
 `ifdef SIMULATION
                             $display("IWM_FLUX: async_update started (byte_completing=%0d)", byte_completing);
 `endif
@@ -393,12 +395,10 @@ module iwm_flux (
     wire byte_completing = (m_rsh >= 8'h80) && MOTOR_SPINNING && DISK_READY;
     wire [7:0] effective_data_raw = byte_completing ? m_rsh : m_data;
 
-    // MAME async mode bit7 masking: after the first read of a valid byte,
-    // subsequent reads see bit7=0 until a new byte completes. This causes
-    // the polling loop to continue waiting, matching MAME behavior.
-    // BUG FIX: Ensure bit 7 is NOT masked if a new byte is completing in this cycle.
-    wire effective_ack = bit7_acknowledged && !byte_completing;
-    wire [7:0] effective_data = effective_ack ? (effective_data_raw & 8'h7F) : effective_data_raw;
+    // MAME behavior: return m_data directly without masking. The async mechanism
+    // clears m_data to 0 after 14 cycles, which causes subsequent reads to see 0x00.
+    // No bit7 masking needed - just use effective_data_raw directly.
+    wire [7:0] effective_data = effective_data_raw;
 
     // Helper wires for byte completion logic to avoid race conditions
     wire cpu_reading_data = RD && !immediate_q7 && !immediate_q6;
