@@ -25,6 +25,40 @@ import argparse
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+# Position conversion constants
+# MAME uses a 0-200,000,000 (200M) angular position scale for disk rotation
+# vsim uses actual bit positions within the track (typically 50,000-75,000 bits)
+MAME_POSITION_SCALE = 200_000_000
+
+def mame_pos_to_bit_pos(mame_pos: int, track_bit_count: int) -> int:
+    """Convert MAME's 0-200M position to bit position in track"""
+    if track_bit_count <= 0:
+        return 0
+    return int((mame_pos / MAME_POSITION_SCALE) * track_bit_count)
+
+def bit_pos_to_mame_pos(bit_pos: int, track_bit_count: int) -> int:
+    """Convert bit position to MAME's 0-200M position scale"""
+    if track_bit_count <= 0:
+        return 0
+    return int((bit_pos / track_bit_count) * MAME_POSITION_SCALE)
+
+def normalize_positions(mame_pos: int, vsim_pos: int, track_bit_count: int = 75215) -> Tuple[int, int, float]:
+    """Normalize both positions to bit position for comparison.
+
+    Returns: (mame_as_bits, vsim_bits, angular_difference_degrees)
+    """
+    mame_bits = mame_pos_to_bit_pos(mame_pos, track_bit_count)
+    # vsim_pos is already in bits
+
+    # Calculate angular difference in degrees (0-360)
+    mame_angle = (mame_pos / MAME_POSITION_SCALE) * 360
+    vsim_angle = (vsim_pos / track_bit_count) * 360
+    angle_diff = abs(mame_angle - vsim_angle)
+    if angle_diff > 180:
+        angle_diff = 360 - angle_diff
+
+    return mame_bits, vsim_pos, angle_diff
+
 @dataclass
 class FluxEvent:
     """Represents a flux decoding event (SHIFT or BYTE_COMPLETE)"""
@@ -845,6 +879,654 @@ def compare_flux_events(mame_file: str, vsim_file: str, start: int = 0, limit: i
     else:
         print(f"\nAll {max_bytes} bytes match!")
 
+def parse_cpu_data_reads_from_file(filename: str, source: str) -> List[Tuple[int, int, int, str]]:
+    """Parse CPU data reads from log file.
+    Returns list of (line_num, byte_value, position, extra_info)
+
+    For MAME: looks for IWM_DATA lines with result=XX
+    For vsim: looks for IWM_FLUX: READ DATA lines with -> XX
+    """
+    reads = []
+
+    # MAME pattern: [:fdc] IWM_DATA @timestamp pos=position: result=XX active=Y ...
+    mame_pattern = re.compile(
+        r'\[:fdc\] IWM_DATA @[^ ]+ pos=(\d+): result=([0-9a-f]{2}) active=(\d)'
+    )
+    # Also match old format without pos
+    mame_pattern_old = re.compile(
+        r'\[:fdc\] IWM_DATA @[^:]+: result=([0-9a-f]{2}) active=(\d)'
+    )
+
+    # vsim pattern: IWM_FLUX: READ DATA @X -> YY pos=ZZZ (motor=M ...)
+    vsim_pattern = re.compile(
+        r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) pos=(\d+) \(motor=(\d)'
+    )
+    # Old vsim format without pos
+    vsim_pattern_old = re.compile(
+        r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) \(motor=(\d)'
+    )
+
+    try:
+        with open(filename, 'rb') as f:
+            content = f.read().decode('utf-8', errors='replace')
+
+        for line_num, line in enumerate(content.split('\n'), 1):
+            if source == 'mame':
+                # Try new format first
+                m = mame_pattern.search(line)
+                if m:
+                    pos = int(m.group(1))
+                    result = int(m.group(2), 16)
+                    active = int(m.group(3))
+                    if active == 1:  # Only when motor is active
+                        reads.append((line_num, result, pos, f"active={active}"))
+                    continue
+                # Try old format
+                m = mame_pattern_old.search(line)
+                if m:
+                    result = int(m.group(1), 16)
+                    active = int(m.group(2))
+                    if active == 1:
+                        reads.append((line_num, result, 0, f"active={active}"))
+                    continue
+            else:  # vsim
+                # Try new format first
+                m = vsim_pattern.search(line)
+                if m:
+                    addr = m.group(1)
+                    result = int(m.group(2), 16)
+                    pos = int(m.group(3))
+                    motor = int(m.group(4))
+                    # Only Q6=0, Q7=0 (data register) and motor on
+                    if motor == 1:
+                        reads.append((line_num, result, pos, f"@{addr} motor={motor}"))
+                    continue
+                # Try old format
+                m = vsim_pattern_old.search(line)
+                if m:
+                    addr = m.group(1)
+                    result = int(m.group(2), 16)
+                    motor = int(m.group(3))
+                    if motor == 1:
+                        reads.append((line_num, result, 0, f"@{addr} motor={motor}"))
+                    continue
+    except FileNotFoundError:
+        print(f"Error: Could not open {filename}", file=sys.stderr)
+        sys.exit(1)
+
+    return reads
+
+def compare_cpu_data_reads(mame_file: str, vsim_file: str, start: int = 0, limit: int = 100,
+                           track_bit_count: int = 75215):
+    """Compare the actual bytes that the CPU receives from IWM reads.
+
+    This compares:
+    - MAME: IWM_DATA result=XX (when active=1)
+    - vsim: IWM_FLUX: READ DATA -> XX (when motor=1)
+
+    These are the actual values the CPU sees, NOT the BYTE_COMPLETE events.
+
+    Position conversion:
+    - MAME uses 0-200M angular position scale
+    - vsim uses bit position within track
+    - Positions are normalized to bit position for comparison
+    """
+    print("=== CPU Data Read Comparison ===")
+    print("Comparing actual bytes CPU receives from IWM $C0EC reads")
+    print(f"Track bit count: {track_bit_count} (use --track-bits to change)\n")
+
+    print(f"Parsing MAME CPU data reads from {mame_file}...")
+    mame_reads = parse_cpu_data_reads_from_file(mame_file, 'mame')
+    print(f"  Found {len(mame_reads)} data reads with motor active")
+
+    print(f"Parsing vsim CPU data reads from {vsim_file}...")
+    vsim_reads = parse_cpu_data_reads_from_file(vsim_file, 'vsim')
+    print(f"  Found {len(vsim_reads)} data reads with motor active")
+
+    # Filter to only valid data bytes (bit7=1)
+    mame_valid = [(ln, val, pos, extra) for ln, val, pos, extra in mame_reads if val & 0x80]
+    vsim_valid = [(ln, val, pos, extra) for ln, val, pos, extra in vsim_reads if val & 0x80]
+
+    print(f"\nMAME: {len(mame_valid)} valid data bytes (bit7=1)")
+    print(f"vsim: {len(vsim_valid)} valid data bytes (bit7=1)")
+
+    if not mame_valid or not vsim_valid:
+        print("\nNo valid data bytes found in one or both logs.")
+        return
+
+    # Compare side by side
+    max_cmp = max(len(mame_valid), len(vsim_valid))
+    if limit > 0:
+        max_cmp = min(max_cmp, start + limit)
+
+    # Header with position conversion columns
+    print(f"\n{'Idx':>5}  {'MAME':>6} {'raw_pos':>10} {'bits':>6}  {'vsim':>6} {'bits':>6} {'angle':>6}  {'Match':>6}")
+    print("-" * 80)
+
+    mismatches = 0
+    first_diff = None
+    total_angle_diff = 0.0
+    angle_count = 0
+
+    for i in range(start, max_cmp):
+        m_val = mame_valid[i] if i < len(mame_valid) else (0, None, 0, "")
+        v_val = vsim_valid[i] if i < len(vsim_valid) else (0, None, 0, "")
+
+        m_str = f"0x{m_val[1]:02X}" if m_val[1] is not None else "----"
+        v_str = f"0x{v_val[1]:02X}" if v_val[1] is not None else "----"
+
+        # Convert positions
+        m_raw_pos = m_val[2] if m_val[2] else 0
+        v_bits = v_val[2] if v_val[2] else 0
+
+        # Convert MAME position to bits
+        m_bits = mame_pos_to_bit_pos(m_raw_pos, track_bit_count)
+
+        # Calculate angular difference
+        if m_raw_pos and v_bits:
+            _, _, angle_diff = normalize_positions(m_raw_pos, v_bits, track_bit_count)
+            angle_str = f"{angle_diff:5.1f}°"
+            total_angle_diff += angle_diff
+            angle_count += 1
+        else:
+            angle_str = "  ---"
+
+        m_pos_str = f"{m_raw_pos:>10}" if m_raw_pos else "      ----"
+        m_bits_str = f"{m_bits:>6}" if m_raw_pos else "  ----"
+        v_bits_str = f"{v_bits:>6}" if v_bits else "  ----"
+
+        if m_val[1] is not None and v_val[1] is not None:
+            if m_val[1] == v_val[1]:
+                match = "OK"
+            else:
+                match = "DIFF"
+                mismatches += 1
+                if first_diff is None:
+                    first_diff = i
+        elif m_val[1] is None:
+            match = "mame-"
+        else:
+            match = "vsim-"
+
+        # Highlight header bytes
+        note = ""
+        if m_val[1] == 0xD5 or v_val[1] == 0xD5:
+            note = " <D5"
+        elif m_val[1] == 0xAA or v_val[1] == 0xAA:
+            note = " <AA"
+        elif m_val[1] == 0x96 or v_val[1] == 0x96:
+            note = " <96"
+
+        print(f"{i:>5}  {m_str:>6} {m_pos_str} {m_bits_str}  {v_str:>6} {v_bits_str} {angle_str}  {match:>6}{note}")
+
+    print("-" * 80)
+    print(f"Compared {max_cmp - start} bytes, Mismatches: {mismatches}")
+
+    # Show average angular difference
+    if angle_count > 0:
+        avg_angle = total_angle_diff / angle_count
+        print(f"Average angular difference: {avg_angle:.1f}° (MAME vs vsim disk position)")
+
+    if first_diff is not None:
+        print(f"\nFirst difference at index {first_diff}")
+
+        # Show context around first difference
+        print(f"\n--- Context around first difference ---")
+        ctx_start = max(0, first_diff - 5)
+        ctx_end = min(max_cmp, first_diff + 15)
+
+        print(f"{'Idx':>5}  {'MAME':>6} {'Line':>8}  {'vsim':>6} {'Line':>8}  {'Note':>12}")
+        print("-" * 60)
+
+        for i in range(ctx_start, ctx_end):
+            m_val = mame_valid[i] if i < len(mame_valid) else (0, None, 0, "")
+            v_val = vsim_valid[i] if i < len(vsim_valid) else (0, None, 0, "")
+
+            m_str = f"0x{m_val[1]:02X}" if m_val[1] is not None else "----"
+            v_str = f"0x{v_val[1]:02X}" if v_val[1] is not None else "----"
+
+            note = ""
+            if i == first_diff:
+                note = "<<< DIFF"
+            elif m_val[1] == 0xD5:
+                note = "D5 header"
+            elif m_val[1] == 0xAA and i > 0 and mame_valid[i-1][1] == 0xD5:
+                note = "AA (after D5)"
+            elif m_val[1] == 0x96 and i > 1 and mame_valid[i-2][1] == 0xD5:
+                note = "96 (header)"
+
+            print(f"{i:>5}  {m_str:>6} {m_val[0]:>8}  {v_str:>6} {v_val[0]:>8}  {note}")
+
+    # Find D5 AA 96 sequences in both
+    print(f"\n--- Header sequence analysis ---")
+
+    def find_headers(valid_list):
+        """Find D5 AA 96 sequences"""
+        headers = []
+        for i in range(len(valid_list) - 2):
+            if (valid_list[i][1] == 0xD5 and
+                valid_list[i+1][1] == 0xAA and
+                valid_list[i+2][1] == 0x96):
+                headers.append(i)
+        return headers
+
+    mame_headers = find_headers(mame_valid)
+    vsim_headers = find_headers(vsim_valid)
+
+    print(f"MAME: {len(mame_headers)} D5 AA 96 headers found")
+    print(f"vsim: {len(vsim_headers)} D5 AA 96 headers found")
+
+    if mame_headers and len(mame_headers) > 0:
+        print(f"\nFirst 5 MAME headers at indices: {mame_headers[:5]}")
+    if vsim_headers and len(vsim_headers) > 0:
+        print(f"First 5 vsim headers at indices: {vsim_headers[:5]}")
+
+    # Show what vsim is reading instead of D5 at MAME's D5 positions
+    if mame_headers and vsim_valid:
+        print(f"\n--- What vsim reads at MAME's header positions ---")
+        for i, mame_idx in enumerate(mame_headers[:5]):
+            if mame_idx < len(vsim_valid):
+                v_bytes = [vsim_valid[j][1] for j in range(mame_idx, min(mame_idx+5, len(vsim_valid)))]
+                v_hex = ' '.join(f'{b:02X}' for b in v_bytes)
+                print(f"  MAME header #{i} at idx {mame_idx}: vsim has: {v_hex}")
+
+def compare_flux_vs_cpu(vsim_file: str, start: int = 0, limit: int = 100):
+    """Compare vsim's BYTE_COMPLETE events vs CPU READ DATA events.
+
+    This checks if the bytes the flux decoder produces are the same bytes
+    the CPU actually receives. They SHOULD match - if not, there's a bug
+    in the m_data path.
+
+    Approach: For each CPU read with valid data (bit7=1), find the most recent
+    BYTE_COMPLETE that happened BEFORE this read (by line number).
+    The CPU should read the value from that most recent BYTE_COMPLETE.
+    """
+    print("=== Flux Decoder vs CPU Read Comparison (vsim internal) ===")
+    print("Comparing BYTE_COMPLETE events with READ DATA events")
+    print("(Using timeline-based matching: most recent BC before each CPU read)\n")
+
+    # Parse all events in order, keeping track of line numbers
+    all_events = []  # (line_num, event_type, data, pos, rsh, m_data)
+
+    # Patterns
+    bc_pattern = re.compile(r'BYTE_COMPLETE_ASYNC data=([0-9a-fA-F]+) pos=(\d+)')
+    rd_pattern = re.compile(r'READ DATA @[0-9a-fA-F]+ -> ([0-9a-fA-F]+) pos=(\d+).*motor=1.*rsh=([0-9a-fA-F]+) data=([0-9a-fA-F]+)')
+
+    print(f"Parsing {vsim_file}...")
+    bc_count = 0
+    rd_count = 0
+    try:
+        with open(vsim_file, 'r', errors='replace') as f:
+            for line_num, line in enumerate(f, 1):
+                # Look for BYTE_COMPLETE
+                bc_match = bc_pattern.search(line)
+                if bc_match:
+                    data = int(bc_match.group(1), 16)
+                    pos = int(bc_match.group(2))
+                    all_events.append((line_num, 'BC', data, pos, None, None))
+                    bc_count += 1
+                    continue
+
+                # Look for READ DATA with motor=1
+                rd_match = rd_pattern.search(line)
+                if rd_match:
+                    data = int(rd_match.group(1), 16)
+                    pos = int(rd_match.group(2))
+                    rsh = int(rd_match.group(3), 16)
+                    m_data = int(rd_match.group(4), 16)
+                    all_events.append((line_num, 'RD', data, pos, rsh, m_data))
+                    rd_count += 1
+    except FileNotFoundError:
+        print(f"Error: Could not open {vsim_file}")
+        return
+
+    print(f"  Found {bc_count} BYTE_COMPLETE events")
+    print(f"  Found {rd_count} CPU READ DATA events (motor=1)")
+
+    # Process events in order, tracking the most recent BYTE_COMPLETE
+    last_bc_data = None
+    last_bc_line = None
+    last_bc_pos = None
+
+    valid_reads = []  # (line, cpu_data, pos, rsh, m_data, last_bc_data, last_bc_line, last_bc_pos)
+
+    for line_num, event_type, data, pos, rsh, m_data in all_events:
+        if event_type == 'BC':
+            last_bc_data = data
+            last_bc_line = line_num
+            last_bc_pos = pos
+        elif event_type == 'RD' and data & 0x80:  # Valid CPU read (bit7=1)
+            valid_reads.append((line_num, data, pos, rsh, m_data, last_bc_data, last_bc_line, last_bc_pos))
+
+    print(f"  Valid CPU reads (bit7=1): {len(valid_reads)}")
+
+    if not valid_reads:
+        print("\nNo valid CPU reads found.")
+        return
+
+    # Show comparison
+    print(f"\n{'Idx':>5}  {'CPUrd':>6} {'pos':>7} {'m_data':>7}  {'lastBC':>7} {'BC_pos':>7} {'Match':>6}  Notes")
+    print("-" * 90)
+
+    mismatches = 0
+    m_data_mismatches = 0
+    max_show = min(len(valid_reads), start + limit)
+
+    for i in range(start, max_show):
+        line_num, cpu_data, pos, rsh, m_data, bc_data, bc_line, bc_pos = valid_reads[i]
+
+        notes = []
+
+        # Check if CPU read matches m_data field (internal consistency)
+        if cpu_data != m_data and m_data != 0:
+            notes.append(f"cpu!=m_data({m_data:02X})")
+            m_data_mismatches += 1
+
+        if bc_data is not None:
+            bc_str = f"0x{bc_data:02X}"
+            bc_pos_str = f"{bc_pos:>7}"
+            if cpu_data == bc_data:
+                match = "OK"
+            elif m_data == bc_data:
+                match = "m_data"
+                notes.append("m_data=BC")
+            else:
+                match = "DIFF"
+                mismatches += 1
+        else:
+            bc_str = "  ----"
+            bc_pos_str = "   ----"
+            match = "no-BC"
+
+        # Highlight header bytes
+        if cpu_data == 0xD5:
+            notes.append("<D5")
+        elif cpu_data == 0xAA:
+            notes.append("<AA")
+        elif cpu_data == 0x96:
+            notes.append("<96")
+
+        note_str = " ".join(notes)
+        print(f"{i:>5}  0x{cpu_data:02X} {pos:>7}    0x{m_data:02X}  {bc_str} {bc_pos_str} {match:>6}  {note_str}")
+
+    print("-" * 90)
+    print(f"Compared {max_show - start} CPU reads")
+    print(f"  Mismatches (CPU != most recent BYTE_COMPLETE): {mismatches}")
+    print(f"  CPU != m_data field: {m_data_mismatches}")
+
+    # Summary analysis
+    if mismatches == 0 and m_data_mismatches == 0:
+        print("\n*** DATA PATH VERIFIED OK ***")
+        print("  CPU reads exactly what the flux decoder produces.")
+    elif m_data_mismatches > 0:
+        print("\n*** DATA PATH ISSUE DETECTED ***")
+        print(f"  - {m_data_mismatches} times CPU read differs from m_data register")
+        print("    This suggests data_out_mux or effective_data logic issue")
+    elif mismatches > 0:
+        print("\n*** POSSIBLE ISSUE ***")
+        print(f"  - {mismatches} times CPU read differs from most recent BYTE_COMPLETE")
+        print("    This could indicate:")
+        print("    1. Multiple bytes completed between CPU reads (overwritten)")
+        print("    2. CPU reading stale data from previous byte")
+
+def compare_data_fields(mame_file: str, vsim_file: str, num_sectors: int = 5, bytes_after: int = 20):
+    """Compare bytes read after D5 AA AD data marks between MAME and vsim.
+
+    Shows what each emulator reads in the data field after finding a data mark.
+    """
+    print("=== Data Field Comparison (after D5 AA AD) ===")
+    print(f"Comparing first {num_sectors} sectors, {bytes_after} bytes each\n")
+
+    def parse_cpu_reads(filename: str, source: str):
+        """Parse CPU read values, looking for D5 AA AD sequences and bytes after"""
+        reads = []  # (line_num, value, pos)
+
+        if source == 'mame':
+            pattern = re.compile(r'IWM_DATA.*result=([0-9a-fA-F]+) active=1')
+        else:
+            pattern = re.compile(r'READ DATA @[0-9a-fA-F]+ -> ([0-9a-fA-F]+) pos=(\d+).*motor=1')
+
+        try:
+            with open(filename, 'r', errors='replace') as f:
+                for line_num, line in enumerate(f, 1):
+                    m = pattern.search(line)
+                    if m:
+                        val = int(m.group(1), 16)
+                        pos = int(m.group(2)) if source == 'vsim' else 0
+                        if val & 0x80:  # Valid data byte
+                            reads.append((line_num, val, pos))
+        except FileNotFoundError:
+            print(f"Error: Could not open {filename}")
+            return []
+
+        return reads
+
+    def find_data_marks(reads):
+        """Find D5 AA AD sequences and return indices"""
+        marks = []
+        for i in range(len(reads) - 2):
+            if (reads[i][1] == 0xD5 and
+                reads[i+1][1] == 0xAA and
+                reads[i+2][1] == 0xAD):
+                marks.append(i)
+        return marks
+
+    print(f"Parsing MAME: {mame_file}...")
+    mame_reads = parse_cpu_reads(mame_file, 'mame')
+    print(f"  Found {len(mame_reads)} valid CPU reads")
+
+    print(f"Parsing vsim: {vsim_file}...")
+    vsim_reads = parse_cpu_reads(vsim_file, 'vsim')
+    print(f"  Found {len(vsim_reads)} valid CPU reads")
+
+    mame_marks = find_data_marks(mame_reads)
+    vsim_marks = find_data_marks(vsim_reads)
+
+    print(f"\nMAME: {len(mame_marks)} D5 AA AD data marks found")
+    print(f"vsim: {len(vsim_marks)} D5 AA AD data marks found")
+
+    # Compare bytes after each data mark
+    num_compare = min(num_sectors, len(mame_marks), len(vsim_marks))
+
+    for sector_idx in range(num_compare):
+        mame_idx = mame_marks[sector_idx]
+        vsim_idx = vsim_marks[sector_idx]
+
+        print(f"\n--- Sector {sector_idx} (MAME read #{mame_idx}, vsim read #{vsim_idx}) ---")
+
+        # Get bytes after the D5 AA AD mark
+        mame_bytes = []
+        vsim_bytes = []
+
+        for offset in range(3, 3 + bytes_after):  # Start after D5 AA AD
+            if mame_idx + offset < len(mame_reads):
+                mame_bytes.append(mame_reads[mame_idx + offset][1])
+            if vsim_idx + offset < len(vsim_reads):
+                vsim_bytes.append(vsim_reads[vsim_idx + offset][1])
+
+        # Display side by side
+        print(f"{'Off':>4}  {'MAME':>6}  {'vsim':>6}  {'Match':>6}")
+        print("-" * 30)
+
+        mismatches = 0
+        for j in range(min(len(mame_bytes), len(vsim_bytes))):
+            m_val = mame_bytes[j]
+            v_val = vsim_bytes[j]
+            match = "OK" if m_val == v_val else "DIFF"
+            if m_val != v_val:
+                mismatches += 1
+            print(f"{j:>4}    0x{m_val:02X}    0x{v_val:02X}  {match:>6}")
+
+        print(f"\nMismatches: {mismatches}/{len(mame_bytes)}")
+
+        # Show hex dump
+        print(f"\nMAME: {' '.join(f'{b:02X}' for b in mame_bytes[:16])}")
+        print(f"vsim: {' '.join(f'{b:02X}' for b in vsim_bytes[:16])}")
+
+
+def compare_track_changes(mame_file: str, vsim_file: str, limit: int = 50):
+    """Compare track stepping/phase changes between MAME and vsim.
+
+    MAME logs track steps as: '[:fdc:X:XXXX] cmd step dir +1' or '-1'
+    MAME logs phases in IWM_STATUS as: 'phases=XX'
+    vsim logs track changes as: 'TRACK_BIT_COUNT CHANGED: ... track=N'
+    """
+
+    @dataclass
+    class TrackEvent:
+        source: str
+        event_type: str  # 'step', 'track', 'phase'
+        track: Optional[int] = None
+        direction: Optional[int] = None  # +1 or -1 for step
+        phase: Optional[int] = None
+        line_num: int = 0
+
+    def parse_mame_tracks(filename: str) -> List[TrackEvent]:
+        """Parse track/phase events from MAME log"""
+        events = []
+
+        # Pattern for step commands
+        step_pattern = re.compile(r'cmd step dir ([+-]1)')
+        # Pattern for phase in status
+        phase_pattern = re.compile(r'phases=([0-9a-f]{2})', re.I)
+
+        try:
+            with open(filename, 'rb') as f:
+                content = f.read().decode('utf-8', errors='replace')
+
+            last_phase = None
+            for line_num, line in enumerate(content.split('\n'), 1):
+                # Step commands
+                m = step_pattern.search(line)
+                if m:
+                    direction = int(m.group(1))
+                    events.append(TrackEvent(
+                        source='mame',
+                        event_type='step',
+                        direction=direction,
+                        line_num=line_num
+                    ))
+                    continue
+
+                # Phase changes in status
+                m = phase_pattern.search(line)
+                if m:
+                    phase = int(m.group(1), 16)
+                    if phase != last_phase:
+                        events.append(TrackEvent(
+                            source='mame',
+                            event_type='phase',
+                            phase=phase,
+                            line_num=line_num
+                        ))
+                        last_phase = phase
+
+        except FileNotFoundError:
+            print(f"Error: Could not open {filename}", file=sys.stderr)
+            return []
+
+        return events
+
+    def parse_vsim_tracks(filename: str) -> List[TrackEvent]:
+        """Parse track change events from vsim log"""
+        events = []
+
+        # Pattern for track changes
+        track_pattern = re.compile(
+            r'TRACK_BIT_COUNT CHANGED:.*track=(\d+)'
+        )
+        # Also capture head_phase
+        phase_pattern = re.compile(
+            r'head_phase=(\d+)'
+        )
+
+        try:
+            with open(filename, 'rb') as f:
+                content = f.read().decode('utf-8', errors='replace')
+
+            last_track = None
+            for line_num, line in enumerate(content.split('\n'), 1):
+                m = track_pattern.search(line)
+                if m:
+                    track = int(m.group(1))
+                    phase_m = phase_pattern.search(line)
+                    phase = int(phase_m.group(1)) if phase_m else None
+
+                    if track != last_track:
+                        events.append(TrackEvent(
+                            source='vsim',
+                            event_type='track',
+                            track=track,
+                            phase=phase,
+                            line_num=line_num
+                        ))
+                        last_track = track
+
+        except FileNotFoundError:
+            print(f"Error: Could not open {filename}", file=sys.stderr)
+            return []
+
+        return events
+
+    print(f"Parsing MAME track events from {mame_file}...")
+    mame_events = parse_mame_tracks(mame_file)
+    mame_steps = [e for e in mame_events if e.event_type == 'step']
+    mame_phases = [e for e in mame_events if e.event_type == 'phase']
+    print(f"  Found {len(mame_steps)} step commands, {len(mame_phases)} phase changes")
+
+    print(f"Parsing vsim track events from {vsim_file}...")
+    vsim_events = parse_vsim_tracks(vsim_file)
+    print(f"  Found {len(vsim_events)} track changes")
+
+    # Summary
+    print(f"\n=== Track Change Summary ===")
+    print(f"MAME: {len(mame_steps)} step commands ({sum(1 for e in mame_steps if e.direction == 1)} forward, {sum(1 for e in mame_steps if e.direction == -1)} backward)")
+    print(f"vsim: {len(vsim_events)} track changes")
+
+    if vsim_events:
+        tracks_visited = sorted(set(e.track for e in vsim_events if e.track is not None))
+        print(f"\nvsim tracks visited: {tracks_visited}")
+        print(f"  Min track: {min(tracks_visited)}, Max track: {max(tracks_visited)}")
+
+    # Show first N track changes side by side
+    print(f"\n=== First {limit} Track Changes ===")
+    print(f"{'#':>4}  {'Source':>6}  {'Type':>6}  {'Track':>6}  {'Dir':>4}  {'Phase':>6}  {'Line':>10}")
+    print("-" * 60)
+
+    # Merge and sort by line number for chronological view
+    all_events = []
+
+    for e in mame_steps[:limit]:
+        all_events.append(('mame', e))
+    for e in vsim_events[:limit]:
+        all_events.append(('vsim', e))
+
+    # Sort by line number (roughly chronological)
+    # Note: Can't directly compare line numbers across files, show separately
+
+    print("\n--- MAME step commands ---")
+    for i, e in enumerate(mame_steps[:limit]):
+        dir_str = f"+{e.direction}" if e.direction > 0 else str(e.direction)
+        print(f"{i:>4}   mame    step       -  {dir_str:>4}       -  {e.line_num:>10}")
+
+    print("\n--- vsim track changes ---")
+    for i, e in enumerate(vsim_events[:limit]):
+        track_str = str(e.track) if e.track is not None else "-"
+        phase_str = str(e.phase) if e.phase is not None else "-"
+        print(f"{i:>4}   vsim   track  {track_str:>6}     -  {phase_str:>6}  {e.line_num:>10}")
+
+    # Track progression analysis
+    if vsim_events:
+        print(f"\n=== vsim Track Progression ===")
+        current_track = 0
+        for e in vsim_events[:50]:
+            if e.track is not None:
+                diff = e.track - current_track
+                direction = "+" if diff > 0 else ""
+                print(f"  Track {current_track} -> {e.track} ({direction}{diff}) at line {e.line_num}")
+                current_track = e.track
+
+
 def main():
     parser = argparse.ArgumentParser(description='Compare IWM logs between MAME and vsim')
     parser.add_argument('mame_log', help='MAME log file')
@@ -869,6 +1551,13 @@ def main():
     parser.add_argument('--flux', action='store_true', help='Compare bit-level flux decoding (SHIFT operations)')
     parser.add_argument('--flux-detail', action='store_true', help='Show detailed bit-by-bit comparison for differing bytes')
     parser.add_argument('--byte-context', type=int, default=2, help='Number of bytes before diff to show in flux mode (default: 2)')
+    parser.add_argument('--cpu-data', action='store_true', help='Compare actual bytes CPU receives from IWM reads (READ DATA events)')
+    parser.add_argument('--track-bits', type=int, default=75215, help='Track bit count for position conversion (default: 75215)')
+    parser.add_argument('--flux-vs-cpu', action='store_true', help='Compare vsim BYTE_COMPLETE vs CPU READ (internal consistency check)')
+    parser.add_argument('--data-fields', action='store_true', help='Compare bytes after D5 AA AD data marks between MAME and vsim')
+    parser.add_argument('--num-sectors', type=int, default=5, help='Number of sectors to compare in --data-fields mode')
+    parser.add_argument('--bytes-after', type=int, default=30, help='Number of bytes after D5 AA AD to show')
+    parser.add_argument('--tracks', action='store_true', help='Compare track stepping/phase changes between MAME and vsim')
 
     args = parser.parse_args()
 
@@ -876,6 +1565,26 @@ def main():
     if args.flux:
         compare_flux_events(args.mame_log, args.vsim_log, args.start, args.limit,
                            args.flux_detail, args.byte_context)
+        return
+
+    # Handle --flux-vs-cpu mode: compare vsim's flux decoder output vs CPU reads
+    if args.flux_vs_cpu:
+        compare_flux_vs_cpu(args.vsim_log, args.start, args.limit)
+        return
+
+    # Handle --data-fields mode: compare bytes after D5 AA AD
+    if args.data_fields:
+        compare_data_fields(args.mame_log, args.vsim_log, args.num_sectors, args.bytes_after)
+        return
+
+    # Handle --cpu-data mode: compare actual bytes CPU receives from IWM
+    if args.cpu_data:
+        compare_cpu_data_reads(args.mame_log, args.vsim_log, args.start, args.limit, args.track_bits)
+        return
+
+    # Handle --tracks mode: compare track stepping between MAME and vsim
+    if args.tracks:
+        compare_track_changes(args.mame_log, args.vsim_log, args.limit)
         return
 
     print(f"Loading MAME log: {args.mame_log}")

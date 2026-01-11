@@ -152,9 +152,14 @@ module flux_drive (
     // This means when DISKREG_SEL=1 (side 1), command 6 becomes 14 (not motor off)
     //
     // Critical: Use LATCHED_SENSE_REG for command code, not IMMEDIATE_PHASES[2:0]
-    // because phases may be cleared before strobe fires. Also, don't gate by
-    // SW_MOTOR_ON because motor ON command needs to execute when motor is off.
-    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT];
+    // because phases may be cleared before strobe fires.
+    //
+    // MAME behavior: When motor is off, devsel=0 and no floppy is selected, so
+    // seek_phase_w() is NOT called. We must gate the strobe by SW_MOTOR_ON to match.
+    // Note: Motor ON command (cmd 2) still needs to work - it sets sony_motor_on,
+    // which then allows subsequent commands. The IWM motor bit (SW_MOTOR_ON) must
+    // be set first by the ROM before any Sony commands take effect.
+    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && SW_MOTOR_ON && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT];
     wire [3:0] sony_cmd_reg = {DISKREG_SEL, LATCHED_SENSE_REG};
 
     // Compute immediate step direction: if strobe is firing with a direction command,

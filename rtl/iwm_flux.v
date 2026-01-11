@@ -100,15 +100,21 @@ module iwm_flux (
     // Window Timing (from MAME iwm.cpp half_window_size/window_size)
     //=========================================================================
     // Window timing depends on drive type:
-    // Window timing in 7M cycles (since state machine runs at CLK_7M_EN)
-    // flux_drive generates at 28 14M-cycles = 14 7M-equivalent cycles per bit
-    // So windows should be 14 7M-cycles (half_window = 7) to match
-    // - 3.5" drives: 14-cycle windows (matches 28 14M-cycle bit cells)
-    // - 5.25" drives: 28-cycle windows (matches 56 14M-cycle bit cells), or 14 in fast mode
+    //
+    // IMPORTANT: Window timing runs at 14M for precision!
+    // MAME uses cycle counts at 7MHz, but processes flux at exact arrival times.
+    // vsim samples at discrete clock edges, so we run at 14M to minimize
+    // quantization error. Without 14M precision, flux arrival time is rounded
+    // to 7M edges, causing 0-1 cycle error per bit that accumulates and
+    // causes byte boundary drift.
+    //
+    // Window timing in 14M cycles:
+    // - 3.5" drives: 28-cycle windows (2µs bit cells at 500 kbit/s)
+    // - 5.25" drives: 56-cycle windows (4µs bit cells at 250 kbit/s), or 28 in fast mode
 
     wire        fast_mode = SW_MODE[3];
-    wire [5:0]  full_window = IS_35_INCH ? 6'd14 : (fast_mode ? 6'd14 : 6'd28);
-    wire [5:0]  half_window = IS_35_INCH ? 6'd7 : (fast_mode ? 6'd7 : 6'd14);
+    wire [5:0]  full_window = IS_35_INCH ? 6'd28 : (fast_mode ? 6'd28 : 6'd56);
+    wire [5:0]  half_window = IS_35_INCH ? 6'd14 : (fast_mode ? 6'd14 : 6'd28);
 
     //=========================================================================
     // Flux Edge Detection
@@ -230,8 +236,10 @@ module iwm_flux (
                 end
             end
 
-            // State machine runs at 7M clock rate (like real IWM hardware)
-            // This matches MAME which clocks the IWM at 7.159 MHz
+            // State machine runs at 14M for precise flux timing!
+            // MAME's IWM clocks at 7M but processes flux at exact arrival times.
+            // vsim must run at 14M to avoid timing quantization that causes
+            // byte boundary drift. Window values are doubled to compensate.
 `ifdef SIMULATION
             if ((MOTOR_SPINNING && DISK_READY) != prev_sm_active) begin
                 $display("IWM_FLUX: State machine %s (MOTOR_SPINNING=%0d DISK_READY=%0d)",
@@ -239,7 +247,7 @@ module iwm_flux (
                          MOTOR_SPINNING, DISK_READY);
             end
 `endif
-            if (CLK_7M_EN && MOTOR_SPINNING && DISK_READY) begin
+            if (MOTOR_SPINNING && DISK_READY) begin
                 case (rw_state)
                     S_IDLE: begin
                         rw_state <= SR_WINDOW_EDGE_0;
