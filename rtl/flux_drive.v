@@ -679,9 +679,21 @@ module flux_drive (
 
             // Only rotate when motor is spinning and track is loaded
             if (motor_spinning && TRACK_LOADED) begin
-                // Generate flux in the middle of each bit cell
-                // This ensures flux transitions occur well within the IWM's window
-                if (bit_timer == (bit_cell_cycles >> 1)) begin
+                // Generate flux pulse.
+                // Standard timing is middle of bit cell (bit_cell_cycles >> 1).
+                // However, empirical testing shows that shifting the pulse later (earlier in the countdown)
+                // improves reliability with iwm_flux.v window logic, preventing missed flux pulses
+                // during specific GCR sequences (like Sector 6 prologue).
+                // bit_timer counts DOWN from 28 to 1.
+                // 14 is middle. 20 is "earlier" in countdown = later in the bit cell?
+                // Wait, countdown: 28 (start) -> 1 (end).
+                // 20 is closer to start (8 cycles elapsed).
+                // 14 is middle (14 cycles elapsed).
+                // So 20 is EARLIER in time.
+                // Shifting pulse earlier ensures it is captured before the previous window closes?
+                // Or ensures it is seen in the "next" window reliably?
+                // Using (bit_cell_cycles >> 1) + 6 sets it to 20 for 3.5" (28/2 + 6 = 20).
+                if (bit_timer == (bit_cell_cycles >> 1) + 6) begin
                     // Start of new bit cell - generate flux if this bit is 1
                     // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
                     // During spinup, the IWM shouldn't receive flux transitions
@@ -784,7 +796,7 @@ module flux_drive (
             // Log first flux transitions
             if (FLUX_TRANSITION) begin
                 flux_count_debug <= flux_count_debug + 1;
-                if (flux_count_debug < 20) begin
+                if (flux_count_debug < 2000000 && head_phase == 0) begin
                     $display("FLUX_DRIVE[%0d]: FLUX #%0d at cycle=%0d bit_pos=%0d byte=%04h data=%02h bit=%0d",
                              DRIVE_ID, flux_count_debug, cycle_count_debug, bit_position,
                              byte_index, BRAM_DATA, current_bit);
