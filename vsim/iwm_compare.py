@@ -494,7 +494,8 @@ def show_event_stream(events: List[IWMEvent], source: str, data_only: bool = Fal
             else:
                 line += f" motor={event.motor} q6={event.q6} q7={event.q7} rsh=0x{event.shift_reg:02X}"
         elif event.event_type == 'STATUS':
-            line += f" result=0x{event.result:02X} motor={event.motor} mode=0x{event.mode:02X}"
+            mode_str = f"0x{event.mode:02X}" if event.mode is not None else "N/A"
+            line += f" result=0x{event.result:02X} motor={event.motor} mode={mode_str}"
         elif event.event_type in ('MOTOR_ON', 'MOTOR_OFF', 'DEVSEL', 'DISKREG', 'PHASES'):
             if event.extra:
                 line += f" {event.extra}"

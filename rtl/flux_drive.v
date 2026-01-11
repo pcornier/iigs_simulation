@@ -173,13 +173,27 @@ module flux_drive (
     wire [5:0]  bit_cell_cycles = IS_35_INCH ? BIT_CELL_35 : BIT_CELL_525;
 
     // Current byte and bit within that byte
-    // Clamp byte_index to prevent out-of-bounds reads during track transitions
-    // When TRACK_BIT_COUNT changes, bit_position might exceed the new track's size
-    // for one cycle before it gets wrapped. This clamp ensures we don't read garbage.
-    wire [13:0] raw_byte_index = bit_position[16:3];    // bit_position / 8
+    // Use modulo-like calculation to handle track size changes during side selection
+    // When TRACK_BIT_COUNT changes (e.g., from 75215 to 62756 on side toggle),
+    // bit_position may exceed the new track's size. Instead of resetting to 0
+    // (which loses angular position), we use conditional subtraction to compute
+    // an effective position within the new track bounds.
+    //
+    // This preserves angular position through rapid side toggles, matching MAME's
+    // behavior where position is time-based and independent of track selection.
+    wire [16:0] track_bit_count_17 = TRACK_BIT_COUNT[16:0];
+    wire        pos_exceeds_1x = (bit_position >= track_bit_count_17) && (TRACK_BIT_COUNT > 0);
+    wire [16:0] pos_minus_1x = bit_position - track_bit_count_17;
+    wire        pos_exceeds_2x = (pos_minus_1x >= track_bit_count_17) && (TRACK_BIT_COUNT > 0);
+    wire [16:0] pos_minus_2x = pos_minus_1x - track_bit_count_17;
+    wire [16:0] effective_bit_position = pos_exceeds_1x ?
+                                         (pos_exceeds_2x ? pos_minus_2x : pos_minus_1x) :
+                                         bit_position;
+
+    wire [13:0] raw_byte_index = effective_bit_position[16:3];    // effective_bit_position / 8
     wire [13:0] max_byte_index = (TRACK_BIT_COUNT > 0) ? ((TRACK_BIT_COUNT - 1) >> 3) : 14'd0;
-    wire [13:0] byte_index = (raw_byte_index > max_byte_index) ? 14'd0 : raw_byte_index;
-    wire [2:0]  bit_shift = 3'd7 - bit_position[2:0]; // MSB first (bit 7 = first bit)
+    wire [13:0] byte_index = (raw_byte_index > max_byte_index) ? max_byte_index : raw_byte_index;
+    wire [2:0]  bit_shift = 3'd7 - effective_bit_position[2:0]; // MSB first (bit 7 = first bit)
 
     // Get current bit from BRAM data
     wire        current_bit = (BRAM_DATA >> bit_shift) & 1'b1;
@@ -193,12 +207,13 @@ module flux_drive (
     assign TRACK = head_phase[8:2];             // Quarter-track to full track
     assign BIT_POSITION = bit_position;
     // Look-ahead for BRAM address to handle simulation/C++ update latency
-    wire [16:0] next_bit_pos = (TRACK_BIT_COUNT > 0 && bit_position + 1 >= TRACK_BIT_COUNT) ? 17'd0 : bit_position + 1'd1;
-    // Clamp BRAM_ADDR to prevent out-of-bounds reads during track transitions.
-    // Both next_bit_pos[16:3] and byte_index need protection because bit_position
-    // may exceed the new track's size for one cycle before wrapping occurs.
+    // Use effective position + 1 to compute next byte address
+    wire [16:0] next_effective_pos = effective_bit_position + 1'd1;
+    wire        next_pos_wraps = (next_effective_pos >= track_bit_count_17) && (TRACK_BIT_COUNT > 0);
+    wire [16:0] next_bit_pos = next_pos_wraps ? (next_effective_pos - track_bit_count_17) : next_effective_pos;
+    // BRAM address uses effective positions (already bounds-checked via modulo calculation)
     wire [13:0] unclamped_bram_addr = (bit_timer == 6'd1) ? next_bit_pos[16:3] : byte_index;
-    assign BRAM_ADDR = (unclamped_bram_addr > max_byte_index) ? 14'd0 : unclamped_bram_addr;
+    assign BRAM_ADDR = (unclamped_bram_addr > max_byte_index) ? max_byte_index : unclamped_bram_addr;
     assign WRITE_PROTECT = DISK_WP;
 
     //=========================================================================
@@ -624,27 +639,17 @@ module flux_drive (
             prev_motor_for_position <= motor_spinning;
 
             // Handle TRACK_BIT_COUNT changes (side selection transitions)
-            // When switching sides, the new track may have fewer bits than the old one.
-            // If bit_position exceeds the new track's bit count, wrap it to avoid
-            // reading garbage data. This is critical for correct side selection.
+            // When switching sides, the new track may have different bit count.
+            // We NO LONGER reset bit_position to 0 here - instead, the combinational
+            // effective_bit_position logic computes a valid position using modulo.
+            // This preserves angular position through rapid side toggles.
             if (prev_track_bit_count != TRACK_BIT_COUNT && TRACK_BIT_COUNT > 0) begin
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: *** TRACK_BIT_COUNT CHANGED: %0d -> %0d (bit_pos=%0d, byte_idx=%0d, head_phase=%0d, track=%0d)",
-                         DRIVE_ID, prev_track_bit_count, TRACK_BIT_COUNT, bit_position, byte_index, head_phase, head_phase[8:2]);
+                $display("FLUX_DRIVE[%0d]: *** TRACK_BIT_COUNT CHANGED: %0d -> %0d (bit_pos=%0d, eff_pos=%0d, byte_idx=%0d, head_phase=%0d, track=%0d)",
+                         DRIVE_ID, prev_track_bit_count, TRACK_BIT_COUNT, bit_position, effective_bit_position, byte_index, head_phase, head_phase[8:2]);
                 $display("FLUX_DRIVE[%0d]: *** TRACK_TRANSITION: BRAM_ADDR=%0d BRAM_DATA=0x%02X current_bit=%0d motor_spin=%0d drive_ready=%0d",
                          DRIVE_ID, BRAM_ADDR, BRAM_DATA, current_bit, motor_spinning, drive_ready);
-`endif
-                // If bit_position exceeds new track size, wrap it to start of track
-                // This prevents reading beyond the track's valid data
-                if (bit_position >= TRACK_BIT_COUNT) begin
-`ifdef SIMULATION
-                    $display("FLUX_DRIVE[%0d]: *** WRAPPING bit_position %0d to 0 (new track size %0d)",
-                             DRIVE_ID, bit_position, TRACK_BIT_COUNT);
-`endif
-                    bit_position <= 17'd0;  // Reset to start of new track
-                    bit_timer <= bit_cell_cycles;  // Reset bit timer too
-                end
-`ifdef SIMULATION
+                // No longer wrapping - effective_bit_position handles overflow via modulo
                 side_transition_logged <= 1'b0;  // Reset to allow logging of data
                 side_transition_byte_count <= 5'd0;  // Reset byte counter for post-transition logging
 `endif
@@ -655,9 +660,9 @@ module flux_drive (
             // Log first 16 bytes after a side transition to verify data
             if (motor_spinning && TRACK_LOADED && TRACK_BIT_COUNT > 0 && side_transition_byte_count < 16) begin
                 // Log once per byte boundary (when starting a new byte)
-                if (bit_position[2:0] == 3'd0 && bit_timer == bit_cell_cycles) begin
-                    $display("FLUX_DRIVE[%0d]: SIDE_DATA[%0d]: byte_idx=%0d BRAM_DATA=0x%02X bit_pos=%0d",
-                             DRIVE_ID, side_transition_byte_count, byte_index, BRAM_DATA, bit_position);
+                if (effective_bit_position[2:0] == 3'd0 && bit_timer == bit_cell_cycles) begin
+                    $display("FLUX_DRIVE[%0d]: SIDE_DATA[%0d]: byte_idx=%0d BRAM_DATA=0x%02X eff_pos=%0d raw_pos=%0d",
+                             DRIVE_ID, side_transition_byte_count, byte_index, BRAM_DATA, effective_bit_position, bit_position);
                     side_transition_byte_count <= side_transition_byte_count + 1'd1;
                 end
             end
@@ -675,9 +680,9 @@ module flux_drive (
                     if (current_bit && drive_ready) begin
                         FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
-                        if (bit_position < 100) begin
-                            $display("FLUX_DRIVE[%0d]: Flux transition at bit %0d (byte %04h, shift %0d)",
-                                     DRIVE_ID, bit_position, byte_index, bit_shift);
+                        if (effective_bit_position < 100) begin
+                            $display("FLUX_DRIVE[%0d]: Flux transition at bit %0d (eff=%0d, byte %04h, shift %0d)",
+                                     DRIVE_ID, bit_position, effective_bit_position, byte_index, bit_shift);
                         end
 `endif
                     end
@@ -688,8 +693,12 @@ module flux_drive (
                     bit_timer <= bit_cell_cycles;
 
                     // Advance bit position with wraparound
+                    // Use effective_bit_position for wrap check to handle side toggles correctly.
+                    // We wrap when the effective position completes a track, not raw position.
                     if (TRACK_BIT_COUNT > 0) begin
-                        if (bit_position + 1 >= TRACK_BIT_COUNT) begin
+                        if (effective_bit_position + 1 >= track_bit_count_17) begin
+                            // Wrap: set bit_position to where effective_position would wrap to
+                            // This handles cases where bit_position > TRACK_BIT_COUNT
                             bit_position <= 17'd0;
                             // Signal that one full rotation has completed
                             rotation_complete <= 1'b1;

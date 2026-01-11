@@ -123,6 +123,8 @@ module iwm_flux (
 `ifdef SIMULATION
     reg [31:0] debug_cycle;
     reg [31:0] byte_counter;  // Sequential byte counter for comparison with MAME
+    reg [31:0] bytes_read_counter;  // How many bytes CPU has read (valid reads with bit7=1)
+    reg [31:0] bytes_lost_counter;  // How many bytes were cleared by async_update before CPU read
 `endif
 
     //=========================================================================
@@ -149,6 +151,8 @@ module iwm_flux (
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
             byte_counter   <= 32'd0;
+            bytes_read_counter <= 32'd0;
+            bytes_lost_counter <= 32'd0;
 `endif
         end else begin
 `ifdef SIMULATION
@@ -208,8 +212,15 @@ module iwm_flux (
                         // Counter about to hit 0 - clear m_data NOW (unless byte completing)
                         if (is_async && !byte_completing) begin
 `ifdef SIMULATION
-                            $display("IWM_FLUX: ASYNC_UPDATE_EXPIRED clearing m_data (was %02h) @cycle=%0d",
-                                     m_data, debug_cycle);
+                            // CRITICAL: If m_data_read is still 0, CPU never read this byte!
+                            if (!m_data_read && m_data[7]) begin
+                                bytes_lost_counter <= bytes_lost_counter + 1;
+                                $display("IWM_FLUX: *** BYTE LOST #%0d *** ASYNC_UPDATE_EXPIRED clearing UNREAD m_data=%02h (completed=%0d read=%0d) @cycle=%0d",
+                                         bytes_lost_counter + 1, m_data, byte_counter, bytes_read_counter, debug_cycle);
+                            end else begin
+                                $display("IWM_FLUX: ASYNC_UPDATE_EXPIRED clearing m_data (was %02h, was_read=%0d) @cycle=%0d",
+                                         m_data, m_data_read, debug_cycle);
+                            end
 `endif
                             m_data <= 8'h00;
                             bit7_acknowledged <= 1'b0;
@@ -359,6 +370,12 @@ module iwm_flux (
                 if ((((ADDR[3:1] == 3'b111) ? ADDR[0] : SW_Q7) == 1'b0) &&
                     (((ADDR[3:1] == 3'b110) ? ADDR[0] : SW_Q6) == 1'b0)) begin
                     m_data_read <= 1'b1;
+`ifdef SIMULATION
+                    // Count valid data reads (bit7=1) for statistics
+                    if (MOTOR_ACTIVE && effective_data_raw[7]) begin
+                        bytes_read_counter <= bytes_read_counter + 1;
+                    end
+`endif
                     // Note: async_update now started at END of read (see above)
                 end
             end
@@ -446,6 +463,13 @@ module iwm_flux (
                 2'b10: $display("IWM_FLUX: READ HANDSHAKE @%01h -> %02h", ADDR, data_out_mux);
                 2'b11: $display("IWM_FLUX: READ @%01h -> %02h (q7=q6=1)", ADDR, data_out_mux);
             endcase
+        end
+
+        // Periodic statistics - every 10M cycles (~0.7 seconds)
+        if (debug_cycle[23:0] == 24'h0 && debug_cycle > 0 && MOTOR_ACTIVE) begin
+            $display("IWM_FLUX: *** STATS @cycle=%0d *** bytes_completed=%0d bytes_read=%0d bytes_lost=%0d loss_rate=%0d%%",
+                     debug_cycle, byte_counter, bytes_read_counter, bytes_lost_counter,
+                     (byte_counter > 0) ? (bytes_lost_counter * 100 / byte_counter) : 0);
         end
     end
 `endif

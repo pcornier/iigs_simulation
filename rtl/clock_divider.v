@@ -92,8 +92,9 @@ always @(posedge clk_14M) begin
     end
 end
 
-// Slow mode: CYAREG bit 7 = 0, OR waiting for slot motor-on detect, OR floppy motor is running
-wire slow_request = (cyareg[7] == 1'b0) || waitforC0C8 || waitforC0D8 || waitforC0E8 || waitforC0F8 || waitforC041 || floppy_motor_on;
+// Slow mode: CYAREG bit 7 = 0, OR waiting for slot motor-on detect
+// Note: 3.5" floppy motor does NOT force slow mode - only 5.25" slot-based detection does
+wire slow_request = (cyareg[7] == 1'b0) || waitforC0C8 || waitforC0D8 || waitforC0E8 || waitforC0F8 || waitforC041;
 
 `ifdef SIMULATION
 // Debug: track previous states and counters (module scope to avoid
