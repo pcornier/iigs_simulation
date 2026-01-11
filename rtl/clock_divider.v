@@ -106,6 +106,12 @@ wire slow_request = (cyareg[7] == 1'b0) ||
                    (waitforC0F8 && cyareg[3]) ||
                    waitforC041;
 
+// I/O bank check for motor detection - banks that have I/O mirrored at $C0xx
+// Banks 00, 01, E0, E1, FC, FD, FE, FF all have I/O at $C0xx
+// IMPORTANT: Can't use IO signal because IO=0 for ROM bank reads
+wire io_bank = (bank == 8'h00 || bank == 8'h01 || bank == 8'he0 || bank == 8'he1 ||
+               bank == 8'hfc || bank == 8'hfd || bank == 8'hfe || bank == 8'hff);
+
 `ifdef SIMULATION
 // Debug: track previous states and counters (module scope to avoid
 // procedural declarations errors in Verilog-2001 tools)
@@ -141,35 +147,37 @@ always @(posedge clk_14M) begin
     end else begin
         // Track motor state UNCONDITIONALLY (like MAME does)
         // The cyareg bits gate whether motor forces slow mode (in slow_request), not tracking
-        if (IO && addr == 16'hC0C9) begin
+        // Use io_bank wire (defined above) to check for I/O-mirrored banks
+
+        if (io_bank && addr == 16'hC0C9) begin
             waitforC0C8 <= 1;
         end
-        if (IO && addr == 16'hC0D9) begin
+        if (io_bank && addr == 16'hC0D9) begin
             waitforC0D8 <= 1;
         end
-        if (IO && addr == 16'hC0E9) begin
+        if (io_bank && addr == 16'hC0E9) begin
             waitforC0E8 <= 1;
         end
-        if (IO && addr == 16'hC0F9) begin
+        if (io_bank && addr == 16'hC0F9) begin
             waitforC0F8 <= 1;
         end
-        if (IO && addr == 16'hC042) begin
+        if (io_bank && addr == 16'hC042) begin
             waitforC041 <= 1;
         end
 
-        if (waitforC0C8 && IO && addr == 16'hC0C8) begin
+        if (waitforC0C8 && io_bank && addr == 16'hC0C8) begin
             waitforC0C8 <= 0;
         end
-        if (waitforC0D8 && IO && addr == 16'hC0D8) begin
+        if (waitforC0D8 && io_bank && addr == 16'hC0D8) begin
             waitforC0D8 <= 0;
         end
-        if (waitforC0E8 && IO && addr == 16'hC0E8) begin
+        if (waitforC0E8 && io_bank && addr == 16'hC0E8) begin
             waitforC0E8 <= 0;
         end
-        if (waitforC0F8 && IO && addr == 16'hC0F8) begin
+        if (waitforC0F8 && io_bank && addr == 16'hC0F8) begin
             waitforC0F8 <= 0;
         end
-        if (waitforC041 && IO && addr == 16'hC041) begin
+        if (waitforC041 && io_bank && addr == 16'hC041) begin
             waitforC041 <= 0;
         end
 
