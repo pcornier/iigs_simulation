@@ -347,8 +347,8 @@ module flux_drive (
 `ifdef SIMULATION
             // Debug: trace strobe conditions
             if (IS_35_INCH && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT]) begin
-                $display("FLUX_DRIVE[%0d]: STROBE! DRIVE_SELECT=%0d DRIVE_SLOT=%0d sel_match=%0d cmd_reg=%0d DISK_MOUNTED=%0d",
-                         DRIVE_ID, DRIVE_SELECT, DRIVE_SLOT, (DRIVE_SELECT == DRIVE_SLOT), sony_cmd_reg, DISK_MOUNTED);
+                $display("FLUX_DRIVE[%0d]: STROBE! DRIVE_SELECT=%0d DRIVE_SLOT=%0d sel_match=%0d cmd_reg=%0d DISK_MOUNTED=%0d SW_MOTOR_ON=%0d strobe_ok=%0d",
+                         DRIVE_ID, DRIVE_SELECT, DRIVE_SLOT, (DRIVE_SELECT == DRIVE_SLOT), sony_cmd_reg, DISK_MOUNTED, SW_MOTOR_ON, sony_cmd_strobe);
             end
 `endif
             if (sony_cmd_strobe) begin
@@ -370,7 +370,7 @@ module flux_drive (
                     4'd0: begin
                         step_direction_slot[DRIVE_SELECT] <= 1'b0;  // "step dir +1" → m_dir=0
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd step dir +1 (m_dir=0)", DRIVE_ID);
+                        $display("FLUX_DRIVE[%0d]: cmd step dir +1 (m_dir=0) t=%0t", DRIVE_ID, $time);
 `endif
                     end
 
@@ -378,16 +378,20 @@ module flux_drive (
                         // StepOn: Execute one step using previously set direction
                         // MAME does: stp_w(0); stp_w(1); which pulses the step line
                         // Direction: m_dir=0 means toward higher tracks, m_dir=1 means toward track 0
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: CASE 4'd1 ENTERED! step_dir[%0d]=%0d head_phase=%0d t=%0t",
+                                 DRIVE_ID, DRIVE_SELECT, step_direction_slot[DRIVE_SELECT], head_phase, $time);
+`endif
                         if (step_direction_slot[DRIVE_SELECT] == 1'b0) begin
                             // Step toward higher tracks (inward)
                             if (head_phase < max_phase)
                                 head_phase <= head_phase + 4'd4;  // 4 quarter-tracks = 1 full track
 `ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=+1) head_phase=%0d->%0d track=%0d->%0d",
+                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=+1) head_phase=%0d->%0d track=%0d->%0d t=%0t",
                                      DRIVE_ID, head_phase,
                                      (head_phase < max_phase) ? head_phase + 4 : head_phase,
                                      head_phase >> 2,
-                                     (head_phase < max_phase) ? (head_phase + 4) >> 2 : head_phase >> 2);
+                                     (head_phase < max_phase) ? (head_phase + 4) >> 2 : head_phase >> 2, $time);
 `endif
                         end else begin
                             // Step toward track 0 (outward)
@@ -396,11 +400,11 @@ module flux_drive (
                             else
                                 head_phase <= 9'd0;
 `ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=-1) head_phase=%0d->%0d track=%0d->%0d",
+                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=-1) head_phase=%0d->%0d track=%0d->%0d t=%0t",
                                      DRIVE_ID, head_phase,
                                      (head_phase >= 4) ? head_phase - 4 : 0,
                                      head_phase >> 2,
-                                     (head_phase >= 4) ? (head_phase - 4) >> 2 : 0);
+                                     (head_phase >= 4) ? (head_phase - 4) >> 2 : 0, $time);
 `endif
                         end
                     end
@@ -424,7 +428,7 @@ module flux_drive (
                     4'd4: begin
                         step_direction_slot[DRIVE_SELECT] <= 1'b1;  // "step dir -1" → m_dir=1
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd step dir -1 (m_dir=1)", DRIVE_ID);
+                        $display("FLUX_DRIVE[%0d]: cmd step dir -1 (m_dir=1) t=%0t", DRIVE_ID, $time);
 `endif
                     end
 

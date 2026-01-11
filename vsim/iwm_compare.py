@@ -1367,59 +1367,79 @@ def compare_data_fields(mame_file: str, vsim_file: str, num_sectors: int = 5, by
 def compare_track_changes(mame_file: str, vsim_file: str, limit: int = 50):
     """Compare track stepping/phase changes between MAME and vsim.
 
-    MAME logs track steps as: '[:fdc:X:XXXX] cmd step dir +1' or '-1'
-    MAME logs phases in IWM_STATUS as: 'phases=XX'
-    vsim logs track changes as: 'TRACK_BIT_COUNT CHANGED: ... track=N'
+    MAME logs track steps as:
+      - '[:fdc:X:XXXX] cmd step dir +1' or '-1' (direction commands)
+      - '[:fdc:X:XXXX] cmd step on' (actual step execution)
+    vsim logs track steps as:
+      - 'FLUX_DRIVE[X]: cmd step dir +1' or '-1' (direction commands)
+      - 'FLUX_DRIVE[X]: cmd step on (dir=XX) head_phase=XX->XX track=XX->XX'
     """
 
     @dataclass
     class TrackEvent:
         source: str
-        event_type: str  # 'step', 'track', 'phase'
-        track: Optional[int] = None
+        event_type: str  # 'step_dir', 'step_on', 'track'
+        track_from: Optional[int] = None
+        track_to: Optional[int] = None
         direction: Optional[int] = None  # +1 or -1 for step
         phase: Optional[int] = None
         line_num: int = 0
+        drive: Optional[int] = None  # Drive number (MAME: 2=drive1, 3=drive2)
 
     def parse_mame_tracks(filename: str) -> List[TrackEvent]:
         """Parse track/phase events from MAME log"""
         events = []
 
-        # Pattern for step commands
-        step_pattern = re.compile(r'cmd step dir ([+-]1)')
-        # Pattern for phase in status
-        phase_pattern = re.compile(r'phases=([0-9a-f]{2})', re.I)
+        # Pattern for step direction commands
+        step_dir_pattern = re.compile(r'\[:fdc:(\d):.*\] cmd step dir ([+-]1)')
+        # Pattern for step on commands
+        step_on_pattern = re.compile(r'\[:fdc:(\d):.*\] cmd step on')
 
         try:
             with open(filename, 'rb') as f:
                 content = f.read().decode('utf-8', errors='replace')
 
-            last_phase = None
+            current_dir = {2: 1, 3: 1}  # Track direction per drive (default +1)
+            current_track = {2: 0, 3: 0}  # Track position per drive
+
             for line_num, line in enumerate(content.split('\n'), 1):
-                # Step commands
-                m = step_pattern.search(line)
+                # Step direction commands
+                m = step_dir_pattern.search(line)
                 if m:
-                    direction = int(m.group(1))
+                    drive = int(m.group(1))
+                    direction = int(m.group(2))
+                    current_dir[drive] = direction
                     events.append(TrackEvent(
                         source='mame',
-                        event_type='step',
+                        event_type='step_dir',
                         direction=direction,
+                        drive=drive,
                         line_num=line_num
                     ))
                     continue
 
-                # Phase changes in status
-                m = phase_pattern.search(line)
+                # Step on commands (actual steps)
+                m = step_on_pattern.search(line)
                 if m:
-                    phase = int(m.group(1), 16)
-                    if phase != last_phase:
-                        events.append(TrackEvent(
-                            source='mame',
-                            event_type='phase',
-                            phase=phase,
-                            line_num=line_num
-                        ))
-                        last_phase = phase
+                    drive = int(m.group(1))
+                    direction = current_dir.get(drive, 1)
+                    track_from = current_track.get(drive, 0)
+                    track_to = track_from + direction
+                    if track_to < 0:
+                        track_to = 0
+                    elif track_to > 79:
+                        track_to = 79
+                    current_track[drive] = track_to
+                    events.append(TrackEvent(
+                        source='mame',
+                        event_type='step_on',
+                        direction=direction,
+                        track_from=track_from,
+                        track_to=track_to,
+                        drive=drive,
+                        line_num=line_num
+                    ))
+                    continue
 
         except FileNotFoundError:
             print(f"Error: Could not open {filename}", file=sys.stderr)
@@ -1431,36 +1451,49 @@ def compare_track_changes(mame_file: str, vsim_file: str, limit: int = 50):
         """Parse track change events from vsim log"""
         events = []
 
-        # Pattern for track changes
-        track_pattern = re.compile(
-            r'TRACK_BIT_COUNT CHANGED:.*track=(\d+)'
-        )
-        # Also capture head_phase
-        phase_pattern = re.compile(
-            r'head_phase=(\d+)'
+        # Pattern for step direction commands
+        step_dir_pattern = re.compile(r'FLUX_DRIVE\[(\d)\]: cmd step dir ([+-]1)')
+        # Pattern for step on commands with track info
+        step_on_pattern = re.compile(
+            r'FLUX_DRIVE\[(\d)\]: cmd step on \(dir=([+-]1)\) head_phase=\d+->\d+ track=(\d+)->(\d+)'
         )
 
         try:
             with open(filename, 'rb') as f:
                 content = f.read().decode('utf-8', errors='replace')
 
-            last_track = None
             for line_num, line in enumerate(content.split('\n'), 1):
-                m = track_pattern.search(line)
+                # Step direction commands
+                m = step_dir_pattern.search(line)
                 if m:
-                    track = int(m.group(1))
-                    phase_m = phase_pattern.search(line)
-                    phase = int(phase_m.group(1)) if phase_m else None
+                    drive = int(m.group(1))
+                    direction = int(m.group(2))
+                    events.append(TrackEvent(
+                        source='vsim',
+                        event_type='step_dir',
+                        direction=direction,
+                        drive=drive,
+                        line_num=line_num
+                    ))
+                    continue
 
-                    if track != last_track:
-                        events.append(TrackEvent(
-                            source='vsim',
-                            event_type='track',
-                            track=track,
-                            phase=phase,
-                            line_num=line_num
-                        ))
-                        last_track = track
+                # Step on commands with track change
+                m = step_on_pattern.search(line)
+                if m:
+                    drive = int(m.group(1))
+                    direction = int(m.group(2))
+                    track_from = int(m.group(3))
+                    track_to = int(m.group(4))
+                    events.append(TrackEvent(
+                        source='vsim',
+                        event_type='step_on',
+                        direction=direction,
+                        track_from=track_from,
+                        track_to=track_to,
+                        drive=drive,
+                        line_num=line_num
+                    ))
+                    continue
 
         except FileNotFoundError:
             print(f"Error: Could not open {filename}", file=sys.stderr)
@@ -1470,61 +1503,75 @@ def compare_track_changes(mame_file: str, vsim_file: str, limit: int = 50):
 
     print(f"Parsing MAME track events from {mame_file}...")
     mame_events = parse_mame_tracks(mame_file)
-    mame_steps = [e for e in mame_events if e.event_type == 'step']
-    mame_phases = [e for e in mame_events if e.event_type == 'phase']
-    print(f"  Found {len(mame_steps)} step commands, {len(mame_phases)} phase changes")
+    mame_step_dirs = [e for e in mame_events if e.event_type == 'step_dir']
+    mame_step_ons = [e for e in mame_events if e.event_type == 'step_on']
+    print(f"  Found {len(mame_step_dirs)} step dir commands, {len(mame_step_ons)} step on commands")
 
     print(f"Parsing vsim track events from {vsim_file}...")
     vsim_events = parse_vsim_tracks(vsim_file)
-    print(f"  Found {len(vsim_events)} track changes")
+    vsim_step_dirs = [e for e in vsim_events if e.event_type == 'step_dir']
+    vsim_step_ons = [e for e in vsim_events if e.event_type == 'step_on']
+    print(f"  Found {len(vsim_step_dirs)} step dir commands, {len(vsim_step_ons)} step on commands")
+
+    # Filter to drive 2 (MAME) / drive 1 (vsim) which is the 3.5" floppy slot 1
+    mame_d2_ons = [e for e in mame_step_ons if e.drive == 2]
+    vsim_d1_ons = [e for e in vsim_step_ons if e.drive == 1]
+
+    # Count actual track movements (exclude track=X->X)
+    vsim_actual_moves = [e for e in vsim_d1_ons if e.track_from != e.track_to]
 
     # Summary
-    print(f"\n=== Track Change Summary ===")
-    print(f"MAME: {len(mame_steps)} step commands ({sum(1 for e in mame_steps if e.direction == 1)} forward, {sum(1 for e in mame_steps if e.direction == -1)} backward)")
-    print(f"vsim: {len(vsim_events)} track changes")
+    print(f"\n=== Step Command Summary (Drive 1 / 3.5\" floppy) ===")
+    print(f"MAME: {len(mame_d2_ons)} step on commands")
+    print(f"vsim: {len(vsim_d1_ons)} step on commands ({len(vsim_actual_moves)} actual moves, {len(vsim_d1_ons) - len(vsim_actual_moves)} at boundary)")
 
-    if vsim_events:
-        tracks_visited = sorted(set(e.track for e in vsim_events if e.track is not None))
-        print(f"\nvsim tracks visited: {tracks_visited}")
-        print(f"  Min track: {min(tracks_visited)}, Max track: {max(tracks_visited)}")
+    # Track sequences
+    if mame_d2_ons:
+        mame_tracks = [e.track_to for e in mame_d2_ons]
+        print(f"\nMAME track sequence (first 20): {mame_tracks[:20]}...")
+        print(f"  Max track reached: {max(mame_tracks)}")
 
-    # Show first N track changes side by side
-    print(f"\n=== First {limit} Track Changes ===")
-    print(f"{'#':>4}  {'Source':>6}  {'Type':>6}  {'Track':>6}  {'Dir':>4}  {'Phase':>6}  {'Line':>10}")
-    print("-" * 60)
+    if vsim_actual_moves:
+        vsim_tracks = [e.track_to for e in vsim_actual_moves]
+        print(f"\nvsim track sequence (first 20): {vsim_tracks[:20]}...")
+        print(f"  Max track reached: {max(vsim_tracks)}")
 
-    # Merge and sort by line number for chronological view
-    all_events = []
+    # Compare step by step
+    print(f"\n=== Step-by-Step Comparison (first {limit}) ===")
+    print(f"{'#':>4}  {'MAME':>12}  {'vsim':>12}  {'Match':>6}")
+    print("-" * 40)
 
-    for e in mame_steps[:limit]:
-        all_events.append(('mame', e))
-    for e in vsim_events[:limit]:
-        all_events.append(('vsim', e))
+    for i in range(min(limit, max(len(mame_d2_ons), len(vsim_actual_moves)))):
+        mame_track = mame_d2_ons[i].track_to if i < len(mame_d2_ons) else None
+        vsim_track = vsim_actual_moves[i].track_to if i < len(vsim_actual_moves) else None
 
-    # Sort by line number (roughly chronological)
-    # Note: Can't directly compare line numbers across files, show separately
+        mame_str = f"{mame_d2_ons[i].track_from}->{mame_track}" if mame_track is not None else "-"
+        vsim_str = f"{vsim_actual_moves[i].track_from}->{vsim_track}" if vsim_track is not None else "-"
 
-    print("\n--- MAME step commands ---")
-    for i, e in enumerate(mame_steps[:limit]):
-        dir_str = f"+{e.direction}" if e.direction > 0 else str(e.direction)
-        print(f"{i:>4}   mame    step       -  {dir_str:>4}       -  {e.line_num:>10}")
+        match = "OK" if mame_track == vsim_track else "DIFF"
+        print(f"{i:>4}  {mame_str:>12}  {vsim_str:>12}  {match:>6}")
 
-    print("\n--- vsim track changes ---")
-    for i, e in enumerate(vsim_events[:limit]):
-        track_str = str(e.track) if e.track is not None else "-"
-        phase_str = str(e.phase) if e.phase is not None else "-"
-        print(f"{i:>4}   vsim   track  {track_str:>6}     -  {phase_str:>6}  {e.line_num:>10}")
+    # Find first divergence
+    print(f"\n=== Divergence Analysis ===")
+    for i in range(min(len(mame_d2_ons), len(vsim_actual_moves))):
+        if mame_d2_ons[i].track_to != vsim_actual_moves[i].track_to:
+            print(f"First divergence at step {i}:")
+            print(f"  MAME: {mame_d2_ons[i].track_from}->{mame_d2_ons[i].track_to} (line {mame_d2_ons[i].line_num})")
+            print(f"  vsim: {vsim_actual_moves[i].track_from}->{vsim_actual_moves[i].track_to} (line {vsim_actual_moves[i].line_num})")
+            break
+    else:
+        if len(mame_d2_ons) != len(vsim_actual_moves):
+            print(f"Track sequences match for first {min(len(mame_d2_ons), len(vsim_actual_moves))} steps")
+            print(f"But different total counts: MAME={len(mame_d2_ons)}, vsim={len(vsim_actual_moves)}")
+        else:
+            print("Track sequences match completely!")
 
-    # Track progression analysis
-    if vsim_events:
-        print(f"\n=== vsim Track Progression ===")
-        current_track = 0
-        for e in vsim_events[:50]:
-            if e.track is not None:
-                diff = e.track - current_track
-                direction = "+" if diff > 0 else ""
-                print(f"  Track {current_track} -> {e.track} ({direction}{diff}) at line {e.line_num}")
-                current_track = e.track
+    # Show vsim track progression
+    print(f"\n=== vsim Track Progression (first {limit}) ===")
+    for i, e in enumerate(vsim_actual_moves[:limit]):
+        delta = e.track_to - e.track_from
+        sign = "+" if delta > 0 else ""
+        print(f"  Track {e.track_from} -> {e.track_to} ({sign}{delta}) at line {e.line_num}")
 
 
 def main():

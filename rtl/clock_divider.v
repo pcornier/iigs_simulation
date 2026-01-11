@@ -1,5 +1,7 @@
 // Define DEBUG_CLKDIV to enable verbose clock divider debug output
-// `define DEBUG_CLKDIV
+`define DEBUG_CLKDIV
+// Define DEBUG_SLOWMEM to enable slowMem access tracking (very verbose)
+//`define DEBUG_SLOWMEM
 
 module clock_divider (
     input  wire        clk_14M,        // 14.318 MHz input clock
@@ -92,9 +94,17 @@ always @(posedge clk_14M) begin
     end
 end
 
-// Slow mode: CYAREG bit 7 = 0, OR waiting for slot motor-on detect
+// Slow mode: CYAREG bit 7 = 0, OR waiting for slot motor-on detect WITH cyareg bit enabled
 // Note: 3.5" floppy motor does NOT force slow mode - only 5.25" slot-based detection does
-wire slow_request = (cyareg[7] == 1'b0) || waitforC0C8 || waitforC0D8 || waitforC0E8 || waitforC0F8 || waitforC041;
+// MAME gates slow mode by (m_motors_active & (m_speed & 0x0f)), so we do the same:
+// - waitforC0XY tracks motor state unconditionally
+// - cyareg[N] bit gates whether that motor forces slow mode
+wire slow_request = (cyareg[7] == 1'b0) ||
+                   (waitforC0C8 && cyareg[0]) ||
+                   (waitforC0D8 && cyareg[1]) ||
+                   (waitforC0E8 && cyareg[2]) ||
+                   (waitforC0F8 && cyareg[3]) ||
+                   waitforC041;
 
 `ifdef SIMULATION
 // Debug: track previous states and counters (module scope to avoid
@@ -106,6 +116,12 @@ reg [31:0] fast_ph2_cnt;
 reg [31:0] slow_14m_cycles;
 reg [31:0] fast_14m_cycles;
 reg [3:0]  last_event; // 0:none 1:C0C9 2:C0D9 3:C0E9 4:C0F9 5:C042 6:slowMem
+// Track previous motor flag states for edge detection
+reg        prev_waitforC0C8;
+reg        prev_waitforC0D8;
+reg        prev_waitforC0E8;
+reg        prev_waitforC0F8;
+reg        prev_waitforC041;
 `endif
 	
 always @(posedge clk_14M) begin
@@ -115,18 +131,78 @@ always @(posedge clk_14M) begin
         waitforC0E8 <= 1'b0;
         waitforC0F8 <= 1'b0;
         waitforC041 <= 1'b0;
+`ifdef SIMULATION
+        prev_waitforC0C8 <= 1'b0;
+        prev_waitforC0D8 <= 1'b0;
+        prev_waitforC0E8 <= 1'b0;
+        prev_waitforC0F8 <= 1'b0;
+        prev_waitforC041 <= 1'b0;
+`endif
     end else begin
-        if (cyareg[0] == 1'b1 && IO && addr == 16'hC0C9) waitforC0C8 <= 1;
-        if (cyareg[1] == 1'b1 && IO && addr == 16'hC0D9) waitforC0D8 <= 1;
-        if (cyareg[2] == 1'b1 && IO && addr == 16'hC0E9) waitforC0E8 <= 1;
-        if (cyareg[3] == 1'b1 && IO && addr == 16'hC0F9) waitforC0F8 <= 1;
-        if (IO && addr == 16'hC042) waitforC041 <= 1;
+        // Track motor state UNCONDITIONALLY (like MAME does)
+        // The cyareg bits gate whether motor forces slow mode (in slow_request), not tracking
+        if (IO && addr == 16'hC0C9) begin
+            waitforC0C8 <= 1;
+        end
+        if (IO && addr == 16'hC0D9) begin
+            waitforC0D8 <= 1;
+        end
+        if (IO && addr == 16'hC0E9) begin
+            waitforC0E8 <= 1;
+        end
+        if (IO && addr == 16'hC0F9) begin
+            waitforC0F8 <= 1;
+        end
+        if (IO && addr == 16'hC042) begin
+            waitforC041 <= 1;
+        end
 
-        if (waitforC0C8 && IO && addr == 16'hC0C8) waitforC0C8 <= 0;
-        if (waitforC0D8 && IO && addr == 16'hC0D8) waitforC0D8 <= 0;
-        if (waitforC0E8 && IO && addr == 16'hC0E8) waitforC0E8 <= 0;
-        if (waitforC0F8 && IO && addr == 16'hC0F8) waitforC0F8 <= 0;
-        if (waitforC041 && IO && addr == 16'hC041) waitforC041 <= 0;
+        if (waitforC0C8 && IO && addr == 16'hC0C8) begin
+            waitforC0C8 <= 0;
+        end
+        if (waitforC0D8 && IO && addr == 16'hC0D8) begin
+            waitforC0D8 <= 0;
+        end
+        if (waitforC0E8 && IO && addr == 16'hC0E8) begin
+            waitforC0E8 <= 0;
+        end
+        if (waitforC0F8 && IO && addr == 16'hC0F8) begin
+            waitforC0F8 <= 0;
+        end
+        if (waitforC041 && IO && addr == 16'hC041) begin
+            waitforC041 <= 0;
+        end
+
+`ifdef SIMULATION
+        // Edge-detected debug output for motor state changes
+`ifdef DEBUG_CLKDIV
+        if (waitforC0C8 && !prev_waitforC0C8)
+            $display("VSIM_MOTOR: slot=4 motor=ON  (waitforC0C8=0->1) cyareg[0]=%0d t=%0t", cyareg[0], $time);
+        if (!waitforC0C8 && prev_waitforC0C8)
+            $display("VSIM_MOTOR: slot=4 motor=OFF (waitforC0C8=1->0) cyareg[0]=%0d t=%0t", cyareg[0], $time);
+        if (waitforC0D8 && !prev_waitforC0D8)
+            $display("VSIM_MOTOR: slot=5 motor=ON  (waitforC0D8=0->1) cyareg[1]=%0d t=%0t", cyareg[1], $time);
+        if (!waitforC0D8 && prev_waitforC0D8)
+            $display("VSIM_MOTOR: slot=5 motor=OFF (waitforC0D8=1->0) cyareg[1]=%0d t=%0t", cyareg[1], $time);
+        if (waitforC0E8 && !prev_waitforC0E8)
+            $display("VSIM_MOTOR: slot=6 motor=ON  (waitforC0E8=0->1) cyareg[2]=%0d t=%0t", cyareg[2], $time);
+        if (!waitforC0E8 && prev_waitforC0E8)
+            $display("VSIM_MOTOR: slot=6 motor=OFF (waitforC0E8=1->0) cyareg[2]=%0d t=%0t", cyareg[2], $time);
+        if (waitforC0F8 && !prev_waitforC0F8)
+            $display("VSIM_MOTOR: slot=7 motor=ON  (waitforC0F8=0->1) cyareg[3]=%0d t=%0t", cyareg[3], $time);
+        if (!waitforC0F8 && prev_waitforC0F8)
+            $display("VSIM_MOTOR: slot=7 motor=OFF (waitforC0F8=1->0) cyareg[3]=%0d t=%0t", cyareg[3], $time);
+        if (waitforC041 && !prev_waitforC041)
+            $display("VSIM_MOTOR: $C042 accessed (waitforC041=0->1) t=%0t", $time);
+        if (!waitforC041 && prev_waitforC041)
+            $display("VSIM_MOTOR: $C041 accessed (waitforC041=1->0) t=%0t", $time);
+`endif
+        prev_waitforC0C8 <= waitforC0C8;
+        prev_waitforC0D8 <= waitforC0D8;
+        prev_waitforC0E8 <= waitforC0E8;
+        prev_waitforC0F8 <= waitforC0F8;
+        prev_waitforC041 <= waitforC041;
+`endif
     end
 end
 
@@ -209,6 +285,14 @@ always @(posedge clk_14M) begin
            )
         begin
             slowMem <= 1;
+`ifdef DEBUG_SLOWMEM
+            if (bank == 8'hE0 || bank == 8'hE1)
+                $display("SLOWMEM: bank_E0E1 bank=%02x addr=%04x t=%0t", bank, addr, $time);
+            else if ((bank == 8'h00 || bank == 8'h01) && addr[15:12] == 4'hC)
+                $display("SLOWMEM: IO_space bank=%02x addr=%04x t=%0t", bank, addr, $time);
+            else if (we_reg)
+                $display("SLOWMEM: shadow_wr bank=%02x addr=%04x shadow=%02x t=%0t", bank, addr, shadow, $time);
+`endif
         end
 
         // --- Original Clock Generation Logic (unchanged) ---
@@ -283,7 +367,13 @@ always @(posedge clk_14M) begin
 `ifdef SIMULATION
         if ((slow != prev_slow) || (slowMem != prev_slowMem)) begin
 `ifdef DEBUG_CLKDIV
-            $display("CLKDIV: slow=%0d slowMem=%0d -> slow=%0d slowMem=%0d ph0_cnt=%0d ph2_cnt=%0d t=%0t", prev_slow, prev_slowMem, slow, slowMem, ph0_counter, ph2_counter, $time);
+            // Match MAME format for easy comparison
+            $display("VSIM_SPEED: %s -> %s (cyareg=%02x cyareg7=%0d motors=%04b wC0C8=%0d wC0D8=%0d wC0E8=%0d wC0F8=%0d wC041=%0d) t=%0t",
+                     prev_slow ? "SLOW" : "FAST",
+                     slow ? "SLOW" : "FAST",
+                     cyareg, cyareg[7],
+                     {waitforC0F8, waitforC0E8, waitforC0D8, waitforC0C8},
+                     waitforC0C8, waitforC0D8, waitforC0E8, waitforC0F8, waitforC041, $time);
 `endif
             if (!slow && !slowMem) begin
                 slow_ph2_cnt <= 0;
