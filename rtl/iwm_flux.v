@@ -264,12 +264,29 @@ module iwm_flux (
                         // Check for flux edge (latched at 14M) OR pending flux from EDGE_1
                         if (flux_seen || flux_pending) begin
                             rw_state <= SR_WINDOW_EDGE_1;
+                            // CRITICAL FIX: Anchor half-window to flux arrival, like MAME
+                            // MAME sets m_next_state_change = flux_time + half_window
+                            // When flux arrives early in window, we need to wait longer
+                            // When flux arrives late, we wait shorter (but at least 1 cycle)
+                            // The flux arrived at the current cycle, so half_window from now
+                            // is correct. But we also need to account for where we were
+                            // in the window when flux arrived.
+                            //
+                            // For a 28-cycle window with half=14:
+                            // - If flux arrives when window_counter=20, we're 8 cycles into window
+                            // - Expected flux at cycle 14 (middle), actual at cycle 8
+                            // - Wait half_window (14) to reach cycle 22, bit boundary at 28
+                            //
+                            // Actually, the MAME behavior is simpler: just wait half_window
+                            // from flux arrival. The next window then starts fresh.
+                            // The key is that consecutive 1-bits work because flux_pending
+                            // captures early flux during EDGE_1.
                             window_counter <= half_window;
                             flux_pending <= 1'b0;  // Clear pending flag
                             flux_seen <= 1'b0;     // Clear seen flag after processing
 `ifdef SIMULATION
-                            $display("IWM_FLUX: EDGE_0->EDGE_1 flux_at=%0d rsh=%02h win=%0d half=%0d",
-                                     debug_cycle, m_rsh, full_window, half_window);
+                            $display("IWM_FLUX: EDGE_0->EDGE_1 flux_at=%0d rsh=%02h win=%0d half=%0d win_remain=%0d",
+                                     debug_cycle, m_rsh, full_window, half_window, window_counter);
 `endif
                         end else if (window_counter == 6'd1) begin
 `ifdef SIMULATION
