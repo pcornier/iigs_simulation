@@ -160,18 +160,24 @@ module flux_drive (
     //
     // MAME behavior: When motor is off, devsel=0 and no floppy is selected, so
     // seek_phase_w() is NOT called. We must gate the strobe by SW_MOTOR_ON to match.
-    // Note: Motor ON command (cmd 2) still needs to work - it sets sony_motor_on,
-    // which then allows subsequent commands. The IWM motor bit (SW_MOTOR_ON) must
-    // be set first by the ROM before any Sony commands take effect.
-    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && SW_MOTOR_ON && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT];
+    //
+    // EXCEPTION: Motor ON (cmd 2) and Motor OFF (cmd 6) commands must work even
+    // when SW_MOTOR_ON=0. The ROM sends these commands to control the physical
+    // drive motor independently of the IWM enable bit. Without this exception,
+    // the motor ON command is rejected and sony_motor_on never gets set, causing
+    // the motor sense register to show OFF and the ROM to fail boot.
+    wire is_motor_cmd = (LATCHED_SENSE_REG == 3'd2) || (LATCHED_SENSE_REG == 3'd6);
+    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && (SW_MOTOR_ON || is_motor_cmd) && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT];
     wire [3:0] sony_cmd_reg = {DISKREG_SEL, LATCHED_SENSE_REG};
 
     // Compute immediate step direction: if strobe is firing with a direction command,
     // use the NEW value; otherwise use the registered value.
-    // cmd_reg 0 = DirNext (m_dir=0, toward higher tracks)
-    // cmd_reg 4 = DirPrev (m_dir=1, toward track 0)
+    // Per disk.txt and Clemens (NOT MAME!):
+    // cmd_reg 0 = direction inward (m_dir=0, toward higher tracks)
+    // cmd_reg 1 = direction outward (m_dir=1, toward track 0)
+    // cmd_reg 4 = step one track (doesn't change direction)
     assign step_direction_immediate = (sony_cmd_strobe && sony_cmd_reg == 4'd0) ? 1'b0 :
-                                      (sony_cmd_strobe && sony_cmd_reg == 4'd4) ? 1'b1 :
+                                      (sony_cmd_strobe && sony_cmd_reg == 4'd1) ? 1'b1 :
                                       step_direction_registered;
 
     //=========================================================================
@@ -363,54 +369,34 @@ module flux_drive (
                 //   0x1: StepOn    - Execute one step in current direction
                 //   0x2: MotorOn   - Turn motor on
                 //   0x3: EjectOff  - End eject sequence (no-op)
-                //   0x4: DirPrev   - Set direction toward track 0 (m_dir=1)
+                //   0x4: StepOne   - Step one track in current direction
                 //   0x5: StepOff   - (not used)
                 //   0x6: MotorOff  - Turn motor off
                 //   0x7: EjectOn   - Start eject sequence
-                //   0x9: MFMModeOn - Switch to MFM mode (1.44MB)
+                //   0x8: MotorOn   - Turn motor on
+                //   0x9: MotorOff (alternate)
                 //   0xC: DskchgClear - Clear disk change flag
                 //   0xD: GCRModeOn - Switch to GCR mode (800K)
+                // NOTE: MAME's mapping is WRONG! Clemens and disk.txt agree on this:
+                //   - $00 = direction inward (toward higher tracks)
+                //   - $01 = direction outward (toward track 0)
+                //   - $04 = step one track
                 case (sony_cmd_reg)
                     4'd0: begin
-                        step_direction_slot[DRIVE_SELECT] <= 1'b0;  // "step dir +1" → m_dir=0
+                        // Direction inward (toward higher tracks)
+                        step_direction_slot[DRIVE_SELECT] <= 1'b0;
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd step dir +1 (m_dir=0) t=%0t", DRIVE_ID, $time);
+                        $display("FLUX_DRIVE[%0d]: cmd step dir +1 (toward higher tracks) t=%0t", DRIVE_ID, $time);
 `endif
                     end
 
                     4'd1: begin
-                        // StepOn: Execute one step using previously set direction
-                        // MAME does: stp_w(0); stp_w(1); which pulses the step line
-                        // Direction: m_dir=0 means toward higher tracks, m_dir=1 means toward track 0
+                        // Direction outward (toward track 0) - NOT step execute!
+                        // This matches Clemens CLEM_IWM_DISK35_CTL_STEP_OUT = 0x01
+                        step_direction_slot[DRIVE_SELECT] <= 1'b1;
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: CASE 4'd1 ENTERED! step_dir[%0d]=%0d head_phase=%0d t=%0t",
-                                 DRIVE_ID, DRIVE_SELECT, step_direction_slot[DRIVE_SELECT], head_phase, $time);
+                        $display("FLUX_DRIVE[%0d]: cmd step dir -1 (toward track 0) t=%0t", DRIVE_ID, $time);
 `endif
-                        if (step_direction_slot[DRIVE_SELECT] == 1'b0) begin
-                            // Step toward higher tracks (inward)
-                            if (head_phase < max_phase)
-                                head_phase <= head_phase + 4'd4;  // 4 quarter-tracks = 1 full track
-`ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=+1) head_phase=%0d->%0d track=%0d->%0d t=%0t",
-                                     DRIVE_ID, head_phase,
-                                     (head_phase < max_phase) ? head_phase + 4 : head_phase,
-                                     head_phase >> 2,
-                                     (head_phase < max_phase) ? (head_phase + 4) >> 2 : head_phase >> 2, $time);
-`endif
-                        end else begin
-                            // Step toward track 0 (outward)
-                            if (head_phase >= 4'd4)
-                                head_phase <= head_phase - 4'd4;
-                            else
-                                head_phase <= 9'd0;
-`ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: cmd step on (dir=-1) head_phase=%0d->%0d track=%0d->%0d t=%0t",
-                                     DRIVE_ID, head_phase,
-                                     (head_phase >= 4) ? head_phase - 4 : 0,
-                                     head_phase >> 2,
-                                     (head_phase >= 4) ? (head_phase - 4) >> 2 : 0, $time);
-`endif
-                        end
                     end
 
                     4'd2: begin
@@ -423,17 +409,44 @@ module flux_drive (
                     end
 
                     4'd3: begin
-                        // EjectOff: End eject sequence (no-op in MAME)
+                        // EjectOff: End eject sequence (Clemens: CLEM_IWM_DISK35_CTL_EJECTED_RESET)
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd eject off (not implemented)", DRIVE_ID);
+                        $display("FLUX_DRIVE[%0d]: cmd eject off / ejected_reset", DRIVE_ID);
 `endif
                     end
 
                     4'd4: begin
-                        step_direction_slot[DRIVE_SELECT] <= 1'b1;  // "step dir -1" → m_dir=1
+                        // StepOne: Execute one step in current direction
+                        // This matches Clemens CLEM_IWM_DISK35_CTL_STEP_ONE = 0x04
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd step dir -1 (m_dir=1) t=%0t", DRIVE_ID, $time);
+                        $display("FLUX_DRIVE[%0d]: cmd STEP ONE dir=%0d head_phase=%0d t=%0t",
+                                 DRIVE_ID, step_direction_slot[DRIVE_SELECT], head_phase, $time);
 `endif
+                        if (step_direction_slot[DRIVE_SELECT] == 1'b0) begin
+                            // Step toward higher tracks (inward)
+                            if (head_phase < max_phase)
+                                head_phase <= head_phase + 4'd4;  // 4 quarter-tracks = 1 full track
+`ifdef SIMULATION
+                            $display("FLUX_DRIVE[%0d]: stepping +1: head_phase=%0d->%0d track=%0d->%0d",
+                                     DRIVE_ID, head_phase,
+                                     (head_phase < max_phase) ? head_phase + 4 : head_phase,
+                                     head_phase >> 2,
+                                     (head_phase < max_phase) ? (head_phase + 4) >> 2 : head_phase >> 2);
+`endif
+                        end else begin
+                            // Step toward track 0 (outward)
+                            if (head_phase >= 4'd4)
+                                head_phase <= head_phase - 4'd4;
+                            else
+                                head_phase <= 9'd0;
+`ifdef SIMULATION
+                            $display("FLUX_DRIVE[%0d]: stepping -1: head_phase=%0d->%0d track=%0d->%0d",
+                                     DRIVE_ID, head_phase,
+                                     (head_phase >= 4) ? head_phase - 4 : 0,
+                                     head_phase >> 2,
+                                     (head_phase >= 4) ? (head_phase - 4) >> 2 : 0);
+`endif
+                        end
                     end
 
                     4'd6: begin

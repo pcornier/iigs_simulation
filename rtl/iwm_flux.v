@@ -536,6 +536,95 @@ module iwm_flux (
     // Note: This tracks raw bytes from the disk, independent of CPU read timing.
 
 `ifdef SECTOR_DEBUG
+    // GCR 6-2 decode function for 3.5" disk address fields
+    // Input: raw GCR byte (0x80-0xFF), Output: decoded 6-bit value (0x00-0x3F, or 0x80 for invalid)
+    // Table from Clemens emulator (clem_disk.c)
+    function [7:0] gcr_6_2_decode;
+        input [7:0] gcr_byte;
+        begin
+            case (gcr_byte)
+                // 0x90-0x97
+                8'h96: gcr_6_2_decode = 8'h00;
+                8'h97: gcr_6_2_decode = 8'h01;
+                // 0x98-0x9F
+                8'h9A: gcr_6_2_decode = 8'h02;
+                8'h9B: gcr_6_2_decode = 8'h03;
+                8'h9D: gcr_6_2_decode = 8'h04;
+                8'h9E: gcr_6_2_decode = 8'h05;
+                8'h9F: gcr_6_2_decode = 8'h06;
+                // 0xA0-0xA7
+                8'hA6: gcr_6_2_decode = 8'h07;
+                8'hA7: gcr_6_2_decode = 8'h08;
+                // 0xA8-0xAF
+                8'hAB: gcr_6_2_decode = 8'h09;
+                8'hAC: gcr_6_2_decode = 8'h0A;
+                8'hAD: gcr_6_2_decode = 8'h0B;
+                8'hAE: gcr_6_2_decode = 8'h0C;
+                8'hAF: gcr_6_2_decode = 8'h0D;
+                // 0xB0-0xB7
+                8'hB2: gcr_6_2_decode = 8'h0E;
+                8'hB3: gcr_6_2_decode = 8'h0F;
+                8'hB4: gcr_6_2_decode = 8'h10;
+                8'hB5: gcr_6_2_decode = 8'h11;
+                8'hB6: gcr_6_2_decode = 8'h12;
+                8'hB7: gcr_6_2_decode = 8'h13;
+                // 0xB8-0xBF
+                8'hB9: gcr_6_2_decode = 8'h14;
+                8'hBA: gcr_6_2_decode = 8'h15;
+                8'hBB: gcr_6_2_decode = 8'h16;
+                8'hBC: gcr_6_2_decode = 8'h17;
+                8'hBD: gcr_6_2_decode = 8'h18;
+                8'hBE: gcr_6_2_decode = 8'h19;
+                8'hBF: gcr_6_2_decode = 8'h1A;
+                // 0xC8-0xCF
+                8'hCB: gcr_6_2_decode = 8'h1B;
+                8'hCD: gcr_6_2_decode = 8'h1C;
+                8'hCE: gcr_6_2_decode = 8'h1D;
+                8'hCF: gcr_6_2_decode = 8'h1E;
+                // 0xD0-0xD7
+                8'hD3: gcr_6_2_decode = 8'h1F;
+                8'hD6: gcr_6_2_decode = 8'h20;
+                8'hD7: gcr_6_2_decode = 8'h21;
+                // 0xD8-0xDF
+                8'hD9: gcr_6_2_decode = 8'h22;
+                8'hDA: gcr_6_2_decode = 8'h23;
+                8'hDB: gcr_6_2_decode = 8'h24;
+                8'hDC: gcr_6_2_decode = 8'h25;
+                8'hDD: gcr_6_2_decode = 8'h26;
+                8'hDE: gcr_6_2_decode = 8'h27;
+                8'hDF: gcr_6_2_decode = 8'h28;
+                // 0xE0-0xE7
+                8'hE5: gcr_6_2_decode = 8'h29;
+                8'hE6: gcr_6_2_decode = 8'h2A;
+                8'hE7: gcr_6_2_decode = 8'h2B;
+                // 0xE8-0xEF
+                8'hE9: gcr_6_2_decode = 8'h2C;
+                8'hEA: gcr_6_2_decode = 8'h2D;
+                8'hEB: gcr_6_2_decode = 8'h2E;
+                8'hEC: gcr_6_2_decode = 8'h2F;
+                8'hED: gcr_6_2_decode = 8'h30;
+                8'hEE: gcr_6_2_decode = 8'h31;
+                8'hEF: gcr_6_2_decode = 8'h32;
+                // 0xF0-0xF7
+                8'hF2: gcr_6_2_decode = 8'h33;
+                8'hF3: gcr_6_2_decode = 8'h34;
+                8'hF4: gcr_6_2_decode = 8'h35;
+                8'hF5: gcr_6_2_decode = 8'h36;
+                8'hF6: gcr_6_2_decode = 8'h37;
+                8'hF7: gcr_6_2_decode = 8'h38;
+                // 0xF8-0xFF
+                8'hF9: gcr_6_2_decode = 8'h39;
+                8'hFA: gcr_6_2_decode = 8'h3A;
+                8'hFB: gcr_6_2_decode = 8'h3B;
+                8'hFC: gcr_6_2_decode = 8'h3C;
+                8'hFD: gcr_6_2_decode = 8'h3D;
+                8'hFE: gcr_6_2_decode = 8'h3E;
+                8'hFF: gcr_6_2_decode = 8'h3F;
+                default: gcr_6_2_decode = 8'h80;  // Invalid GCR byte
+            endcase
+        end
+    endfunction
+
     // Sector tracking state machine
     localparam SEC_IDLE       = 4'd0;
     localparam SEC_WAIT_AA1   = 4'd1;  // Saw D5, waiting for first AA
@@ -550,12 +639,16 @@ module iwm_flux (
     localparam SEC_DATA_CSUM  = 4'd10; // Reading data field: 4 checksum bytes
 
     reg [3:0]  sec_state;
-    reg [7:0]  sec_track;
-    reg [7:0]  sec_sector;
-    reg [7:0]  sec_side;
-    reg [7:0]  sec_format;
-    reg [7:0]  sec_addr_csum;     // Expected checksum from address field
-    reg [7:0]  sec_computed_csum; // Computed checksum (track XOR sector XOR side XOR format)
+    reg [7:0]  sec_track;         // Raw GCR byte
+    reg [7:0]  sec_sector;        // Raw GCR byte
+    reg [7:0]  sec_side;          // Raw GCR byte
+    reg [7:0]  sec_format;        // Raw GCR byte
+    reg [7:0]  sec_addr_csum;     // Raw checksum byte from address field
+    reg [5:0]  sec_decoded_track; // Decoded 6-bit track value
+    reg [5:0]  sec_decoded_sector;// Decoded 6-bit sector value
+    reg [5:0]  sec_decoded_side;  // Decoded 6-bit side value
+    reg [5:0]  sec_decoded_format;// Decoded 6-bit format value
+    reg [5:0]  sec_running_xor;   // Running XOR of decoded values (should be 0 after all 5 bytes)
     reg [9:0]  sec_data_count;    // Counter for data bytes (0-511)
     reg [3:0]  sec_tag_count;     // Counter for tag bytes (0-11)
     reg [1:0]  sec_csum_count;    // Counter for checksum bytes (0-3)
@@ -580,7 +673,11 @@ module iwm_flux (
             sec_side <= 8'd0;
             sec_format <= 8'd0;
             sec_addr_csum <= 8'd0;
-            sec_computed_csum <= 8'd0;
+            sec_decoded_track <= 6'd0;
+            sec_decoded_sector <= 6'd0;
+            sec_decoded_side <= 6'd0;
+            sec_decoded_format <= 6'd0;
+            sec_running_xor <= 6'd0;
             sec_data_count <= 10'd0;
             sec_tag_count <= 4'd0;
             sec_csum_count <= 2'd0;
@@ -634,37 +731,47 @@ module iwm_flux (
 
                     SEC_ADDR_TRACK: begin
                         sec_track <= m_rsh;
+                        sec_decoded_track <= gcr_6_2_decode(m_rsh)[5:0];
+                        sec_running_xor <= gcr_6_2_decode(m_rsh)[5:0];  // Start running XOR
                         sec_state <= SEC_ADDR_SEC;
                     end
 
                     SEC_ADDR_SEC: begin
                         sec_sector <= m_rsh;
+                        sec_decoded_sector <= gcr_6_2_decode(m_rsh)[5:0];
+                        sec_running_xor <= sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0];
                         sec_state <= SEC_ADDR_SIDE;
                     end
 
                     SEC_ADDR_SIDE: begin
                         sec_side <= m_rsh;
+                        sec_decoded_side <= gcr_6_2_decode(m_rsh)[5:0];
+                        sec_running_xor <= sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0];
                         sec_state <= SEC_ADDR_FMT;
                     end
 
                     SEC_ADDR_FMT: begin
                         sec_format <= m_rsh;
-                        // Compute expected checksum
-                        sec_computed_csum <= sec_track ^ sec_sector ^ sec_side ^ m_rsh;
+                        sec_decoded_format <= gcr_6_2_decode(m_rsh)[5:0];
+                        sec_running_xor <= sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0];
                         sec_state <= SEC_ADDR_CSUM;
                     end
 
                     SEC_ADDR_CSUM: begin
                         sec_addr_csum <= m_rsh;
-                        // Validate checksum
-                        if (m_rsh == sec_computed_csum) begin
+                        // ROM-style validation: XOR of all 5 decoded bytes must equal 0
+                        // The checksum byte is chosen so that track^sector^side^format^checksum = 0
+                        if ((sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0]) == 6'd0) begin
                             sec_addr_ok_count <= sec_addr_ok_count + 1;
-                            $display("SECTOR: ADDR OK T=%02h S=%02h side=%02h fmt=%02h csum=%02h pos=%0d",
+                            $display("SECTOR: ADDR OK T=%0d S=%0d side=%02h fmt=%02h (raw: %02h %02h %02h %02h %02h) pos=%0d",
+                                     sec_decoded_track, sec_decoded_sector, sec_decoded_side, sec_decoded_format,
                                      sec_track, sec_sector, sec_side, sec_format, m_rsh, DISK_BIT_POSITION);
                         end else begin
                             sec_addr_fail_count <= sec_addr_fail_count + 1;
-                            $display("SECTOR: ADDR FAIL T=%02h S=%02h side=%02h fmt=%02h csum=%02h (expected %02h) pos=%0d",
-                                     sec_track, sec_sector, sec_side, sec_format, m_rsh, sec_computed_csum, DISK_BIT_POSITION);
+                            $display("SECTOR: ADDR FAIL T=%0d S=%0d side=%02h fmt=%02h xor=%02h (raw: %02h %02h %02h %02h %02h) pos=%0d",
+                                     sec_decoded_track, sec_decoded_sector, sec_decoded_side, sec_decoded_format,
+                                     sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0],
+                                     sec_track, sec_sector, sec_side, sec_format, m_rsh, DISK_BIT_POSITION);
                         end
                         sec_state <= SEC_IDLE;  // Wait for data field
                     end
