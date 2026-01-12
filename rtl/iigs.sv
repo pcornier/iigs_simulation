@@ -324,11 +324,8 @@ module iigs
                ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
-  // LC_IO: Language Card soft switches ($C080-$C08F) should ALWAYS trigger their side effects,
-  // even when IOLC is inhibited (shadow[6]=1). This is because IOLC inhibit only affects
-  // data routing, not the LC state machine. The ROM RAM address test relies on this.
   wire LC_IO = ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 & (cpu_addr[7:4] == 4'h8) &
-               (bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1);
+               ((~shadow[6] & (bank_bef == 8'h00 | bank_bef == 8'h01)) | bank_bef == 8'he0 | bank_bef == 8'he1);
 
   // Debug: IOLC inhibit testing
   always @(posedge CLK_14M) begin
@@ -469,7 +466,7 @@ module iigs
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (txt1_shadow || txt2_shadow || shr_master_shadow || hgr1_shadow || hgr2_shadow) begin
@@ -496,7 +493,7 @@ module iigs
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (shr_master_shadow) begin
