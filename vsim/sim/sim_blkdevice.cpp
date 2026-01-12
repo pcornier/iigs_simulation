@@ -28,6 +28,8 @@ SData* img_mounted=NULL;
 CData* img_readonly=NULL;
 QData* img_size=NULL;
 
+CData* woz3_track=NULL;
+
 
 #define bitset(byte,nbit)   ((byte) |=  (1<<(nbit)))
 #define bitclear(byte,nbit) ((byte) &= ~(1<<(nbit)))
@@ -85,9 +87,18 @@ void SimBlockDevice::BeforeEval(int cycles)
  static int woz3_debug_count = 0;
  static int woz3_last_track = -1;
  static int woz3_last_addr = -1;
+ static int woz3_periodic_debug = 0;
+
+
  if (woz3_track && woz3_bit_addr && woz3_bit_data && woz3_bit_count) {
      if (woz_mounted[0]) {
          int track = *woz3_track;
+         // Periodic debug: print track value every 500k cycles to catch if it ever changes
+         if (woz3_periodic_debug < 1000 && (cycles % 500000) < 5000) {
+             printf("WOZ3_TRACK_DEBUG: INLOOP cycles=%d woz3_track=%d (raw signal value) bit_addr=%d\n",
+                    cycles, track, *woz3_bit_addr);
+             woz3_periodic_debug++;
+         }
          int byte_addr = *woz3_bit_addr;
          const WOZTrack* woz_track = GetWOZTrack(0, track);
          if (woz_track && woz_track->initialized) {

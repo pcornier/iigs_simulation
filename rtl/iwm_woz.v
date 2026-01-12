@@ -362,12 +362,19 @@ module iwm_woz (
 `ifdef SIMULATION
     // Debug: track diskreg_sel changes to detect oscillation bug
     reg prev_diskreg_sel;
+    reg [6:0] prev_drive35_track;
     always @(posedge CLK_14M) begin
         if (prev_diskreg_sel != diskreg_sel) begin
             $display("IWM_WOZ: *** diskreg_sel CHANGED: %0d -> %0d (DISK35=%02h drive35_track=%0d WOZ_TRACK3_comb=%0d WOZ_TRACK3_reg=%0d)",
                      prev_diskreg_sel, diskreg_sel, DISK35, drive35_track, woz_track3_comb, woz_track3_reg);
         end
+        // Debug: Track drive35_track changes (from flux_drive TRACK output)
+        if (prev_drive35_track != drive35_track) begin
+            $display("IWM_WOZ: *** drive35_track CHANGED: %0d -> %0d (woz_track3_comb=%0d woz_track3_reg=%0d)",
+                     prev_drive35_track, drive35_track, woz_track3_comb, woz_track3_reg);
+        end
         prev_diskreg_sel <= diskreg_sel;
+        prev_drive35_track <= drive35_track;
     end
 `endif
 
@@ -471,8 +478,11 @@ module iwm_woz (
     //=========================================================================
 
     // Flux transition: use selected drive's transitions
-    wire flux_transition = (is_35_inch) ? ((drive_sel == 0) ? flux_transition_35 : flux_transition_35_2) :
-                                         ((drive_sel == 0) ? flux_transition_525 : 1'b0);
+    // CRITICAL: Must use flux_is_35_inch (based on spinning motor) not is_35_inch (software register)!
+    // When 3.5" drive is spinning but ROM temporarily accesses slot 5 mode, we must still
+    // read flux from the 3.5" drive.
+    wire flux_transition = (flux_is_35_inch) ? ((drive_sel == 0) ? flux_transition_35 : flux_transition_35_2) :
+                                              ((drive_sel == 0) ? flux_transition_525 : 1'b0);
 
     // Track which drive type's flux we're actually using (for window timing)
     // CRITICAL: Window timing must match the SPINNING drive, not software DISK35 register!
@@ -595,10 +605,10 @@ module iwm_woz (
 
         // Periodic status when motor is on
         if (motor_spinning && (debug_cycle[19:0] == 20'h80000)) begin
-            $display("IWM_WOZ: Status: is_35=%0d drive35_active=%0d drive525_active=%0d DISK_READY=%04b q6=%0d q7=%0d",
-                     is_35_inch, drive35_active, drive525_active, DISK_READY, q6, q7);
-            $display("IWM_WOZ: Track3=%0d BitAddr3=%0d BitCount3=%0d Data3=%02h",
-                     drive35_track, drive35_bram_addr, WOZ_TRACK3_BIT_COUNT, WOZ_TRACK3_BIT_DATA);
+            $display("IWM_WOZ: Status: is_35=%0d drive35_active=%0d drive525_active=%0d DISK_READY=%04b q6=%0d q7=%0d drive_sel=%0d",
+                     is_35_inch, drive35_active, drive525_active, DISK_READY, q6, q7, drive_sel);
+            $display("IWM_WOZ: Track3=%0d BitAddr3=%0d BitCount3=%0d Data3=%02h woz_track3_comb=%0d woz_track3_reg=%0d diskreg_sel=%0d",
+                     drive35_track, drive35_bram_addr, WOZ_TRACK3_BIT_COUNT, WOZ_TRACK3_BIT_DATA, woz_track3_comb, woz_track3_reg, diskreg_sel);
         end
     end
 

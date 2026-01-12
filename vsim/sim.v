@@ -184,6 +184,13 @@ assign WOZ_TRACK3_BIT_COUNT = woz3_bit_count;
 assign WOZ_TRACK1_BIT_DATA = woz1_bit_data;
 assign WOZ_TRACK1_BIT_COUNT = woz1_bit_count;
 
+reg [7:0] old_woz_3;
+always @(posedge clk_sys) begin
+old_woz_3 <= WOZ_TRACK3;
+if (old_woz_3!=WOZ_TRACK3)
+      $display("WOZ_TRACK3 changed %d",WOZ_TRACK3);
+end
+
 // Export WOZ track/address to C++ for data lookup
 assign woz3_track_out = WOZ_TRACK3;
 assign woz3_bit_addr_out = WOZ_TRACK3_BIT_ADDR;

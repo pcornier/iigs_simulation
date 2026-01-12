@@ -15,7 +15,11 @@
 
 // Enable detailed byte framing debug output for comparing with MAME
 // Uncomment the following line to enable:
-// `define BYTE_FRAME_DEBUG
+`define BYTE_FRAME_DEBUG
+
+// Enable sector read logging with checksum validation
+// Uncomment the following line to enable:
+`define SECTOR_DEBUG
 
 module iwm_flux (
     // Global signals
@@ -518,6 +522,197 @@ module iwm_flux (
             $display("IWM_FLUX: *** STATS @cycle=%0d *** bytes_completed=%0d bytes_read=%0d bytes_lost=%0d loss_rate=%0d%%",
                      debug_cycle, byte_counter, bytes_read_counter, bytes_lost_counter,
                      (byte_counter > 0) ? (bytes_lost_counter * 100 / byte_counter) : 0);
+        end
+    end
+`endif
+
+    //=========================================================================
+    // Sector Read Tracking (for debug - tracks byte stream, not CPU reads)
+    //=========================================================================
+    // This state machine watches the byte stream (m_data) and tracks sector reads.
+    // 3.5" GCR format:
+    //   Address field: D5 AA 96 <track> <sector> <side> <format> <checksum> DE AA
+    //   Data field:    D5 AA AD <12 tag> <512 data> <4 checksum> DE AA
+    // Note: This tracks raw bytes from the disk, independent of CPU read timing.
+
+`ifdef SECTOR_DEBUG
+    // Sector tracking state machine
+    localparam SEC_IDLE       = 4'd0;
+    localparam SEC_WAIT_AA1   = 4'd1;  // Saw D5, waiting for first AA
+    localparam SEC_WAIT_96    = 4'd2;  // Saw D5 AA, waiting for 96 (addr) or AD (data)
+    localparam SEC_ADDR_TRACK = 4'd3;  // Reading address field: track byte
+    localparam SEC_ADDR_SEC   = 4'd4;  // Reading address field: sector byte
+    localparam SEC_ADDR_SIDE  = 4'd5;  // Reading address field: side byte
+    localparam SEC_ADDR_FMT   = 4'd6;  // Reading address field: format byte
+    localparam SEC_ADDR_CSUM  = 4'd7;  // Reading address field: checksum byte
+    localparam SEC_DATA_TAG   = 4'd8;  // Reading data field: 12 tag bytes
+    localparam SEC_DATA_READ  = 4'd9;  // Reading data field: 512 data bytes
+    localparam SEC_DATA_CSUM  = 4'd10; // Reading data field: 4 checksum bytes
+
+    reg [3:0]  sec_state;
+    reg [7:0]  sec_track;
+    reg [7:0]  sec_sector;
+    reg [7:0]  sec_side;
+    reg [7:0]  sec_format;
+    reg [7:0]  sec_addr_csum;     // Expected checksum from address field
+    reg [7:0]  sec_computed_csum; // Computed checksum (track XOR sector XOR side XOR format)
+    reg [9:0]  sec_data_count;    // Counter for data bytes (0-511)
+    reg [3:0]  sec_tag_count;     // Counter for tag bytes (0-11)
+    reg [1:0]  sec_csum_count;    // Counter for checksum bytes (0-3)
+    reg [31:0] sec_data_csum;     // Running checksum for data field (3 bytes used)
+    reg [16:0] sec_start_pos;     // Position where sector started (for logging)
+
+    // Statistics
+    reg [15:0] sec_addr_ok_count;
+    reg [15:0] sec_addr_fail_count;
+    reg [15:0] sec_data_count_total;
+
+    // Detect byte completion using m_rsh >= 0x80 signal (byte_completing is defined earlier)
+    // Use edge detection since byte_completing is a level signal during the completion cycle.
+    reg        prev_byte_completing;
+    wire       new_byte = byte_completing && !prev_byte_completing;
+
+    always @(posedge CLK_14M or posedge RESET) begin
+        if (RESET) begin
+            sec_state <= SEC_IDLE;
+            sec_track <= 8'd0;
+            sec_sector <= 8'd0;
+            sec_side <= 8'd0;
+            sec_format <= 8'd0;
+            sec_addr_csum <= 8'd0;
+            sec_computed_csum <= 8'd0;
+            sec_data_count <= 10'd0;
+            sec_tag_count <= 4'd0;
+            sec_csum_count <= 2'd0;
+            sec_data_csum <= 32'd0;
+            sec_start_pos <= 17'd0;
+            sec_addr_ok_count <= 16'd0;
+            sec_addr_fail_count <= 16'd0;
+            sec_data_count_total <= 16'd0;
+            prev_byte_completing <= 1'b0;
+        end else if (MOTOR_SPINNING && DISK_READY) begin
+            prev_byte_completing <= byte_completing;
+
+            // State machine triggered by new bytes
+            // NOTE: When new_byte fires (byte_completing edge), the completed byte is in m_rsh
+            if (new_byte) begin
+                case (sec_state)
+                    SEC_IDLE: begin
+                        if (m_rsh == 8'hD5) begin
+                            sec_state <= SEC_WAIT_AA1;
+                            sec_start_pos <= DISK_BIT_POSITION;
+                        end
+                    end
+
+                    SEC_WAIT_AA1: begin
+                        if (m_rsh == 8'hAA)
+                            sec_state <= SEC_WAIT_96;
+                        else if (m_rsh == 8'hD5)
+                            sec_state <= SEC_WAIT_AA1;  // Stay, could be new marker
+                        else
+                            sec_state <= SEC_IDLE;
+                    end
+
+                    SEC_WAIT_96: begin
+                        if (m_rsh == 8'h96) begin
+                            // Address field prologue complete
+                            sec_state <= SEC_ADDR_TRACK;
+                            $display("SECTOR: D5 AA 96 at pos=%0d (address prologue)", sec_start_pos);
+                        end else if (m_rsh == 8'hAD) begin
+                            // Data field prologue
+                            sec_state <= SEC_DATA_TAG;
+                            sec_tag_count <= 4'd0;
+                            $display("SECTOR: D5 AA AD at pos=%0d (data prologue) for T%0d S%0d",
+                                     sec_start_pos, sec_track, sec_sector);
+                        end else if (m_rsh == 8'hD5) begin
+                            sec_state <= SEC_WAIT_AA1;
+                            sec_start_pos <= DISK_BIT_POSITION;
+                        end else begin
+                            sec_state <= SEC_IDLE;
+                        end
+                    end
+
+                    SEC_ADDR_TRACK: begin
+                        sec_track <= m_rsh;
+                        sec_state <= SEC_ADDR_SEC;
+                    end
+
+                    SEC_ADDR_SEC: begin
+                        sec_sector <= m_rsh;
+                        sec_state <= SEC_ADDR_SIDE;
+                    end
+
+                    SEC_ADDR_SIDE: begin
+                        sec_side <= m_rsh;
+                        sec_state <= SEC_ADDR_FMT;
+                    end
+
+                    SEC_ADDR_FMT: begin
+                        sec_format <= m_rsh;
+                        // Compute expected checksum
+                        sec_computed_csum <= sec_track ^ sec_sector ^ sec_side ^ m_rsh;
+                        sec_state <= SEC_ADDR_CSUM;
+                    end
+
+                    SEC_ADDR_CSUM: begin
+                        sec_addr_csum <= m_rsh;
+                        // Validate checksum
+                        if (m_rsh == sec_computed_csum) begin
+                            sec_addr_ok_count <= sec_addr_ok_count + 1;
+                            $display("SECTOR: ADDR OK T=%02h S=%02h side=%02h fmt=%02h csum=%02h pos=%0d",
+                                     sec_track, sec_sector, sec_side, sec_format, m_rsh, DISK_BIT_POSITION);
+                        end else begin
+                            sec_addr_fail_count <= sec_addr_fail_count + 1;
+                            $display("SECTOR: ADDR FAIL T=%02h S=%02h side=%02h fmt=%02h csum=%02h (expected %02h) pos=%0d",
+                                     sec_track, sec_sector, sec_side, sec_format, m_rsh, sec_computed_csum, DISK_BIT_POSITION);
+                        end
+                        sec_state <= SEC_IDLE;  // Wait for data field
+                    end
+
+                    SEC_DATA_TAG: begin
+                        sec_tag_count <= sec_tag_count + 1;
+                        if (sec_tag_count == 4'd11) begin
+                            sec_state <= SEC_DATA_READ;
+                            sec_data_count <= 10'd0;
+                            sec_data_csum <= 32'd0;
+                        end
+                    end
+
+                    SEC_DATA_READ: begin
+                        // Track data bytes (simplified - not computing full checksum)
+                        sec_data_count <= sec_data_count + 1;
+                        if (sec_data_count == 10'd511) begin
+                            sec_state <= SEC_DATA_CSUM;
+                            sec_csum_count <= 2'd0;
+                            sec_data_count_total <= sec_data_count_total + 1;
+                        end
+                    end
+
+                    SEC_DATA_CSUM: begin
+                        sec_csum_count <= sec_csum_count + 1;
+                        if (sec_csum_count == 2'd3) begin
+                            $display("SECTOR: DATA COMPLETE T=%02h S=%02h (512 bytes read) pos=%0d",
+                                     sec_track, sec_sector, DISK_BIT_POSITION);
+                            sec_state <= SEC_IDLE;
+                        end
+                    end
+
+                    default: sec_state <= SEC_IDLE;
+                endcase
+            end
+
+            // Reset if marker sequence broken
+            if (!MOTOR_SPINNING || !DISK_READY) begin
+                sec_state <= SEC_IDLE;
+            end
+        end
+    end
+
+    // Periodic statistics for sector tracking
+    always @(posedge CLK_14M) begin
+        if (debug_cycle[24:0] == 25'h0 && debug_cycle > 0 && MOTOR_ACTIVE) begin
+            $display("SECTOR: *** STATS *** addr_ok=%0d addr_fail=%0d data_complete=%0d",
+                     sec_addr_ok_count, sec_addr_fail_count, sec_data_count_total);
         end
     end
 `endif

@@ -88,10 +88,14 @@ module flux_drive (
 
     // Drive ready state (MAME m_ready equivalent)
     // MAME: m_ready=true means NOT ready, m_ready=false means ready (active-low)
-    // After motor turns on, drive needs 2 rotations to become ready
-    reg [1:0]   spinup_counter;         // Count rotations for spin-up (starts at 2)
+    // After motor turns on, drive needs ~2 rotations worth of bits to become ready.
+    // Using fixed bit count instead of rotation detection because rapid side switching
+    // can cause spurious rotation_complete signals that make spinup too short.
+    // 2 rotations at ~75,000 bits/track = ~150,000 bits
+    parameter SPINUP_BIT_COUNT = 150000;
+    reg [17:0]  spinup_bits;            // Count bits during spin-up
     reg         drive_ready;            // True when drive is spun up and ready
-    reg         rotation_complete;      // Pulse when disk completes one rotation
+    reg         rotation_complete;      // Pulse when disk completes one rotation (for debug)
 
     // Head position (quarter-track)
     reg [8:0]   head_phase;             // 0-319 for 80 tracks (3.5") or 0-139 for 35 tracks (5.25")
@@ -547,7 +551,7 @@ module flux_drive (
         if (RESET) begin
             motor_spinning <= 1'b0;
             prev_motor_spinning <= 1'b0;
-            spinup_counter <= 2'd0;
+            spinup_bits <= 18'd0;
             drive_ready <= 1'b0;
         end else begin
             prev_motor_spinning <= motor_spinning;
@@ -564,38 +568,23 @@ module flux_drive (
                 motor_spinning <= MOTOR_ON;
             end
 
-            // Drive ready logic (MAME floppy.cpp)
-            // When motor turns ON: start spin-up counter at 2
-            // After 2 rotations: drive becomes ready
-            // When motor turns OFF: drive becomes not ready
+            // Drive ready logic - bit-count based spinup
+            // Using fixed bit count (SPINUP_BIT_COUNT = ~2 rotations) instead of
+            // rotation detection because rapid side switching during ROM drive
+            // detection causes spurious rotation_complete signals.
             if (!prev_motor_spinning && motor_spinning && DISK_MOUNTED) begin
                 // Motor just turned ON with disk mounted - start spin-up
-                spinup_counter <= 2'd2;
+                spinup_bits <= 18'd0;
                 drive_ready <= 1'b0;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: Motor ON - starting spin-up (counter=2)", DRIVE_ID);
+                $display("FLUX_DRIVE[%0d]: Motor ON - starting spin-up (need %0d bits)", DRIVE_ID, SPINUP_BIT_COUNT);
 `endif
             end else if (!motor_spinning) begin
                 // Motor OFF - not ready
                 drive_ready <= 1'b0;
-                spinup_counter <= 2'd0;
-            end else if (rotation_complete && spinup_counter > 0) begin
-                // Rotation completed while still spinning up
-                spinup_counter <= spinup_counter - 1'd1;
-                if (spinup_counter == 2'd1) begin
-                    // This rotation will make counter reach 0 - drive is now ready
-                    drive_ready <= 1'b1;
-`ifdef SIMULATION
-                    $display("FLUX_DRIVE[%0d]: Spin-up complete - drive ready!", DRIVE_ID);
-`endif
-                end
-`ifdef SIMULATION
-                else begin
-                    $display("FLUX_DRIVE[%0d]: Spin-up rotation, counter: %0d -> %0d",
-                             DRIVE_ID, spinup_counter, spinup_counter - 1);
-                end
-`endif
+                spinup_bits <= 18'd0;
             end
+            // Note: spinup_bits increment happens in the bit_timer section below
         end
     end
 
@@ -682,10 +671,11 @@ module flux_drive (
                 // 20 is closer to start (8 cycles elapsed).
                 // 14 is middle (14 cycles elapsed).
                 // So 20 is EARLIER in time.
-                // Shifting pulse earlier ensures it is captured before the previous window closes?
-                // Or ensures it is seen in the "next" window reliably?
-                // Using (bit_cell_cycles >> 1) + 6 sets it to 20 for 3.5" (28/2 + 6 = 20).
-                if (bit_timer == (bit_cell_cycles >> 1) + 6) begin
+                // Generate flux at start of bit cell to better align with MAME timing.
+                // MAME queries flux transitions at window boundaries and uses exact timing.
+                // By generating at bit cell start (bit_timer == bit_cell_cycles), the flux
+                // occurs at the beginning of the window, matching MAME's event timing.
+                if (bit_timer == bit_cell_cycles) begin
                     // Start of new bit cell - generate flux if this bit is 1
                     // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
                     // During spinup, the IWM shouldn't receive flux transitions
@@ -719,6 +709,21 @@ module flux_drive (
                             bit_position <= bit_position + 1'd1;
                         end
                     end
+
+                    // Bit-count based spinup: increment counter during spinup
+                    // When spinup_bits reaches SPINUP_BIT_COUNT, drive becomes ready.
+                    // This is more robust than rotation-based counting because rapid
+                    // side switching can cause spurious rotation_complete signals.
+                    if (motor_spinning && !drive_ready && spinup_bits < SPINUP_BIT_COUNT) begin
+                        spinup_bits <= spinup_bits + 1'd1;
+                        if (spinup_bits + 1 >= SPINUP_BIT_COUNT) begin
+                            drive_ready <= 1'b1;
+`ifdef SIMULATION
+                            $display("FLUX_DRIVE[%0d]: Drive ready after %0d bits spinup (needed %0d)",
+                                     DRIVE_ID, spinup_bits + 1, SPINUP_BIT_COUNT);
+`endif
+                        end
+                    end
                 end else begin
                     // Still in current bit cell
                     bit_timer <= bit_timer - 1'd1;
@@ -726,25 +731,6 @@ module flux_drive (
             end else begin
                 // Motor not spinning or track not loaded - reset timer
                 bit_timer <= bit_cell_cycles;
-            end
-
-            // Angular offset for MAME alignment - applied when drive becomes ready.
-            // This MUST come AFTER the rotation wrap logic so our assignment wins.
-            // At the cycle when rotation_complete=1 and spinup_counter=1:
-            // - The motor state machine sets drive_ready <= 1
-            // - We set bit_position <= angular_offset
-            // - Both take effect next cycle, so state machine sees correct position
-            //
-            // Analysis: Sync region starts at ~pos 7, D5 at pos 2845.
-            // Try starting at beginning of sync region to maximize sync byte count.
-            if (rotation_complete && spinup_counter == 2'd1) begin
-                if (TRACK_BIT_COUNT > 17'd0) begin
-                    bit_position <= 17'd0;
-`ifdef SIMULATION
-                    $display("FLUX_DRIVE[%0d]: Drive becoming ready - setting bit_position to 0 (sync-start)",
-                             DRIVE_ID);
-`endif
-                end
             end
 
             // Track change detection - request new track load when head moves
@@ -824,9 +810,9 @@ module flux_drive (
         end
 
         if (head_phase != prev_head_phase) begin
-            $display("FLUX_DRIVE[%0d]: Phase %0d -> %0d (track %0d -> %0d)",
+            $display("FLUX_DRIVE[%0d]: Phase %0d -> %0d (track %0d -> %0d) TRACK_OUTPUT=%0d",
                      DRIVE_ID, prev_head_phase, head_phase,
-                     prev_head_phase[8:2], head_phase[8:2]);
+                     prev_head_phase[8:2], head_phase[8:2], TRACK);
         end
         prev_head_phase <= head_phase;
     end

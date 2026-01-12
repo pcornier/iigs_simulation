@@ -320,6 +320,7 @@ int cpu_sync;
 long cpu_instruction_count;
 int cpu_clock;
 int cpu_clock_last;
+int woz_track_3_last;
 const int ins_size = 48;
 int ins_index = 0;
 unsigned short ins_pc[ins_size];
@@ -1717,7 +1718,9 @@ int verilate() {
 
 			// Update cpu_clock_last to properly track clock edge transitions
 			cpu_clock_last = cpu_clock;
-
+			//if  (woz_track_3_last != *blockdevice.woz3_track )
+			//	fprintf(stderr,"\nsim_main.cpp: woz_3_track_out changed %d\n",*blockdevice.woz3_track);
+			woz_track_3_last = *blockdevice.woz3_track;
 			if (CLK_14M.clk) { bus.AfterEval(); blockdevice.AfterEval(); }
 		}
 
