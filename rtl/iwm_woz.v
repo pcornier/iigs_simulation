@@ -490,8 +490,9 @@ module iwm_woz (
     // Any disk ready - drive must be spun up AND have track data loaded
     // The state machine should wait until drive_ready is true (spinup complete)
     // This prevents decoding garbage during motor spin-up period
+    // NOTE: drive35_2 is not included - it has no separate DISK_READY signal and
+    // its motor is gated off when DISK_READY[2]=1 (disk in primary 3.5" drive)
     wire any_disk_ready = (drive35_ready && DISK_READY[2]) ||
-                          (drive35_2_ready && DISK_READY[2]) ||
                           (drive525_ready && DISK_READY[0]);
 
     //=========================================================================
@@ -517,8 +518,10 @@ module iwm_woz (
                        DISK_READY[0] ? 1'b1 :
                        (is_35_inch ? DISK_READY[2] : DISK_READY[0]);
 
-    // Muxed bit position for debug logging
-    wire [16:0] current_bit_position = is_35_inch ? drive35_bit_position : drive525_bit_position;
+    // Muxed bit position for debug logging and flux decoder
+    // Use flux_is_35_inch (based on which motor is spinning) instead of is_35_inch (register)
+    // to ensure correct drive's position is used even when ROM temporarily accesses other slot
+    wire [16:0] current_bit_position = flux_is_35_inch ? drive35_bit_position : drive525_bit_position;
 
     iwm_flux iwm (
         .CLK_14M(CLK_14M),

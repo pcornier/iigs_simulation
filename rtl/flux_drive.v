@@ -633,18 +633,10 @@ module flux_drive (
             SD_TRACK_STROBE <= 1'b0;
             rotation_complete <= 1'b0;
 
-            // Don't reset bit_position when motor turns on - let the disk continue
-            // from wherever it was (like a real disk). MAME calculates position from
-            // elapsed time, which naturally gives varying start positions.
-            // Resetting to 0 causes the first few bytes to differ because we always
-            // start at the same track position.
-            if (!prev_motor_for_position && motor_spinning) begin
-                // Just reset the bit timer, not the position
-                bit_timer <= bit_cell_cycles;
-`ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: Motor ON - keeping bit_position at %0d", DRIVE_ID, bit_position);
-`endif
-            end
+            // Track motor state transitions (for potential future use)
+            // NOTE: Angular offset is now applied when drive_ready becomes 1, not here.
+            // This fixes a bug where the old approach set the offset at motor start,
+            // but the spinup (2 wraps) would reset bit_position to 0 before reading began.
             prev_motor_for_position <= motor_spinning;
 
             // Handle TRACK_BIT_COUNT changes (side selection transitions)
@@ -734,6 +726,25 @@ module flux_drive (
             end else begin
                 // Motor not spinning or track not loaded - reset timer
                 bit_timer <= bit_cell_cycles;
+            end
+
+            // Angular offset for MAME alignment - applied when drive becomes ready.
+            // This MUST come AFTER the rotation wrap logic so our assignment wins.
+            // At the cycle when rotation_complete=1 and spinup_counter=1:
+            // - The motor state machine sets drive_ready <= 1
+            // - We set bit_position <= angular_offset
+            // - Both take effect next cycle, so state machine sees correct position
+            //
+            // Analysis: Sync region starts at ~pos 7, D5 at pos 2845.
+            // Try starting at beginning of sync region to maximize sync byte count.
+            if (rotation_complete && spinup_counter == 2'd1) begin
+                if (TRACK_BIT_COUNT > 17'd0) begin
+                    bit_position <= 17'd0;
+`ifdef SIMULATION
+                    $display("FLUX_DRIVE[%0d]: Drive becoming ready - setting bit_position to 0 (sync-start)",
+                             DRIVE_ID);
+`endif
+                end
             end
 
             // Track change detection - request new track load when head moves

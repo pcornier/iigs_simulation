@@ -13,6 +13,10 @@
 // Reference: MAME iwm.cpp (src/devices/machine/iwm.cpp)
 //
 
+// Enable detailed byte framing debug output for comparing with MAME
+// Uncomment the following line to enable:
+// `define BYTE_FRAME_DEBUG
+
 module iwm_flux (
     // Global signals
     input  wire        CLK_14M,         // 14MHz master clock
@@ -108,11 +112,16 @@ module iwm_flux (
     // to 7M edges, causing 0-1 cycle error per bit that accumulates and
     // causes byte boundary drift.
     //
-    // Window timing in 14M cycles:
-    // - 3.5" drives: 28-cycle windows (2µs bit cells at 500 kbit/s)
-    // - 5.25" drives: 56-cycle windows (4µs bit cells at 250 kbit/s), or 28 in fast mode
+    // Window timing in 14M cycles (doubled from MAME's 7MHz values):
+    // MAME mode 0x00 (slow): half=14@7M, window=28@7M -> half=28@14M, window=56@14M (4µs)
+    // MAME mode 0x08 (fast): half=7@7M, window=14@7M -> half=14@14M, window=28@14M (2µs)
+    // Note: 3.5" drives use 2µs bit cells but ROM often doesn't set fast mode bit!
 
     wire        fast_mode = SW_MODE[3];
+    // Window timing: MAME uses 7MHz clock, we run at 14MHz.
+    // For 3.5" drives: 2µs bit cells, window = 28 @ 14MHz (matches MAME mode 0x08 fast)
+    // For 5.25" drives: 4µs bit cells (slow) or 2µs (fast)
+    // Note: ROM typically sets mode=0x0F for 3.5" drives (fast mode + async).
     wire [5:0]  full_window = IS_35_INCH ? 6'd28 : (fast_mode ? 6'd28 : 6'd56);
     wire [5:0]  half_window = IS_35_INCH ? 6'd14 : (fast_mode ? 6'd14 : 6'd28);
 
@@ -254,9 +263,14 @@ module iwm_flux (
                         window_counter <= full_window;
                         m_rsh <= 8'h00;
                         flux_seen <= 1'b0;  // Clear on state machine start
+`ifdef BYTE_FRAME_DEBUG
+                        $display("BYTE_START: pos=%0d window=%0d half=%0d mode=%02h",
+                                 DISK_BIT_POSITION, full_window, half_window, SW_MODE);
+`else
 `ifdef SIMULATION
                         $display("IWM_FLUX: START_READ cycle=%0d win=%0d mode=%02h",
                                  debug_cycle, full_window, SW_MODE);
+`endif
 `endif
                     end
 
@@ -284,14 +298,15 @@ module iwm_flux (
                             window_counter <= half_window;
                             flux_pending <= 1'b0;  // Clear pending flag
                             flux_seen <= 1'b0;     // Clear seen flag after processing
-`ifdef SIMULATION
-                            $display("IWM_FLUX: EDGE_0->EDGE_1 flux_at=%0d rsh=%02h win=%0d half=%0d win_remain=%0d",
-                                     debug_cycle, m_rsh, full_window, half_window, window_counter);
+`ifdef BYTE_FRAME_DEBUG
+                            $display("BYTE_FLUX: pos=%0d flux_detected win_remain=%0d->half=%0d pending=%0d sr=%02h",
+                                     DISK_BIT_POSITION, window_counter, half_window, flux_pending, m_rsh);
 `endif
                         end else if (window_counter == 6'd1) begin
-`ifdef SIMULATION
-                            $display("IWM_FLUX: SHIFT bit=0 rsh=%02h->%02h state=EDGE_0 endw=%0d",
-                                     m_rsh, {m_rsh[6:0], 1'b0}, debug_cycle);
+`ifdef BYTE_FRAME_DEBUG
+                            $display("BYTE_SHIFT: pos=%0d bit=0 sr=%02h->%02h bitnum=%0d",
+                                     DISK_BIT_POSITION, m_rsh, {m_rsh[6:0], 1'b0},
+                                     (m_rsh[6] ? 1 : (m_rsh[5] ? 2 : (m_rsh[4] ? 3 : (m_rsh[3] ? 4 : (m_rsh[2] ? 5 : (m_rsh[1] ? 6 : (m_rsh[0] ? 7 : 8))))))));
 `endif
                             m_rsh <= {m_rsh[6:0], 1'b0};
                             window_counter <= full_window;
@@ -311,9 +326,10 @@ module iwm_flux (
                         end
 
                         if (window_counter == 6'd1) begin
-`ifdef SIMULATION
-                            $display("IWM_FLUX: SHIFT bit=1 rsh=%02h->%02h state=EDGE_1 endw=%0d",
-                                     m_rsh, {m_rsh[6:0], 1'b1}, debug_cycle);
+`ifdef BYTE_FRAME_DEBUG
+                            $display("BYTE_SHIFT: pos=%0d bit=1 sr=%02h->%02h bitnum=%0d",
+                                     DISK_BIT_POSITION, m_rsh, {m_rsh[6:0], 1'b1},
+                                     (m_rsh[6] ? 1 : (m_rsh[5] ? 2 : (m_rsh[4] ? 3 : (m_rsh[3] ? 4 : (m_rsh[2] ? 5 : (m_rsh[1] ? 6 : (m_rsh[0] ? 7 : 8))))))));
 `endif
                             m_rsh <= {m_rsh[6:0], 1'b1};
                             rw_state <= SR_WINDOW_EDGE_0;
@@ -332,8 +348,15 @@ module iwm_flux (
                 if (m_rsh >= 8'h80) begin
 `ifdef SIMULATION
                     byte_counter <= byte_counter + 1;
+`endif
+`ifdef BYTE_FRAME_DEBUG
+                    $display("BYTE_FORMED: pos=%0d byte#=%0d data=%02h",
+                             DISK_BIT_POSITION, byte_counter + 1, m_rsh);
+`else
+`ifdef SIMULATION
                     $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d byte#=%0d @cycle=%0d",
                              m_rsh, DISK_BIT_POSITION, byte_counter + 1, debug_cycle);
+`endif
 `endif
                     m_data <= m_rsh;
                     m_rsh <= 8'h00;
