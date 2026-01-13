@@ -133,14 +133,27 @@ module flux_controller (
 
         // Control from IWM
         .PHASES(iwm_phases),
+        .IMMEDIATE_PHASES(iwm_phases),
+        .LATCHED_SENSE_REG(3'b000),
+        .IWM_MODE(5'b00000),
         .MOTOR_ON(iwm_motor_on),
+        .SW_MOTOR_ON(iwm_motor_on),
+        .DISKREG_SEL(DISK35[7]),
+        .SEL35(DISK35[6]),
+        .DRIVE_SELECT(iwm_drive_sel),
+        .DRIVE_SLOT(1'b0),
+        .DISK_MOUNTED(WOZ_TRACK_LOADED),
+        .DISK_WP(1'b1),
+        .DOUBLE_SIDED(1'b1),
 
         // Flux interface to IWM
         .FLUX_TRANSITION(flux_transition),
         .WRITE_PROTECT(drive_write_protect),
+        .SENSE(),
 
         // Status outputs
         .MOTOR_SPINNING(motor_spinning),
+        .DRIVE_READY(),
         .TRACK(track),
 
         // Track data interface

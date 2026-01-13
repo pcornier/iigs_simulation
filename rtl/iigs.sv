@@ -236,6 +236,11 @@ module iigs
   logic [1:0]         snd_addr;
   logic               snd_rw, snd_strobe;
 
+  // Sound GLU MMIO select ($C03C-$C03F). This must be level-true for the duration
+  // of the I/O cycle so `soundglu` can latch on `ph0_en` (PH0 domain), independent
+  // of `phi2` qualification used for other soft-switches.
+  wire snd_selected = IO && (addr[11:0] >= 12'h03c) && (addr[11:0] <= 12'h03f);
+
   // SCC (Serial Communications Controller) signals
   logic [7:0]         scc_din;
   logic [7:0]         scc_dout;  
@@ -954,6 +959,15 @@ module iigs
     end
     snd_strobe <= 1'b0;
 
+    // Sound GLU access: assert select for full I/O cycle and drive rw/addr/data
+    // directly from the CPU bus. `soundglu` will sample the access on `ph0_en`.
+    if (snd_selected) begin
+      snd_strobe <= 1'b1;
+      snd_addr   <= addr[1:0];
+      snd_rw     <= ~cpu_we_n;  // 1=write, 0=read
+      snd_din    <= cpu_dout;
+    end
+
     // Handle SCC read response (same cycle pattern like other peripherals)
     if (scc_cs & cpu_we_n) begin
       io_dout <= scc_dout;
@@ -975,16 +989,20 @@ module iigs
       if (~cpu_we_n)
         // write
         begin
+          // Qualify soft-switch writes on PHI2 high to avoid glitch writes during read cycles.
+          // Exception: IWM ($C0E0-$C0EF) writes are allowed regardless of PHI2 because the IWM
+          // module does its own edge qualification; blocking them here can drop valid writes.
+          if (phi2 || (addr[11:4] == 8'h0e)) begin
 `ifdef SIMULATION
-          // Debug: Show which address the case will match
-          if (addr[11:8] == 4'h0 && addr[7:4] == 4'h3) begin
-            $display("IO_WRITE_C03x: addr[11:0]=%03x bank_bef=%02x cpu_dout=%02x phi2=%b", addr[11:0], bank_bef, cpu_dout, phi2);
-            if (addr[11:0] == 12'h036) begin
-                $display("CYAREG_MATCH_CHECK: addr=036 dout=%02x", cpu_dout);
+            // Debug: Show which address the case will match
+            if (addr[11:8] == 4'h0 && addr[7:4] == 4'h3) begin
+              $display("IO_WRITE_C03x: addr[11:0]=%03x bank_bef=%02x cpu_dout=%02x phi2=%b", addr[11:0], bank_bef, cpu_dout, phi2);
+              if (addr[11:0] == 12'h036) begin
+                  $display("CYAREG_MATCH_CHECK: addr=036 dout=%02x", cpu_dout);
+              end
             end
-          end
 `endif
-          case (addr[11:0])
+            case (addr[11:0])
             // Apple II compatibility soft switches ($C000-$C00F)
             // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
             // This prevents MVN/MVP block moves through bank $01 I/O space from corrupting state
@@ -1133,15 +1151,7 @@ module iigs
 `endif
 		end
             end
-            12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
-              snd_rw <= 1'b1;
-              snd_strobe <= 1'b1;
-              snd_addr <= addr[1:0];
-              snd_din <= cpu_dout;
-`ifdef DEBUG_IO
-              $display("SOUND WR %03h <= %02h (SNDCTL/DATA/APL/APH)", addr[11:0], cpu_dout);
-`endif
-            end
+            // Sound GLU ($C03C-$C03F) handled via `snd_selected` (level select) above.
             12'h041: begin
 `ifdef DEBUG_IRQ
               $display("INTEN: %02x -> %02x",INTEN,{INTEN[7:5],cpu_dout[4:0]});
@@ -1327,6 +1337,7 @@ module iigs
 `endif
             end
           endcase
+          end // if (phi2)
         end
       else
         begin
@@ -1484,11 +1495,7 @@ module iigs
               end
             end
 
-            12'h03c, 12'h03d, 12'h03e, 12'h03f: begin
-              snd_addr <= addr[1:0];
-              snd_rw <= 1'b0;
-              snd_strobe <= 1'b1;
-            end
+            // Sound GLU ($C03C-$C03F) handled via `snd_selected` (level select) above.
 `ifdef DEBUG_IRQ
             12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");

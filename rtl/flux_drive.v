@@ -25,9 +25,11 @@ module flux_drive (
     input  wire [3:0]  PHASES,          // Head stepper phases (PH0-PH3) - registered value
     input  wire [3:0]  IMMEDIATE_PHASES,// Immediate phase value (for sense calculation)
     input  wire [2:0]  LATCHED_SENSE_REG, // MAME-style latched sense register index
+    input  wire [4:0]  IWM_MODE,        // IWM mode bits [4:0] (for SmartPort vs 3.5" sense behavior)
     input  wire        MOTOR_ON,        // Motor enable from IWM (with spinup inertia)
     input  wire        SW_MOTOR_ON,     // Software motor on state (immediate, from $C0E9)
     input  wire        DISKREG_SEL,     // SEL line from $C031 bit 7 (for 3.5" status)
+    input  wire        SEL35,           // 1 = 3.5" selected (DISK35[6]); 0 forces 3.5 motor off after timeout
     input  wire        DRIVE_SELECT,    // Drive selection (0=drive1, 1=drive2)
     input  wire        DRIVE_SLOT,      // Which slot this drive is (0 or 1)
 
@@ -95,6 +97,7 @@ module flux_drive (
     parameter SPINUP_BIT_COUNT = 150000;
     reg [17:0]  spinup_bits;            // Count bits during spin-up
     reg         drive_ready;            // True when drive is spun up and ready
+    reg [5:0]   spinup_timer;           // 14MHz divider to approximate bit-cell timing for spinup
     reg         rotation_complete;      // Pulse when disk completes one rotation (for debug)
 
     // Head position (quarter-track)
@@ -149,35 +152,34 @@ module flux_drive (
     reg [4:0]   side_transition_byte_count; // Counter for post-transition byte logging
 `endif
 
-    // Sony 3.5" drive command interface (MAME floppy.cpp mac_floppy_device::seek_phase_w)
-    // Commands execute on rising edge of strobe (phases[3])
-    // MAME computes: m_reg = (phases & 7) | (m_actual_ss ? 8 : 0)
-    // where m_actual_ss is set from DISKREG_SEL (bit 7 of $C031)
-    // This means when DISKREG_SEL=1 (side 1), command 6 becomes 14 (not motor off)
+    //=========================================================================
+    // Apple IIgs 3.5" drive control protocol (Clemens / ROM-confirmed)
+    //=========================================================================
+    // The IIgs ROM does NOT drive a 4-phase stepper for 3.5". Instead it uses the
+    // IWM phase outputs as control lines (ad35driver_subroutines.asm SDCLINES):
+    //   phase0 = CA0
+    //   phase1 = CA1
+    //   phase2 = CA2
+    //   phase3 = LSTRB (strobe pulse)
+    // And DISKREG_SEL ($C031 bit7) is used as the "SEL" bit in the 4-bit command/address.
     //
-    // Critical: Use LATCHED_SENSE_REG for command code, not IMMEDIATE_PHASES[2:0]
-    // because phases may be cleared before strobe fires.
+    // The ROM passes a 4-bit nibble in A: XXXX CA1 CA0 SEL CA2. SDCLINES drives those
+    // lines, then WriteBit pulses LSTRB to latch the nibble into the drive.
     //
-    // MAME behavior: When motor is off, devsel=0 and no floppy is selected, so
-    // seek_phase_w() is NOT called. We must gate the strobe by SW_MOTOR_ON to match.
-    //
-    // EXCEPTION: Motor ON (cmd 2) and Motor OFF (cmd 6) commands must work even
-    // when SW_MOTOR_ON=0. The ROM sends these commands to control the physical
-    // drive motor independently of the IWM enable bit. Without this exception,
-    // the motor ON command is rejected and sony_motor_on never gets set, causing
-    // the motor sense register to show OFF and the ROM to fail boot.
-    wire is_motor_cmd = (LATCHED_SENSE_REG == 3'd2) || (LATCHED_SENSE_REG == 3'd6);
-    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && (SW_MOTOR_ON || is_motor_cmd) && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT];
-    wire [3:0] sony_cmd_reg = {DISKREG_SEL, LATCHED_SENSE_REG};
+    // Key ROM evidence:
+    // - cmd 1 is direction out, cmd 4 is step (see IIgsRomSource/Bank FF/ad35driver_subroutines.asm:1569)
+    // - ReadBit uses the nibble to select which status appears on the SENSE line.
+    wire ca0 = IMMEDIATE_PHASES[0];
+    wire ca1 = IMMEDIATE_PHASES[1];
+    wire ca2 = IMMEDIATE_PHASES[2];
+    wire lstrb = IMMEDIATE_PHASES[3];
+    wire [3:0] sony_ctl = {ca1, ca0, DISKREG_SEL, ca2};
 
-    // Compute immediate step direction: if strobe is firing with a direction command,
-    // use the NEW value; otherwise use the registered value.
-    // Per disk.txt and Clemens (NOT MAME!):
-    // cmd_reg 0 = direction inward (m_dir=0, toward higher tracks)
-    // cmd_reg 1 = direction outward (m_dir=1, toward track 0)
-    // cmd_reg 4 = step one track (doesn't change direction)
-    assign step_direction_immediate = (sony_cmd_strobe && sony_cmd_reg == 4'd0) ? 1'b0 :
-                                      (sony_cmd_strobe && sony_cmd_reg == 4'd1) ? 1'b1 :
+    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && lstrb && !prev_strobe_slot[DRIVE_SELECT];
+
+    // Immediate direction reflects a same-cycle strobe of 0/1.
+    assign step_direction_immediate = (sony_cmd_strobe && sony_ctl == 4'h0) ? 1'b0 :
+                                      (sony_cmd_strobe && sony_ctl == 4'h1) ? 1'b1 :
                                       step_direction_registered;
 
     //=========================================================================
@@ -234,56 +236,60 @@ module flux_drive (
     //=========================================================================
     // Status Sensing (3.5" drives)
     //=========================================================================
-    // For 3.5" drives, status is read via the sense line based on a register
-    // index formed from {SEL, phases[2:0]}. Each drive computes its own sense.
-    // For 5.25" drives, sense is just the write protect status.
+    // For 3.5" drives, the IIgs ROM uses the IWM phase outputs as control lines
+    // (CA0/CA1/CA2 + SEL) and reads the SENSE line based on the selected nibble.
+    // See IIgsRomSource/Bank FF/ad35driver_subroutines.asm (ReadBit/WriteBit):
+    //   A nibble format: XXXX CA1 CA0 SEL CA2
     //
-    // Reference: MAME floppy.cpp mac_floppy_device::wpt_r()
-
-    // Use LATCHED_SENSE_REG for sense calculation - MAME latches m_reg when
-    // phases are written, and subsequent reads use that latched value even
-    // if phases have been cleared. This is critical for the ROM drive detection.
-    wire [3:0] status_reg = {DISKREG_SEL, LATCHED_SENSE_REG};
+    // For 5.25" drives, SENSE is just the write-protect input.
+    wire [3:0] status_reg = IS_35_INCH ? sony_ctl : {DISKREG_SEL, LATCHED_SENSE_REG};
     wire       at_track0 = (head_phase[8:2] == 7'd0);
 
-    // 3.5" status sensing - some registers work without motor power
-    // MAME reference: floppy.cpp mac_floppy_device::wpt_r()
-    // Note: Many signals use active-low logic (0 = true/active)
+    // Step handshake pulse used by SENDSTEPS (IWMsense loop after step command).
+    // The ROM polls until it observes the sense line asserted; if this pulse is too short
+    // (a few microseconds) the polling loop can miss it and hang.
+    localparam [15:0] STEP_HANDSHAKE_CYCLES = 16'd4096; // ~292us at 14MHz
+    reg [15:0] step_handshake_cnt;
+    wire      step_handshake = (step_handshake_cnt != 16'd0);
+
+    // 3.5" status sensing (IIgs ROM protocol; many signals are active-low)
+    // In SmartPort/C-Bus mode the ROM reads the IWM status sense bit as /BSY and
+    // will wait forever for it to go high in `smartdrvr.asm` (RDH0) if we hold it low.
+    // Mode bit 3 selects bit-cell width (1=2us 3.5" disk, 0=4us SmartPort/5.25").
+    // Mode bit 1 selects async handshake (used by SmartPort devices).
+    //
+    // For now, keep /BSY deasserted (high) in SmartPort mode to avoid the hang.
+    // Proper C-Bus device emulation belongs above the flux-level drive model.
+    wire smartport_mode = (!IWM_MODE[3]) && IWM_MODE[1];
     reg sense_35;
-    // Match MAME's mac_floppy_device::wpt_r() for 800K GCR drive
-    // See mame/src/devices/imagedev/floppy.cpp around line 2885
     always @(*) begin
+        if (smartport_mode) begin
+            sense_35 = 1'b1;
+        end else begin
         case (status_reg)
-            4'h0: begin
-                // Use immediate value so sense read in same cycle as direction command sees new value
-                // This matches MAME where m_dir updates synchronously in seek_phase_w() before wpt_r()
-                sense_35 = step_direction_immediate;
-`ifdef SIMULATION
-                if (sense_35) $display("FLUX_DRIVE[%0d]: Case 0 returning 1! step_dir_imm=%0d step_dir_reg=%0d sel=%0d", DRIVE_ID, step_direction_immediate, step_direction_registered, DRIVE_SELECT);
-`endif
-            end
-            4'h1: sense_35 = 1'b1;              // Step signal (always 1 in MAME, no delay)
-            4'h2: sense_35 = ~motor_on_sense;    // Motor: 0=ON, 1=OFF (MAME m_mon, based on Sony command)
-            4'h3: sense_35 = ~disk_switched;    // Disk change: 0=Changed, 1=No Change
-            4'h4: sense_35 = 1'b0;              // Index: 0 for GCR drives (no MFM index)
-            4'h5: sense_35 = 1'b0;              // MFM Capable: 0 for 800K GCR drive
-            4'h6: sense_35 = 1'b1;              // Double Sided: 1 for 800K drive
-            4'h7: sense_35 = 1'b0;              // Drive Present: 0 (Active Low detection)
-            4'h8: sense_35 = ~DISK_MOUNTED;     // Disk In Place: 0=Yes, 1=No
-            4'h9: sense_35 = ~DISK_WP;          // Write Protect: 0=Protected, 1=Writable (MAME returns !m_wpt, check polarity)
-            // Wait, MAME says: case 0x9: return !m_wpt;
-            // If m_wpt is true (protected), returns false (0).
-            // If m_wpt is false (writable), returns true (1).
-            // My DISK_WP is 1=Protected?
-            // If DISK_WP=1 (Protected), ~DISK_WP=0. Matches MAME.
-            
-            4'hA: sense_35 = ~at_track0;        // Track 0: 0=At Track 0, 1=Not At Track 0
-            4'hB: sense_35 = 1'b1;              // Tachometer: 1 (Simplified)
-            4'hC: sense_35 = 1'b0;              // Index: 0 for GCR
-            4'hD: sense_35 = 1'b0;              // Mode: 0=GCR, 1=MFM (800K is GCR)
-            4'hE: sense_35 = ~drive_ready;       // NoReady: 0=ready, 1=not ready (MAME m_ready)
-            4'hF: sense_35 = 1'b1;              // Interface: 1=2M/800K, 0=400K
+            4'h0: sense_35 = step_direction_immediate;  // Dir readback (IS35DRIVE)
+            4'h1: sense_35 = step_direction_immediate;  // Dir readback (paired test)
+            4'h2: sense_35 = ~DISK_MOUNTED;             // /DIP: 0=disk present, 1=no disk
+            4'h4: sense_35 = step_handshake;            // Step handshake pulse
+            4'h8: sense_35 = ~motor_on_sense;           // /MOTOR: 0=on, 1=off
+            4'hA: sense_35 = ~at_track0;                // /TK0: 0=at track0, 1=not track0
+            4'hB: sense_35 = ~drive_ready;              // /READY: 0=ready, 1=not ready
+            // Disk switched (/eject) status: ROM/driver treats SENSE high as "disk switched/ejected".
+            // See `IIgsRomSource/GSOS/Drivers/AD3.5.drivsubs.asm`:
+            // - `read_bit` returns C=1 when SENSE is high
+            // - `Enable_Sense` sets drv_sts bit7 when SENSE is high (dsw true)
+            // - `read_dsw_status` branches on BCC (SENSE low) as "no eject/dsw"
+            4'hC: sense_35 = disk_switched;
+            4'h9: sense_35 = 1'b1;                      // Default-high for unused reads
+            4'hD: sense_35 = 1'b1;                      // Default-high for unused reads
+            4'hE: sense_35 = ~drive_ready;              // Treat as /READY as well (safe)
+            4'hF: sense_35 = 1'b1;
+            4'h3: sense_35 = 1'b1;
+            4'h5: sense_35 = 1'b1;
+            4'h6: sense_35 = 1'b1;
+            4'h7: sense_35 = 1'b1;
         endcase
+        end
     end
 
     // For 5.25" drives, sense is just write protect
@@ -297,8 +303,8 @@ module flux_drive (
     reg prev_sense_debug;
     always @(posedge CLK_14M) begin
         if (IS_35_INCH && MOTOR_ON && (sense_35 != prev_sense_debug)) begin
-            $display("FLUX_DRIVE: sense=%0d status_reg=%h (SEL=%0d latched=%03b phases=%04b) at_track0=%0d motor_spin=%0d mounted=%0d",
-                     sense_35, status_reg, DISKREG_SEL, LATCHED_SENSE_REG, PHASES, at_track0, motor_spinning, DISK_MOUNTED);
+            $display("FLUX_DRIVE: sense=%0d status_reg=%h (sony_ctl=%01x SEL35=%0d phases=%04b) at_track0=%0d motor_spin=%0d mounted=%0d",
+                     sense_35, status_reg, sony_ctl, SEL35, PHASES, at_track0, motor_spinning, DISK_MOUNTED);
         end
         prev_sense_debug <= sense_35;
     end
@@ -325,7 +331,15 @@ module flux_drive (
             sony_motor_on <= 1'b0;         // Default: motor off
             disk_switched <= 1'b1;         // Assume disk switched on reset
             prev_disk_mounted <= 1'b0;
+            step_handshake_cnt <= 16'd0;
         end else begin
+            if (step_handshake_cnt != 16'd0)
+                step_handshake_cnt <= step_handshake_cnt - 16'd1;
+
+            // NOTE: The ROM routinely clears $C031 (including 35SEL) at command boundaries.
+            // Do not forcibly clear the Sony motor command immediately when SEL35 deasserts,
+            // or we can lose the spindle state across brief deselect windows and fail boot.
+
             // Track disk insertion
             if (DISK_MOUNTED && !prev_disk_mounted) begin
                 disk_switched <= 1'b1;
@@ -345,154 +359,102 @@ module flux_drive (
             end
             prev_imm_phases_debug <= IMMEDIATE_PHASES;
 `endif
-            // Sony 3.5" drive command interface (MAME floppy.cpp mac_floppy_device::seek_phase_w)
-            // Commands execute on rising edge of strobe (phases[3]):
-            //   - phases[2:0] = command code
-            //   - Command 0: "step dir +1" → dir_w(0) → m_dir=0 (toward higher tracks)
-            //   - Command 4: "step dir -1" → dir_w(1) → m_dir=1 (toward track 0)
-            //   - Command 2: "motor on"
-            //   - Command 6: "motor off"
-            // MAME behavior: devsel=0 when motor is off, so seek_phase_w() isn't called.
-            // Use SW_MOTOR_ON (immediate soft switch state) not MOTOR_ON (with inertia).
+            // Apple IIgs 3.5" drive command interface (ROM SDCLINES + LSTRB pulse).
 `ifdef SIMULATION
             // Debug: trace strobe conditions
-            if (IS_35_INCH && IMMEDIATE_PHASES[3] && !prev_strobe_slot[DRIVE_SELECT]) begin
-                $display("FLUX_DRIVE[%0d]: STROBE! DRIVE_SELECT=%0d DRIVE_SLOT=%0d sel_match=%0d cmd_reg=%0d DISK_MOUNTED=%0d SW_MOTOR_ON=%0d strobe_ok=%0d",
-                         DRIVE_ID, DRIVE_SELECT, DRIVE_SLOT, (DRIVE_SELECT == DRIVE_SLOT), sony_cmd_reg, DISK_MOUNTED, SW_MOTOR_ON, sony_cmd_strobe);
+            if (IS_35_INCH && lstrb && !prev_strobe_slot[DRIVE_SELECT]) begin
+                $display("FLUX_DRIVE[%0d]: LSTRB! DRIVE_SELECT=%0d DRIVE_SLOT=%0d sel_match=%0d sony_ctl=%01x DISK_MOUNTED=%0d SEL35=%0d",
+                         DRIVE_ID, DRIVE_SELECT, DRIVE_SLOT, (DRIVE_SELECT == DRIVE_SLOT), sony_ctl, DISK_MOUNTED, SEL35);
             end
 `endif
             if (sony_cmd_strobe) begin
-                // Use 4-bit command register like MAME: {DISKREG_SEL, LATCHED_SENSE_REG}
-                // When DISKREG_SEL=1 (side 1), commands 0-7 become 8-15
-                // Sony 3.5" drive command set (from MAME floppy.cpp mac_floppy_device::seek_phase_w):
-                //   0x0: DirNext   - Set direction toward higher tracks (m_dir=0)
-                //   0x1: StepOn    - Execute one step in current direction
-                //   0x2: MotorOn   - Turn motor on
-                //   0x3: EjectOff  - End eject sequence (no-op)
-                //   0x4: StepOne   - Step one track in current direction
-                //   0x5: StepOff   - (not used)
-                //   0x6: MotorOff  - Turn motor off
-                //   0x7: EjectOn   - Start eject sequence
-                //   0x8: MotorOn   - Turn motor on
-                //   0x9: MotorOff (alternate)
-                //   0xC: DskchgClear - Clear disk change flag
-                //   0xD: GCRModeOn - Switch to GCR mode (800K)
-                // NOTE: MAME's mapping is WRONG! Clemens and disk.txt agree on this:
-                //   - $00 = direction inward (toward higher tracks)
-                //   - $01 = direction outward (toward track 0)
-                //   - $04 = step one track
-                case (sony_cmd_reg)
-                    4'd0: begin
-                        // Direction inward (toward higher tracks)
+                case (sony_ctl)
+                    4'h0: begin
+                        // Direction inward (toward higher tracks) - ROM dirinadr=0
                         step_direction_slot[DRIVE_SELECT] <= 1'b0;
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd step dir +1 (toward higher tracks) t=%0t", DRIVE_ID, $time);
 `endif
                     end
 
-                    4'd1: begin
-                        // Direction outward (toward track 0) - NOT step execute!
-                        // This matches Clemens CLEM_IWM_DISK35_CTL_STEP_OUT = 0x01
+                    4'h1: begin
+                        // Direction outward (toward track 0) - ROM diroutadr=1
                         step_direction_slot[DRIVE_SELECT] <= 1'b1;
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd step dir -1 (toward track 0) t=%0t", DRIVE_ID, $time);
 `endif
                     end
 
-                    4'd2: begin
-                        if (DISK_MOUNTED) begin
+                    4'h4: begin
+                        // Step one track - ROM step0adr=4 (see SENDSTEPS)
+                        if (SEL35 && DISK_MOUNTED) begin
+                            if (step_direction_slot[DRIVE_SELECT] == 1'b0) begin
+                                if (head_phase < max_phase)
+                                    head_phase <= head_phase + 9'd4;
+                            end else begin
+                                if (head_phase >= 9'd4)
+                                    head_phase <= head_phase - 9'd4;
+                                else
+                                    head_phase <= 9'd0;
+                            end
+                        end
+                        // Provide a short handshake pulse on SENSE for IWMsense polling.
+                        // The ROM expects the sense line to go high shortly after the step pulse.
+                        step_handshake_cnt <= STEP_HANDSHAKE_CYCLES;
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd STEP (dir=%0d head_phase=%0d)", DRIVE_ID, step_direction_slot[DRIVE_SELECT], head_phase);
+`endif
+                    end
+
+                    4'h8: begin
+                        // Motor on - ROM mtronadr=8
+                        if (SEL35 && DISK_MOUNTED)
                             sony_motor_on <= 1'b1;
 `ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: cmd motor ON", DRIVE_ID);
-`endif
-                        end
-                    end
-
-                    4'd3: begin
-                        // EjectOff: End eject sequence (Clemens: CLEM_IWM_DISK35_CTL_EJECTED_RESET)
-`ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd eject off / ejected_reset", DRIVE_ID);
+                        $display("FLUX_DRIVE[%0d]: cmd motor ON", DRIVE_ID);
 `endif
                     end
 
-                    4'd4: begin
-                        // StepOne: Execute one step in current direction
-                        // This matches Clemens CLEM_IWM_DISK35_CTL_STEP_ONE = 0x04
-`ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd STEP ONE dir=%0d head_phase=%0d t=%0t",
-                                 DRIVE_ID, step_direction_slot[DRIVE_SELECT], head_phase, $time);
-`endif
-                        if (step_direction_slot[DRIVE_SELECT] == 1'b0) begin
-                            // Step toward higher tracks (inward)
-                            if (head_phase < max_phase)
-                                head_phase <= head_phase + 4'd4;  // 4 quarter-tracks = 1 full track
-`ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: stepping +1: head_phase=%0d->%0d track=%0d->%0d",
-                                     DRIVE_ID, head_phase,
-                                     (head_phase < max_phase) ? head_phase + 4 : head_phase,
-                                     head_phase >> 2,
-                                     (head_phase < max_phase) ? (head_phase + 4) >> 2 : head_phase >> 2);
-`endif
-                        end else begin
-                            // Step toward track 0 (outward)
-                            if (head_phase >= 4'd4)
-                                head_phase <= head_phase - 4'd4;
-                            else
-                                head_phase <= 9'd0;
-`ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: stepping -1: head_phase=%0d->%0d track=%0d->%0d",
-                                     DRIVE_ID, head_phase,
-                                     (head_phase >= 4) ? head_phase - 4 : 0,
-                                     head_phase >> 2,
-                                     (head_phase >= 4) ? (head_phase - 4) >> 2 : 0);
-`endif
-                        end
-                    end
-
-                    4'd6: begin
+                    4'h9: begin
+                        // Motor off - ROM mtroffadr=9
                         sony_motor_on <= 1'b0;
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd motor OFF", DRIVE_ID);
 `endif
                     end
 
-                    4'd7: begin
-                        // EjectOn: Start eject sequence - MAME calls unload()
-`ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd eject on (not implemented)", DRIVE_ID);
-`endif
-                    end
-
-                    4'd9: begin
-                        // MFMModeOn: Switch to MFM mode for 1.44MB disks
-`ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd MFM mode on (not implemented)", DRIVE_ID);
-`endif
-                    end
-
-                    4'd12: begin
-                        // DskchgClear: Clear disk change flag
+                    4'hC: begin
+                        // Disk-change clear (ROM uses DskchgClear via ReadBit/WriteBit)
                         disk_switched <= 1'b0;
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd disk change clear", DRIVE_ID);
 `endif
                     end
 
-                    4'd13: begin
-                        // GCRModeOn: Switch to GCR mode for 800K disks
+                    4'h3: begin
+                        // Eject reset / disk-switched clear used during CONFIGURE (ejct_reset=3)
+                        disk_switched <= 1'b0;
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd GCR mode on (not implemented)", DRIVE_ID);
+                        $display("FLUX_DRIVE[%0d]: cmd eject reset (disk change clear)", DRIVE_ID);
+`endif
+                    end
+
+                    4'h7: begin
+                        // Start eject: treat as disk removed (best-effort)
+                        // Real hardware would unload; in sim we don't hot-unmount here.
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: cmd eject on (not implemented)", DRIVE_ID);
 `endif
                     end
 
                     default: begin
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd %0d (unknown)", DRIVE_ID, sony_cmd_reg);
+                        $display("FLUX_DRIVE[%0d]: cmd %01x (unhandled)", DRIVE_ID, sony_ctl);
 `endif
                     end
                 endcase
             end
-            prev_strobe_slot[DRIVE_SELECT] <= IMMEDIATE_PHASES[3];
+            prev_strobe_slot[DRIVE_SELECT] <= lstrb;
 
             if (motor_spinning) begin  // Only step when motor is on
             // NOTE: 3.5" Sony drives use command-based stepping (cmd 1 = step on)
@@ -566,16 +528,18 @@ module flux_drive (
             prev_motor_spinning <= 1'b0;
             spinup_bits <= 18'd0;
             drive_ready <= 1'b0;
+            spinup_timer <= BIT_CELL_35;
         end else begin
             prev_motor_spinning <= motor_spinning;
 
             if (IS_35_INCH) begin
                 // 3.5" Sony drives: motor_spinning controls flux generation
-                // MAME calls mon_w(false) immediately when IWM motor bit is set,
-                // which starts the motor spinning. The Sony motor command also
-                // calls mon_w(), but the IWM motor bit provides the initial trigger.
-                // This decouples flux generation timing from sense register timing.
-                motor_spinning <= SW_MOTOR_ON || sony_motor_on;
+                // IIgs ROM controls motor via the 0x8/0x9 LSTRB command.
+                // Note: SEL35 (DISK35[6]) is a selection/control line used by the ROM at
+                // command boundaries. The physical spindle keeps rotating based on the
+                // Sony motor command; do not gate rotation on SEL35 or we will "freeze"
+                // angular position during deselect windows and break subsequent prologue scans.
+                motor_spinning <= sony_motor_on && DISK_MOUNTED;
             end else begin
                 // 5.25" drives: controlled by IWM enable line + inertia (handled in iwm_woz)
                 motor_spinning <= MOTOR_ON;
@@ -589,15 +553,52 @@ module flux_drive (
                 // Motor just turned ON with disk mounted - start spin-up
                 spinup_bits <= 18'd0;
                 drive_ready <= 1'b0;
+                spinup_timer <= bit_cell_cycles;
 `ifdef SIMULATION
                 $display("FLUX_DRIVE[%0d]: Motor ON - starting spin-up (need %0d bits)", DRIVE_ID, SPINUP_BIT_COUNT);
 `endif
             end else if (!motor_spinning) begin
-                // Motor OFF - not ready
-                drive_ready <= 1'b0;
-                spinup_bits <= 18'd0;
+                // Motor not spinning.
+                //
+                // For 5.25" drives, this means the motor is actually off, so we must clear ready.
+                //
+                // For 3.5" Sony drives, `motor_spinning` is gated by SEL35 (3.5" enable). The ROM
+                // routinely deasserts SEL35 at command boundaries, which would otherwise clear
+                // drive_ready and force the ROM into long /READY polling loops. Real hardware keeps
+                // the spindle spinning (inertia) and the drive electronics remain ready across brief
+                // deselect windows; treat the Sony motor command as the authoritative "spindle on".
+                if (!IS_35_INCH) begin
+                    drive_ready <= 1'b0;
+                    spinup_bits <= 18'd0;
+                    spinup_timer <= bit_cell_cycles;
+                end else if (!sony_motor_on || !DISK_MOUNTED) begin
+                    drive_ready <= 1'b0;
+                    spinup_bits <= 18'd0;
+                    spinup_timer <= bit_cell_cycles;
+                end
             end
-            // Note: spinup_bits increment happens in the bit_timer section below
+
+            // Spin-up timing should not depend on track data being loaded: /READY is a physical-drive
+            // signal that the ROM polls before/while track data is being streamed.
+            if (motor_spinning && !drive_ready && DISK_MOUNTED) begin
+                if (spinup_timer == 6'd1) begin
+                    spinup_timer <= bit_cell_cycles;
+                    if (spinup_bits < SPINUP_BIT_COUNT) begin
+                        spinup_bits <= spinup_bits + 1'd1;
+                        if (spinup_bits + 1 >= SPINUP_BIT_COUNT) begin
+                            drive_ready <= 1'b1;
+`ifdef SIMULATION
+                            $display("FLUX_DRIVE[%0d]: Drive ready after %0d bits spinup (needed %0d)",
+                                     DRIVE_ID, spinup_bits + 1, SPINUP_BIT_COUNT);
+`endif
+                        end
+                    end
+                end else begin
+                    spinup_timer <= spinup_timer - 1'd1;
+                end
+            end else begin
+                spinup_timer <= bit_cell_cycles;
+            end
         end
     end
 
@@ -674,22 +675,20 @@ module flux_drive (
             // Only rotate when motor is spinning and track is loaded
             if (motor_spinning && TRACK_LOADED) begin
                 // Generate flux pulse.
-                // Standard timing is middle of bit cell (bit_cell_cycles >> 1).
-                // However, empirical testing shows that shifting the pulse later (earlier in the countdown)
-                // improves reliability with iwm_flux.v window logic, preventing missed flux pulses
-                // during specific GCR sequences (like Sector 6 prologue).
-                // bit_timer counts DOWN from 28 to 1.
-                // 14 is middle. 20 is "earlier" in countdown = later in the bit cell?
-                // Wait, countdown: 28 (start) -> 1 (end).
-                // 20 is closer to start (8 cycles elapsed).
-                // 14 is middle (14 cycles elapsed).
-                // So 20 is EARLIER in time.
-                // Generate flux at start of bit cell to better align with MAME timing.
-                // MAME queries flux transitions at window boundaries and uses exact timing.
-                // By generating at bit cell start (bit_timer == bit_cell_cycles), the flux
-                // occurs at the beginning of the window, matching MAME's event timing.
-                if (bit_timer == bit_cell_cycles) begin
-                    // Start of new bit cell - generate flux if this bit is 1
+                // The WOZ bitstream encodes flux transitions as 1-bits in fixed bit cells.
+                //
+                // IMPORTANT: Avoid emitting the pulse exactly on the window boundary used by
+                // iwm_flux.v. That state machine latches flux edges into `flux_seen` via a
+                // nonblocking assignment; a pulse that coincides with a window shift boundary
+                // can be missed for one cycle and create occasional bit slips (hurting multi-sector
+                // reads like ProDOS load).
+                //
+                // Emit the pulse at the center of the bit cell (half-window) rather than at the
+                // boundary. The IWM windowing logic anchors the bit boundary at +half_window from
+                // flux arrival (see iwm_flux SR_WINDOW_EDGE_0), so centering transitions yields a
+                // stable decode and avoids boundary race conditions.
+                if (bit_timer == (bit_cell_cycles >> 1)) begin
+                    // Mid-bit-cell - generate flux if this bit is 1
                     // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
                     // During spinup, the IWM shouldn't receive flux transitions
                     // This matches MAME behavior where m_data stays 0x00 during spinup
@@ -723,20 +722,6 @@ module flux_drive (
                         end
                     end
 
-                    // Bit-count based spinup: increment counter during spinup
-                    // When spinup_bits reaches SPINUP_BIT_COUNT, drive becomes ready.
-                    // This is more robust than rotation-based counting because rapid
-                    // side switching can cause spurious rotation_complete signals.
-                    if (motor_spinning && !drive_ready && spinup_bits < SPINUP_BIT_COUNT) begin
-                        spinup_bits <= spinup_bits + 1'd1;
-                        if (spinup_bits + 1 >= SPINUP_BIT_COUNT) begin
-                            drive_ready <= 1'b1;
-`ifdef SIMULATION
-                            $display("FLUX_DRIVE[%0d]: Drive ready after %0d bits spinup (needed %0d)",
-                                     DRIVE_ID, spinup_bits + 1, SPINUP_BIT_COUNT);
-`endif
-                        end
-                    end
                 end else begin
                     // Still in current bit cell
                     bit_timer <= bit_timer - 1'd1;

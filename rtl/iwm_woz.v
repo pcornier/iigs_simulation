@@ -66,6 +66,10 @@ module iwm_woz (
     wire       is_35_inch = DISK35[6];
     wire       diskreg_sel = DISK35[7];
 
+    // DISK35[6] is the IIgs 35SEL line (3.5" vs 5.25" select). The ROM routinely clears it
+    // (see ad35driver_mainline.asm: STZ $C031) when returning to the caller, which in MAME
+    // immediately forces the Sony drive motor off (mac_floppy_device::tfsel_w()).
+
     //=========================================================================
     // Soft Switch Handling
     //=========================================================================
@@ -163,30 +167,32 @@ module iwm_woz (
             latched_sense_reg <= 3'b000;
             cpu_access_latched <= 1'b0;
         end else begin
-            // Edge detection: clear latch when access ends
-            if (!cpu_accessing) begin
+            // Edge detection: clear latch when PH2 goes low (one action per CPU bus cycle)
+            // This matches soft-switch semantics: a single update per PH2-high access, not per 14MHz tick.
+            if (!PH2 || !cpu_accessing) begin
                 cpu_access_latched <= 1'b0;
             end
 
             // Process soft switch updates once per CPU access
             if (cpu_access_edge) begin
                 cpu_access_latched <= 1'b1;
-            // Any access to soft switch latches the bit from A[0]
-            case (A[3:1])
-                3'b000: motor_phase[0] <= A[0];  // $C0E0/$C0E1: Phase 0
-                3'b001: motor_phase[1] <= A[0];  // $C0E2/$C0E3: Phase 1
-                3'b010: motor_phase[2] <= A[0];  // $C0E4/$C0E5: Phase 2
-                3'b011: motor_phase[3] <= A[0];  // $C0E6/$C0E7: Phase 3
-                3'b100: drive_on      <= A[0];  // $C0E8/$C0E9: Motor
-                3'b101: begin
-                    drive_sel     <= A[0];  // $C0EA/$C0EB: Drive select
+                // IWM soft switches are "touch" switches: any access (read or write) updates state.
+                // MAME implements this by routing both reads and writes through the same control() path.
+                case (A[3:1])
+                    3'b000: motor_phase[0] <= A[0];  // $C0E0/$C0E1: Phase 0
+                    3'b001: motor_phase[1] <= A[0];  // $C0E2/$C0E3: Phase 1
+                    3'b010: motor_phase[2] <= A[0];  // $C0E4/$C0E5: Phase 2
+                    3'b011: motor_phase[3] <= A[0];  // $C0E6/$C0E7: Phase 3
+                    3'b100: drive_on      <= A[0];  // $C0E8/$C0E9: Motor
+                    3'b101: begin
+                        drive_sel     <= A[0];  // $C0EA/$C0EB: Drive select
 `ifdef SIMULATION
-                    $display("IWM_WOZ: DRIVE_SEL %0d -> %0d (A=%04h is_35=%0d)", drive_sel, A[0], A, is_35_inch);
+                        $display("IWM_WOZ: DRIVE_SEL %0d -> %0d (A=%04h is_35=%0d)", drive_sel, A[0], A, is_35_inch);
 `endif
-                end
-                3'b110: q6            <= A[0];  // $C0EC/$C0ED: Q6
-                3'b111: q7            <= A[0];  // $C0EE/$C0EF: Q7
-            endcase
+                    end
+                    3'b110: q6            <= A[0];  // $C0EC/$C0ED: Q6
+                    3'b111: q7            <= A[0];  // $C0EE/$C0EF: Q7
+                endcase
 
             // MAME behavior: Latch sense register index on EVERY phase access (SET or CLEAR)
             // MAME's control() always calls update_phases() which calls seek_phase_w() for all
@@ -305,8 +311,17 @@ module iwm_woz (
     wire [16:0] drive35_bit_position;
     wire [13:0] drive35_bram_addr;
 
-    // Drive is active when motor is spinning, 3.5" mode, and disk ready
-    wire drive35_active = motor_spinning && is_35_inch && DISK_READY[2];
+    // 3.5" drives must NOT use the 5.25" inertia-managed motor_spinning signal.
+    // The IIgs ROM (Sony driver) can toggle DISK35 during command boundaries, and
+    // motor_spinning is intentionally forced low when is_35_inch=1. Feeding that into
+    // the 3.5" flux_drive causes brief/glitchy motor pulses that prevent spin-up.
+    //
+    // For 3.5", MOTOR_ON should be driven from the IWM motor command (drive_on) gated
+    // by the software 3.5" select (DISK35[6]) and disk presence.
+    wire drive35_motor_on = drive_on && is_35_inch && DISK_READY[2];
+
+    // Drive is active when the 3.5" motor is physically spinning and disk is present
+    wire drive35_active = drive35_motor_spinning && DISK_READY[2];
 
     flux_drive drive35 (
         .IS_35_INCH(1'b1),
@@ -316,9 +331,11 @@ module iwm_woz (
         .PHASES(motor_phase),
         .IMMEDIATE_PHASES(immediate_phases),
         .LATCHED_SENSE_REG(immediate_latched_sense_reg),  // Use immediate for same-cycle visibility
-        .MOTOR_ON(motor_spinning && DISK_READY[2]),
+        .IWM_MODE(immediate_mode[4:0]),
+        .MOTOR_ON(drive35_motor_on),
         .SW_MOTOR_ON(drive_on),         // Immediate motor state for direction gating
         .DISKREG_SEL(diskreg_sel),
+        .SEL35(is_35_inch),
         .DRIVE_SELECT(drive_sel),       // Pass drive selection for per-slot direction tracking
         .DRIVE_SLOT(1'b0),              // This drive is slot 0 (drive 1 - internal drive)
         .DISK_MOUNTED(DISK_READY[2]),
@@ -345,7 +362,11 @@ module iwm_woz (
     // combinationally, the C++ would provide the OLD track's data while Verilog
     // is already reading from the NEW track position. By registering WOZ_TRACK3,
     // the track change is delayed by one cycle to match the C++ timing.
-    wire [7:0] woz_track3_comb = {1'b0, drive35_track} + (diskreg_sel ? 8'd80 : 8'd0);
+    //
+    // IMPORTANT (ROM-confirmed): The IIgs Sony driver addresses tracks as cylinder*2 + side
+    // (see IIgsRomSource/Bank FF/ad35driver_subroutines.asm:2198). That means side 1 is the
+    // LSB, not an +80 offset. Using +80 causes completely wrong tracks beyond cylinder 0.
+    wire [7:0] woz_track3_comb = {drive35_track, 1'b0} | {7'b0, diskreg_sel};
     reg [7:0] woz_track3_reg;
 
     always @(posedge CLK_14M or posedge RESET) begin
@@ -397,9 +418,11 @@ module iwm_woz (
         .PHASES(motor_phase),
         .IMMEDIATE_PHASES(immediate_phases),
         .LATCHED_SENSE_REG(immediate_latched_sense_reg),
+        .IWM_MODE(immediate_mode[4:0]),
         .MOTOR_ON(1'b0),                // No disk inertia tracking for empty drive
         .SW_MOTOR_ON(drive_on),         // Immediate motor state for command processing
         .DISKREG_SEL(diskreg_sel),
+        .SEL35(is_35_inch),
         .DRIVE_SELECT(drive_sel),
         .DRIVE_SLOT(1'b1),              // This drive is slot 1 (external drive, typically empty)
         .DISK_MOUNTED(1'b0),            // No disk
@@ -446,9 +469,11 @@ module iwm_woz (
         .PHASES(motor_phase),
         .IMMEDIATE_PHASES(immediate_phases),
         .LATCHED_SENSE_REG(immediate_latched_sense_reg),
+        .IWM_MODE(immediate_mode[4:0]),
         .MOTOR_ON(motor_spinning && DISK_READY[0]),
         .SW_MOTOR_ON(drive_on),         // Immediate motor state for direction gating
         .DISKREG_SEL(1'b0),
+        .SEL35(1'b0),
         .DRIVE_SELECT(drive_sel),       // Pass drive selection
         .DRIVE_SLOT(1'b0),              // 5.25" doesn't use per-slot direction (IS_35_INCH=0)
         .DISK_MOUNTED(DISK_READY[0]),
@@ -489,11 +514,12 @@ module iwm_woz (
     // When a 3.5" drive is spinning, use 28-cycle windows even if ROM temporarily
     // accesses slot 5 (5.25" mode). Otherwise byte decoding gets corrupted!
     wire flux_is_35_inch = drive35_motor_spinning ? 1'b1 :
+                          drive35_2_motor_spinning ? 1'b1 :
                           drive525_motor_spinning ? 1'b0 :
                           is_35_inch;  // Fallback to software setting when no drive spinning
 
-    wire drive_active = is_35_inch ? drive35_active : drive525_active;
-    wire current_wp = is_35_inch ? drive35_wp : drive525_wp;
+    wire drive_active = flux_is_35_inch ? drive35_active : drive525_active;
+    wire current_wp = flux_is_35_inch ? drive35_wp : drive525_wp;
 
     // Any disk spinning - used for IWM MOTOR_SPINNING independent of is_35_inch
     wire any_disk_spinning = drive35_motor_spinning || drive35_2_motor_spinning || drive525_motor_spinning;
@@ -509,13 +535,14 @@ module iwm_woz (
     // Sense Mux - Select active drive's status sense
     //=========================================================================
     // Select between Drive 1 and Drive 2 based on drive_sel.
-    wire drive_sense = (is_35_inch) ? ((drive_sel == 0) ? drive35_sense : drive35_2_sense) :
-                                     ((drive_sel == 0) ? drive525_sense : 1'b1);
+    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? drive35_sense : drive35_2_sense) :
+                                          ((drive_sel == 0) ? drive525_sense : 1'b1);
 
-    // When motor is off (drive_on=0), MAME's m_floppy is null, so sense=1 (bit7=1)
-    wire current_sense = drive_on ? drive_sense : 1'b1;
+    // Sense gating: when no drive is enabled, the IWM sense input floats high.
+    wire sense_enabled = drive_on;
+    wire current_sense = sense_enabled ? drive_sense : 1'b1;
 
-    wire current_motor_spinning = is_35_inch ? drive35_motor_spinning : drive525_motor_spinning;
+    wire current_motor_spinning = flux_is_35_inch ? drive35_motor_spinning : drive525_motor_spinning;
 
     //=========================================================================
     // IWM Chip (Flux-Based Byte Decoding)
@@ -533,6 +560,33 @@ module iwm_woz (
     // to ensure correct drive's position is used even when ROM temporarily accesses other slot
     wire [16:0] current_bit_position = flux_is_35_inch ? drive35_bit_position : drive525_bit_position;
 
+    // Disk II / IWM compatibility behavior:
+    // The IIgs ROM writes the mode register via $C0EF (which sets Q7=1) and can then
+    // immediately read $C0EC for disk data without first touching $C0EE to clear Q7.
+    // Real hardware effectively treats $C0EC as a DATA-register read when the selected
+    // drive has media and the motor is on. Without this, $C0EC can return 0x80
+    // (handshake, Q7=1 Q6=0), corrupting the ROM's read loops.
+    // IMPORTANT: Use the *active/spinning* drive type (flux_is_35_inch), not DISK35[6].
+    // The ROM frequently toggles DISK35 during command boundaries; if we key off DISK35[6]
+    // here we can incorrectly treat $C0EC reads as handshake (Q7=1) while the ROM is
+    // actually trying to read disk data from the still-spinning 3.5" drive.
+    wire selected_disk_present = flux_is_35_inch ? (drive_sel ? DISK_READY[3] : DISK_READY[2])
+                                                 : (drive_sel ? DISK_READY[1] : DISK_READY[0]);
+    // Only force $C0EC to be treated as a data read when the IWM motor output is enabled.
+    // If we force this while `drive_on` is 0 but the Sony spindle is still spinning
+    // (common between SmartPort calls), the CPU can read 0xFF as "data" and corrupt
+    // the ROM's nibble decode loops.
+    // IMPORTANT: Do NOT apply this compatibility hack in SmartPort/C-Bus mode.
+    // The SmartPort driver intentionally reads $C0EC as the WHD/handshake register
+    // (Q7=1,Q6=0) using `ASL $C08C,X` polling. Forcing Q7 low there breaks the
+    // handshake loop and the ROM will hang in `smartdrvr.asm` at FF:56CD.
+    wire smartport_mode = (!immediate_mode[3]) && immediate_mode[1];
+    wire force_q7_data_read = cpu_rd && (A[3:0] == 4'hC) &&
+                              selected_disk_present &&
+                              drive_on &&
+                              !smartport_mode;
+    wire q7_for_flux = force_q7_data_read ? 1'b0 : q7;
+
     iwm_flux iwm (
         .CLK_14M(CLK_14M),
         .CLK_7M_EN(CLK_7M_EN),  // 7M clock enable for IWM timing (matches real hardware)
@@ -549,11 +603,14 @@ module iwm_woz (
         .SW_MOTOR_ON(drive_on),
         .SW_DRIVE_SEL(drive_sel),
         .SW_Q6(q6),
-        .SW_Q7(q7),
+        .SW_Q7(q7_for_flux),
         .SW_MODE(immediate_mode),
 
         .FLUX_TRANSITION(flux_transition),
-        .MOTOR_ACTIVE(immediate_motor),  // Motor command state (for status register) - use IMMEDIATE value
+        // MOTOR_ACTIVE drives the IWM status bit5 (0x20). The IIgs ROM's `SETIWMMODE`
+        // polls this bit after touching `DeSelect` ($C0E8) and expects it to drop
+        // immediately when mode bit2 is set (ROM uses mode=0x0F).
+        .MOTOR_ACTIVE(immediate_motor),
         .MOTOR_SPINNING(any_disk_spinning),  // Physical spinning (for flux decoding)
         .DISK_READY(any_disk_ready),
         .DISK_MOUNTED(disk_mounted),
