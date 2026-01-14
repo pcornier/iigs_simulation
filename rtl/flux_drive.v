@@ -677,18 +677,11 @@ module flux_drive (
                 // Generate flux pulse.
                 // The WOZ bitstream encodes flux transitions as 1-bits in fixed bit cells.
                 //
-                // IMPORTANT: Avoid emitting the pulse exactly on the window boundary used by
-                // iwm_flux.v. That state machine latches flux edges into `flux_seen` via a
-                // nonblocking assignment; a pulse that coincides with a window shift boundary
-                // can be missed for one cycle and create occasional bit slips (hurting multi-sector
-                // reads like ProDOS load).
-                //
-                // Emit the pulse at the center of the bit cell (half-window) rather than at the
-                // boundary. The IWM windowing logic anchors the bit boundary at +half_window from
-                // flux arrival (see iwm_flux SR_WINDOW_EDGE_0), so centering transitions yields a
-                // stable decode and avoids boundary race conditions.
-                if (bit_timer == (bit_cell_cycles >> 1)) begin
-                    // Mid-bit-cell - generate flux if this bit is 1
+                // Emit transitions at the bit-cell boundary (start of cell). `iwm_flux.v` now treats
+                // 1-cycle pulses as visible in the same 14MHz tick (`flux_now`), so boundary pulses
+                // no longer risk being missed at window shift boundaries.
+                if (bit_timer == bit_cell_cycles) begin
+                    // Bit-cell boundary - generate flux if this bit is 1
                     // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
                     // During spinup, the IWM shouldn't receive flux transitions
                     // This matches MAME behavior where m_data stays 0x00 during spinup

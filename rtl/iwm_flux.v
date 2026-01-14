@@ -21,6 +21,12 @@
 // Uncomment the following line to enable:
 // `define SECTOR_DEBUG
 
+// For simulator builds that already use `+define+debug=1`, enable a limited
+// sector/prologue trace without needing to edit this file per-run.
+`ifdef debug
+`define IWM_SECTOR_TRACE
+`endif
+
 module iwm_flux (
     // Global signals
     input  wire        CLK_14M,         // 14MHz master clock
@@ -82,12 +88,23 @@ module iwm_flux (
     reg        m_data_read; // Flag: data register has been read since last byte loaded
     reg        m_rw_mode;   // 0 = read mode, 1 = write mode (tracks Q7 for mode changes)
     reg        m_motor_was_on; // Track motor state for edge detection
+    // Minimal write-mode underrun handling:
+    // We don't implement flux writing yet, but the IIgs ROM/SmartPort code can enter the
+    // WHD polling loop while Q7=1. In MAME, if no data is written in write mode, the IWM
+    // quickly signals an underrun and clears WHD bit6, allowing the ROM loop to exit.
+    // Without this, WHD can remain 0xFF and hang at FF:57B7 (LDA $C08C,X; AND #$40; BNE).
+    reg [9:0]  write_underrun_cnt;
+    localparam [9:0] WRITE_UNDERRUN_DELAY_7M = 10'd64; // ~9µs at 7MHz
     reg [9:0]  async_update;   // Countdown to clear "data valid" bit7 in async mode (7MHz domain)
     // CPU read tracking (PHI2/CEN-relative)
     reg        rd_in_progress;     // RD captured during this PHI2-high bus cycle
     reg        rd_was_data_reg;    // Latched Q7/Q6 decode for this read
     reg [7:0]  rd_data_latched;    // Byte value observed by CPU during PHI2-high
     reg        prev_cen;           // CEN (PHI2) edge detect
+    // CPU access tracking (read OR write) for MAME-like async_update scheduling
+    reg        access_in_progress;    // Any IWM access captured during this PHI2-high bus cycle
+    reg        access_q7_latched;     // Latched Q7 state for this access (MAME uses !(m_control & 0x80))
+    reg        access_data_valid;     // Latched "byte valid" at access time (m_data bit7)
 
     // MAME async behavior: In async mode, completed bytes remain in m_data until overwritten by
     // the next completed byte. After the CPU performs an IWM register access while a valid byte
@@ -147,6 +164,10 @@ module iwm_flux (
     reg        flux_pending;    // Latched when flux arrives during EDGE_1
     reg        flux_seen;       // Latched at 14M when flux edge detected, cleared at 7M
     wire       flux_edge = FLUX_TRANSITION && !prev_flux;
+    // Treat a 1-cycle FLUX_TRANSITION pulse as visible to the state machine in the same
+    // 14MHz tick; relying on `flux_seen` alone delays visibility by one tick (NBA),
+    // which can miss edges that land on window boundaries.
+    wire       flux_now  = flux_edge || flux_seen;
 
 `ifdef SIMULATION
     reg [31:0] debug_cycle;
@@ -154,6 +175,14 @@ module iwm_flux (
     reg [31:0] bytes_read_counter;  // How many bytes CPU has read (valid reads with bit7=1)
     reg [31:0] bytes_lost_counter;  // How many bytes were cleared by async_update before CPU read
 `endif
+
+    // Clear the read shift register shortly after a completed byte.
+    // We intentionally keep the completed byte in `m_rsh` for 1x 14MHz tick so:
+    // - `byte_completing` can bypass for same-cycle CPU reads, and
+    // - debug/sector-trace logic can see the completed byte.
+    // This is safe because the next bit shift does not occur for many 14MHz ticks.
+    reg        clear_rsh_pending;
+    reg [7:0]  shifted_rsh;
 
     //=========================================================================
     // State Machine and Data Register Logic
@@ -178,6 +207,11 @@ module iwm_flux (
             rd_was_data_reg <= 1'b0;
             rd_data_latched <= 8'h00;
             prev_cen       <= 1'b0;
+            access_in_progress <= 1'b0;
+            access_q7_latched  <= 1'b0;
+            access_data_valid  <= 1'b0;
+            write_underrun_cnt <= 10'd0;
+            clear_rsh_pending   <= 1'b0;
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
             byte_counter   <= 32'd0;
@@ -188,6 +222,11 @@ module iwm_flux (
 `ifdef SIMULATION
             debug_cycle <= debug_cycle + 1;
 `endif
+            if (clear_rsh_pending) begin
+                clear_rsh_pending <= 1'b0;
+                m_rsh <= 8'h00;
+            end
+
             // MAME behavior: Clear m_data when entering read mode
             // Only reset if motor was truly stopped (not spinning), not just command toggling
             if (MOTOR_ACTIVE && !m_motor_was_on && !SW_Q7 && !MOTOR_SPINNING) begin
@@ -208,6 +247,7 @@ module iwm_flux (
             end else if (MOTOR_ACTIVE && SW_Q7 && !m_rw_mode) begin
                 m_rw_mode <= 1'b1;
                 m_whd <= m_whd | 8'h40;
+                write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
             end else if (!MOTOR_ACTIVE && m_motor_was_on) begin
                 // Motor command off - but only reset state if motor actually stopped
                 m_whd <= m_whd & 8'hBF;
@@ -238,12 +278,38 @@ module iwm_flux (
             if (CLK_7M_EN) begin
                 if (async_update != 0) begin
                     if (async_update == 1) begin
-                        // Counter about to hit 0 - clear m_data NOW (unless a new byte is completing)
-                        if (is_async && !byte_completing && m_data[7]) begin
-                            m_data <= 8'h00;
+                        // Counter about to hit 0 - clear m_data NOW (unless a new byte is completing).
+                        //
+                        // Important: do not change the data register during PHI2-high while the CPU
+                        // is in the middle of an IWM access, or the CPU can sample a different value
+                        // than the one we "returned" at the start of the bus cycle (seen in logs as
+                        // `read_iwm ret: xx` with the ROM still taking `BPL` as if bit7 were 0).
+                        //
+                        // If an access is in progress, hold the clear until the next 7MHz tick.
+                        if (!(CEN && (RD || WR))) begin
+                            if (is_async && !byte_completing && m_data[7]) begin
+                                m_data <= 8'h00;
+                            end
+                            async_update <= 10'd0;
+                        end else begin
+                            async_update <= 10'd1;
                         end
+                    end else begin
+                        async_update <= async_update - 10'd1;
                     end
-                    async_update <= async_update - 10'd1;
+                end
+
+                // Minimal MAME-like write underrun: if we entered write mode (Q7=1) but no data writes
+                // occur (we don't implement writes yet), clear WHD bit6 after a short delay so ROM
+                // polling loops can proceed.
+                if (m_rw_mode && m_whd[6]) begin
+                    if (write_underrun_cnt != 10'd0) begin
+                        write_underrun_cnt <= write_underrun_cnt - 10'd1;
+                    end else begin
+                        m_whd <= m_whd & 8'hBF;
+                    end
+                end else begin
+                    write_underrun_cnt <= 10'd0;
                 end
             end
 
@@ -277,8 +343,8 @@ module iwm_flux (
                     end
 
                     SR_WINDOW_EDGE_0: begin
-                        // Check for flux edge (latched at 14M) OR pending flux from EDGE_1
-                        if (flux_seen || flux_pending) begin
+                        // Check for flux edge (current tick OR latched) OR pending flux from EDGE_1
+                        if (flux_now || flux_pending) begin
                             rw_state <= SR_WINDOW_EDGE_1;
                             // CRITICAL FIX: Anchor half-window to flux arrival, like MAME
                             // MAME sets m_next_state_change = flux_time + half_window
@@ -310,7 +376,25 @@ module iwm_flux (
                                      DISK_BIT_POSITION, m_rsh, {m_rsh[6:0], 1'b0},
                                      (m_rsh[6] ? 1 : (m_rsh[5] ? 2 : (m_rsh[4] ? 3 : (m_rsh[3] ? 4 : (m_rsh[2] ? 5 : (m_rsh[1] ? 6 : (m_rsh[0] ? 7 : 8))))))));
 `endif
-                            m_rsh <= {m_rsh[6:0], 1'b0};
+                            shifted_rsh = {m_rsh[6:0], 1'b0};
+                            m_rsh <= shifted_rsh;
+                            // Byte complete when MSB is set in the *shifted* value.
+                            if (shifted_rsh[7]) begin
+`ifdef SIMULATION
+                                    byte_counter <= byte_counter + 1;
+                                    if (!m_data_read && m_data[7]) begin
+                                        bytes_lost_counter <= bytes_lost_counter + 1;
+`ifdef IWM_BYTELOG
+                                        $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
+                                                 bytes_lost_counter + 1, m_data, shifted_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
+`endif
+                                    end
+`endif
+                                    m_data <= shifted_rsh;
+                                    m_data_read <= 1'b0;
+                                    async_update <= 10'd0;
+                                    clear_rsh_pending <= 1'b1;
+                            end
                             window_counter <= full_window;
                         end else begin
                             window_counter <= window_counter - 1'd1;
@@ -322,7 +406,7 @@ module iwm_flux (
                         // latch it so we detect it immediately when we go to EDGE_0.
                         // This handles consecutive 1-bits where flux arrives before
                         // the half-window completes.
-                        if (flux_seen) begin
+                        if (flux_now) begin
                             flux_pending <= 1'b1;  // Latch for use in EDGE_0
                             flux_seen <= 1'b0;     // Clear seen flag
                         end
@@ -333,7 +417,25 @@ module iwm_flux (
                                      DISK_BIT_POSITION, m_rsh, {m_rsh[6:0], 1'b1},
                                      (m_rsh[6] ? 1 : (m_rsh[5] ? 2 : (m_rsh[4] ? 3 : (m_rsh[3] ? 4 : (m_rsh[2] ? 5 : (m_rsh[1] ? 6 : (m_rsh[0] ? 7 : 8))))))));
 `endif
-                            m_rsh <= {m_rsh[6:0], 1'b1};
+                            shifted_rsh = {m_rsh[6:0], 1'b1};
+                            m_rsh <= shifted_rsh;
+                            // Byte complete when MSB is set in the *shifted* value.
+                            if (shifted_rsh[7]) begin
+`ifdef SIMULATION
+                                    byte_counter <= byte_counter + 1;
+                                    if (!m_data_read && m_data[7]) begin
+                                        bytes_lost_counter <= bytes_lost_counter + 1;
+`ifdef IWM_BYTELOG
+                                        $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
+                                                 bytes_lost_counter + 1, m_data, shifted_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
+`endif
+                                    end
+`endif
+                                    m_data <= shifted_rsh;
+                                    m_data_read <= 1'b0;
+                                    async_update <= 10'd0;
+                                    clear_rsh_pending <= 1'b1;
+                            end
                             rw_state <= SR_WINDOW_EDGE_0;
                             window_counter <= full_window;
                         end else begin
@@ -346,35 +448,8 @@ module iwm_flux (
                     end
                 endcase
 
-                // Byte complete when MSB is set
-                if (m_rsh >= 8'h80) begin
-`ifdef SIMULATION
-                    byte_counter <= byte_counter + 1;
-`endif
-`ifdef BYTE_FRAME_DEBUG
-                    $display("BYTE_FORMED: pos=%0d byte#=%0d data=%02h",
-                             DISK_BIT_POSITION, byte_counter + 1, m_rsh);
-`else
-`ifdef SIMULATION
-                    $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d byte#=%0d @cycle=%0d",
-                             m_rsh, DISK_BIT_POSITION, byte_counter + 1, debug_cycle);
-`endif
-`endif
-`ifdef SIMULATION
-                    // If a new byte arrives before the previous one was observed by the CPU,
-                    // that's an overrun (software didn't read fast enough).
-                    if (!m_data_read && m_data[7]) begin
-                        bytes_lost_counter <= bytes_lost_counter + 1;
-                        $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
-                                 bytes_lost_counter + 1, m_data, m_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
-                    end
-`endif
-                    m_data <= m_rsh;
-                    m_rsh <= 8'h00;
-                    m_data_read <= 1'b0;
-                    // New byte cancels any pending clear from a previous CPU read.
-                    async_update <= 10'd0;
-                end
+                // Byte completion is handled in the shift blocks (shift0/shift1) so that
+                // completion is detected against the *shifted* value (MAME behavior).
             end
 
             // Reset state when motor stops or disk removed
@@ -393,6 +468,23 @@ module iwm_flux (
             // or the CPU can sample the post-clear value (e.g., 0x55 instead of 0xD5).
             prev_cen <= CEN;
 
+            // Start of a CPU access cycle (PHI2-high). Capture Q7 and whether a valid byte is present.
+            if ((RD || WR) && CEN && !access_in_progress) begin
+                access_in_progress <= 1'b1;
+                access_q7_latched <= immediate_q7;
+                access_data_valid <= effective_data_raw[7];
+            end
+
+            // MAME behavior: In active mode, a write to Q6=1,Q7=1 with odd offset is a DATA write
+            // (used for write-mode shifting / SmartPort handshakes), not a mode register write.
+            // iwm_woz.v gates mode writes on !iwm_active; handle the active case here.
+            if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE && !smartport_mode) begin
+                m_data <= DATA_IN;
+                if (SW_MODE[0]) begin
+                    m_whd <= m_whd & 8'h7f;
+                end
+            end
+
             // Start of a CPU read cycle (PHI2-high). Capture what the CPU will see.
             if (RD && CEN && !rd_in_progress) begin
                 rd_in_progress <= 1'b1;
@@ -404,14 +496,22 @@ module iwm_flux (
 
             // End of CPU bus cycle (PHI2 falling). Now it is safe to acknowledge the read.
             if (prev_cen && !CEN) begin
+                // MAME async_update scheduling: if we're in async mode, active, Q7=0 (read/rdstat domain),
+                // and a valid byte was present during the access, schedule m_data to clear shortly after.
+                if (access_in_progress) begin
+                    if (is_async && !access_q7_latched && access_data_valid) begin
+                        // Key behavioral tweak vs MAME: do not indefinitely postpone the clear if
+                        // the CPU polls too quickly (ROM loops like `LDA $C0EC / BPL`).
+                        // If we reschedule every access, bit7 can stay high continuously and the ROM
+                        // may burn its byte-timeout counter on duplicate reads of the same byte.
+                        if (async_update == 10'd0) begin
+                            async_update <= ASYNC_CLEAR_DELAY_7M;
+                        end
+                    end
+                end
                 if (rd_in_progress) begin
                     if (rd_was_data_reg) begin
                         m_data_read <= 1'b1;
-                        // Async mode: schedule m_data clear a short time after the CPU access,
-                        // matching MAME's "async_update" behavior (iwm.cpp: m_async_update = m_last_sync + 14).
-                        if (is_async && rd_data_latched[7]) begin
-                            async_update <= ASYNC_CLEAR_DELAY_7M;
-                        end
 `ifdef SIMULATION
                         if (MOTOR_ACTIVE && rd_data_latched[7]) begin
                             bytes_read_counter <= bytes_read_counter + 1;
@@ -420,11 +520,15 @@ module iwm_flux (
                     end
                 end
                 rd_in_progress <= 1'b0;
+                access_in_progress <= 1'b0;
             end
 
             // Abort tracking if RD deasserts early (shouldn't normally happen, but keeps state sane).
             if (!RD) begin
                 rd_in_progress <= 1'b0;
+            end
+            if (!(RD || WR)) begin
+                access_in_progress <= 1'b0;
             end
         end
     end
@@ -443,15 +547,21 @@ module iwm_flux (
     // Bit 7: SENSE_BIT - drive status sense line (write-protect, disk present, etc.)
     //        Selected by phase lines, comes from drive via SENSE_BIT input
     // Bit 6: 0 (reserved)
-    // Bit 5: motor_active && disk_installed
+    // Bit 5: motor_active (MAME: m_status bit5 reflects IWM active state, not disk presence)
     // Bits 4-0: mode register
     // Note: data_ready is NOT in the status register - it's only relevant for
     //       determining when to read the DATA register (Q6=0, Q7=0)
-    wire motor_status_bit = MOTOR_ACTIVE && DISK_MOUNTED;
+    wire motor_status_bit = MOTOR_ACTIVE;
     wire [7:0] status_reg = {SENSE_BIT, 1'b0, motor_status_bit, SW_MODE[4:0]};
 
-    // Write handshake register
-    wire [7:0] handshake_reg = 8'h80;
+    // SmartPort/C-Bus mode detection (MAME-style): mode bit3 selects disk bit-cell width,
+    // and mode bit1 is used for async/SmartPort handshakes. In this mode we do not emulate
+    // a SmartPort device; we must avoid hanging the ROM in `smartdrvr.asm` polling loops.
+    wire smartport_mode = (!SW_MODE[3]) && SW_MODE[1];
+
+    // Write handshake register (MAME: m_whd, initialized to 0xBF). In SmartPort mode,
+    // always report "ready" (bit7=1) so `ASL $C08C,X` polling loops can progress.
+    wire [7:0] handshake_reg = smartport_mode ? 8'h80 : m_whd;
 
     // Immediate Q6/Q7 values for current access
     // If current access is to Q6/Q7 switch, use ADDR[0] for that bit
@@ -462,10 +572,10 @@ module iwm_flux (
     wire immediate_q7 = access_q7 ? ADDR[0] : SW_Q7;
 
     // Combinatorial bypass for same-cycle read
-    // MAME behavior: always return m_data (the completed byte), which holds its value
-    // until the next byte completes. The byte_completing bypass handles the case where
-    // the CPU reads in the same cycle that m_rsh reaches 0x80+.
-    wire byte_completing = (m_rsh >= 8'h80) && MOTOR_SPINNING && DISK_READY;
+    // MAME behavior: always return `m_data` (the completed byte), which holds its value until
+    // the next byte completes. The `byte_completing` bypass handles the case where the CPU
+    // reads in the same cycle that the shift register reaches 0x80+.
+    wire byte_completing = (m_rsh >= 8'h80) && DISK_READY;
     wire [7:0] effective_data_raw = byte_completing ? m_rsh : m_data;
 
     wire [7:0] effective_data = effective_data_raw;
@@ -521,7 +631,7 @@ module iwm_flux (
     //   Data field:    D5 AA AD <12 tag> <512 data> <4 checksum> DE AA
     // Note: This tracks raw bytes from the disk, independent of CPU read timing.
 
-`ifdef SECTOR_DEBUG
+`ifdef IWM_SECTOR_TRACE
     // GCR 6-2 decode function for 3.5" disk address fields
     // Input: raw GCR byte (0x80-0xFF), Output: decoded 6-bit value (0x00-0x3F, or 0x80 for invalid)
     // Table from Clemens emulator (clem_disk.c)
@@ -641,19 +751,21 @@ module iwm_flux (
     reg [31:0] sec_data_csum;     // Running checksum for data field (3 bytes used)
     reg [16:0] sec_start_pos;     // Position where sector started (for logging)
 
-    // Statistics
-    reg [15:0] sec_addr_ok_count;
-    reg [15:0] sec_addr_fail_count;
-    reg [15:0] sec_data_count_total;
-    reg [15:0] sec_prologue_miss_count;
+	    // Statistics
+	    reg [15:0] sec_addr_ok_count;
+	    reg [15:0] sec_addr_fail_count;
+	    reg [15:0] sec_data_count_total;
+	    reg [15:0] sec_prologue_miss_count;
+	    reg [15:0] sec_log_count;
+	    localparam [15:0] SEC_LOG_MAX = 16'd250;
 
     // Detect byte completion using m_rsh >= 0x80 signal (byte_completing is defined earlier)
     // Use edge detection since byte_completing is a level signal during the completion cycle.
     reg        prev_byte_completing;
     wire       new_byte = byte_completing && !prev_byte_completing;
 
-    always @(posedge CLK_14M or posedge RESET) begin
-        if (RESET) begin
+	    always @(posedge CLK_14M or posedge RESET) begin
+	        if (RESET) begin
             sec_state <= SEC_IDLE;
             sec_track <= 8'd0;
             sec_sector <= 8'd0;
@@ -670,12 +782,13 @@ module iwm_flux (
             sec_csum_count <= 2'd0;
             sec_data_csum <= 32'd0;
             sec_start_pos <= 17'd0;
-            sec_addr_ok_count <= 16'd0;
-            sec_addr_fail_count <= 16'd0;
-            sec_data_count_total <= 16'd0;
-            sec_prologue_miss_count <= 16'd0;
-            prev_byte_completing <= 1'b0;
-        end else if (MOTOR_SPINNING && DISK_READY) begin
+	            sec_addr_ok_count <= 16'd0;
+	            sec_addr_fail_count <= 16'd0;
+	            sec_data_count_total <= 16'd0;
+	            sec_prologue_miss_count <= 16'd0;
+	            sec_log_count <= 16'd0;
+	            prev_byte_completing <= 1'b0;
+	        end else if (MOTOR_SPINNING && DISK_READY) begin
             prev_byte_completing <= byte_completing;
 
             // State machine triggered by new bytes
@@ -698,30 +811,37 @@ module iwm_flux (
                             sec_state <= SEC_IDLE;
                     end
 
-                    SEC_WAIT_96: begin
-                        if (m_rsh == 8'h96) begin
-                            // Address field prologue complete
-                            sec_state <= SEC_ADDR_TRACK;
-                            $display("SECTOR: D5 AA 96 at pos=%0d (address prologue)", sec_start_pos);
-                        end else if (m_rsh == 8'hAD) begin
-                            // Data field prologue
-                            sec_state <= SEC_DATA_TAG;
-                            sec_tag_count <= 4'd0;
-                            $display("SECTOR: D5 AA AD at pos=%0d (data prologue) for T%0d S%0d",
-                                     sec_start_pos, sec_track, sec_sector);
-                        end else if (m_rsh == 8'hD5) begin
-                            sec_state <= SEC_WAIT_AA1;
-                            sec_start_pos <= DISK_BIT_POSITION;
-                        end else begin
-                            // Useful for diagnosing RDADDR hangs: we saw D5 AA but not the third mark.
-                            sec_prologue_miss_count <= sec_prologue_miss_count + 1'd1;
-                            if (sec_prologue_miss_count < 16'd50) begin
-                                $display("SECTOR: PROLOGUE_MISS D5 AA %02h at pos=%0d (start_pos=%0d miss#=%0d)",
-                                         m_rsh, DISK_BIT_POSITION, sec_start_pos, sec_prologue_miss_count + 1'd1);
-                            end
-                            sec_state <= SEC_IDLE;
-                        end
-                    end
+	                    SEC_WAIT_96: begin
+	                        if (m_rsh == 8'h96) begin
+	                            // Address field prologue complete
+	                            sec_state <= SEC_ADDR_TRACK;
+	                            if (sec_log_count < SEC_LOG_MAX) begin
+	                                sec_log_count <= sec_log_count + 1'd1;
+	                                $display("SECTOR: D5 AA 96 at pos=%0d (address prologue)", sec_start_pos);
+	                            end
+	                        end else if (m_rsh == 8'hAD) begin
+	                            // Data field prologue
+	                            sec_state <= SEC_DATA_TAG;
+	                            sec_tag_count <= 4'd0;
+	                            if (sec_log_count < SEC_LOG_MAX) begin
+	                                sec_log_count <= sec_log_count + 1'd1;
+	                                $display("SECTOR: D5 AA AD at pos=%0d (data prologue) for rawT=%02h rawS=%02h",
+	                                         sec_start_pos, sec_track, sec_sector);
+	                            end
+	                        end else if (m_rsh == 8'hD5) begin
+	                            sec_state <= SEC_WAIT_AA1;
+	                            sec_start_pos <= DISK_BIT_POSITION;
+	                        end else begin
+	                            // Useful for diagnosing RDADDR hangs: we saw D5 AA but not the third mark.
+	                            sec_prologue_miss_count <= sec_prologue_miss_count + 1'd1;
+	                            if (sec_prologue_miss_count < 16'd50 && sec_log_count < SEC_LOG_MAX) begin
+	                                sec_log_count <= sec_log_count + 1'd1;
+	                                $display("SECTOR: PROLOGUE_MISS D5 AA %02h at pos=%0d (start_pos=%0d miss#=%0d)",
+	                                         m_rsh, DISK_BIT_POSITION, sec_start_pos, sec_prologue_miss_count + 1'd1);
+	                            end
+	                            sec_state <= SEC_IDLE;
+	                        end
+	                    end
 
                     SEC_ADDR_TRACK: begin
                         sec_track <= m_rsh;
@@ -751,24 +871,26 @@ module iwm_flux (
                         sec_state <= SEC_ADDR_CSUM;
                     end
 
-                    SEC_ADDR_CSUM: begin
-                        sec_addr_csum <= m_rsh;
+	                    SEC_ADDR_CSUM: begin
+	                        sec_addr_csum <= m_rsh;
                         // ROM-style validation: XOR of all 5 decoded bytes must equal 0
                         // The checksum byte is chosen so that track^sector^side^format^checksum = 0
-                        if ((sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0]) == 6'd0) begin
-                            sec_addr_ok_count <= sec_addr_ok_count + 1;
-                            $display("SECTOR: ADDR OK T=%0d S=%0d side=%02h fmt=%02h (raw: %02h %02h %02h %02h %02h) pos=%0d",
-                                     sec_decoded_track, sec_decoded_sector, sec_decoded_side, sec_decoded_format,
-                                     sec_track, sec_sector, sec_side, sec_format, m_rsh, DISK_BIT_POSITION);
-                        end else begin
-                            sec_addr_fail_count <= sec_addr_fail_count + 1;
-                            $display("SECTOR: ADDR FAIL T=%0d S=%0d side=%02h fmt=%02h xor=%02h (raw: %02h %02h %02h %02h %02h) pos=%0d",
-                                     sec_decoded_track, sec_decoded_sector, sec_decoded_side, sec_decoded_format,
-                                     sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0],
-                                     sec_track, sec_sector, sec_side, sec_format, m_rsh, DISK_BIT_POSITION);
-                        end
-                        sec_state <= SEC_IDLE;  // Wait for data field
-                    end
+	                        if ((sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0]) == 6'd0) begin
+	                            sec_addr_ok_count <= sec_addr_ok_count + 1;
+	                            // Avoid logging every OK (too noisy); counts are enough.
+	                        end else begin
+	                            sec_addr_fail_count <= sec_addr_fail_count + 1;
+	                            if (sec_log_count < SEC_LOG_MAX) begin
+	                                sec_log_count <= sec_log_count + 1'd1;
+	                                $display("SECTOR: ADDR FAIL T=%0d S=%0d side=%02h fmt=%02h xor=%02h pos=%0d raw=%02h %02h %02h %02h %02h",
+	                                         sec_decoded_track, sec_decoded_sector, sec_decoded_side, sec_decoded_format,
+	                                         sec_running_xor ^ gcr_6_2_decode(m_rsh)[5:0],
+	                                         DISK_BIT_POSITION,
+	                                         sec_track, sec_sector, sec_side, sec_format, m_rsh);
+	                            end
+	                        end
+	                        sec_state <= SEC_IDLE;  // Wait for data field
+	                    end
 
                     SEC_DATA_TAG: begin
                         sec_tag_count <= sec_tag_count + 1;
@@ -789,14 +911,17 @@ module iwm_flux (
                         end
                     end
 
-                    SEC_DATA_CSUM: begin
-                        sec_csum_count <= sec_csum_count + 1;
-                        if (sec_csum_count == 2'd3) begin
-                            $display("SECTOR: DATA COMPLETE T=%02h S=%02h (512 bytes read) pos=%0d",
-                                     sec_track, sec_sector, DISK_BIT_POSITION);
-                            sec_state <= SEC_IDLE;
-                        end
-                    end
+	                    SEC_DATA_CSUM: begin
+	                        sec_csum_count <= sec_csum_count + 1;
+	                        if (sec_csum_count == 2'd3) begin
+	                            if (sec_log_count < SEC_LOG_MAX) begin
+	                                sec_log_count <= sec_log_count + 1'd1;
+	                                $display("SECTOR: DATA COMPLETE rawT=%02h rawS=%02h (512 bytes read) pos=%0d",
+	                                         sec_track, sec_sector, DISK_BIT_POSITION);
+	                            end
+	                            sec_state <= SEC_IDLE;
+	                        end
+	                    end
 
                     default: sec_state <= SEC_IDLE;
                 endcase
@@ -809,13 +934,16 @@ module iwm_flux (
         end
     end
 
-    // Periodic statistics for sector tracking
-    always @(posedge CLK_14M) begin
-        if (debug_cycle[24:0] == 25'h0 && debug_cycle > 0 && MOTOR_ACTIVE) begin
-            $display("SECTOR: *** STATS *** addr_ok=%0d addr_fail=%0d data_complete=%0d",
-                     sec_addr_ok_count, sec_addr_fail_count, sec_data_count_total);
-        end
-    end
+	    // Periodic statistics for sector tracking
+	    always @(posedge CLK_14M) begin
+	        if (debug_cycle[24:0] == 25'h0 && debug_cycle > 0 && MOTOR_ACTIVE) begin
+	            if (sec_log_count < SEC_LOG_MAX) begin
+	                sec_log_count <= sec_log_count + 1'd1;
+	                $display("SECTOR: *** STATS *** addr_ok=%0d addr_fail=%0d data_complete=%0d prologue_miss=%0d",
+	                         sec_addr_ok_count, sec_addr_fail_count, sec_data_count_total, sec_prologue_miss_count);
+	            end
+	        end
+	    end
 `endif
 
 endmodule

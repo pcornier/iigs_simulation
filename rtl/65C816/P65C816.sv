@@ -243,18 +243,22 @@ module P65C816
                   //$display("INSTR_COMPLETE: %02x:%04x IR=%02x P[2]=%d", PBR, PC, IR, P[2]);
             end
 
-            // Debug: Track MVN instruction state transitions
-            if (IR == 8'h54 && STATE != NextState) begin
-               //$display("MVN_STATE: %02x:%04x STATE %d -> %d (A=%04x P[2]=%d)", PBR, PC, STATE, NextState, A, P[2]);
-            end
+	            // Debug: Track MVN instruction state transitions
+	            if (IR == 8'h54 && STATE != NextState) begin
+	               //$display("MVN_STATE: %02x:%04x STATE %d -> %d (A=%04x P[2]=%d)", PBR, PC, STATE, NextState, A, P[2]);
+	            end
 
-            // Debug: Track P[2] for every MVN instruction cycle
-            if (IR == 8'h54) begin
-               $display("MVN_P2_TRACK: %02x:%04x STATE=%d P[2]=%d IRQ_ACTIVE=%d LAST_CYCLE=%d",
-                        PBR, PC, STATE, P[2], IRQ_ACTIVE, LAST_CYCLE);
-            end
-         end
-      end
+	            // Debug: Track P[2] for every MVN instruction cycle
+`ifdef SIMULATION
+`ifdef DEBUG_MVN_P2
+	            if (IR == 8'h54) begin
+	               $display("MVN_P2_TRACK: %02x:%04x STATE=%d P[2]=%d IRQ_ACTIVE=%d LAST_CYCLE=%d",
+	                        PBR, PC, STATE, P[2], IRQ_ACTIVE, LAST_CYCLE);
+	            end
+`endif
+`endif
+	         end
+	      end
 
 
    mcode MCode(.CLK(CLK), .RST_N(RST_N), .EN(EN), .IR(NextIR), .STATE(NextState), .M(MC));

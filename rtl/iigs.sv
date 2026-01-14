@@ -405,8 +405,13 @@ module iigs
   // the registered iwm_strobe (high for only 1 clock) may not coincide with PH2.
   wire iwm_device_select = IO & (cpu_addr[7:4] == 4'hE);
 
-  // Use combinational logic but add debug to detect timing issues
-  assign { bank_bef, addr_bef } = cpu_addr;
+	  // Use combinational logic but add debug to detect timing issues
+	  assign { bank_bef, addr_bef } = cpu_addr;
+	  
+	  // Bank normalization: use the raw CPU-visible bank for decode/limits.
+	  // Do not mirror $80-$DF down to $00-$5F/$00-$7F here; regression tests expect
+	  // reads from banks above installed RAM to float (return the bank number).
+	  wire [7:0] bank_norm = bank_bef;
   
   // Debug: Track bank changes to detect potential timing issues
   reg [7:0] prev_bank;
@@ -518,7 +523,7 @@ module iigs
       fastram_ce_int = 0;
       slowram_ce_int = 0;
     end else begin
-      case (bank_bef)
+	      case (bank_norm)
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
@@ -607,7 +612,7 @@ module iigs
         // All other banks: Normal RAM (if within RAMSIZE)
         // CYAREG bit 4 (shadow all banks): When set, video page writes in ANY bank shadow to E0/E1
         default: begin
-          if ((bank_bef < RAMSIZE) && ~rom1_ce && ~rom2_ce) begin
+	          if ((bank_norm < RAMSIZE) && ~rom1_ce && ~rom2_ce) begin
             fastram_ce_int = 1;
             // CYAREG[4] = FPI shadow enable: shadow video pages from all banks to E0/E1
             // Even banks shadow to E0, odd banks shadow to E1 (via bank[0] bit in slowram address)
@@ -615,21 +620,21 @@ module iigs
             if (CYAREG[4] && we) begin  // All banks when writing (bank[0] determines E0 vs E1)
               // Check if address is in a shadowable video region
               if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shr_master_shadow) begin
-                slowram_ce_int = 1;  // Enable shadow write to E0 (even) or E1 (odd)
+	                slowram_ce_int = 1;  // Enable shadow write to E0 (even) or E1 (odd)
 `ifdef DEBUG_IO
-                $display("FPI_SHADOW: bank%02x addr=%04x data=%02x -> E%d shadow (CYAREG[4]=1)",
-                         bank_bef, addr_bef, cpu_dout, bank_bef[0]);
+	                $display("FPI_SHADOW: bank%02x addr=%04x data=%02x -> E%d shadow (CYAREG[4]=1)",
+	                         bank_bef, addr_bef, cpu_dout, bank_norm[0]);
 `endif
-              end
-            end
-          end
-        end
-      endcase
+	              end
+	            end
+	          end
+	        end
+	      endcase
     end
   end
 
   // ROM write-through for language card
-  assign rom_writethrough = ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE && we);
+  assign rom_writethrough = ((bank_norm == 8'h00 || bank_norm == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE && we);
 
 `ifdef DEBUG_BANK
   // Debug: C034 RTC access tracing (to catch address bus corruption)
@@ -1931,24 +1936,25 @@ module iigs
   end
 `endif
 
-  // All-bank shadow: When CYAREG[4]=1, even banks (02-7E) act like bank 00 for RAMRD/RAMWRT
-  wire all_bank_shadow_even = CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7e) && ~bank_bef[0];
+  // All-bank shadow: When CYAREG[4]=1, even banks (02-7E) act like bank 00 for RAMRD/RAMWRT.
+  // Use `bank_norm` so $82-$FE mirrors behave the same as $02-$7E.
+  wire all_bank_shadow_even = CYAREG[4] && (bank_norm >= 8'h02 && bank_norm <= 8'h7e) && ~bank_norm[0];
 
   always @(*)
     begin: aux_ctrl
       aux = 1'b0;
-      if ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
-        aux = ALTZP;
-      else if ((bank_bef==0 || bank_bef==1 || bank_bef==8'he0 || bank_bef==8'he1) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
-        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
-      else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
-        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
-      else if (all_bank_shadow_even)
-        // All-bank shadow: RAMRD/RAMWRT redirects even banks to odd banks
-        aux = ((RAMRD & cpu_we_n) | (RAMWRT & ~cpu_we_n));
-      else
-        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
-    end
+	      if ((bank_norm==0 || bank_norm==8'he0 || (bank_norm==8'he1 && ~NEWVIDEO[0])) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
+	        aux = ALTZP;
+	      else if ((bank_norm==0 || bank_norm==1 || bank_norm==8'he0 || bank_norm==8'he1) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
+	        aux = ((bank_norm==1 || (bank_norm==8'he1 && NEWVIDEO[0])) || ((bank_norm==0 || bank_norm==8'he0 || (bank_norm==8'he1 && ~NEWVIDEO[0])) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
+	      else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
+	        aux = ((bank_norm==1 || (bank_norm==8'he1 && NEWVIDEO[0])) || ((bank_norm==0 || bank_norm==8'he0 || (bank_norm==8'he1 && ~NEWVIDEO[0])) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))))));
+	      else if (all_bank_shadow_even)
+	        // All-bank shadow: RAMRD/RAMWRT redirects even banks to odd banks
+	        aux = ((RAMRD & cpu_we_n) | (RAMWRT & ~cpu_we_n));
+	      else
+	        aux = ((bank_norm==1 || (bank_norm==8'he1 && NEWVIDEO[0])) || ((bank_norm==0 || bank_norm==8'he0 || (bank_norm==8'he1 && ~NEWVIDEO[0])) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
+	    end
 assign     fastram_address = {bank[6:0],addr};
 assign     fastram_datatoram = dout;
 assign     fastram_dout = fastram_datafromram;
@@ -2124,8 +2130,8 @@ vgc vgc(
 
 
 
-// Floating bus: reads from non-existent RAM banks return the bank number
-wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef : 8'h80;
+// Floating bus: reads from non-existent RAM banks return the bank number.
+wire [7:0] floating_bus = (bank_norm >= RAMSIZE && bank_norm < 8'hE0) ? bank_norm : 8'h80;
 
 wire [7:0] din =
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
@@ -2212,6 +2218,120 @@ wire [7:0] din =
     if (cpu_we_n && cpu_din == 8'h80 && cpu_addr[15:8] == 8'hC0) begin
       $display("ALERT_DEFAULT_READ: CPU received default 0x80 from addr=%04X bank=%02X IO=%b din=%02X io_dout=%02X",
                cpu_addr, bank, IO, din, io_dout);
+    end
+  end
+`endif
+
+  // ----------------------------------------------------------------------------
+  // SIMULATION-ONLY SYSDEATH ARGUMENT TRACE
+  // - When the ROM enters FE:B03C (SysDeathMgr), capture the stack arguments:
+  //     Ptr (long) at S+7..S+10 and ErrCode (word) at S+11..S+12.
+  // - Prints the actual error code + message pointer that triggered the crash.
+  // ----------------------------------------------------------------------------
+`ifdef SIMULATION
+  reg        sysdeath_active;
+  reg [15:0] sysdeath_sp_base;
+  reg [7:0]  sysdeath_ptr_b7;
+  reg [7:0]  sysdeath_ptr_b8;
+  reg [7:0]  sysdeath_ptr_b9;
+  reg [7:0]  sysdeath_ptr_b10;
+  reg [7:0]  sysdeath_err_b11;
+  reg [7:0]  sysdeath_err_b12;
+  reg        sysdeath_have_b7;
+  reg        sysdeath_have_b8;
+  reg        sysdeath_have_b9;
+  reg        sysdeath_have_b10;
+  reg        sysdeath_have_b11;
+  reg        sysdeath_have_b12;
+
+  reg        sysdeath_entry_latched;
+  reg        sysdeath_msg_active;
+  reg [7:0]  sysdeath_msg_bank;
+  reg [15:0] sysdeath_msg_addr;
+  reg [7:0]  sysdeath_msg_buf [0:127];
+  reg [7:0]  sysdeath_msg_len;
+
+  wire sysdeath_all_captured =
+    sysdeath_have_b7  && sysdeath_have_b8  &&
+    sysdeath_have_b9  && sysdeath_have_b10 &&
+    sysdeath_have_b11 && sysdeath_have_b12;
+
+  always @(posedge CLK_14M) begin
+    // Detect entry to SysDeathMgr (ROM: FE:B03C)
+    if (cpu_vpa && cpu_addr == 24'hFEB03C && !sysdeath_entry_latched) begin
+      sysdeath_entry_latched <= 1'b1;
+      sysdeath_active   <= 1'b1;
+      sysdeath_sp_base  <= 16'h0000;
+      sysdeath_ptr_b7   <= 8'h00;
+      sysdeath_ptr_b8   <= 8'h00;
+      sysdeath_ptr_b9   <= 8'h00;
+      sysdeath_ptr_b10  <= 8'h00;
+      sysdeath_err_b11  <= 8'h00;
+      sysdeath_err_b12  <= 8'h00;
+      sysdeath_have_b7  <= 1'b0;
+      sysdeath_have_b8  <= 1'b0;
+      sysdeath_have_b9  <= 1'b0;
+      sysdeath_have_b10 <= 1'b0;
+      sysdeath_have_b11 <= 1'b0;
+      sysdeath_have_b12 <= 1'b0;
+      sysdeath_msg_active <= 1'b0;
+      sysdeath_msg_bank <= 8'h00;
+      sysdeath_msg_addr <= 16'h0000;
+      sysdeath_msg_len <= 8'd0;
+      $display("SYSDEATH: Enter SysDeathMgr at FE:B03C (capturing stack args...)");
+    end
+    if (!(cpu_vpa && cpu_addr == 24'hFEB03C)) begin
+      sysdeath_entry_latched <= 1'b0;
+    end
+
+    // Capture stack bytes as the CPU reads them (bank $00, non-I/O).
+    if (sysdeath_active && cpu_vda && cpu_we_n && !IO && bank_bef == 8'h00) begin
+      // First observed read becomes Ptr[0] @ S+7; infer S base from the effective address.
+      if (!sysdeath_have_b7) begin
+        sysdeath_ptr_b7  <= cpu_din;
+        sysdeath_have_b7 <= 1'b1;
+        sysdeath_sp_base <= addr_bef - 16'd7;
+        $display("SYSDEATH: Ptr[0] @00:%04h = %02h (infer S=%04h)", addr_bef, cpu_din, addr_bef - 16'd7);
+      end else begin
+        if (!sysdeath_have_b8  && addr_bef == (sysdeath_sp_base + 16'd8))  begin sysdeath_ptr_b8  <= cpu_din; sysdeath_have_b8  <= 1'b1; $display("SYSDEATH: Ptr[1] @00:%04h = %02h", addr_bef, cpu_din); end
+        if (!sysdeath_have_b9  && addr_bef == (sysdeath_sp_base + 16'd9))  begin sysdeath_ptr_b9  <= cpu_din; sysdeath_have_b9  <= 1'b1; $display("SYSDEATH: Ptr[2] @00:%04h = %02h", addr_bef, cpu_din); end
+        if (!sysdeath_have_b10 && addr_bef == (sysdeath_sp_base + 16'd10)) begin sysdeath_ptr_b10 <= cpu_din; sysdeath_have_b10 <= 1'b1; $display("SYSDEATH: Ptr[3] @00:%04h = %02h", addr_bef, cpu_din); end
+        if (!sysdeath_have_b11 && addr_bef == (sysdeath_sp_base + 16'd11)) begin sysdeath_err_b11 <= cpu_din; sysdeath_have_b11 <= 1'b1; $display("SYSDEATH: Err[0] @00:%04h = %02h", addr_bef, cpu_din); end
+        if (!sysdeath_have_b12 && addr_bef == (sysdeath_sp_base + 16'd12)) begin sysdeath_err_b12 <= cpu_din; sysdeath_have_b12 <= 1'b1; $display("SYSDEATH: Err[1] @00:%04h = %02h", addr_bef, cpu_din); end
+      end
+    end
+
+    // Once we have everything, print a single summary and stop capturing.
+    if (sysdeath_active && sysdeath_all_captured) begin
+      $display("SYSDEATH: Captured args: ErrCode(le)=%02h%02h ErrCode(be)=%02h%02h Ptr32=%02h%02h%02h%02h Ptr24=%02h:%02h%02h (S=%04h)",
+               sysdeath_err_b12, sysdeath_err_b11,
+               sysdeath_err_b11, sysdeath_err_b12,
+               sysdeath_ptr_b10, sysdeath_ptr_b9, sysdeath_ptr_b8, sysdeath_ptr_b7,
+               sysdeath_ptr_b9, sysdeath_ptr_b8, sysdeath_ptr_b7,
+               sysdeath_sp_base);
+      // Interpret the pointer as a 24-bit address: bank=Ptr[2], addr=Ptr[1:0].
+      sysdeath_msg_bank <= sysdeath_ptr_b9;
+      sysdeath_msg_addr <= {sysdeath_ptr_b8, sysdeath_ptr_b7};
+      sysdeath_msg_len <= 8'd0;
+      sysdeath_msg_active <= 1'b1;
+      sysdeath_active <= 1'b0;
+    end
+
+    // Sniff the message string as SysDeath code reads it from memory.
+    if (sysdeath_msg_active && cpu_vda && cpu_we_n && !IO &&
+        bank_bef == sysdeath_msg_bank &&
+        addr_bef == (sysdeath_msg_addr + sysdeath_msg_len) &&
+        sysdeath_msg_len < 8'd127) begin
+      sysdeath_msg_buf[sysdeath_msg_len] <= cpu_din;
+      $display("SYSDEATH_MSG: [%0d] @%02h:%04h = %02h (%c)",
+               sysdeath_msg_len, bank_bef, addr_bef, cpu_din,
+               (cpu_din >= 8'h20 && cpu_din <= 8'h7e) ? cpu_din : 8'h2e);
+      if (cpu_din == 8'h00) begin
+        $display("SYSDEATH_MSG: NUL terminator at len=%0d", sysdeath_msg_len);
+        sysdeath_msg_active <= 1'b0;
+      end else begin
+        sysdeath_msg_len <= sysdeath_msg_len + 8'd1;
+      end
     end
   end
 `endif

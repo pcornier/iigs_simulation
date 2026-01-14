@@ -64,7 +64,27 @@ module iwm_woz (
 
     // Drive type from DISK35 register
     wire       is_35_inch = DISK35[6];
-    wire       diskreg_sel = DISK35[7];
+
+    // DISKREG bit7 (HDSEL) is only meaningful while 35SEL is asserted.
+    // The IIgs ROM frequently clears DISKREG (including bit7) at command boundaries; in MAME,
+    // the head-select line is only updated when 35SEL is active.
+    //
+    // IMPORTANT timing detail:
+    // - The ROM uses SDCLINES to update CA0/CA1/CA2 and then writes $C031 (HDSEL/SEL) immediately
+    //   before pulsing LSTRB. If we add an extra registered stage here, the SEL bit can lag and
+    //   the Sony command nibble seen by `flux_drive` can be wrong.
+    // - Therefore, use DISK35[7] directly when 35SEL is asserted (no extra cycle), but retain a
+    //   latched copy for the periods when 35SEL is deasserted so brief deselect windows don't
+    //   force HDSEL low.
+    reg        diskreg_sel_latched;
+    always @(posedge CLK_14M or posedge RESET) begin
+        if (RESET) begin
+            diskreg_sel_latched <= 1'b0;
+        end else if (is_35_inch) begin
+            diskreg_sel_latched <= DISK35[7];
+        end
+    end
+    wire       diskreg_sel = is_35_inch ? DISK35[7] : diskreg_sel_latched;
 
     // DISK35[6] is the IIgs 35SEL line (3.5" vs 5.25" select). The ROM routinely clears it
     // (see ad35driver_mainline.asm: STZ $C031) when returning to the caller, which in MAME
@@ -74,36 +94,72 @@ module iwm_woz (
     // Soft Switch Handling
     //=========================================================================
 
-    // Access strobes (active for entire CPU bus cycle)
+    // Access strobes (IWM-selected CPU cycle)
     wire cpu_rd = DEVICE_SELECT && WR_CYCLE;
     wire cpu_wr = DEVICE_SELECT && !WR_CYCLE;
     wire cpu_accessing = cpu_rd || cpu_wr;
 
-    // Edge detection for soft switch updates - process once per CPU access
-    reg  cpu_access_latched;
-    wire cpu_access_edge = cpu_accessing && PH2 && !cpu_access_latched;
+    // IWM bus timing:
+    // The CPU address is stable during PH2=0 and advances on the PH2 pulse. Sample the bus on
+    // the PH2 pulse (seeing the prior stable address/data) rather than using PH2+1.
+    wire bus_cen = PH2;
+
+    //=========================================================================
+    // CPU bus view for IWM (must be same-cycle accurate)
+    //=========================================================================
+    // A separate latch updated with nonblocking assignments causes the soft-switch decode
+    // (in the other posedge block) to see the *previous* cycle’s bus_addr. That matches the
+    // observed failure: during an E1:C0EE access, the state update behaved like C0ED.
+    //
+    // Use the raw bus signals during the PH2 pulse and rely on iwm_flux’s own immediate
+    // Q6/Q7 decoding for correct same-cycle behavior.
+    wire [3:0] bus_addr = A[3:0];
+    wire       bus_rd   = bus_cen && cpu_rd;
+    wire       bus_wr   = bus_cen && cpu_wr;
+    wire [7:0] bus_din  = D_IN;
+
+    wire cpu_access_edge = bus_cen && cpu_accessing;
 
     // Immediate Q6/Q7 values for mode register write detection
     // When accessing the Q6/Q7 switch, use the NEW value from A[0], not the latched value
     // This is critical: writing to $C0EF (Q7=1) must trigger mode write in the same cycle
-    wire access_q6 = (A[3:1] == 3'b110);
-    wire access_q7 = (A[3:1] == 3'b111);
-    wire immediate_q6 = access_q6 ? A[0] : q6;
-    wire immediate_q7 = access_q7 ? A[0] : q7;
+    wire access_q6 = (bus_addr[3:1] == 3'b110);
+    wire access_q7 = (bus_addr[3:1] == 3'b111);
+    wire immediate_q6 = access_q6 ? bus_addr[0] : q6;
+    wire immediate_q7 = access_q7 ? bus_addr[0] : q7;
+
+    //=========================================================================
+    // Mode Register Write Detection (ROM3 verify loop at FF:4720)
+    //=========================================================================
+    // Detect mode register writes using raw bus signals. The ROM writes the mode value to
+    // $C0EF (Q7=1, odd) while Q6 is already set, then reads back via $C0EE.
+    wire write_mode_q6 = (A[3:1] == 3'b110) ? A[0] : q6;
+    wire write_mode_q7 = (A[3:1] == 3'b111) ? A[0] : q7;
+    wire is_mode_write_access = cpu_access_edge && cpu_wr && !iwm_active &&
+                                (A[3:0] == 4'hF) && write_mode_q6 && write_mode_q7;
+
+    //=========================================================================
+    // IWM Active State (Motor Delay Emulation)
+    //=========================================================================
+
+    // MAME delays motor-off by ~1 second unless mode bit2 requests immediate off.
+    localparam [23:0] IWM_DELAY_CYCLES = 24'd14000000; // ~1 second at 14MHz
+    reg        iwm_active;
+    reg [23:0] iwm_delay_cnt;
 
     // Immediate motor value for status register
     // MAME behavior: When reading $C0E9 (motor on), the status immediately reflects
     // motor=1. This is critical for the boot ROM which checks status after motor on.
-    wire access_motor = (A[3:1] == 3'b100);  // $C0E8/$C0E9
-    wire immediate_motor = cpu_accessing && access_motor ? A[0] : drive_on;
+    wire access_motor = (bus_addr[3:1] == 3'b100);  // $C0E8/$C0E9
+    wire immediate_motor = cpu_access_edge && access_motor ? bus_addr[0] : drive_on;
 
     // Immediate mode value for status register
-    // MAME behavior: When writing mode register via $C0EF (Q6=1, Q7=1, motor off, odd address),
+    // MAME behavior: When writing mode register via $C0EF (Q6=1, Q7=1, IWM inactive, odd address),
     // the status register immediately reflects the new mode value. This is critical because
     // the ROM writes mode then immediately reads status, expecting to see the new mode bits.
-    // The mode write condition is: cpu_wr && !drive_on && immediate_q7 && immediate_q6 && A[0]
-    wire mode_write_active = cpu_wr && !drive_on && immediate_q7 && immediate_q6 && A[0];
-    wire [7:0] immediate_mode = mode_write_active ? {3'b000, D_IN[4:0]} : mode_reg;
+    // The mode write condition is: cpu_wr && !m_active && immediate_q7 && immediate_q6 && A[0]
+    wire mode_write_active = bus_wr && !iwm_active && immediate_q7 && immediate_q6 && bus_addr[0];
+    wire [7:0] immediate_mode = mode_write_active ? {3'b000, bus_din[4:0]} : mode_reg;
 
 `ifdef SIMULATION
     // Debug: track immediate_mode during status reads
@@ -128,16 +184,16 @@ module iwm_woz (
     // When the ROM accesses a phase register (e.g., bit $C0E3), the sense value
     // should use the NEW phase value immediately, not wait for the next cycle.
     // This is critical for the boot ROM's drive detection logic.
-    wire access_phase0 = (A[3:1] == 3'b000);
-    wire access_phase1 = (A[3:1] == 3'b001);
-    wire access_phase2 = (A[3:1] == 3'b010);
-    wire access_phase3 = (A[3:1] == 3'b011);
-    // Note: cpu_accessing is defined above with edge detection
+    wire access_phase0 = (bus_addr[3:1] == 3'b000);
+    wire access_phase1 = (bus_addr[3:1] == 3'b001);
+    wire access_phase2 = (bus_addr[3:1] == 3'b010);
+    wire access_phase3 = (bus_addr[3:1] == 3'b011);
+    // Note: use `cpu_access_edge` so we only treat bus_addr[0] as valid on PH2+1.
     wire [3:0] immediate_phases = {
-        (cpu_accessing && access_phase3) ? A[0] : motor_phase[3],
-        (cpu_accessing && access_phase2) ? A[0] : motor_phase[2],
-        (cpu_accessing && access_phase1) ? A[0] : motor_phase[1],
-        (cpu_accessing && access_phase0) ? A[0] : motor_phase[0]
+        (cpu_access_edge && access_phase3) ? bus_addr[0] : motor_phase[3],
+        (cpu_access_edge && access_phase2) ? bus_addr[0] : motor_phase[2],
+        (cpu_access_edge && access_phase1) ? bus_addr[0] : motor_phase[1],
+        (cpu_access_edge && access_phase0) ? bus_addr[0] : motor_phase[0]
     };
 
     // Latched sense register - MAME behavior
@@ -147,15 +203,18 @@ module iwm_woz (
     // that persists even after phases are cleared.
     reg [2:0] latched_sense_reg;
     wire [3:0] latched_immediate_phases = {
-        (cpu_accessing && access_phase3) ? A[0] : motor_phase[3],
-        (cpu_accessing && access_phase2) ? A[0] : motor_phase[2],
-        (cpu_accessing && access_phase1) ? A[0] : motor_phase[1],
-        (cpu_accessing && access_phase0) ? A[0] : motor_phase[0]
+        (cpu_access_edge && access_phase3) ? bus_addr[0] : motor_phase[3],
+        (cpu_access_edge && access_phase2) ? bus_addr[0] : motor_phase[2],
+        (cpu_access_edge && access_phase1) ? bus_addr[0] : motor_phase[1],
+        (cpu_access_edge && access_phase0) ? bus_addr[0] : motor_phase[0]
     };
-    wire [2:0] immediate_latched_sense_reg = (cpu_accessing && A[3:1] < 3'b100)
+    wire [2:0] immediate_latched_sense_reg = (cpu_access_edge && bus_addr[3:1] < 3'b100)
                                            ? latched_immediate_phases[2:0]
                                            : latched_sense_reg;
 
+    //=========================================================================
+    // IWM Active State Machine
+    //=========================================================================
     always @(posedge CLK_14M or posedge RESET) begin
         if (RESET) begin
             motor_phase <= 4'b0000;
@@ -165,39 +224,44 @@ module iwm_woz (
             q7 <= 1'b0;
             mode_reg <= 8'h00;
             latched_sense_reg <= 3'b000;
-            cpu_access_latched <= 1'b0;
+            iwm_active <= 1'b0;
+            iwm_delay_cnt <= 24'd0;
         end else begin
-            // Edge detection: clear latch when PH2 goes low (one action per CPU bus cycle)
-            // This matches soft-switch semantics: a single update per PH2-high access, not per 14MHz tick.
-            if (!PH2 || !cpu_accessing) begin
-                cpu_access_latched <= 1'b0;
+            // Robust mode register capture:
+            // The IIgs ROM expects a write to $C0EF (odd, Q7=1) while the IWM is idle to latch the
+            // mode bits, then immediately reads back via $C0EE. Capture the mode write when the
+            // sampled bus indicates a write to offset $F. Repeated captures are harmless.
+            if (cpu_access_edge && bus_wr && !iwm_active && (bus_addr == 4'hF)) begin
+                mode_reg <= {3'b000, bus_din[4:0]};
+`ifdef SIMULATION
+                $display("IWM_WOZ: MODE_REG <= %02h (robust wr, D_IN=%02h A=%01h)", {3'b000, bus_din[4:0]}, bus_din, bus_addr);
+`endif
             end
 
-            // Process soft switch updates once per CPU access
+            // Process soft switch updates once per IWM bus cycle (PH2 pulse).
             if (cpu_access_edge) begin
-                cpu_access_latched <= 1'b1;
                 // IWM soft switches are "touch" switches: any access (read or write) updates state.
                 // MAME implements this by routing both reads and writes through the same control() path.
-                case (A[3:1])
-                    3'b000: motor_phase[0] <= A[0];  // $C0E0/$C0E1: Phase 0
-                    3'b001: motor_phase[1] <= A[0];  // $C0E2/$C0E3: Phase 1
-                    3'b010: motor_phase[2] <= A[0];  // $C0E4/$C0E5: Phase 2
-                    3'b011: motor_phase[3] <= A[0];  // $C0E6/$C0E7: Phase 3
-                    3'b100: drive_on      <= A[0];  // $C0E8/$C0E9: Motor
+                case (bus_addr[3:1])
+                    3'b000: motor_phase[0] <= bus_addr[0];  // $C0E0/$C0E1: Phase 0
+                    3'b001: motor_phase[1] <= bus_addr[0];  // $C0E2/$C0E3: Phase 1
+                    3'b010: motor_phase[2] <= bus_addr[0];  // $C0E4/$C0E5: Phase 2
+                    3'b011: motor_phase[3] <= bus_addr[0];  // $C0E6/$C0E7: Phase 3
+                    3'b100: drive_on      <= bus_addr[0];  // $C0E8/$C0E9: Motor
                     3'b101: begin
-                        drive_sel     <= A[0];  // $C0EA/$C0EB: Drive select
+                        drive_sel     <= bus_addr[0];  // $C0EA/$C0EB: Drive select
 `ifdef SIMULATION
-                        $display("IWM_WOZ: DRIVE_SEL %0d -> %0d (A=%04h is_35=%0d)", drive_sel, A[0], A, is_35_inch);
+                        $display("IWM_WOZ: DRIVE_SEL %0d -> %0d (A=%04h is_35=%0d)", drive_sel, bus_addr[0], A, is_35_inch);
 `endif
                     end
-                    3'b110: q6            <= A[0];  // $C0EC/$C0ED: Q6
-                    3'b111: q7            <= A[0];  // $C0EE/$C0EF: Q7
+                    3'b110: q6            <= bus_addr[0];  // $C0EC/$C0ED: Q6
+                    3'b111: q7            <= bus_addr[0];  // $C0EE/$C0EF: Q7
                 endcase
 
             // MAME behavior: Latch sense register index on EVERY phase access (SET or CLEAR)
             // MAME's control() always calls update_phases() which calls seek_phase_w() for all
             // phase register accesses. The m_reg value is updated to (phases & 7) | ss.
-            if (A[3:1] < 3'b100) begin
+            if (bus_addr[3:1] < 3'b100) begin
                 // Writing to phase 0-3 ($C0E0-$C0E7)
                 latched_sense_reg <= latched_immediate_phases[2:0];
 `ifdef SIMULATION
@@ -214,14 +278,11 @@ module iwm_woz (
             end
 `endif
 
-            // Mode register write: WR + motor off + Q7=1 + Q6=1 + odd address
-            // Use IMMEDIATE Q6/Q7 values (what they will become after this access)
-            // This is critical: the ROM sets Q6=1 first, then writes to $C0EF (Q7=1) with mode value
-            if (cpu_wr && !drive_on && immediate_q7 && immediate_q6 && A[0]) begin
+            // Mode register write: see `is_mode_write_access` above.
+            if (is_mode_write_access) begin
                 mode_reg <= {3'b000, D_IN[4:0]};
 `ifdef SIMULATION
-                $display("IWM_WOZ: MODE_REG <= %02h (fast=%0d D_IN=%02h q6=%0d q7=%0d imm_q6=%0d imm_q7=%0d)",
-                         {3'b000, D_IN[4:0]}, D_IN[3], D_IN, q6, q7, immediate_q6, immediate_q7);
+                $display("IWM_WOZ: MODE_REG <= %02h (D_IN=%02h q6=%0d q7=%0d)", {3'b000, D_IN[4:0]}, D_IN, write_mode_q6, write_mode_q7);
 `endif
             end
 
@@ -235,6 +296,44 @@ module iwm_woz (
             end
 `endif
             end  // end of cpu_access_edge block
+
+            // IWM "active" timing (MAME: m_active MODE_ACTIVE/MODE_DELAY):
+            // - Rising edge of motor enable: becomes active immediately.
+            // - Falling edge of motor enable:
+            //     - mode bit2 set  -> immediate off (MODE_IDLE)
+            //     - mode bit2 clear -> delayed off (~1s, MODE_DELAY)
+            //
+            // Critical: Do NOT restart the delayed-off timer on repeated "motor off" accesses
+            // while already off; MAME only starts the 1s timer when transitioning from ACTIVE->DELAY.
+            if (cpu_access_edge && access_motor) begin
+                // drive_on will be updated to A[0] by the switch case above (nonblocking).
+                // Use the *previous* drive_on value to detect transitions.
+                if (bus_addr[0] && !drive_on) begin
+                    // Motor command OFF -> ON
+                    iwm_active <= 1'b1;
+                    iwm_delay_cnt <= IWM_DELAY_CYCLES;
+                end else if (!bus_addr[0] && drive_on) begin
+                    // Motor command ON -> OFF
+                    if (immediate_mode[2]) begin
+                        iwm_active <= 1'b0;
+                        iwm_delay_cnt <= 24'd0;
+                    end else begin
+                        iwm_active <= 1'b1;
+                        iwm_delay_cnt <= IWM_DELAY_CYCLES;
+                    end
+                end
+            end else if (drive_on) begin
+                // While motor is commanded on, stay active.
+                iwm_active <= 1'b1;
+                iwm_delay_cnt <= IWM_DELAY_CYCLES;
+            end else if (iwm_active) begin
+                // Motor commanded off: count down delayed-off, then drop to idle.
+                if (iwm_delay_cnt != 24'd0) begin
+                    iwm_delay_cnt <= iwm_delay_cnt - 1'd1;
+                end else begin
+                    iwm_active <= 1'b0;
+                end
+            end
         end  // end of else (not reset)
     end  // end of always
 
@@ -581,7 +680,7 @@ module iwm_woz (
     // (Q7=1,Q6=0) using `ASL $C08C,X` polling. Forcing Q7 low there breaks the
     // handshake loop and the ROM will hang in `smartdrvr.asm` at FF:56CD.
     wire smartport_mode = (!immediate_mode[3]) && immediate_mode[1];
-    wire force_q7_data_read = cpu_rd && (A[3:0] == 4'hC) &&
+    wire force_q7_data_read = bus_rd && (bus_addr == 4'hC) &&
                               selected_disk_present &&
                               drive_on &&
                               !smartport_mode;
@@ -591,11 +690,13 @@ module iwm_woz (
         .CLK_14M(CLK_14M),
         .CLK_7M_EN(CLK_7M_EN),  // 7M clock enable for IWM timing (matches real hardware)
         .RESET(RESET),
-        .CEN(PH2),              // Clock enable (phi2) for CPU bus timing
-        .ADDR(A[3:0]),
-        .RD(cpu_rd),
-        .WR(cpu_wr),
-        .DATA_IN(D_IN),
+        // In this sim architecture, IWM bus address/control are valid on PH2+1.
+        // Drive iwm_flux's access tracking from the same qualified enable.
+        .CEN(bus_cen),
+        .ADDR(bus_addr),
+        .RD(bus_rd),
+        .WR(bus_wr),
+        .DATA_IN(bus_din),
         .DATA_OUT(iwm_data_out),
 
         // Soft switch state from this module (SINGLE SOURCE OF TRUTH)
@@ -610,7 +711,8 @@ module iwm_woz (
         // MOTOR_ACTIVE drives the IWM status bit5 (0x20). The IIgs ROM's `SETIWMMODE`
         // polls this bit after touching `DeSelect` ($C0E8) and expects it to drop
         // immediately when mode bit2 is set (ROM uses mode=0x0F).
-        .MOTOR_ACTIVE(immediate_motor),
+        // MAME-style active/delay behavior (not just raw motor soft switch).
+        .MOTOR_ACTIVE(iwm_active),
         .MOTOR_SPINNING(any_disk_spinning),  // Physical spinning (for flux decoding)
         .DISK_READY(any_disk_ready),
         .DISK_MOUNTED(disk_mounted),
@@ -630,17 +732,21 @@ module iwm_woz (
     // Motor Status Output
     //=========================================================================
 
-    assign FLOPPY_MOTOR_ON = any_disk_spinning;
+    // Only slow down for 5.25" drives (motor_spinning tracks 5.25" state/inertia).
+    // 3.5" drives (handled by Sony logic) should NOT slow the system to 1MHz.
+    assign FLOPPY_MOTOR_ON = motor_spinning;
 
 `ifdef SIMULATION
     // Debug: Monitor state changes
     reg [3:0] prev_phase;
     reg       prev_drive_on;
     reg       prev_motor_spinning;
+    reg       prev_iwm_active;
     reg [31:0] debug_cycle;
     always @(posedge CLK_14M) begin
         if (RESET) begin
             debug_cycle <= 0;
+            prev_iwm_active <= 1'b0;
         end else begin
             debug_cycle <= debug_cycle + 1;
         end
@@ -652,6 +758,10 @@ module iwm_woz (
             $display("IWM_WOZ: drive_on %0d -> %0d (is_35=%0d ready=%04b motor_spinning=%0d)",
                      prev_drive_on, drive_on, is_35_inch, DISK_READY, motor_spinning);
         end
+        if (iwm_active != prev_iwm_active) begin
+            $display("IWM_WOZ: iwm_active %0d -> %0d (drive_on=%0d mode=%02h delay_cnt=%0d)",
+                     prev_iwm_active, iwm_active, drive_on, mode_reg, iwm_delay_cnt);
+        end
         if (motor_spinning != prev_motor_spinning) begin
             $display("IWM_WOZ: motor_spinning %0d -> %0d (drive_on=%0d ready=%04b is_35=%0d)",
                      prev_motor_spinning, motor_spinning, drive_on, DISK_READY, is_35_inch);
@@ -659,6 +769,7 @@ module iwm_woz (
         prev_phase <= motor_phase;
         prev_drive_on <= drive_on;
         prev_motor_spinning <= motor_spinning;
+        prev_iwm_active <= iwm_active;
 
         // Periodic status when motor is on
         if (motor_spinning && (debug_cycle[19:0] == 20'h80000)) begin
