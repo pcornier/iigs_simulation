@@ -178,9 +178,38 @@ wire [12:0] WOZ_TRACK1_BIT_ADDR;  // Byte address in track bit buffer
 wire [7:0]  WOZ_TRACK1_BIT_DATA;  // Byte from track bit buffer
 wire [31:0] WOZ_TRACK1_BIT_COUNT; // Total bits in track
 
-// Connect WOZ bit data from C++ inputs
-assign WOZ_TRACK3_BIT_DATA = woz3_bit_data;
-assign WOZ_TRACK3_BIT_COUNT = woz3_bit_count;
+// Connect WOZ bit data - select between C++ and Verilog sources for 3.5"
+// Define USE_CPP_WOZ to use C++ data path, comment out to use Verilog controller
+//
+// NOTE: The C++ path (via BeforeEval) already has 1-cycle latency inherently
+// because BeforeEval runs before top->eval(), so it reads the address from
+// the PREVIOUS tick. This naturally matches BRAM's 1-cycle latency.
+// DO NOT add an extra delay register here!
+//
+// Enable C++ path for comparison (comment out to use Verilog path)
+`define USE_CPP_WOZ  // Enable C++ path - TESTING VERILOG PATH
+
+// Debug: log data flow when address changes and data is loaded
+reg [31:0] flux_data_log_count = 0;
+reg [13:0] flux_data_last_addr = 0;
+always @(posedge CLK_14M) begin
+    if (flux_data_log_count < 100 && woz3_bit_count > 0 && WOZ_TRACK3_BIT_ADDR != flux_data_last_addr) begin
+        flux_data_last_addr <= WOZ_TRACK3_BIT_ADDR;
+        $display("FLUX_DATA: addr=%04X cpp=%02X verilog=%02X MATCH=%0d count_cpp=%0d count_v=%0d",
+                 WOZ_TRACK3_BIT_ADDR, woz3_bit_data, woz_ctrl_bit_data,
+                 (woz3_bit_data == woz_ctrl_bit_data) ? 1 : 0,
+                 woz3_bit_count, woz_ctrl_bit_count);
+        flux_data_log_count <= flux_data_log_count + 1;
+    end
+end
+
+`ifdef USE_CPP_WOZ
+assign WOZ_TRACK3_BIT_DATA = woz3_bit_data;          // C++ (inherent 1-cycle latency)
+assign WOZ_TRACK3_BIT_COUNT = woz3_bit_count;        // bit_count is immediate
+`else
+assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;   // Verilog woz_floppy_controller
+assign WOZ_TRACK3_BIT_COUNT = woz_ctrl_bit_count; // Verilog woz_floppy_controller
+`endif
 assign WOZ_TRACK1_BIT_DATA = woz1_bit_data;
 assign WOZ_TRACK1_BIT_COUNT = woz1_bit_count;
 
@@ -377,7 +406,7 @@ reg hdd_active_unit = 1'b0;
 assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 0
 assign sd_lba[3] = {16'b0, hdd_sector};  // Unit 1
 assign sd_lba[4] = 32'b0;                // Unused
-assign sd_lba[5] = 32'b0;                // Unused
+// sd_lba[5] driven by woz_floppy_controller
 
 // Route sd_rd/sd_wr to the correct bit based on active unit
 reg  sd_rd_hd;
@@ -385,11 +414,11 @@ reg  sd_wr_hd;
 assign sd_rd[1] = sd_rd_hd & (hdd_active_unit == 1'b0);
 assign sd_rd[3] = sd_rd_hd & (hdd_active_unit == 1'b1);
 // sd_rd[4] driven by floppy35_track_1
-assign sd_rd[5] = 1'b0;  // Unused
+// sd_rd[5] driven by woz_floppy_controller
 assign sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b0);
 assign sd_wr[3] = sd_wr_hd & (hdd_active_unit == 1'b1);
 // sd_wr[4] driven by floppy35_track_1
-assign sd_wr[5] = 1'b0;  // Unused
+// sd_wr[5] driven by woz_floppy_controller
 
 // Select the ack for the active unit
 wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[1] : sd_ack[3];
@@ -399,7 +428,7 @@ wire [7:0] hdd_ram_do;
 assign sd_buff_din[1] = hdd_ram_do;  // Unit 0
 assign sd_buff_din[3] = hdd_ram_do;  // Unit 1
 // sd_buff_din[4] driven by floppy35_track_1
-assign sd_buff_din[5] = 8'h00;       // Unused
+// sd_buff_din[5] driven by woz_floppy_controller
 
 `ifdef SIMULATION
 // Debug counters to measure how long the CPU is stalled by HDD
@@ -508,7 +537,7 @@ reg        img_mounted0_d, img_mounted2_d, img_mounted4_d;
 wire [3:0] DISK_READY;
 assign DISK_READY[0] = woz1_ready | DISK_READY_internal[0];  // 5.25" drive 1
 assign DISK_READY[1] = DISK_READY_internal[1];               // 5.25" drive 2
-assign DISK_READY[2] = woz3_ready | DISK_READY_internal[2];  // 3.5" drive 1
+assign DISK_READY[2] = woz_ctrl_disk_mounted | DISK_READY_internal[2];  // 3.5" drive 1 (Verilog controller - use disk_mounted not ready)
 assign DISK_READY[3] = DISK_READY_internal[3];               // 3.5" drive 2
 
 
@@ -633,5 +662,168 @@ floppy35_track floppy35_track_1
    .sd_ack       (sd_ack[4])
 );
 
+//=============================================================================
+// WOZ Floppy Controller (Verilog implementation for validation)
+// This controller parses raw WOZ files via SD block device and provides
+// bitstream data. Used to validate against the C++ implementation.
+//=============================================================================
+
+// Verilog WOZ controller outputs (for comparison with C++ implementation)
+wire        woz_ctrl_ready;
+wire        woz_ctrl_disk_mounted;
+wire        woz_ctrl_busy;
+wire [31:0] woz_ctrl_bit_count;
+wire [7:0]  woz_ctrl_bit_data;
+
+// Mount detection for WOZ controller (index 5)
+reg         img_mounted5_d = 0;
+reg         woz_ctrl_mount = 0;
+reg         woz_ctrl_change = 0;
+
+always @(posedge clk_sys) begin
+    img_mounted5_d <= img_mounted[5];
+    // Detect rising edge of img_mounted[5]
+    if (~img_mounted5_d & img_mounted[5]) begin
+        woz_ctrl_mount  <= (img_size != 0);
+        woz_ctrl_change <= ~woz_ctrl_change;
+`ifdef SIMULATION
+        $display("WOZ_CTRL: Mount detected for index 5 (size=%0d)", img_size);
+`endif
+    end
+end
+
+woz_floppy_controller #(
+    .IS_35_INCH(1)
+) woz_ctrl (
+    .clk(clk_sys),
+    .reset(reset),
+
+    // SD Block Device Interface (index 5)
+    .sd_lba(sd_lba[5]),
+    .sd_rd(sd_rd[5]),
+    .sd_wr(sd_wr[5]),
+    .sd_ack(sd_ack[5]),
+    .sd_buff_addr(sd_buff_addr),
+    .sd_buff_dout(sd_buff_dout),
+    .sd_buff_din(sd_buff_din[5]),
+    .sd_buff_wr(sd_buff_wr),
+
+    // Disk Status
+    .img_mounted(woz_ctrl_mount),
+    .img_readonly(img_readonly),
+    .img_size(img_size),
+
+    // Drive Interface - use same track_id as C++ path
+    .track_id(WOZ_TRACK3),
+    .ready(woz_ctrl_ready),
+    .disk_mounted(woz_ctrl_disk_mounted),
+    .busy(woz_ctrl_busy),
+    .active(FD_DISK_3),
+
+    // Bitstream Interface - use same bit_addr as C++ path
+    .bit_count(woz_ctrl_bit_count),
+    .bit_addr(WOZ_TRACK3_BIT_ADDR),
+    .bit_data(woz_ctrl_bit_data),
+    .bit_data_in(8'h00),
+    .bit_we(1'b0)
+);
+
+//=============================================================================
+// WOZ Controller Validation - Compare C++ vs Verilog outputs
+//=============================================================================
+`ifdef SIMULATION
+reg [13:0] woz_cmp_last_addr;
+reg [13:0] woz_cmp_last_addr_d;  // Delayed by 1 cycle for BRAM latency
+reg [13:0] woz_cmp_last_addr_d2; // Delayed by 2 cycles for display
+reg [31:0] woz_cmp_mismatch_count;
+reg [31:0] woz_cmp_match_count;
+reg        woz_cmp_enabled;
+reg        woz_cmp_addr_changed;   // Stage 1: address changed this cycle
+reg        woz_cmp_addr_changed_d; // Stage 2: delayed by 1 cycle (C++ data now valid)
+reg [7:0]  woz_cmp_cpp_data_d;     // C++ data captured when C++ has updated for new addr
+
+initial begin
+    woz_cmp_last_addr = 14'h3FFF;
+    woz_cmp_last_addr_d = 14'h3FFF;
+    woz_cmp_last_addr_d2 = 14'h3FFF;
+    woz_cmp_mismatch_count = 0;
+    woz_cmp_match_count = 0;
+    woz_cmp_enabled = 0;
+    woz_cmp_addr_changed = 0;
+    woz_cmp_addr_changed_d = 0;
+    woz_cmp_cpp_data_d = 8'hFF;
+end
+
+reg [7:0] woz_cmp_last_track = 8'hFF;
+reg [3:0] woz_cmp_track_stable_count = 4'd0;
+wire woz_cmp_track_stable = (woz_cmp_track_stable_count >= 4'd3);
+
+always @(posedge clk_sys) begin
+    // Enable comparison once both controllers are ready
+    if (woz3_ready && woz_ctrl_ready && woz_ctrl_disk_mounted) begin
+        woz_cmp_enabled <= 1;
+    end
+
+    // Track stability counter: count cycles since track_id last changed
+    if (WOZ_TRACK3 != woz_cmp_last_track) begin
+        woz_cmp_last_track <= WOZ_TRACK3;
+        woz_cmp_track_stable_count <= 4'd0;
+    end else if (woz_cmp_track_stable_count < 4'd15) begin
+        woz_cmp_track_stable_count <= woz_cmp_track_stable_count + 1'd1;
+    end
+
+    // Stage 1: Detect address change
+    woz_cmp_addr_changed <= 0;
+    if (woz_cmp_enabled && WOZ_TRACK3_BIT_ADDR != woz_cmp_last_addr) begin
+        woz_cmp_last_addr <= WOZ_TRACK3_BIT_ADDR;
+        woz_cmp_addr_changed <= 1;
+    end
+
+    // Stage 2: One cycle later, C++ BeforeEval has run with new address
+    // Now capture C++ data (which is correct for the new address)
+    woz_cmp_addr_changed_d <= woz_cmp_addr_changed;
+    if (woz_cmp_addr_changed) begin
+        woz_cmp_cpp_data_d <= woz3_bit_data;  // Capture C++ data (now valid for new addr)
+    end
+
+    // Delay the address for display purposes (2 cycles total)
+    woz_cmp_last_addr_d <= woz_cmp_last_addr;
+    woz_cmp_last_addr_d2 <= woz_cmp_last_addr_d;
+
+    // Stage 3: Compare on cycle after C++ data capture (when BRAM data is also valid)
+    // Skip comparison while Verilog controller is loading a track (busy)
+    // Also skip if track_id recently changed (to avoid glitches during track switches)
+    if (woz_cmp_addr_changed_d && !woz_ctrl_busy && woz_cmp_track_stable) begin
+        // Compare bit_data (now both should be for the same address)
+        if (woz_cmp_cpp_data_d != woz_ctrl_bit_data) begin
+            woz_cmp_mismatch_count <= woz_cmp_mismatch_count + 1;
+            if (woz_cmp_mismatch_count < 100) begin
+                $display("WOZ_CMP MISMATCH #%0d: track=%0d addr=%0d C++=%02X Verilog=%02X (C++ bit_count=%0d V bit_count=%0d)",
+                         woz_cmp_mismatch_count + 1, WOZ_TRACK3, woz_cmp_last_addr_d2,
+                         woz_cmp_cpp_data_d, woz_ctrl_bit_data,
+                         woz3_bit_count, woz_ctrl_bit_count);
+            end
+        end else begin
+            woz_cmp_match_count <= woz_cmp_match_count + 1;
+            // Log every 16384 matches to show progress
+            if (woz_cmp_match_count[13:0] == 14'h0000 && woz_cmp_match_count > 0) begin
+                $display("WOZ_CMP: %0d matches so far, %0d mismatches",
+                         woz_cmp_match_count, woz_cmp_mismatch_count);
+            end
+        end
+
+        // Compare bit_count
+        if (woz3_bit_count != woz_ctrl_bit_count && woz_cmp_mismatch_count < 10) begin
+            $display("WOZ_CMP BIT_COUNT MISMATCH: track=%0d C++=%0d Verilog=%0d",
+                     WOZ_TRACK3, woz3_bit_count, woz_ctrl_bit_count);
+        end
+    end
+
+    // Log ready state changes
+    if (woz_ctrl_ready && !woz_cmp_enabled) begin
+        $display("WOZ_CMP: Verilog controller ready, waiting for C++ ready signal");
+    end
+end
+`endif
 
 endmodule

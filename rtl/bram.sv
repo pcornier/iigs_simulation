@@ -19,10 +19,10 @@ module bram #(
     input   wire    [width_a-1:0]  data_b,
     output  reg     [width_a-1:0]  q_b,
 
-    input wire byteena_a,
-    input wire byteena_b,
-    input wire enable_a,
-    input wire enable_b 
+    input wire byteena_a = 1'b1,
+    input wire byteena_b = 1'b1,
+    input wire enable_a = 1'b1,
+    input wire enable_b = 1'b1
 );
 
     initial begin
@@ -46,12 +46,11 @@ always @(posedge clock_a) begin
     end
 end
  
-// Port B
+// Port B - Standard BRAM behavior with registered read (1-cycle latency)
 always @(posedge clock_b) begin
     if(wren_b) begin
         mem[address_b] <= data_b;
         q_b      <= data_b;
-        $display("writingb: %x %x",address_b,data_b);
     end else begin
         q_b      <= mem[address_b];
     end

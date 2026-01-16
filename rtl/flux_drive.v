@@ -213,7 +213,43 @@ module flux_drive (
     wire [2:0]  bit_shift = 3'd7 - effective_bit_position[2:0]; // MSB first (bit 7 = first bit)
 
     // Get current bit from BRAM data
+    // BRAM has 1-cycle read latency: address at cycle N → BRAM_DATA valid at cycle N+1
+    //
+    // The critical timing constraint: flux is generated at bit_timer == bit_cell_cycles
+    // (start of bit cell). When crossing a byte boundary, bit_position advances from 7→8
+    // at the clock edge when bit_timer==1, and the NEXT cycle has bit_timer==bit_cell_cycles.
+    //
+    // Problem: If we set BRAM_ADDR to the new byte_index at that same cycle, BRAM_DATA
+    // won't be valid until the FOLLOWING cycle - too late for the flux check!
+    //
+    // Solution: Look-ahead addressing. When we're on the last bit of a byte (bit_shift=0)
+    // AND about to advance (bit_timer==2), switch to the next byte address early.
+    // This gives BRAM one cycle to return the new data before the flux check.
+    //
+    // For bit_shift: use current bit_shift directly. At the flux check, bit_position has
+    // already advanced so bit_shift reflects the correct bit in the new byte. The look-ahead
+    // addressing ensures BRAM_DATA is the correct byte by that time.
     wire        current_bit = (BRAM_DATA >> bit_shift) & 1'b1;
+
+    // Look-ahead logic for byte boundary crossing
+    // When at bit_shift=0 (last bit of byte) and bit_timer is about to expire,
+    // we need to present the NEXT byte's address so BRAM_DATA is ready at the flux check.
+    //
+    // Timing:
+    //   bit_timer=2: Start look-ahead (present next_byte_index)
+    //   bit_timer=1: HOLD look-ahead (BRAM returns next byte data)
+    //   bit_timer=bit_cell_cycles (after advance): Flux check uses correct BRAM_DATA
+    //
+    // We must hold the look-ahead for 2 cycles (timer=2 and timer=1) because:
+    // - At timer=2: We set BRAM_ADDR to next_byte_index
+    // - At timer=1: BRAM_DATA becomes valid for next byte (but bit_position hasn't advanced yet)
+    // - At timer=28 (after advance): bit_position advanced, flux check uses BRAM_DATA
+    //
+    // If we revert at timer=1, BRAM_DATA would be wrong at the flux check!
+    wire        at_byte_end = (bit_shift == 3'd0);
+    wire        about_to_advance = (bit_timer <= 6'd2) && (bit_timer >= 6'd1);
+    wire        need_lookahead = at_byte_end && about_to_advance && motor_spinning && TRACK_LOADED;
+    wire [13:0] next_byte_index = (byte_index >= max_byte_index) ? 14'd0 : (byte_index + 14'd1);
 
     //=========================================================================
     // Output Assignments
@@ -223,14 +259,8 @@ module flux_drive (
     assign DRIVE_READY = drive_ready;           // Ready after 2 rotation spinup
     assign TRACK = head_phase[8:2];             // Quarter-track to full track
     assign BIT_POSITION = bit_position;
-    // Look-ahead for BRAM address to handle simulation/C++ update latency
-    // Use effective position + 1 to compute next byte address
-    wire [16:0] next_effective_pos = effective_bit_position + 1'd1;
-    wire        next_pos_wraps = (next_effective_pos >= track_bit_count_17) && (TRACK_BIT_COUNT > 0);
-    wire [16:0] next_bit_pos = next_pos_wraps ? (next_effective_pos - track_bit_count_17) : next_effective_pos;
-    // BRAM address uses effective positions (already bounds-checked via modulo calculation)
-    wire [13:0] unclamped_bram_addr = (bit_timer == 6'd1) ? next_bit_pos[16:3] : byte_index;
-    assign BRAM_ADDR = (unclamped_bram_addr > max_byte_index) ? max_byte_index : unclamped_bram_addr;
+    // BRAM address with look-ahead for byte boundary crossings
+    assign BRAM_ADDR = need_lookahead ? next_byte_index : byte_index;
     assign WRITE_PROTECT = DISK_WP;
 
     //=========================================================================
@@ -685,6 +715,7 @@ module flux_drive (
                     // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
                     // During spinup, the IWM shouldn't receive flux transitions
                     // This matches MAME behavior where m_data stays 0x00 during spinup
+                    // NOTE: bram_data_valid check removed - look-ahead should be sufficient
                     if (current_bit && drive_ready) begin
                         FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION

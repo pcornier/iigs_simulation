@@ -97,6 +97,9 @@ V_SRC = \
 	$(RTL)/woz_track.sv \
 	$(RTL)/apple_drive.v \
 	$(RTL)/floppy_track.sv \
+	$(RTL)/floppy35_track.sv \
+	$(RTL)/bram.sv \
+	$(RTL)/woz_floppy_controller.sv \
 	$(RTL)/iwm.v \
 	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \

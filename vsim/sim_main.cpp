@@ -2677,6 +2677,9 @@ int main(int argc, char** argv, char** env) {
             fprintf(stderr, "ERROR: Failed to mount WOZ image\n");
         } else {
             printf("WOZ image mounted successfully (flux-based floppy emulation)\n");
+            // Also mount as raw file at index 5 for Verilog woz_floppy_controller validation
+            printf("Mounting WOZ image as raw file at index 5 for Verilog controller validation\n");
+            blockdevice.MountDisk(woz_image.c_str(), 5);
         }
     }
 

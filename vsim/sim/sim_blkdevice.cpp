@@ -278,8 +278,26 @@ void SimBlockDevice::BeforeEval(int cycles)
     if ((current_disk==-1 || current_disk==i) && (bitcheck(*sd_rd,i) || bitcheck(*sd_wr,i) )) {
        // set current disk here..
        current_disk=i;
+      // Debug: show when read is blocked by ack_delay (only for WOZ raw index 5)
+      if (i == 5 && ack_delay > 0) {
+          static int blocked_count = 0;
+          static int last_lba = -1;
+          int lba = *(sd_lba[i]);
+          if (lba != last_lba) {
+              blocked_count++;
+              if (blocked_count <= 50) {
+                  printf("WOZ_RAW BLOCKED: sd_rd[5]=1 but ack_delay=%d, lba=%d current_disk=%d reading=%d writing=%d\n",
+                         ack_delay, lba, current_disk, reading, writing);
+              }
+              last_lba = lba;
+          }
+      }
       if (!ack_delay) {
         int lba = *(sd_lba[i]);
+        // Debug: show when read starts (only for WOZ raw index 5)
+        if (i == 5) {
+            printf("WOZ_RAW START: ack_delay=0, starting read for lba=%d\n", lba);
+        }
         if (bitcheck(*sd_rd,i)) {
         	reading = true;
 	}
@@ -287,12 +305,13 @@ void SimBlockDevice::BeforeEval(int cycles)
         	writing = true;
 	}
 
-        // Check if this is a WOZ drive (indices 4-7)
+        // Check if this is a WOZ drive (indices 4-7) AND has WOZ data mounted
         bool is_woz_drive = (i >= WOZ_DRIVE_35_1 && i <= WOZ_DRIVE_525_2);
+        int woz_index = i - WOZ_DRIVE_35_1;
+        bool is_woz_mounted = is_woz_drive && woz_mounted[woz_index];
 
-        if (is_woz_drive) {
+        if (is_woz_mounted) {
             // WOZ drive: no file seek needed, data is in memory
-            int woz_index = i - WOZ_DRIVE_35_1;
             int track = (lba >> 5) & 0xFF;
             int block = lba & 0x1F;
             printf("WOZ DMA: LBA=%d (track=%d block=%d) reading=%d\n",
@@ -307,6 +326,20 @@ void SimBlockDevice::BeforeEval(int cycles)
                 int sector = lba % 13;
                 printf("FLOPPY DMA: LBA=%d (track=%d sector=%d) seek=%06X reading=%d writing=%d\n",
                        lba, track, sector, (lba) * kBLKSZ + header_size[i], reading, writing);
+            }
+            // Debug for WOZ raw file reads (index 5)
+            if (i == 5) {
+                long seek_pos = (lba) * kBLKSZ + header_size[i];
+                printf("WOZ_RAW DMA: index=%d LBA=%d seek=%06lX header_size=%ld reading=%d\n",
+                       i, lba, seek_pos, header_size[i], reading);
+                // Also print first 8 bytes at seek position
+                disk[i].seekg(seek_pos);
+                printf("WOZ_RAW DATA: ");
+                for (int j = 0; j < 8; j++) {
+                    printf("%02X ", (unsigned char)disk[i].get());
+                }
+                printf("\n");
+                disk[i].seekg(seek_pos);  // Seek back for actual read
             }
         }
         bytecnt = 0;
@@ -391,17 +424,15 @@ bool SimBlockDevice::MountWOZ(const std::string& file, int woz_index) {
 	woz_current_track[woz_index] = -1;
 	woz_block_offset[woz_index] = 0;
 
-	// Map WOZ index to SD block device index
-	int sd_index = WOZ_DRIVE_35_1 + woz_index;
+	// NOTE: The C++ WOZ path provides bit data directly to the IWM via
+	// woz3_bit_data/woz3_bit_count pointers. It does NOT use the SD block
+	// interface (indices 4-7). Do NOT set mountQueue here - that would
+	// trigger floppy35_track_1 which conflicts with woz_floppy_controller.
+	// The Verilog woz_floppy_controller uses a separate raw file mount at
+	// index 5 (via MountDisk in sim_main.cpp).
 
-	// Set disk_size for the SD block interface (use a dummy size)
-	// The actual track data will be provided via WOZ protocol
-	disk_size[sd_index] = 1;  // Non-zero to indicate disk present
-	header_size[sd_index] = 0;
-	mountQueue[sd_index] = 1;
-
-	printf("WOZ: Mounted %s as WOZ drive %d (SD index %d)\n",
-	       file.c_str(), woz_index, sd_index);
+	printf("WOZ: Mounted %s as WOZ drive %d (C++ bit-level path)\n",
+	       file.c_str(), woz_index);
 	printf("WOZ: Disk type: %s, bit timing: %d ns, tracks: %d\n",
 	       woz_disk[woz_index].disk_type == WOZ_DISK_TYPE_525 ? "5.25\"" : "3.5\"",
 	       woz_disk[woz_index].bit_timing_ns,
