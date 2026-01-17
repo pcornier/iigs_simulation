@@ -55,6 +55,7 @@ module flux_drive (
     output wire [16:0] BIT_POSITION,    // Current bit position within track (for debug)
     input  wire [31:0] TRACK_BIT_COUNT, // Total bits in current track
     input  wire        TRACK_LOADED,    // Track data is available
+    input  wire        TRACK_LOAD_COMPLETE, // Pulses when track finishes loading (reset bit_position)
 
     // BRAM interface for track bits
     output wire [13:0] BRAM_ADDR,       // Byte address in track buffer
@@ -666,6 +667,17 @@ module flux_drive (
             SD_TRACK_STROBE <= 1'b0;
             rotation_complete <= 1'b0;
 
+            // Reset bit_position when track load completes (Option A fix for bit_position drift)
+            // This eliminates accumulated drift from modulo calculations with wrong/stale bit counts
+            // during track loading. The ROM doesn't expect exact angular continuity across seeks.
+            if (TRACK_LOAD_COMPLETE) begin
+                bit_position <= 17'd0;
+                bit_timer <= bit_cell_cycles;
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d)", DRIVE_ID, bit_position);
+`endif
+            end
+
             // Track motor state transitions (for potential future use)
             // NOTE: Angular offset is now applied when drive_ready becomes 1, not here.
             // This fixes a bug where the old approach set the offset at motor start,
@@ -700,10 +712,17 @@ module flux_drive (
                     side_transition_byte_count <= side_transition_byte_count + 1'd1;
                 end
             end
+
+            // Focused debug around suspected divergence position.
+            if (motor_spinning && TRACK_LOADED &&
+                (bit_position >= 17'd27470) && (bit_position <= 17'd27480)) begin
+                $display("FLUX_DRIVE_WIN pos=%0d addr=%0d data=%02h shift=%0d bit=%0d",
+                         bit_position, BRAM_ADDR, BRAM_DATA, bit_position[2:0], current_bit);
+            end
 `endif
 
-            // Only rotate when motor is spinning and track is loaded
-            if (motor_spinning && TRACK_LOADED) begin
+            // Rotate whenever motor is spinning so angular position keeps advancing
+            if (motor_spinning) begin
                 // Generate flux pulse.
                 // The WOZ bitstream encodes flux transitions as 1-bits in fixed bit cells.
                 //
@@ -716,9 +735,13 @@ module flux_drive (
                     // During spinup, the IWM shouldn't receive flux transitions
                     // This matches MAME behavior where m_data stays 0x00 during spinup
                     // NOTE: bram_data_valid check removed - look-ahead should be sufficient
-                    if (current_bit && drive_ready) begin
+                    if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
                         FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
+                        if (flux_count_debug < 50) begin
+                            $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d",
+                                     DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer);
+                        end
                         if (effective_bit_position < 100) begin
                             $display("FLUX_DRIVE[%0d]: Flux transition at bit %0d (eff=%0d, byte %04h, shift %0d)",
                                      DRIVE_ID, bit_position, effective_bit_position, byte_index, bit_shift);
@@ -744,6 +767,9 @@ module flux_drive (
                         end else begin
                             bit_position <= bit_position + 1'd1;
                         end
+                    end else begin
+                        // No track loaded yet; keep angular position advancing.
+                        bit_position <= bit_position + 1'd1;
                     end
 
                 end else begin

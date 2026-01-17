@@ -40,6 +40,7 @@ module iwm_woz (
     output [13:0]   WOZ_TRACK3_BIT_ADDR,
     input  [7:0]    WOZ_TRACK3_BIT_DATA,
     input  [31:0]   WOZ_TRACK3_BIT_COUNT,
+    input           WOZ_TRACK3_LOAD_COMPLETE,  // Pulses when track load finishes (reset bit_position)
 
     // WOZ Track bit interface for 5.25" drive 1
     output [5:0]    WOZ_TRACK1,
@@ -422,6 +423,8 @@ module iwm_woz (
     // Drive is active when the 3.5" motor is physically spinning and disk is present
     wire drive35_active = drive35_motor_spinning && DISK_READY[2];
 
+    wire drive35_track_loaded = DISK_READY[2] && (WOZ_TRACK3_BIT_COUNT > 0);
+
     flux_drive drive35 (
         .IS_35_INCH(1'b1),
         .DRIVE_ID(2'd1),
@@ -448,7 +451,8 @@ module iwm_woz (
         .TRACK(drive35_track),
         .BIT_POSITION(drive35_bit_position),
         .TRACK_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
-        .TRACK_LOADED(DISK_READY[2]),
+        .TRACK_LOADED(drive35_track_loaded),
+        .TRACK_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
         .BRAM_ADDR(drive35_bram_addr),
         .BRAM_DATA(WOZ_TRACK3_BIT_DATA),
         .SD_TRACK_REQ(),
@@ -456,27 +460,14 @@ module iwm_woz (
         .SD_TRACK_ACK(1'b0)
     );
 
-    // WOZ_TRACK3: Register the track output to synchronize with C++ data updates.
-    // The C++ BeforeEval() runs before Verilog eval, so if we changed WOZ_TRACK3
-    // combinationally, the C++ would provide the OLD track's data while Verilog
-    // is already reading from the NEW track position. By registering WOZ_TRACK3,
-    // the track change is delayed by one cycle to match the C++ timing.
+    // WOZ_TRACK3: Use combinational track selection for hardware correctness.
+    // The C++ path can apply its own register stage in sim.v to align with BeforeEval.
     //
     // IMPORTANT (ROM-confirmed): The IIgs Sony driver addresses tracks as cylinder*2 + side
     // (see IIgsRomSource/Bank FF/ad35driver_subroutines.asm:2198). That means side 1 is the
     // LSB, not an +80 offset. Using +80 causes completely wrong tracks beyond cylinder 0.
     wire [7:0] woz_track3_comb = {drive35_track, 1'b0} | {7'b0, diskreg_sel};
-    reg [7:0] woz_track3_reg;
-
-    always @(posedge CLK_14M or posedge RESET) begin
-        if (RESET) begin
-            woz_track3_reg <= 8'd0;
-        end else begin
-            woz_track3_reg <= woz_track3_comb;
-        end
-    end
-
-    assign WOZ_TRACK3 = woz_track3_reg;
+    assign WOZ_TRACK3 = woz_track3_comb;
     assign WOZ_TRACK3_BIT_ADDR = drive35_bram_addr;
 
 `ifdef SIMULATION
@@ -486,12 +477,12 @@ module iwm_woz (
     always @(posedge CLK_14M) begin
         if (prev_diskreg_sel != diskreg_sel) begin
             $display("IWM_WOZ: *** diskreg_sel CHANGED: %0d -> %0d (DISK35=%02h drive35_track=%0d WOZ_TRACK3_comb=%0d WOZ_TRACK3_reg=%0d)",
-                     prev_diskreg_sel, diskreg_sel, DISK35, drive35_track, woz_track3_comb, woz_track3_reg);
+                     prev_diskreg_sel, diskreg_sel, DISK35, drive35_track, woz_track3_comb, woz_track3_comb);
         end
         // Debug: Track drive35_track changes (from flux_drive TRACK output)
         if (prev_drive35_track != drive35_track) begin
-            $display("IWM_WOZ: *** drive35_track CHANGED: %0d -> %0d (woz_track3_comb=%0d woz_track3_reg=%0d)",
-                     prev_drive35_track, drive35_track, woz_track3_comb, woz_track3_reg);
+            $display("IWM_WOZ: *** drive35_track CHANGED: %0d -> %0d (woz_track3_comb=%0d)",
+                     prev_drive35_track, drive35_track, woz_track3_comb);
         end
         prev_diskreg_sel <= diskreg_sel;
         prev_drive35_track <= drive35_track;
@@ -536,6 +527,7 @@ module iwm_woz (
         .BIT_POSITION(),
         .TRACK_BIT_COUNT(32'd0),
         .TRACK_LOADED(1'b0),
+        .TRACK_LOAD_COMPLETE(1'b0),
         .BRAM_ADDR(),
         .BRAM_DATA(8'h00),
         .SD_TRACK_REQ(),
@@ -559,6 +551,8 @@ module iwm_woz (
 
     // Drive is active when motor is spinning, 5.25" mode, and disk ready
     wire drive525_active = motor_spinning && !is_35_inch && DISK_READY[0];
+
+    wire drive525_track_loaded = DISK_READY[0] && (WOZ_TRACK1_BIT_COUNT > 0);
 
     flux_drive drive525 (
         .IS_35_INCH(1'b0),
@@ -586,7 +580,8 @@ module iwm_woz (
         .TRACK(drive525_track_7bit),
         .BIT_POSITION(drive525_bit_position),
         .TRACK_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
-        .TRACK_LOADED(DISK_READY[0]),
+        .TRACK_LOADED(drive525_track_loaded),
+        .TRACK_LOAD_COMPLETE(1'b0),  // TODO: Add 5.25" track load signal when needed
         .BRAM_ADDR(drive525_bram_addr),
         .BRAM_DATA(WOZ_TRACK1_BIT_DATA),
         .SD_TRACK_REQ(),
@@ -671,6 +666,9 @@ module iwm_woz (
     // actually trying to read disk data from the still-spinning 3.5" drive.
     wire selected_disk_present = flux_is_35_inch ? (drive_sel ? DISK_READY[3] : DISK_READY[2])
                                                  : (drive_sel ? DISK_READY[1] : DISK_READY[0]);
+    // Only force data reads when a cached track is available for the selected drive.
+    wire selected_track_cached = flux_is_35_inch ? (WOZ_TRACK3_BIT_COUNT > 0)
+                                                 : (WOZ_TRACK1_BIT_COUNT > 0);
     // Only force $C0EC to be treated as a data read when the IWM motor output is enabled.
     // If we force this while `drive_on` is 0 but the Sony spindle is still spinning
     // (common between SmartPort calls), the CPU can read 0xFF as "data" and corrupt
@@ -682,6 +680,7 @@ module iwm_woz (
     wire smartport_mode = (!immediate_mode[3]) && immediate_mode[1];
     wire force_q7_data_read = bus_rd && (bus_addr == 4'hC) &&
                               selected_disk_present &&
+                              selected_track_cached &&
                               drive_on &&
                               !smartport_mode;
     wire q7_for_flux = force_q7_data_read ? 1'b0 : q7;
@@ -775,8 +774,8 @@ module iwm_woz (
         if (motor_spinning && (debug_cycle[19:0] == 20'h80000)) begin
             $display("IWM_WOZ: Status: is_35=%0d drive35_active=%0d drive525_active=%0d DISK_READY=%04b q6=%0d q7=%0d drive_sel=%0d",
                      is_35_inch, drive35_active, drive525_active, DISK_READY, q6, q7, drive_sel);
-            $display("IWM_WOZ: Track3=%0d BitAddr3=%0d BitCount3=%0d Data3=%02h woz_track3_comb=%0d woz_track3_reg=%0d diskreg_sel=%0d",
-                     drive35_track, drive35_bram_addr, WOZ_TRACK3_BIT_COUNT, WOZ_TRACK3_BIT_DATA, woz_track3_comb, woz_track3_reg, diskreg_sel);
+            $display("IWM_WOZ: Track3=%0d BitAddr3=%0d BitCount3=%0d Data3=%02h woz_track3_comb=%0d diskreg_sel=%0d",
+                     drive35_track, drive35_bram_addr, WOZ_TRACK3_BIT_COUNT, WOZ_TRACK3_BIT_DATA, woz_track3_comb, diskreg_sel);
         end
     end
 

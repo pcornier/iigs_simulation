@@ -32,7 +32,10 @@ module woz_floppy_controller #(
     input      [13:0] bit_addr,      // Read address
     output     [7:0]  bit_data,      // Read data
     input      [7:0]  bit_data_in,   // Write data
-    input             bit_we         // Write enable (sets dirty)
+    input             bit_we,        // Write enable (sets dirty)
+
+    // Track load notification (for flux_drive to reset position)
+    output reg        track_load_complete  // Pulses high for 1 cycle when physical track finishes loading
 );
 
     //=========================================================================
@@ -80,12 +83,13 @@ module woz_floppy_controller #(
     wire [7:0]  bit_data0;
     wire [7:0]  bit_data1;
     reg         load_side;   // Which side is currently being DMA-loaded/saved (3.5" only)
+    reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
     // Dual port RAM for Track Data (Side 0)
     bram #(.width_a(8), .widthad_a(14)) track_ram_side0 (
         .clock_a(clk),
         .address_a(track_load_addr),
-        .wren_a(track_load_we && (!IS_35_INCH || (load_side == 1'b0))),
+        .wren_a(track_load_we && (!IS_35_INCH || (track_load_side == 1'b0))),
         .data_a(track_load_data),
         .q_a(track_ram_dout0),
 
@@ -100,7 +104,7 @@ module woz_floppy_controller #(
     bram #(.width_a(8), .widthad_a(14)) track_ram_side1 (
         .clock_a(clk),
         .address_a(track_load_addr),
-        .wren_a(track_load_we && (IS_35_INCH && (load_side == 1'b1))),
+        .wren_a(track_load_we && (IS_35_INCH && (track_load_side == 1'b1))),
         .data_a(track_load_data),
         .q_a(track_ram_dout1),
 
@@ -113,10 +117,31 @@ module woz_floppy_controller #(
 
     assign bit_data = (IS_35_INCH && track_id[0]) ? bit_data1 : bit_data0;
 
-    // bit_count must be combinational to match C++ path timing - it must update
-    // immediately when track_id changes, not 1 cycle later (which would cause
-    // wrap-around calculation errors in flux_drive)
-    assign bit_count = (IS_35_INCH && track_id[0]) ? bit_count_side1 : bit_count_side0;
+    // bit_count: Return the correct bit_count for the requested track.
+    //
+    // The single-track-per-side BRAM cache means only ONE track per side is stored.
+    // When seeking to a new track, we need to return the CORRECT bit_count:
+    //
+    // 1. If requested track matches cached track → return cached bit_count (correct data in BRAM)
+    // 2. If currently loading a track → return the pending track's bit_count (trk_bit_count)
+    //    This gives flux_drive a reasonable bit_count during loading (data is garbage anyway)
+    // 3. Otherwise → return cached side's bit_count (best effort for rapid SEL toggles)
+    //
+    // The key insight: returning bit_count=0 causes no flux transitions, which makes
+    // the ROM timeout waiting for data. Returning a reasonable non-zero value lets
+    // flux_drive generate flux (even from garbage data) which keeps the ROM responsive.
+    //
+    // After track load completes, current_track_id_sideX is updated and the correct
+    // bit_count is returned for subsequent reads.
+    wire track_side0_match = (current_track_id_side0 == track_id);
+    wire track_side1_match = (current_track_id_side1 == track_id);
+    wire selected_track_match = (IS_35_INCH && track_id[0]) ? track_side1_match : track_side0_match;
+    wire [31:0] selected_bit_count = (IS_35_INCH && track_id[0]) ? bit_count_side1 : bit_count_side0;
+    wire is_loading = (state == S_SEEK_LOOKUP) || (state == S_READ_TRACK);
+    // During loading, use the pending track's bit_count (or cached if not yet known)
+    wire [31:0] loading_bit_count = (trk_bit_count > 0) ? trk_bit_count : selected_bit_count;
+    assign bit_count = woz_valid ? (selected_track_match ? selected_bit_count :
+                                    (is_loading ? loading_bit_count : selected_bit_count)) : 32'd0;
 
     // State Machine
     localparam S_INIT        = 0;
@@ -225,14 +250,16 @@ module woz_floppy_controller #(
 	            dirty <= 0;
             current_track_id_side0 <= 8'hFF;
             current_track_id_side1 <= 8'hFF;
-            pending_track_id <= 8'h00;
-            load_side <= 1'b0;
+	            pending_track_id <= 8'h00;
+	            load_side <= 1'b0;
+	            track_load_side <= 1'b0;
             old_ack <= 1'b0;
             transfer_active <= 1'b0;
             loading_second_side <= 1'b0;
             target_physical_track <= 7'h7F;
 	            bit_count_side0 <= 32'd0;
 	            bit_count_side1 <= 32'd0;
+            track_load_complete <= 1'b0;
 	            // bit_count is now a wire (combinational mux), no reset needed
 	            sd_buff_din <= 8'h00;
 	            have_info <= 1'b0;
@@ -250,10 +277,11 @@ module woz_floppy_controller #(
 	            info_bit_timing <= 8'd0;
 	            scan_failed <= 1'b0;
 	        end else begin
-            
+
             // Default signals
             meta_we <= 0;
             track_load_we <= 0;
+            track_load_complete <= 1'b0;  // Default low, pulse high when track load finishes
             // SD requests are level-based in the MiSTer-style block device interface.
             // Assert a request only while we are waiting for `sd_ack` to go high, then
             // deassert during the transfer to avoid re-triggering when the transfer ends.
@@ -296,6 +324,7 @@ module woz_floppy_controller #(
 	                load_side <= track_id[0];
 	                loading_second_side <= 1'b0;
 	                target_physical_track <= track_id[7:1];
+	                track_load_side <= 1'b0;
 	                have_info <= 1'b0;
 	                have_tmap <= 1'b0;
 	                have_trks <= 1'b0;
@@ -320,6 +349,7 @@ module woz_floppy_controller #(
 	                current_track_id_side1 <= 8'hFF;
 	                bit_count_side0 <= 32'd0;
 	                bit_count_side1 <= 32'd0;
+	                track_load_side <= 1'b0;
 	                have_info <= 1'b0;
 	                have_tmap <= 1'b0;
 	                have_trks <= 1'b0;
@@ -394,23 +424,36 @@ module woz_floppy_controller #(
                         reg [6:0] requested_physical;
                         reg [6:0] cached_physical_s0;
                         reg [6:0] cached_physical_s1;
-                        reg both_sides_cached;
+                        reg       side0_cached;
+                        reg       side1_cached;
+                        reg       both_sides_cached;
 
                         requested_physical = track_id[7:1];
                         cached_physical_s0 = current_track_id_side0[7:1];
                         cached_physical_s1 = current_track_id_side1[7:1];
 
-                        // Check if physical track matches what's cached in BOTH RAMs
-                        both_sides_cached = (cached_physical_s0 == requested_physical) &&
-                                            (cached_physical_s1 == requested_physical);
+                        // Track-side cache validity
+                        side0_cached = (current_track_id_side0 == {requested_physical, 1'b0});
+                        side1_cached = (current_track_id_side1 == {requested_physical, 1'b1});
+                        both_sides_cached = side0_cached && side1_cached;
 
                         if (!both_sides_cached) begin
                             // Physical track change - need to load both sides
                             target_physical_track <= requested_physical;
                             loading_second_side <= 1'b0;
-                            // Start with side 0
-                            pending_track_id <= {requested_physical, 1'b0};
-                            load_side <= 1'b0;
+                            // If the requested side is already cached, load the other side first.
+                            // This avoids overwriting the active side while the ROM is reading it.
+                            if (side0_cached && !side1_cached) begin
+                                pending_track_id <= {requested_physical, 1'b1};
+                                load_side <= 1'b1;
+                            end else if (side1_cached && !side0_cached) begin
+                                pending_track_id <= {requested_physical, 1'b0};
+                                load_side <= 1'b0;
+                            end else begin
+                                // Neither side cached: start with the requested side
+                                pending_track_id <= track_id;
+                                load_side <= track_id[0];
+                            end
                             $display("WOZ_CTRL: Physical track change: %0d -> %0d (loading both sides)",
                                      cached_physical_s0, requested_physical);
 
@@ -583,12 +626,56 @@ module woz_floppy_controller #(
                              sd_lba <= {16'b0, trk_start_block};
                              blocks_processed <= 0; // Reset for block counting
                              old_ack <= sd_ack;  // Prevent spurious falling edge detection on state entry
+                             track_load_side <= load_side; // Latch side before DMA begins
                              if (!sd_ack) sd_rd <= 1'b1;
                         end
                     endcase
                 end
                 
                 S_READ_TRACK: begin
+                    // IMPORTANT: Do NOT abort track loads when physical track changes!
+                    // During fast seeks (boot-time seeking from track 0 to ~45), the ROM
+                    // steps rapidly through intermediate tracks. If we abort and restart
+                    // on each step, we never complete any load and the boot hangs.
+                    //
+                    // Instead, continue loading the current track. When the load completes
+                    // (in S_IDLE), we'll see the new track_id and start loading it.
+                    // The ROM doesn't expect valid data while stepping anyway - it only
+                    // reads after settle time. bit_count returning 0 for non-cached tracks
+                    // is fine during the seek phase.
+                    //
+                    // (The old abort logic is commented out below for reference)
+                    // if (IS_35_INCH && (track_id[7:1] != target_physical_track) && (track_id != pending_track_id)) begin
+                    //     $display("WOZ_CTRL: Track change during load (pending=%0d target_phys=%0d -> req=%0d), aborting load",
+                    //              pending_track_id, target_physical_track, track_id);
+                    //     ...
+                    // end
+                    // If only the side bit changes while loading the same physical track:
+                    // ONLY restart if the requested side is NOT already cached.
+                    // The ROM frequently toggles SEL to read status; if the requested side
+                    // is already cached, just continue loading the other side.
+                    // This prevents thrashing where side changes cause endless restarts.
+                    if (IS_35_INCH && (track_id[7:1] == target_physical_track) && (track_id != pending_track_id)) begin
+                        // Check if the requested side is already cached
+                        reg requested_side_cached;
+                        requested_side_cached = (track_id[0] == 1'b0) ? (current_track_id_side0 == track_id)
+                                                                      : (current_track_id_side1 == track_id);
+                        if (!requested_side_cached) begin
+                            $display("WOZ_CTRL: Side change during load (pending=%0d -> req=%0d), restarting load",
+                                     pending_track_id, track_id);
+                            pending_track_id <= track_id;
+                            load_side <= track_id[0];
+                            loading_second_side <= 1'b0;
+                            state <= S_SEEK_LOOKUP;
+                            busy <= 1'b1;
+                            sd_rd <= 1'b0;
+                            blocks_processed <= 0;
+                            old_ack <= sd_ack;
+                            transfer_active <= 1'b0;
+                        end
+                        // else: requested side is cached, continue loading the other side
+                    end
+
                     // Assert sd_rd while waiting for ack, but NOT when completing a transfer
                     if (!sd_ack && !(old_ack && transfer_active)) begin
                         sd_rd <= 1'b1;
@@ -614,23 +701,26 @@ module woz_floppy_controller #(
                                 $display("WOZ_CTRL: Stored track %0d to side0 RAM, bit_count=%0d", pending_track_id, trk_bit_count);
                             end
 
-                            // 3.5" DUAL-SIDE: After side 0, load side 1
+                            // 3.5" DUAL-SIDE: After first side, load the other side
                             if (IS_35_INCH && !loading_second_side) begin
-                                // Side 0 done, now load side 1
+                                // First side done, now load the opposite side
                                 loading_second_side <= 1'b1;
-                                pending_track_id <= {target_physical_track, 1'b1};
-                                load_side <= 1'b1;
+                                pending_track_id <= {target_physical_track, ~pending_track_id[0]};
+                                load_side <= ~pending_track_id[0];
                                 state <= S_SEEK_LOOKUP;
                                 blocks_processed <= 0;
-                                $display("WOZ_CTRL: Side 0 complete, starting side 1 load for physical track %0d",
+                                $display("WOZ_CTRL: First side complete, starting other side load for physical track %0d",
                                          target_physical_track);
                             end else begin
                                 // 5.25" single-sided OR 3.5" side 1 complete - done!
                                 state <= S_IDLE;
                                 busy <= 0;
                                 loading_second_side <= 1'b0;
+                                track_load_complete <= 1'b1;  // Pulse to signal flux_drive to reset position
                                 if (IS_35_INCH) begin
                                     $display("WOZ_CTRL: Both sides loaded for physical track %0d", target_physical_track);
+                                end else begin
+                                    $display("WOZ_CTRL: Track %0d loaded (5.25\")", pending_track_id);
                                 end
                             end
                             dirty <= 0;

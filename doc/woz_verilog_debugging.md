@@ -4,13 +4,64 @@
 
 This document captures the current state of debugging the Verilog WOZ floppy controller for Apple IIgs simulation. The goal is to make the Verilog path produce identical results to the working C++ path so it can be synthesized for FPGA.
 
-## Current Status
+## Current Status (2026-01-16)
 
 | Path | BRAM Type | Boot Result |
 |------|-----------|-------------|
-| C++ (BeforeEval DPI) | Registered | **WORKS** - "Welcome to the IIgs" |
-| Verilog (woz_floppy_controller) | Registered | **FAILS** - "Error loading GS.OS file. Error=#0027" |
-| Verilog (woz_floppy_controller) | Combinational | **STILL FAILS** - same error |
+| C++ (BeforeEval DPI) | Registered | **WORKS** - "Welcome to the IIgs" by frame ~600 |
+| Verilog (woz_floppy_controller) | Registered | **WORKS** - "Welcome to the IIgs" by frame ~600 |
+
+**SUCCESS! The Verilog path now boots identically to the C++ path!**
+
+## Root Cause Identified
+
+**The single-track-per-side BRAM cache in woz_floppy_controller causes `bit_count` mismatch.**
+
+### The Problem
+
+1. woz_floppy_controller has ONE 16KB BRAM per side (side0 and side1)
+2. When seeking, only the last loaded track's data is in BRAM
+3. `bit_count_side0` and `bit_count_side1` reflect the LAST loaded track, not the requested track
+4. When ROM seeks from track 45 back to track 7:
+   - BRAM still has track 45's data (75215 bits)
+   - ROM requests track 7 (75688 bits)
+   - Old code returned bit_count=75215 (track 45's value) for track 7
+   - flux_drive used wrong bit_count for position wrapping → read wrong data
+   - ROM got different bytes than C++ path → different execution → boot failure
+
+### Evidence
+
+Track change comparison showed both paths start identical for first 97 track changes, then diverge:
+- **C++ (change 98)**: track 7 → 8 (continuing upward)
+- **Verilog (change 98)**: track 7 → 6 (going back down)
+
+This happened because at track 7, the Verilog path read wrong data due to bit_count mismatch.
+
+### Fix Attempt #1 (Failed - caused ROM timeout)
+
+Changed `woz_floppy_controller.sv` to return `bit_count=0` when cached track doesn't match requested track. This caused ROM timeout during seeks because `bit_count=0` means no flux transitions.
+
+### Fix Attempt #2 (SUCCESS!)
+
+Return a reasonable bit_count during track loading instead of 0:
+
+```verilog
+wire track_side0_match = (current_track_id_side0 == track_id);
+wire track_side1_match = (current_track_id_side1 == track_id);
+wire selected_track_match = (IS_35_INCH && track_id[0]) ? track_side1_match : track_side0_match;
+wire [31:0] selected_bit_count = (IS_35_INCH && track_id[0]) ? bit_count_side1 : bit_count_side0;
+wire is_loading = (state == S_SEEK_LOOKUP) || (state == S_READ_TRACK);
+wire [31:0] loading_bit_count = (trk_bit_count > 0) ? trk_bit_count : selected_bit_count;
+assign bit_count = woz_valid ? (selected_track_match ? selected_bit_count :
+                                (is_loading ? loading_bit_count : selected_bit_count)) : 32'd0;
+```
+
+This approach:
+1. Returns correct `bit_count` when track IS cached and matches
+2. Returns the pending track's `bit_count` (trk_bit_count) during loading
+3. Falls back to cached side's `bit_count` for rapid SEL toggles (status reads)
+
+The key insight: the ROM needs to see SOME flux transitions during seeks to avoid timeout. Even garbage data with a reasonable bit_count is better than no flux at all.
 
 ## Test Configuration
 

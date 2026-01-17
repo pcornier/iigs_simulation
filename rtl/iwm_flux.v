@@ -601,6 +601,7 @@ module iwm_flux (
 
 `ifdef SIMULATION
     // Debug: log register reads (only on CEN/PH2 to log once per CPU access)
+    reg [31:0] debug_win_count;
     always @(posedge CLK_14M) begin
         if (RD && CEN) begin
             case ({immediate_q7, immediate_q6})
@@ -618,6 +619,16 @@ module iwm_flux (
             $display("IWM_FLUX: *** STATS @cycle=%0d *** bytes_completed=%0d bytes_read=%0d bytes_lost=%0d loss_rate=%0d%%",
                      debug_cycle, byte_counter, bytes_read_counter, bytes_lost_counter,
                      (byte_counter > 0) ? (bytes_lost_counter * 100 / byte_counter) : 0);
+        end
+
+        // Focused window logging around suspected divergence position.
+        if (MOTOR_ACTIVE && DISK_READY &&
+            (DISK_BIT_POSITION >= 17'd27460) && (DISK_BIT_POSITION <= 17'd27490) &&
+            debug_win_count < 500) begin
+            $display("IWM_FLUX_WIN pos=%0d flux=%0d state=%0d win=%0d pending=%0d rsh=%02h data=%02h bc=%0d async=%0d",
+                     DISK_BIT_POSITION, FLUX_TRANSITION, rw_state, window_counter, flux_pending,
+                     m_rsh, m_data, byte_completing, async_update);
+            debug_win_count <= debug_win_count + 1;
         end
     end
 `endif
