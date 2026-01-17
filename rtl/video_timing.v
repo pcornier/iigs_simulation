@@ -33,24 +33,24 @@ reg [9:0] vcount;
 // Total frame: 912x262 (NTSC standard)
 
 // Horizontal Timing (912 pixels total)
-// Layout: |Left Border(32px)|Active Display(640px)|Right Border(32px)|H-Sync|
-parameter BORDER_WIDTH = 32;
-parameter ACTIVE_WIDTH = 640;
-parameter HFP = ACTIVE_WIDTH + 2*BORDER_WIDTH; // Total visible area (704 pixels)
-parameter HSP = HFP + 48;   // Start horizontal sync (752)
-parameter HBP = HSP + 64;   // End horizontal sync (816)
-parameter HWL = HBP + 96;   // Total line width (912 pixels)
+// Layout: |Left Border(44px)|Active Display(640px)|Right Border(60px)|H-Sync|
+parameter H_BORDER = 104;
+parameter H_ACTIVE = 640;
+parameter HFP = H_ACTIVE + H_BORDER; // Total visible area (744 pixels)
+parameter HSP = HFP + 14;            // Start horizontal sync (758)
+parameter HBP = HSP + 56;            // End horizontal sync (814)
+parameter HWL = HBP + 98 - 1;        // Total line width (count 911, 912 pixels)
 
 // Vertical Timing (262 lines total - NTSC standard)
-// Layout: |Top Border(16)|Active Display(200)|Bottom Border(16)|Blanking(30)| = 262 total
-parameter V_BORDER = 32;        // Top/bottom border lines (total)
-parameter V_ACTIVE = 200;       // Active display lines (Super Hi-Res)
-parameter V_BLANKING = 30;      // Blanking lines
+// Layout: |Top Border(19)|Active Display(200)|Bottom Border(21)|Blanking(22)| = 262 total
+parameter V_BORDER = 40;   // Top/bottom border lines (total)
+parameter V_ACTIVE = 200;  // Active display lines (Super Hi-Res)
+parameter V_BLANKING = 22; // Blanking lines
 
-parameter VFP = V_BORDER + V_ACTIVE;              // 232 - End of active display
-parameter VSP = VFP + 3;                          // 247 - Start vertical sync
-parameter VBP = VSP + 3;                          // 250 - End vertical sync
-parameter VWL = V_ACTIVE + V_BORDER + V_BLANKING; // 262 - Total frame
+parameter VFP = V_BORDER + V_ACTIVE;                  // 240 - End of active display
+parameter VSP = VFP + 3;                              // 243 - Start vertical sync
+parameter VBP = VSP + 4;                              // 246 - End vertical sync
+parameter VWL = V_ACTIVE + V_BORDER + V_BLANKING - 1; // 261 - Total frame
 
 assign hsync = ~((hcount >= HSP) && (hcount < HBP));
 assign vsync = ~((vcount >= VSP) && (vcount < VBP));

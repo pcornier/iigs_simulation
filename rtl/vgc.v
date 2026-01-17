@@ -29,7 +29,7 @@ input SHRG
 );
 
 // Counts for the border boundaries
-localparam HTOTAL = 10'd912;    // total scanline pixels
+localparam HTOTAL = 10'd911;    // count 911, 912 total pixel clocks
 localparam BT = 9'd19;          // top border
 localparam BB = BT + 9'd200;    // bottom border (SHRG)
 localparam BBE = BT + 9'd192;   // bottom border (IIe)
@@ -175,14 +175,12 @@ begin
 		end
 		video_addr_shrg <= video_addr_shrg + 1'b1;
 		video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
-		if (H==31)
-		begin
-			// Setup pixel data address: $2000 + (scanline * 160 bytes/line)
-			// V=16 is scanline 0, so offset = (V-16) * 160
-			video_addr_shrg_1 <= 'h12000 + ({14'd0, (V-BT)} * 'd160);
-			video_addr_shrg <= 'h12000 + ({14'd0, (V-BT)} * 'd160);
-			h_counter<=0;
-		end
+	end else if (H==(BL-1)) begin
+	   // Setup pixel data address: $2000 + (scanline * 160 bytes/line)
+	   // V=16 is scanline 0, so offset = (V-16) * 160
+	   video_addr_shrg_1 <= 'h12000 + ({14'd0, (V-BT)} * 'd160);
+	   video_addr_shrg <= 'h12000 + ({14'd0, (V-BT)} * 'd160);
+	   h_counter<=0;
 	end else if (H < BR) begin
 		h_counter<=h_counter+1'b1;
 		// Only advance address for first 159 advances (byte 0->159), skip the 160th
