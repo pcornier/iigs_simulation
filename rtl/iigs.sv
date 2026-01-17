@@ -2012,7 +2012,7 @@ vgc vgc(
         .PAGE2(PAGE2),
         .TEXTG(TEXTG),
         .MIXG(MIXG),
-        .NEWVIDEO(NEWVIDEO)
+        .SHRG(NEWVIDEO[7])
 );
 
 
