@@ -121,6 +121,7 @@ module iigs
    output [13:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer
    input  [7:0]       WOZ_TRACK3_BIT_DATA,  // Byte from track bit buffer
    input  [31:0]      WOZ_TRACK3_BIT_COUNT, // Total bits in track
+   input              WOZ_TRACK3_LOAD_COMPLETE, // Pulses when track load finishes (reset bit_position)
 
    // 5.25" drive 1 WOZ bit interface
    output [5:0]       WOZ_TRACK1,           // Track number being read
@@ -953,7 +954,10 @@ module iigs
 
     // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & cpu_we_n) begin
-      $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x)",addr[11:0],iwm_dout,CYAREG,addr,cpu_addr);
+      $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x) PH2=%0d VDA=%0d VPA=%0d iwm_addr=%02x iwm_rw=%0d q6=%0d q7=%0d drive_on=%0d diskreg_sel=%0d bitpos=%0d bram_addr=%0d bit_count=%0d",
+               addr[11:0], iwm_dout, CYAREG, addr, cpu_addr, phi2, cpu_vda, cpu_vpa, iwm_addr, iwm_rw,
+               iwmc.q6, iwmc.q7, iwmc.drive_on, iwmc.diskreg_sel, iwmc.current_bit_position,
+               iwmc.drive35_bram_addr, iwmc.WOZ_TRACK3_BIT_COUNT);
       io_dout <= iwm_dout;
     end
     iwm_strobe <= 1'b0;
@@ -2821,6 +2825,7 @@ wire ready_out;
       .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
       .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
       .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+      .WOZ_TRACK3_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
       // WOZ bit interface for 5.25" drive 1
       .WOZ_TRACK1(WOZ_TRACK1),
       .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),

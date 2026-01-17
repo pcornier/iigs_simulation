@@ -41,10 +41,15 @@ make clean             # Clean build artifacts
 ./obj_dir/Vemu --screenshot 245 --stop-at-frame 245
 
 # Run with selftest mode
-./obj_dir/Vemu --selftest 
+./obj_dir/Vemu --selftest
 
 # With debug output to file
 ./obj_dir/Vemu > debug.log 2>&1
+
+# VCD waveform capture (for signal-level debugging)
+# IMPORTANT: VCD files grow very fast. Only capture 2-3 frames maximum.
+# Use --stop-at-frame no more than 3 frames after the dump start frame.
+./obj_dir/Vemu --dump-vcd-after 400 --stop-at-frame 403  # Capture frames 400-403 to vsim.vcd
 
 # use a disk image (HDD slot 7)
 ./Vemu --disk totalreplay.hdv
