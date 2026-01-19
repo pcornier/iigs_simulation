@@ -262,6 +262,7 @@ Use `--screenshot N` to capture specific frame states for visual debugging of gr
 
 ## Reference Materials
 
+- **IIgsRomSource/**: Original source code with comments of the IIgs ROM
 - **doc/**: Official Apple IIgs documentation and technical references
 - **ref/**: Reference implementation for comparison
 - **software_emulators/**: C-based emulators for algorithm reference
