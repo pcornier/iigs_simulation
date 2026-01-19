@@ -10,6 +10,8 @@ module video_timing(
   output reg hblank,
   output reg vblank,
 
+  output reg mega2_vbl, // Legacy vblank state at $C019
+
   output [10:0] hpos,
   output [9:0] vpos
 
@@ -43,14 +45,25 @@ parameter HWL = HBP + 98;                // Total line width (count 911, 912 pix
 
 // Vertical Timing (262 lines total - NTSC standard)
 // Layout: |Top Border(19)|Active Display(200)|Bottom Border(21)|Blanking(22)| = 262 total
-parameter V_BORDER = 40;   // Top/bottom border lines (total)
+parameter B_BORDER = 21;   // Bottom border lines
 parameter V_ACTIVE = 200;  // Active display lines (Super Hi-Res)
 parameter V_BLANKING = 22; // Blanking lines
 
-parameter VFP = V_BORDER + V_ACTIVE - 1; // 240 - End of active display
-parameter VSP = VFP + 3;                 // 243 - Start vertical sync
-parameter VBP = VSP + 4;                 // 246 - End vertical sync
-parameter VWL = VBP + 15;                // 261 - Total frame
+// This uses the legacy Apple II V counter scheme, which counts from
+// 250 to 511 rather than 0 to 261. This count is visible to the CPU
+// at $C02E/F, and structured so that V[7:0] is the current line
+// during the buffer scanout period. The main downside is that this
+// causes the counter reset to occur during the top border period
+// rather than at a transition.
+parameter V_LOAD = 250;                           // remainder of top border
+parameter V_SCAN = 256;                           // Buffer scanout
+parameter VFP = V_SCAN + B_BORDER + V_ACTIVE - 1; // Front porch
+parameter VSP = VFP + 3;                          // vsync
+parameter VBP = VSP + 4;                          // back porch
+parameter VTB = VBP + 15;                         // top border
+parameter V_END = 10'd511;                        // counter resets
+
+parameter V_M2_VBL = V_SCAN + 191;
 
 always @(posedge clk_vid) if (ce_pix) begin
   hcount <= hcount + 11'd1;
@@ -67,10 +80,13 @@ always @(posedge clk_vid) if (ce_pix && hcount == HWL) begin
   vcount <= vcount + 10'd1;
 
   case (vcount)
+    V_M2_VBL: mega2_vbl <= 1;
+    V_SCAN: mega2_vbl <= 0;
     VFP: vblank <= 1;
     VSP: vsync <= 0;
     VBP: vsync <= 1;
-    VWL: begin vblank <= 0; vcount <= 0; end
+    VTB: vblank <= 0;
+    V_END: vcount <= V_LOAD;
   endcase // case (vcount)
 end
 

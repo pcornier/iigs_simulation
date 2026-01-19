@@ -28,15 +28,21 @@ input SHRG
 
 );
 
-// Counts for the border boundaries
-localparam HTOTAL = 10'd911;    // count 911, 912 total pixel clocks
-localparam BT = 9'd19;          // top border
-localparam BB = BT + 9'd200;    // bottom border (SHRG)
-localparam BBE = BT + 9'd192;   // bottom border (IIe)
-localparam BL = 10'd44;         // left border (SHRG)
-localparam BLE = 10'd84;        // left border (IIe)
-localparam BR = BL + 10'd640;   // right border (SHRG)
-localparam BRE = BLE + 10'd560; // right border (IIe)
+// Counter values for the border boundaries
+
+// NB: Top border range is non-monotonic due to the legacy counter reset.
+// It spans counts 499 to 511, then 250 to 255.
+// See comments in video_timing.v for more information.
+localparam HTOTAL = 10'd911;      // count 911, 912 total pixel clocks
+localparam V_SCAN_PRE = 9'd255;   // Line before buffer scan
+localparam V_SCAN = 9'd256;       // Buffer line 0
+localparam BBE = V_SCAN + 9'd192; // bottom border (IIe)
+localparam BB = V_SCAN + 9'd200;  // bottom border (SHRG)
+localparam BT = 9'd499;           // top border start
+localparam BL = 10'd44;           // left border (SHRG)
+localparam BLE = 10'd84;          // left border (IIe)
+localparam BR = BL + 10'd640;     // right border (SHRG)
+localparam BRE = BLE + 10'd560;   // right border (IIe)
 
 assign video_addr = SHRG ? video_addr_shrg : video_addr_ii;
 // NEWVIDEO[6] controls CPU memory mapping for Double Hi-Res, but per the IIgs Hardware Reference,
@@ -132,11 +138,8 @@ begin
 	if (H == 0)
 		bordercolor_latched <= BORDERCOLOR;
 	// Pre-fetch SCB during HBLANK for next scanline's display
-	// At V=15, fetch SCB[0] for scanline 0 (displayed at V=16)
-	// At V=16, fetch SCB[1] for scanline 1 (displayed at V=17), etc.
-	// Formula: at V=N, fetch SCB[N-15] = $9D00 + (V-16+1) = $9D00 + (V-15)
 	if (H==(HTOTAL-4)) begin
-		video_addr_shrg <= 'h19D00+{14'b0, (V-(BT-9'd1))};
+		video_addr_shrg <= 'h19D00+{14'b0,  (V[7:0]+1'b1)};
 	end
 	else if (H==(HTOTAL-2)) begin
 		scb <= video_data;
@@ -147,7 +150,7 @@ begin
 			$display("VGC_SCANIRQ_CHECK: V=%d H=%03x SCB=%02x SCB[6]=%d NEWVIDEO[7]=%d -> fire=%d",
 			         V, H, video_data, video_data[6], SHRG, (video_data[6] && SHRG));
 `endif
-		if (video_data[6] && SHRG && V >= (BT-1) && V < BB)
+		if (video_data[6] && SHRG && V >= V_SCAN_PRE && V < BB)
 			scanline_irq<=1;
 		// Setup palette base address from SCB palette selector (bits 3:0)
 		// Each palette is 32 bytes at $9E00 + (palette * 32)
@@ -172,9 +175,8 @@ begin
 		video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
 	end else if (H==(BL-1)) begin
 	   // Setup pixel data address: $2000 + (scanline * 160 bytes/line)
-	   // V=16 is scanline 0, so offset = (V-16) * 160
-	   video_addr_shrg_1 <= 'h12000 + ({14'd0, (V-BT)} * 'd160);
-	   video_addr_shrg <= 'h12000 + ({14'd0, (V-BT)} * 'd160);
+	   video_addr_shrg_1 <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
+	   video_addr_shrg <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
 	   h_counter<=0;
 	end else if (H < BR) begin
 		h_counter<=h_counter+1'b1;
@@ -396,7 +398,7 @@ wire [11:0] graphics_rgb = lores_mode ? palette_rgb_r[final_graphics_color] :
                                        {apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]};
 
 reg [12:0] BASEADDR;
-wire  [ 4:0] vert = V[7:3]-5'h02;  // (V-16)
+wire  [ 4:0] vert = V[7:3];
 always @(*) begin
 	case (vert)
 		5'h00: BASEADDR= 13'h000;
@@ -731,13 +733,13 @@ begin
 			// Mode-dependent boundaries: SHRG uses full width, Apple II modes are centered
 			if (SHRG) begin
 				// SHRG mode: use full 640-pixel width (within 704 visible area)
-				if (H >= BL && H < BR && V >= BT && V < BB)
+				if (H >= BL && H < BR && V >= V_SCAN && V < BB)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < BL)
 					pixel_counter <= 11'b0; // Reset at start of each line
 			end else begin
 				// Apple II modes: 192 lines starting at V=16 (scanline 0 to 191)
-				if (H >= BLE && H < BRE && V >= BT && V < BBE)
+				if (H >= BLE && H < BRE && V >= V_SCAN && V < BBE)
 					pixel_counter <= pixel_counter + 1'b1;
 				else if (H < BLE)
 					pixel_counter <= 11'b0; // Reset at start of each line
@@ -835,9 +837,9 @@ begin
 // Apple II TEXT: active display H=72-631 (560 pixels), V=16-207 (192 lines)
 // Apple II GFX:  active display H=77-636 (560 pixels), V=16-207 (192 lines)
 // SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
-if ((!SHRG && GR && ((H < (BLE+5) || H > (BRE+4)) || (V < BT || V >= BBE))) ||
-    (!SHRG && !GR && ((H < BLE || H >= BRE) || (V < BT || V >= BBE))) ||
-    (SHRG && ((H < (BL+1) || H >= BR || V < BT || V >= BB))))  // SHRG: 33px left border (mem latency), 639px active
+if ((!SHRG && GR && ((H < (BLE+5) || H > (BRE+4)) || (V < V_SCAN || V >= BBE))) ||
+    (!SHRG && !GR && ((H < BLE || H >= BRE) || (V < V_SCAN || V >= BBE))) ||
+    (SHRG && ((H < (BL+1) || H >= BR || V < V_SCAN || V >= BB))))  // SHRG: 33px left border (mem latency), 639px active
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -882,7 +884,7 @@ end
 wire [9:0] window_x_w = SHRG ?
     ((H >= BL) ? H - BL : 10'b0) :          // SHRG: start at H=32
     ((H >= BLE) ? H - BLE : 10'b0);           // Apple II: start at H=72
-wire [9:0] window_y_w = (V >= BT) ? V - BT : 10'b0;  // Apple II display starts at V=16 (scanline 0)
+wire [9:0] window_y_w = (V >= V_SCAN) ? {2'b0, V[7:0]} : 10'b0;  // Apple II display starts at V=16 (scanline 0)
 
 // Apple II coordinate mapping: Now properly centered, window_y_w is 0-191 (192 lines)
 // No clamping needed since we're properly centered within the 200-line area

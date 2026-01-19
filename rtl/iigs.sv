@@ -156,12 +156,6 @@ module iigs
    logic [9:0]        H;
    logic [8:0]        V;
    
-   // Video counter intermediate calculations for C02E/C02F
-   // Per TN 39, 9'h100 corresponds to the first buffer line.
-   logic [8:0] v_adjusted;
-   assign v_adjusted = V + 9'hF0;
-
-
   logic [7:0]         bank_bef;
   logic [15:0]        addr_bef;
 
@@ -280,6 +274,9 @@ module iigs
   logic               rom_writethrough;
 
   logic               lcram2_sel;
+
+  // Legacy Mega II VBL status bit for $C019
+  wire                mega2_vbl;
 
   assign VPB=cpu_vpb;
   assign CXROM=INTCXROM;
@@ -1315,7 +1312,7 @@ module iigs
             12'h016: io_dout <= {ALTZP, key_keys};
             12'h017: io_dout <= {SLOTC3ROM, key_keys};
             12'h018: io_dout <= {STORE80, key_keys};
-            12'h019: io_dout <= {(V >= 199), key_keys};  // IIgs VBL: bit 7 HIGH when V >= 199 (like Clemens)
+            12'h019: io_dout <= {mega2_vbl, key_keys};  // Mega II VBL flag
             12'h01a: io_dout <= {TEXTG, key_keys};
             12'h01b: io_dout <= {MIXG, key_keys};
             12'h01c: io_dout <= {PAGE2, key_keys};
@@ -1356,8 +1353,8 @@ module iigs
             12'h02b: io_dout <= C02BVAL; // from gsplus
             12'h02c: io_dout <= 'h0; // from gsplus
             12'h02d: io_dout <= SLTROMSEL;
-            12'h02e: io_dout <= v_adjusted >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
-            12'h02f: io_dout <= {v_adjusted[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
+            12'h02e: io_dout <= V >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
+            12'h02f: io_dout <= {V[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
             12'h030: begin io_dout <= SPKR; if (phi2) speaker_state <= ~speaker_state; end
             12'h031: io_dout <= DISK35;
             // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
@@ -1974,6 +1971,7 @@ video_timing video_timing(
 .vsync(VS),
 .hblank(HBlank),
 .vblank(VBlank),
+.mega2_vbl(mega2_vbl),
 .hpos(H),
 .vpos(V)
 );
@@ -2077,7 +2075,7 @@ wire [7:0] din =
     (cpu_addr[7:0] == 8'h16) ? {ALTZP, key_keys} :
     (cpu_addr[7:0] == 8'h17) ? {SLOTC3ROM, key_keys} :
     (cpu_addr[7:0] == 8'h18) ? {STORE80, key_keys} :
-    (cpu_addr[7:0] == 8'h19) ? {(V >= 199), key_keys} :  // VBL: bit 7 HIGH when V >= 199
+    (cpu_addr[7:0] == 8'h19) ? {mega2_vbl, key_keys} :  // Mega II VBL flag
     (cpu_addr[7:0] == 8'h1a) ? {TEXTG, key_keys} :
     (cpu_addr[7:0] == 8'h1b) ? {MIXG, key_keys} :
     (cpu_addr[7:0] == 8'h1c) ? {PAGE2, key_keys} :
