@@ -169,8 +169,12 @@ wire FD_DISK_3;
 // 3.5" drive 1 WOZ bit interface
 wire [7:0]  WOZ_TRACK3;           // Track number being read
 wire [13:0] WOZ_TRACK3_BIT_ADDR;  // Byte address in track bit buffer
+wire        WOZ_TRACK3_STABLE_SIDE; // Stable side for data reads (captured when motor starts)
 wire [7:0]  WOZ_TRACK3_BIT_DATA;  // Byte from track bit buffer
 wire [31:0] WOZ_TRACK3_BIT_COUNT; // Total bits in track
+wire        WOZ_TRACK3_IS_FLUX;   // Track data is flux timing (not bitstream)
+wire [31:0] WOZ_TRACK3_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
+wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
 
 // 5.25" drive 1 WOZ bit interface
 wire [5:0]  WOZ_TRACK1;           // Track number being read
@@ -187,7 +191,7 @@ wire [31:0] WOZ_TRACK1_BIT_COUNT; // Total bits in track
 // to the C++ data when comparing.
 //
 // Enable C++ path for comparison (comment out to use Verilog path)
-//`define USE_CPP_WOZ  // Enable C++ path - TESTING VERILOG PATH
+// `define USE_CPP_WOZ  // DISABLED - Testing Verilog with combinational BRAM
 
 // Delay register for C++ data to match BRAM's 1-cycle latency for comparison
 reg [7:0] woz3_bit_data_delayed;
@@ -198,24 +202,48 @@ end
 // Debug: log data flow when address changes and data is loaded
 // Use delayed C++ data to match BRAM's 1-cycle latency
 reg [31:0] flux_data_log_count = 0;
+reg [31:0] flux_data_mismatch_count = 0;
 reg [13:0] flux_data_last_addr = 0;
 always @(posedge CLK_14M) begin
-    if (flux_data_log_count < 100 && woz3_bit_count > 0 && WOZ_TRACK3_BIT_ADDR != flux_data_last_addr) begin
+    if (woz3_bit_count > 0 && WOZ_TRACK3_BIT_ADDR != flux_data_last_addr) begin
         flux_data_last_addr <= WOZ_TRACK3_BIT_ADDR;
-        $display("FLUX_DATA: addr=%04X cpp_d=%02X verilog=%02X MATCH=%0d count_cpp=%0d count_v=%0d (cpp_imm=%02X)",
-                 WOZ_TRACK3_BIT_ADDR, woz3_bit_data_delayed, woz_ctrl_bit_data,
-                 (woz3_bit_data_delayed == woz_ctrl_bit_data) ? 1 : 0,
-                 woz3_bit_count, woz_ctrl_bit_count, woz3_bit_data);
-        flux_data_log_count <= flux_data_log_count + 1;
+        // Log first 100 samples for initial debug
+        if (flux_data_log_count < 100) begin
+            $display("FLUX_DATA: addr=%04X cpp_d=%02X verilog=%02X MATCH=%0d count_cpp=%0d count_v=%0d (cpp_imm=%02X)",
+                     WOZ_TRACK3_BIT_ADDR, woz3_bit_data_delayed, woz_ctrl_bit_data,
+                     (woz3_bit_data_delayed == woz_ctrl_bit_data) ? 1 : 0,
+                     woz3_bit_count, woz_ctrl_bit_count, woz3_bit_data);
+            flux_data_log_count <= flux_data_log_count + 1;
+        end
+        // Always log mismatches
+        if (woz3_bit_data_delayed != woz_ctrl_bit_data) begin
+            flux_data_mismatch_count <= flux_data_mismatch_count + 1;
+            if (flux_data_mismatch_count < 50) begin
+                $display("FLUX_MISMATCH #%0d: addr=%04X cpp_d=%02X verilog=%02X ready=%0d s0=%0d s1=%0d req=%0d state=%0d stable_side=%0d",
+                         flux_data_mismatch_count + 1, WOZ_TRACK3_BIT_ADDR, woz3_bit_data_delayed, woz_ctrl_bit_data,
+                         woz_ctrl_ready, sim_woz_track_s0, sim_woz_track_s1, WOZ_TRACK3, sim_woz_state, WOZ_TRACK3_STABLE_SIDE);
+            end
+        end
+        // Also log bit_count mismatches
+        if (woz3_bit_count != woz_ctrl_bit_count && woz_ctrl_bit_count > 0) begin
+            $display("BITCOUNT_MISMATCH: cpp=%0d verilog=%0d addr=%04X",
+                     woz3_bit_count, woz_ctrl_bit_count, WOZ_TRACK3_BIT_ADDR);
+        end
     end
 end
 
 `ifdef USE_CPP_WOZ
-assign WOZ_TRACK3_BIT_DATA = woz3_bit_data;          // C++ (inherent 1-cycle latency)
+// C++ BeforeEval returns data immediately for the given address.
+// The flux_drive expects immediate data response (no latency).
+assign WOZ_TRACK3_BIT_DATA = woz3_bit_data;       // C++ immediate data
 assign WOZ_TRACK3_BIT_COUNT = woz3_bit_count;        // bit_count is immediate
+assign WOZ_TRACK3_FLUX_TOTAL_TICKS = 32'd0;
 `else
-assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;   // Verilog woz_floppy_controller
+// Verilog controller BRAM has 1-cycle read latency.
+// The woz_floppy_controller needs to account for this internally.
+assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;   // Verilog woz_floppy_controller (BRAM has 1-cycle latency)
 assign WOZ_TRACK3_BIT_COUNT = woz_ctrl_bit_count; // Verilog woz_floppy_controller
+assign WOZ_TRACK3_FLUX_TOTAL_TICKS = woz_ctrl_flux_total_ticks;
 `endif
 assign WOZ_TRACK1_BIT_DATA = woz1_bit_data;
 assign WOZ_TRACK1_BIT_COUNT = woz1_bit_count;
@@ -229,9 +257,14 @@ end
 
 // Export WOZ track/address to C++ for data lookup
 // Register track to align with C++ BeforeEval timing.
+// Also register stable_side for Verilog controller to match C++ timing.
+// Without this registration, Verilog controller sees immediate side changes
+// while C++ sees 1-cycle-delayed track values, causing byte stream divergence.
 reg [7:0] woz3_track_out_reg;
+reg       woz3_stable_side_reg;
 always @(posedge clk_sys) begin
     woz3_track_out_reg <= WOZ_TRACK3;
+    woz3_stable_side_reg <= WOZ_TRACK3_STABLE_SIDE;
 end
 assign woz3_track_out = woz3_track_out_reg;
 assign woz3_bit_addr_out = WOZ_TRACK3_BIT_ADDR;
@@ -297,9 +330,13 @@ iigs  iigs(
     // 3.5" drive 1
     .WOZ_TRACK3(WOZ_TRACK3),
     .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+    .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
     .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
     .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
     .WOZ_TRACK3_LOAD_COMPLETE(woz_ctrl_track_load_complete),
+    .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
+    .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
+    .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
     // 5.25" drive 1
     .WOZ_TRACK1(WOZ_TRACK1),
     .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
@@ -552,7 +589,11 @@ reg        img_mounted0_d, img_mounted2_d, img_mounted4_d;
 wire [3:0] DISK_READY;
 assign DISK_READY[0] = woz1_ready | DISK_READY_internal[0];  // 5.25" drive 1
 assign DISK_READY[1] = DISK_READY_internal[1];               // 5.25" drive 2
-assign DISK_READY[2] = woz_ctrl_disk_mounted | DISK_READY_internal[2];  // 3.5" drive 1 (Verilog controller - use disk_mounted not ready)
+// DISK_READY[2] indicates disk presence for motor control and flux_drive.
+// Track data availability is checked separately via WOZ_TRACK3_BIT_COUNT > 0.
+// Using woz_ctrl_disk_mounted (not woz_ctrl_ready) prevents motor/spinup reset
+// when the track loader briefly goes non-IDLE during track changes.
+assign DISK_READY[2] = woz_ctrl_disk_mounted | DISK_READY_internal[2];
 assign DISK_READY[3] = DISK_READY_internal[3];               // 3.5" drive 2
 
 
@@ -690,6 +731,7 @@ wire        woz_ctrl_busy;
 wire [31:0] woz_ctrl_bit_count;
 wire [7:0]  woz_ctrl_bit_data;
 wire        woz_ctrl_track_load_complete;  // Pulses when track load finishes
+wire [31:0] woz_ctrl_flux_total_ticks;
 
 // Mount detection for WOZ controller (index 5)
 reg         img_mounted5_d = 0;
@@ -729,7 +771,8 @@ woz_floppy_controller #(
     .img_readonly(img_readonly),
     .img_size(img_size),
 
-    // Drive Interface - use same track_id as C++ path
+    // Drive Interface - use immediate track_id for correct bit_count timing
+    // The woz_floppy_controller needs immediate track_id for position calculations.
     .track_id(WOZ_TRACK3),
     .ready(woz_ctrl_ready),
     .disk_mounted(woz_ctrl_disk_mounted),
@@ -737,14 +780,23 @@ woz_floppy_controller #(
     .active(FD_DISK_3),
 
     // Bitstream Interface - use same bit_addr as C++ path
+    // Use REGISTERED stable_side to match C++ timing.
+    // When side changes, the BRAM mux must switch in sync with the BRAM data update.
+    // Using immediate stable_side causes a 1-cycle glitch where stale data is returned.
     .bit_count(woz_ctrl_bit_count),
     .bit_addr(WOZ_TRACK3_BIT_ADDR),
+    .stable_side(woz3_stable_side_reg),
     .bit_data(woz_ctrl_bit_data),
     .bit_data_in(8'h00),
     .bit_we(1'b0),
 
     // Track load notification (for flux_drive to reset bit_position)
-    .track_load_complete(woz_ctrl_track_load_complete)
+    .track_load_complete(woz_ctrl_track_load_complete),
+
+    // FLUX track support (WOZ v3)
+    .is_flux_track(WOZ_TRACK3_IS_FLUX),
+    .flux_data_size(WOZ_TRACK3_FLUX_SIZE),
+    .flux_total_ticks(woz_ctrl_flux_total_ticks)
 );
 
 // WOZ floppy cpu_wait: DISABLED - caused boot to be too slow
@@ -884,10 +936,10 @@ always @(posedge clk_sys) begin
         if (woz_cmp_cpp_data_d != woz_ctrl_bit_data) begin
             woz_cmp_mismatch_count <= woz_cmp_mismatch_count + 1;
             if (woz_cmp_mismatch_count < 100) begin
-                $display("WOZ_CMP MISMATCH #%0d: frame=%0d track=%0d addr=%0d C++=%02X Verilog=%02X (C++ bit_count=%0d V bit_count=%0d)",
+                $display("WOZ_CMP MISMATCH #%0d: frame=%0d track=%0d addr=%0d C++=%02X Verilog=%02X (C++ bit_count=%0d V bit_count=%0d stable_side=%0d)",
                          woz_cmp_mismatch_count + 1, woz_cmp_frame, WOZ_TRACK3, woz_cmp_last_addr_d2,
                          woz_cmp_cpp_data_d, woz_ctrl_bit_data,
-                         woz3_bit_count, woz_ctrl_bit_count);
+                         woz3_bit_count, woz_ctrl_bit_count, WOZ_TRACK3_STABLE_SIDE);
             end
         end else begin
             woz_cmp_match_count <= woz_cmp_match_count + 1;

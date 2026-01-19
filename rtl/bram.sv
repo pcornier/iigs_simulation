@@ -17,7 +17,7 @@ module bram #(
     input   wire                wren_b,
     input   wire    [widthad_a-1:0]  address_b,
     input   wire    [width_a-1:0]  data_b,
-    output  reg     [width_a-1:0]  q_b,
+    output  wire    [width_a-1:0]  q_b,  // Changed to wire for combinational read
 
     input wire byteena_a = 1'b1,
     input wire byteena_b = 1'b1,
@@ -46,14 +46,14 @@ always @(posedge clock_a) begin
     end
 end
  
-// Port B - Standard BRAM behavior with registered read (1-cycle latency)
+// Port B - Combinational read for simulation (no latency)
+// NOTE: Real FPGAs need registered BRAM. This is only for debugging the WOZ path.
 always @(posedge clock_b) begin
     if(wren_b) begin
         mem[address_b] <= data_b;
-        q_b      <= data_b;
-    end else begin
-        q_b      <= mem[address_b];
     end
 end
+// Combinational read - output changes immediately with address
+assign q_b = wren_b ? data_b : mem[address_b];
  
 endmodule
