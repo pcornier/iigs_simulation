@@ -14,7 +14,7 @@ output reg [7:0] G,
 output reg [7:0] B,
 output [22:0] video_addr,
 input [7:0] video_data,
-input [7:0] TEXTCOLOR,
+input [7:0] TEXTCOLOR, // 7:4 text color 3:0 background
 input [3:0] BORDERCOLOR,
 input HIRES_MODE,
 input AN3,
@@ -37,11 +37,6 @@ localparam BL = 10'd44;         // left border (SHRG)
 localparam BLE = 10'd84;        // left border (IIe)
 localparam BR = BL + 10'd640;   // right border (SHRG)
 localparam BRE = BLE + 10'd560; // right border (IIe)
-
-// TEXTCOLOR -- 7:4 text color 3:0 background
-
-
-// if NEWVIDEO[7] == 1 then we are in SHRG mode
 
 assign video_addr = SHRG ? video_addr_shrg : video_addr_ii;
 // NEWVIDEO[6] controls CPU memory mapping for Double Hi-Res, but per the IIgs Hardware Reference,
@@ -147,7 +142,7 @@ begin
 		scb <= video_data;
 		// Check for scanline interrupt: SCB bit 6, SHR mode enabled, valid scanline range
 		// V >= 15 allows SCB[0] interrupt to fire at V=15 (just before scanline 0 displays at V=16)
-`ifdef SIMULATION
+`ifdef VGC_DEBUG
 		if (V >= (BT-1) && V < 'd206 && V[4:0] == 5'd0)  // Debug every 32nd line in valid range
 			$display("VGC_SCANIRQ_CHECK: V=%d H=%03x SCB=%02x SCB[6]=%d NEWVIDEO[7]=%d -> fire=%d",
 			         V, H, video_data, video_data[6], SHRG, (video_data[6] && SHRG));
@@ -680,9 +675,11 @@ begin
 	begin
 		// Graphics pixel buffer system - coordinate with memory timing
 		// Debug start and end of line to check horizontal alignment
+`ifdef VGC_DEBUG
 		if (((H >= 70 && H <= 90) || (H >= 620 && H <= 640)) && V == 100 && hires_mode)
 			$display("HPIX: H=%d xpos=%d chram_x=%d reload=%b shift=%b pixel=%b video_data=%h",
 			         H, xpos, chram_x, buffer_needs_reload, graphics_pix_shift, graphics_pix_shift[0], video_data);
+`endif
 		if (graphics_mode && GR) begin
 			// Reload buffer when chram_x changes (new memory data available)
 			// Only reload if chram_x is within valid range (0-39 for 40-col, 0-59 for 80-col)
@@ -953,7 +950,7 @@ end
 
 
 
-`ifdef SIMULATION
+`ifdef VGC_DEBUG
 /*
     reg [8:0] V_d;
     always @(posedge clk_vid) if(ce_pix) begin
