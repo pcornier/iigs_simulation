@@ -174,12 +174,10 @@ module flux_drive #(
     // Decoupled from motor_spinning which controls flux generation
     wire        motor_on_sense = sony_motor_on;
 
-`ifdef SIMULATION
     reg [3:0]   prev_imm_phases_debug;  // For tracking phase changes
     reg [31:0]  prev_track_bit_count;   // Track changes in TRACK_BIT_COUNT
     reg         side_transition_logged; // One-shot for side transition logging
     reg [4:0]   side_transition_byte_count; // Counter for post-transition byte logging
-`endif
 
     //=========================================================================
     // Apple IIgs 3.5" drive control protocol (Clemens / ROM-confirmed)
@@ -1126,10 +1124,10 @@ module flux_drive #(
         end
     end
 
+    reg [4:0] debug_read_count;  // Counter for track dump logging
 `ifdef SIMULATION
     // Debug output
     reg [8:0] prev_head_phase;
-    reg [4:0] debug_read_count;  // Counter for track dump logging
     reg [31:0] flux_count_debug;
     reg [31:0] cycle_count_debug;
     reg [31:0] rotate_cycles;    // Cycles where disk is rotating
