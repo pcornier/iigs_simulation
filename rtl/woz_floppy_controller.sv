@@ -1,6 +1,10 @@
 
 module woz_floppy_controller #(
-    parameter IS_35_INCH = 0
+    parameter IS_35_INCH = 0,
+    // BRAM_LATENCY controls track RAM read behavior:
+    //   0 = Combinational read (simulation-friendly, no latency)
+    //   1 = Registered read (FPGA-friendly, 1-cycle latency)
+    parameter BRAM_LATENCY = 0
 ) (
     input             clk,
     input             reset,
@@ -92,7 +96,7 @@ module woz_floppy_controller #(
     reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
     // Dual port RAM for Track Data (Side 0)
-    bram #(.width_a(8), .widthad_a(14)) track_ram_side0 (
+    bram #(.width_a(8), .widthad_a(14), .BRAM_LATENCY(BRAM_LATENCY)) track_ram_side0 (
         .clock_a(clk),
         .address_a(track_load_addr),
         .wren_a(track_load_we && (!IS_35_INCH || (track_load_side == 1'b0))),
@@ -107,7 +111,7 @@ module woz_floppy_controller #(
     );
 
     // Dual port RAM for Track Data (Side 1) - only meaningful for 3.5"
-    bram #(.width_a(8), .widthad_a(14)) track_ram_side1 (
+    bram #(.width_a(8), .widthad_a(14), .BRAM_LATENCY(BRAM_LATENCY)) track_ram_side1 (
         .clock_a(clk),
         .address_a(track_load_addr),
         .wren_a(track_load_we && (IS_35_INCH && (track_load_side == 1'b1))),

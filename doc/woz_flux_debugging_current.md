@@ -294,19 +294,156 @@ python3 iwm_compare.py wozdisks/ark_mame.log /tmp/ark_vsim.log --cpu-bytes --lim
 
 ## Next Steps
 
-1. **FPGA synthesis support**:
-   - Implement look-ahead logic in `flux_drive.v` to handle 1-cycle BRAM latency
-   - Pre-fetch next BRAM byte during current byte processing
-   - This would allow using registered BRAM for real FPGA targets
+1. **FPGA synthesis support** - IN PROGRESS
+2. Test additional WOZ images
+3. Compare byte timing with MAME (optional)
 
-2. **Test additional WOZ images**:
-   - Verify other WOZ disk images boot correctly
-   - Test both 3.5" and 5.25" WOZ formats
+---
 
-3. **Compare byte timing with MAME** (optional):
-   - Byte decode timing differs from MAME
-   - This is expected due to different decoder implementations
-   - Not critical since sectors are read correctly
+## FPGA Look-Ahead Implementation Plan
+
+### Goal
+Make `flux_drive.v` work with standard registered BRAM (1-cycle read latency) so it can be synthesized for real FPGAs.
+
+### Approach: State Machine Look-Ahead (Pipeline)
+
+Modify `flux_drive.v` to compute the *next* BRAM address one cycle early. When we need byte N, we already issued the read for it last cycle.
+
+### Why This Approach
+- Standard pipelining technique used in FPGA designs
+- Works with any synchronous BRAM (no clock tricks)
+- No additional clock domains needed
+- Natural fit since flux_drive already tracks bit_position
+
+### Implementation Steps
+
+#### Phase 1: Add BRAM Latency Parameter ✓
+- [x] Add `parameter BRAM_LATENCY = 0` to `bram.sv`
+- [x] When `BRAM_LATENCY=0`: combinational read (current simulation behavior)
+- [x] When `BRAM_LATENCY=1`: registered read (FPGA behavior)
+- [x] Build and verify simulation still works with `BRAM_LATENCY=0`
+
+#### Phase 2: Capture Regression Baseline ✓
+- [x] Run `./obj_dir/Vemu --woz ArkanoidIIgs.woz --stop-at-frame 1500` and capture:
+  - BYTE_COMPLETE_ASYNC stream (byte values and positions) - 1,470,066 entries
+  - Track load sequence - 678 events
+  - Screenshot at frame 800
+- [x] Create regression test script (`woz_regression.sh`)
+
+#### Phase 3: Implement Look-Ahead in flux_drive.v
+- [ ] Add `next_bram_addr` register (computed one cycle ahead)
+- [ ] Add `prefetch_data` register to hold the pre-fetched byte
+- [ ] Modify address output: `BRAM_ADDR = next_bram_addr` (one cycle early)
+- [ ] On bit_position advance: use `prefetch_data` instead of direct BRAM read
+- [ ] Handle edge cases:
+  - [ ] Track wrap (bit_position reaches TRACK_BIT_COUNT)
+  - [ ] Track/side change (invalidate prefetch, re-sync)
+  - [ ] Motor start (initial prefetch)
+  - [ ] Drive not ready (don't prefetch)
+
+#### Phase 4: Test with BRAM_LATENCY=1
+- [ ] Change `bram.sv` to `BRAM_LATENCY=1` (registered)
+- [ ] Run regression tests
+- [ ] Compare BYTE_COMPLETE_ASYNC streams (must match exactly)
+- [ ] Compare screenshots (must match)
+- [ ] Verify boot milestones (frames 200, 400, 800, 1500)
+
+#### Phase 5: Stress Testing
+- [ ] Test rapid track seeking
+- [ ] Test side switching on double-sided disks
+- [ ] Test motor on/off cycles
+- [ ] Test multiple WOZ images (3.5" and 5.25")
+
+### Key Signals to Modify in flux_drive.v
+
+```
+Current flow:
+  bit_position -> BRAM_ADDR = bit_position[16:3]
+  BRAM returns data immediately
+  flux_drive uses BRAM_DATA
+
+New flow with look-ahead:
+  bit_position -> compute next_bit_position (one cycle ahead)
+  BRAM_ADDR = next_bit_position[16:3]
+  BRAM returns data next cycle -> prefetch_data register
+  When bit_position advances, prefetch_data is already valid
+```
+
+### Edge Cases to Handle
+
+1. **Track wrap**: When `bit_position >= TRACK_BIT_COUNT`, wrap to 0
+   - `next_bit_position` must also wrap correctly
+
+2. **Track change**: When track_id changes
+   - Invalidate prefetch_data
+   - Wait one cycle for new data before resuming
+
+3. **Motor start / drive_ready rising**:
+   - Initialize prefetch pipeline
+   - First byte needs special handling (no valid prefetch yet)
+
+4. **Side change on 3.5" disks**:
+   - Similar to track change - invalidate and re-sync
+
+### Regression Test Script
+
+```bash
+#!/bin/bash
+# woz_regression.sh - Run before and after changes
+
+BASELINE_DIR="regression_baseline"
+TEST_LOG="regression_test.log"
+
+# Capture baseline (run once with known-good code)
+capture_baseline() {
+    mkdir -p $BASELINE_DIR
+    ./obj_dir/Vemu --woz ArkanoidIIgs.woz --screenshot 800 --stop-at-frame 1500 2>&1 | tee $BASELINE_DIR/full.log
+    grep "BYTE_COMPLETE_ASYNC" $BASELINE_DIR/full.log > $BASELINE_DIR/bytes.txt
+    grep "WOZ3 DATA: Track" $BASELINE_DIR/full.log > $BASELINE_DIR/tracks.txt
+    cp screenshot_frame_0800.png $BASELINE_DIR/
+    echo "Baseline captured in $BASELINE_DIR/"
+}
+
+# Run regression test
+run_test() {
+    ./obj_dir/Vemu --woz ArkanoidIIgs.woz --screenshot 800 --stop-at-frame 1500 2>&1 | tee $TEST_LOG
+
+    # Compare bytes
+    grep "BYTE_COMPLETE_ASYNC" $TEST_LOG > test_bytes.txt
+    if diff -q $BASELINE_DIR/bytes.txt test_bytes.txt > /dev/null; then
+        echo "PASS: Byte stream matches"
+    else
+        echo "FAIL: Byte stream differs"
+        diff $BASELINE_DIR/bytes.txt test_bytes.txt | head -20
+        return 1
+    fi
+
+    # Compare screenshot (binary diff for now)
+    if cmp -s $BASELINE_DIR/screenshot_frame_0800.png screenshot_frame_0800.png; then
+        echo "PASS: Screenshot matches"
+    else
+        echo "WARN: Screenshot differs (may need visual inspection)"
+    fi
+
+    echo "Regression test complete"
+}
+
+case "$1" in
+    baseline) capture_baseline ;;
+    test) run_test ;;
+    *) echo "Usage: $0 {baseline|test}" ;;
+esac
+```
+
+### Progress Tracking
+
+| Step | Status | Notes |
+|------|--------|-------|
+| Phase 1: BRAM_LATENCY param | **DONE** | Added to bram.sv, woz_floppy_controller.sv, sim.v |
+| Phase 2: Regression baseline | **DONE** | 1.47M bytes, 678 track events, screenshot captured |
+| Phase 3: Look-ahead impl | In Progress | |
+| Phase 4: Test with latency | Not started | |
+| Phase 5: Stress testing | Not started | |
 
 ## Test Results History
 

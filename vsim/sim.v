@@ -750,8 +750,15 @@ always @(posedge clk_sys) begin
     end
 end
 
+// BRAM_LATENCY: 0 = combinational (simulation), 1 = registered (FPGA)
+// Can be overridden via -DBRAM_LATENCY=1 in Verilator command line
+`ifndef WOZ_BRAM_LATENCY
+`define WOZ_BRAM_LATENCY 0
+`endif
+
 woz_floppy_controller #(
-    .IS_35_INCH(1)
+    .IS_35_INCH(1),
+    .BRAM_LATENCY(`WOZ_BRAM_LATENCY)
 ) woz_ctrl (
     .clk(clk_sys),
     .reset(reset),
