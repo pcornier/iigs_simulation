@@ -278,22 +278,21 @@ void SimBlockDevice::BeforeEval(int cycles)
     if ((current_disk==-1 || current_disk==i) && (bitcheck(*sd_rd,i) || bitcheck(*sd_wr,i) )) {
        // set current disk here..
        current_disk=i;
-      // Debug: show when read is blocked by ack_delay (only for WOZ raw index 5)
-      if (i == 5 && ack_delay > 0) {
-          static int blocked_count = 0;
-          static int last_lba = -1;
+      // If sd_lba changed while a transfer is in progress, cancel the old transfer
+      // This prevents the Verilog from receiving data for the wrong LBA
+      if (ack_delay > 0 && reading) {
           int lba = *(sd_lba[i]);
-          if (lba != last_lba) {
-              blocked_count++;
-              if (blocked_count <= 50) {
-                  printf("WOZ_RAW BLOCKED: sd_rd[5]=1 but ack_delay=%d, lba=%d current_disk=%d reading=%d writing=%d\n",
-                         ack_delay, lba, current_disk, reading, writing);
-              }
-              last_lba = lba;
+          if (lba != current_lba[i]) {
+              printf("WOZ_RAW CANCEL: LBA changed from %d to %d during transfer (ack_delay=%d), canceling\n",
+                     current_lba[i], lba, ack_delay);
+              ack_delay = 0;
+              reading = false;
+              bitclear(*sd_ack,i);  // Make sure sd_ack is low
           }
       }
       if (!ack_delay) {
         int lba = *(sd_lba[i]);
+        current_lba[i] = lba;  // Track which LBA this transfer is for
         // Debug: show when read starts (only for WOZ raw index 5)
         if (i == 5) {
             printf("WOZ_RAW START: ack_delay=0, starting read for lba=%d\n", lba);
@@ -382,6 +381,7 @@ SimBlockDevice::SimBlockDevice(DebugConsole c) {
            sd_lba[i] = NULL;
 	   sd_buff_din[i] = NULL;
            mountQueue[i]=0;
+           current_lba[i] = -1;  // Initialize to invalid LBA
         }
         sd_buff_wr=NULL;
         img_mounted=NULL;

@@ -58,6 +58,7 @@ public:
 	bool writing;
 	int ack_delay;
 	int current_disk;
+	int current_lba[kVDNUM];  // LBA currently being transferred for each drive
 	bool mountQueue[kVDNUM];
 	std::fstream disk[kVDNUM];
 

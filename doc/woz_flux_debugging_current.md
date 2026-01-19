@@ -6,6 +6,8 @@ Testing WOZ disk images with the Apple IIgs simulator. WOZ v2 BITSTREAM format (
 
 **Status: FIXED - BOTH C++ and Verilog paths boot GS/OS successfully!**
 
+**Update (top-level FPGA path)**: Integrated the Verilog WOZ controller directly into `IIgs.sv` so the top-level uses a single WOZ disk (slot S2 / index 2) instead of the legacy `floppy_track` modules. This wires the WOZ bit interface into `iigs`, routes SD index 2 to `woz_floppy_controller`, and drives `DISK_READY[2]` from `woz_ctrl_disk_mounted`. 5.25" drives are currently disabled at top-level. `WOZ_BRAM_LATENCY` is set to 1 for FPGA-style registered BRAM timing.
+
 Verified working at frames 800 and 1500 with "Welcome to the IIgs" progress screen.
 
 ### Root Cause (SOLVED)
@@ -205,6 +207,21 @@ assign q_b = wren_b ? data_b : mem[address_b];
 **Note**: This is a simulation-only fix. Real FPGAs need registered BRAM, so `flux_drive.v` would need proper look-ahead logic for FPGA synthesis.
 
 **Result**: Both C++ and Verilog WOZ paths now boot GS/OS successfully.
+
+### Additional Fix (BRAM latency / wrap prefetch)
+
+With `BRAM_LATENCY=1`, the bitstream path can read the wrong byte when `TRACK_BIT_COUNT` is not byte-aligned and the bit position wraps mid-byte. The original look-ahead only handled byte-boundary crossings; it did not prefetch the wrap-to-zero byte when the wrap happens at a non-byte boundary. This caused divergence between latency=0 and latency=1 paths.
+
+**Fix**: Added a wrap-aware prefetch in `rtl/flux_drive.v` so `BRAM_ADDR` switches to byte 0 one cycle early when the next bit will wrap to the start of the track.
+
+```verilog
+wire wrap_next_bit = (TRACK_BIT_COUNT > 0) && (effective_bit_position + 1 >= track_bit_count_17);
+wire need_wrap_prefetch = wrap_next_bit && about_to_advance && motor_spinning && TRACK_LOADED;
+wire need_prefetch = need_lookahead || need_wrap_prefetch;
+wire [13:0] prefetch_byte_index = wrap_next_bit ? 14'd0 : next_byte_index;
+assign BRAM_ADDR = IS_FLUX_TRACK ? flux_byte_addr[13:0] :
+                   (need_prefetch ? prefetch_byte_index : byte_index);
+```
 
 ## Current Working State
 
@@ -439,11 +456,57 @@ esac
 
 | Step | Status | Notes |
 |------|--------|-------|
-| Phase 1: BRAM_LATENCY param | **DONE** | Added to bram.sv, woz_floppy_controller.sv, sim.v |
+| Phase 1: BRAM_LATENCY param | **DONE** | Added to bram.sv, woz_floppy_controller.sv, iwm_woz.v, iigs.sv, sim.v |
 | Phase 2: Regression baseline | **DONE** | 1.47M bytes, 678 track events, screenshot captured |
-| Phase 3: Look-ahead impl | In Progress | |
-| Phase 4: Test with latency | Not started | |
-| Phase 5: Stress testing | Not started | |
+| Phase 3: Look-ahead impl | **DONE** | Implemented in flux_drive.v with byte boundary look-ahead |
+| Phase 4: Test with latency | **BLOCKED** | 311-bit position drift issue discovered via VCD analysis |
+| Phase 5: Stress testing | Not started | Waiting for Phase 4 resolution |
+
+### BRAM_LATENCY=1 Position Drift Issue (2026-01-19)
+
+**Symptom**: With BRAM_LATENCY=1, GS/OS fails with "Unable to load START.GS.OS file. Error=#0027" despite sector detection working correctly.
+
+**VCD Analysis Results**:
+Captured VCD waveforms at frames 460-463 for both BRAM_LATENCY=0 and BRAM_LATENCY=1:
+
+```
+At timestamp #110454741:
+- BRAM_LATENCY=0: bit_position = 57159, BRAM_ADDR = 0x1BE8
+- BRAM_LATENCY=1: bit_position = 56848, BRAM_ADDR = 0x1BC2
+- Difference: 311 bits (38 bytes)
+```
+
+**Root Cause Analysis**:
+
+The 311-bit drift accumulates because position resets pause the disk rotation:
+
+1. When `TRACK_LOAD_COMPLETE` or `drive_ready_rising` fires:
+   - `bit_position <= 0` (non-blocking, takes effect at end of cycle)
+   - `BRAM_ADDR = 0` (combinational, immediate)
+   - With BRAM_LATENCY=1, valid data for addr=0 arrives NEXT cycle
+
+2. The `bram_first_read_pending` mechanism waits one cycle for valid BRAM data
+   - During this wait, `bit_position` doesn't advance
+   - The simulated disk "pauses" while real hardware would continue rotating
+
+3. Over many position resets (motor restarts, track changes), the pauses accumulate
+   - ~7 BRAM wait events in 400 frames
+   - Each wait loses timing equivalent to ~44 bits
+   - Total drift: 311 bits by frame 460
+
+**Attempted Fixes**:
+1. Let timer run during BRAM wait (position advances, skip flux check) - still drifts
+2. Reset bit_timer in BRAM wait to trigger flux check next cycle - timer decrement overwrites
+3. Add !bram_first_read_pending to timer conditions - pauses position, causes drift
+
+**Core Problem**:
+The BRAM address changes combinationally with bit_position. With 1-cycle BRAM latency, we need the address presented ONE CYCLE BEFORE the data is needed. For byte boundary crossings, the look-ahead logic handles this. For position resets, we can't predict when TRACK_LOAD_COMPLETE will fire.
+
+**Potential Solutions** (not yet implemented):
+1. **Pipeline the position reset**: Delay the actual position reset by one cycle so BRAM data is ready
+2. **Accept small drift**: Skip flux check on first bit after reset but keep position advancing
+3. **Dual-port BRAM timing**: Use port A for speculative reads, port B for actual data
+4. **Prefetch on track load**: When TRACK_LOAD_COMPLETE fires, data at addr=0 is already in pipeline
 
 ## Test Results History
 

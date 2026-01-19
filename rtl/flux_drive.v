@@ -12,7 +12,9 @@
 // Reference: MAME iwm.cpp, real Apple IIgs drive architecture
 //
 
-module flux_drive (
+module flux_drive #(
+    parameter BRAM_LATENCY = 0  // 0 = combinational BRAM, 1 = registered BRAM
+) (
     // Configuration
     input  wire        IS_35_INCH,      // 1 = 3.5" drive, 0 = 5.25" drive
     input  wire [1:0]  DRIVE_ID,        // Drive instance identifier for debug
@@ -122,6 +124,10 @@ module flux_drive (
 
     // Flux generation state
     reg         prev_flux;              // Previous flux state for edge detection
+
+    // BRAM first-read wait (only used when BRAM_LATENCY > 0)
+    // After bit_position resets (track load, drive_ready), wait 1 cycle for BRAM data
+    reg         bram_first_read_pending;
 
     // WOZ FLUX timing playback state (when IS_FLUX_TRACK=1)
     // Flux tick phase accumulator.
@@ -283,8 +289,20 @@ module flux_drive (
     // If we revert at timer=1, BRAM_DATA would be wrong at the flux check!
     wire        at_byte_end = (bit_shift == 3'd0);
     wire        about_to_advance = (bit_timer <= 6'd2) && (bit_timer >= 6'd1);
+    wire        wrap_next_bit = (TRACK_BIT_COUNT > 0) && (effective_bit_position + 1 >= track_bit_count_17);
     wire        need_lookahead = at_byte_end && about_to_advance && motor_spinning && TRACK_LOADED;
+    wire        need_wrap_prefetch = wrap_next_bit && about_to_advance && motor_spinning && TRACK_LOADED;
+    wire        need_prefetch = need_lookahead || need_wrap_prefetch;
     wire [13:0] next_byte_index = (byte_index >= max_byte_index) ? 14'd0 : (byte_index + 14'd1);
+    wire [13:0] prefetch_byte_index = wrap_next_bit ? 14'd0 : next_byte_index;
+
+    // Skip position advance when TRACK_LOAD_COMPLETE, drive_ready rising edge, or motor restart occurs.
+    // This prevents the timer code (which runs later in the always block) from
+    // overwriting the position reset (bit_position <= 0) with bit_position + 1.
+    // Motor restart: motor_spinning 0→1 while drive_ready already true (common with 3.5" drives)
+    wire        drive_ready_rising = drive_ready && !prev_drive_ready && (TRACK_BIT_COUNT > 0);
+    wire        motor_restart_ready = motor_spinning && !prev_motor_for_position && drive_ready && (TRACK_BIT_COUNT > 0);
+    wire        skip_position_advance = TRACK_LOAD_COMPLETE || drive_ready_rising || (motor_restart_ready && (BRAM_LATENCY > 0));
 
     //=========================================================================
     // Output Assignments
@@ -296,7 +314,7 @@ module flux_drive (
     assign BIT_POSITION = bit_position;
     // BRAM address: flux mode uses flux_byte_addr, bitstream mode uses byte_index with look-ahead
     assign BRAM_ADDR = IS_FLUX_TRACK ? flux_byte_addr[13:0] :
-                       (need_lookahead ? next_byte_index : byte_index);
+                       (need_prefetch ? prefetch_byte_index : byte_index);
     assign WRITE_PROTECT = DISK_WP;
 
     //=========================================================================
@@ -717,6 +735,7 @@ module flux_drive (
             flux_is_continuation <= 1'b0;
             next_flux_byte <= 8'd0;
             next_byte_valid <= 1'b0;
+            bram_first_read_pending <= (BRAM_LATENCY > 0) ? 1'b1 : 1'b0;  // Wait for BRAM on startup
 `ifdef SIMULATION
             side_transition_logged <= 1'b1;  // Start as logged to avoid spam at startup
             debug_read_count <= 5'd16;       // Disable log until first track change
@@ -731,9 +750,15 @@ module flux_drive (
             // Reset bit_position when track load completes (Option A fix for bit_position drift)
             // This eliminates accumulated drift from modulo calculations with wrong/stale bit counts
             // during track loading. The ROM doesn't expect exact angular continuity across seeks.
+            //
+            // NOTE: For FPGA BRAM with 1-cycle read latency, we start bit_timer at bit_cell_cycles-1
+            // to give BRAM one cycle to load the new track's first byte before flux checks.
             if (TRACK_LOAD_COMPLETE) begin
                 bit_position <= 17'd0;
-                bit_timer <= bit_cell_cycles;
+                bit_timer <= bit_cell_cycles;  // Full bit cell time
+                // skip_position_advance wire handles this automatically
+                // For BRAM_LATENCY > 0, wait 1 cycle for BRAM data before first flux check
+                if (BRAM_LATENCY > 0) bram_first_read_pending <= 1'b1;
                 // Reset flux playback state for new track
                 flux_phase_accum <= 32'd0;
                 flux_byte_counter <= 8'd0;
@@ -743,7 +768,11 @@ module flux_drive (
                 flux_is_continuation <= 1'b0;
                 next_byte_valid <= 1'b0;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d) is_flux=%0d", DRIVE_ID, bit_position, IS_FLUX_TRACK);
+                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d) is_flux=%0d BRAM_LAT=%0d", DRIVE_ID, bit_position, IS_FLUX_TRACK, BRAM_LATENCY);
+                if (BRAM_LATENCY > 0) begin
+                    $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE bram_wait=1 bit_timer=%0d cell=%0d addr=%0d pos=%0d",
+                             DRIVE_ID, bit_timer, bit_cell_cycles, BRAM_ADDR, bit_position);
+                end
 `endif
             end
 
@@ -751,9 +780,21 @@ module flux_drive (
             // This ensures the decoder starts at a known position when the state machine activates.
             // Without this reset, bit_position accumulates during spinup (~170000 bits) and the
             // decoder starts mid-track, never seeing the D5 AA prologue markers at the track start.
+            //
+            // NOTE: For FPGA BRAM with 1-cycle read latency, we start bit_timer at bit_cell_cycles-1
+            // instead of bit_cell_cycles. This gives BRAM one cycle to load the initial byte before
+            // the first flux check (which happens when bit_timer == bit_cell_cycles).
+            //
+            // MOTOR RESTART HANDLING (BRAM_LATENCY > 0):
+            // When motor_spinning restarts (0→1) while drive_ready is ALREADY true (common with
+            // 3.5" drives during GS/OS loading due to SEL35 toggling), we need to wait for
+            // fresh BRAM data. The first flux check after restart would otherwise use stale data.
             if (drive_ready && !prev_drive_ready && TRACK_BIT_COUNT > 0) begin
                 bit_position <= 17'd0;
-                bit_timer <= bit_cell_cycles;
+                bit_timer <= bit_cell_cycles;  // Full bit cell time
+                // skip_position_advance wire handles this automatically
+                // For BRAM_LATENCY > 0, wait 1 cycle for BRAM data before first flux check
+                if (BRAM_LATENCY > 0) bram_first_read_pending <= 1'b1;
                 // Also reset flux playback state
                 flux_phase_accum <= 32'd0;
                 flux_byte_counter <= 8'd0;
@@ -763,12 +804,31 @@ module flux_drive (
                 flux_is_continuation <= 1'b0;
                 next_byte_valid <= 1'b0;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: DRIVE_READY rising edge - resetting bit_position to 0 (was %0d)", DRIVE_ID, bit_position);
+                $display("FLUX_DRIVE[%0d]: DRIVE_READY rising edge - resetting bit_position to 0 (was %0d) BRAM_LAT=%0d", DRIVE_ID, bit_position, BRAM_LATENCY);
+                if (BRAM_LATENCY > 0) begin
+                    $display("FLUX_DRIVE[%0d]: DRIVE_READY bram_wait=1 bit_timer=%0d cell=%0d addr=%0d pos=%0d",
+                             DRIVE_ID, bit_timer, bit_cell_cycles, BRAM_ADDR, bit_position);
+                end
 `endif
             end
             prev_drive_ready <= drive_ready;
 
-            // Track motor state transitions (for potential future use)
+            // Track motor state transitions
+            // MOTOR RESTART WITH DRIVE ALREADY READY (BRAM_LATENCY handling):
+            // When motor_spinning goes 0→1 while drive_ready is already true (common with 3.5"
+            // drives due to SEL35 toggling), we need to wait for fresh BRAM data. Without this,
+            // the first flux check after motor restart uses stale BRAM data from the old address.
+            if (motor_spinning && !prev_motor_for_position && drive_ready && TRACK_BIT_COUNT > 0) begin
+                if (BRAM_LATENCY > 0) bram_first_read_pending <= 1'b1;
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: MOTOR_RESTART while drive_ready - waiting for BRAM (addr=%0d) BRAM_LAT=%0d",
+                         DRIVE_ID, BRAM_ADDR, BRAM_LATENCY);
+                if (BRAM_LATENCY > 0) begin
+                    $display("FLUX_DRIVE[%0d]: MOTOR_RESTART bram_wait=1 bit_timer=%0d cell=%0d pos=%0d",
+                             DRIVE_ID, bit_timer, bit_cell_cycles, bit_position);
+                end
+`endif
+            end
             prev_motor_for_position <= motor_spinning;
 
             // Handle TRACK_BIT_COUNT changes (side selection transitions)
@@ -818,6 +878,13 @@ module flux_drive (
 
             // Rotate whenever motor is spinning so angular position keeps advancing
             if (motor_spinning) begin
+`ifdef SIMULATION
+                if (BRAM_LATENCY > 0 && (TRACK_LOAD_COMPLETE || drive_ready_rising || motor_restart_ready)) begin
+                    $display("FLUX_DRIVE[%0d]: SKIP_ADVANCE reason=%0d%0d%0d timer=%0d pos=%0d eff=%0d addr=%0d",
+                             DRIVE_ID, TRACK_LOAD_COMPLETE, drive_ready_rising, motor_restart_ready,
+                             bit_timer, bit_position, effective_bit_position, BRAM_ADDR);
+                end
+`endif
                 if (IS_FLUX_TRACK && TRACK_LOADED) begin
                     //=================================================================
                     // FLUX TIMING PLAYBACK MODE
@@ -936,7 +1003,8 @@ module flux_drive (
 
                     // Track bit position in FLUX mode using same bit_timer mechanism as bitstream mode.
                     // This ensures DISK_BIT_POSITION advances at the expected rate for IWM timing.
-                    if (bit_timer == 6'd1) begin
+                    // skip_position_advance prevents this code from overwriting position resets
+                    if (bit_timer == 6'd1 && !skip_position_advance) begin
                         bit_timer <= bit_cell_cycles;
                         // Advance bit position with wraparound
                         if (TRACK_BIT_COUNT > 0) begin
@@ -948,7 +1016,7 @@ module flux_drive (
                         end else begin
                             bit_position <= bit_position + 1'd1;
                         end
-                    end else begin
+                    end else if (!skip_position_advance) begin
                         bit_timer <= bit_timer - 1'd1;
                     end
 
@@ -962,12 +1030,26 @@ module flux_drive (
                     // Emit transitions at the bit-cell boundary (start of cell). `iwm_flux.v` now treats
                     // 1-cycle pulses as visible in the same 14MHz tick (`flux_now`), so boundary pulses
                     // no longer risk being missed at window shift boundaries.
-                    if (bit_timer == bit_cell_cycles) begin
+                    //
+                    // BRAM LATENCY HANDLING:
+                    // With registered BRAM (BRAM_LATENCY > 0), we need to wait 1 cycle after any
+                    // bit_position reset for BRAM_DATA to become valid. This wait is ONLY needed
+                    // when BRAM_LATENCY > 0; with combinational BRAM, data is immediately valid.
+                    if (bram_first_read_pending) begin
+                        // BRAM wait cycle: skip flux check but let position/timer run normally.
+                        // With BRAM_LATENCY > 0, data isn't valid this cycle, so we can't check flux.
+                        // Missing one bit's flux check per position reset is acceptable - the disk
+                        // position stays synchronized, which is more important than one missed bit.
+                        bram_first_read_pending <= 1'b0;
+`ifdef SIMULATION
+                        $display("FLUX_DRIVE[%0d]: BRAM first read wait - skipping flux (addr=%0d pos=%0d)",
+                                 DRIVE_ID, BRAM_ADDR, bit_position);
+`endif
+                    end else if (bit_timer == bit_cell_cycles) begin
                         // Bit-cell boundary - generate flux if this bit is 1
                         // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
                         // During spinup, the IWM shouldn't receive flux transitions
                         // This matches MAME behavior where m_data stays 0x00 during spinup
-                        // NOTE: bram_data_valid check removed - look-ahead should be sufficient
                         if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
@@ -983,7 +1065,11 @@ module flux_drive (
                         end
                     end
 
-                    if (bit_timer == 6'd1) begin
+                    // Timer operations: position advances at a constant rate, independent of BRAM waits.
+                    // The disk rotates continuously; bram_first_read_pending only skips flux check,
+                    // not position tracking. This keeps the simulated disk synchronized with real timing.
+                    // skip_position_advance is set when TRACK_LOAD_COMPLETE or drive_ready resets position.
+                    if (bit_timer == 6'd1 && !skip_position_advance) begin
                         // End of bit cell - advance to next bit
                         bit_timer <= bit_cell_cycles;
 
@@ -1005,7 +1091,7 @@ module flux_drive (
                             bit_position <= bit_position + 1'd1;
                         end
 
-                    end else begin
+                    end else if (!skip_position_advance) begin
                         // Still in current bit cell
                         bit_timer <= bit_timer - 1'd1;
                     end

@@ -10,8 +10,9 @@
 // Define DEBUG_IRQ to enable verbose interrupt debug output
 // `define DEBUG_IRQ
 
-module iigs
-  (
+module iigs #(
+    parameter WOZ_BRAM_LATENCY = 0  // 0 = combinational BRAM, 1 = registered BRAM
+) (
    input              reset,
    input              cold_reset,  // 1 = cold/power-on reset (CYAREG bit 6 = 1), 0 = warm reset
 
@@ -2805,7 +2806,7 @@ wire ready_out;
   assign WOZ_TRACK1_BIT_ADDR = 13'd0;
   `else
   // Hardware-accurate IWM with WOZ/flux-based disk interface
-  iwm_woz iwmc (
+  iwm_woz #(.BRAM_LATENCY(WOZ_BRAM_LATENCY)) iwmc (
       // Global clocks/resets
       .CLK_14M(CLK_14M),
       .CLK_7M_EN(clk_7M_en),

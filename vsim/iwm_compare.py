@@ -95,22 +95,37 @@ class IWMEvent:
     latched: Optional[int] = None # Latched sense register (phases & 7)
     sel: Optional[int] = None     # SEL bit from $C031
     position: Optional[int] = None  # Disk position for flux debugging
+    frame: Optional[int] = None  # Frame number for time correlation
 
 def parse_mame_log(filename: str) -> List[IWMEvent]:
     """Parse MAME IWM log entries"""
     events = []
 
     # Patterns for MAME log lines
-    # New format with position: IWM_DATA @<time> pos=<pos>: result=...
-    # Old format without position: IWM_DATA @<time>: result=...
+    # New format with frame and position: IWM_DATA @<time> frame=<frame> pos=<pos>: result=...
+    # Format with frame only: IWM_DATA @<time> frame=<frame>: result=...
+    # Legacy format with position only: IWM_DATA @<time> pos=<pos>: result=...
+    # Legacy format without frame or position: IWM_DATA @<time>: result=...
+    iwm_data_pattern_with_frame_pos = re.compile(
+        r'\[:fdc\] IWM_DATA @([^ ]+) frame=(\d+) pos=(\d+): result=([0-9a-f]{2}) active=(\d) data=([0-9a-f]{2}) status=([0-9a-f]{2}) mode=([0-9a-f]{2}) floppy=(.+)'
+    )
+    iwm_data_pattern_with_frame = re.compile(
+        r'\[:fdc\] IWM_DATA @([^ ]+) frame=(\d+): result=([0-9a-f]{2}) active=(\d) data=([0-9a-f]{2}) status=([0-9a-f]{2}) mode=([0-9a-f]{2}) floppy=(.+)'
+    )
     iwm_data_pattern_with_pos = re.compile(
         r'\[:fdc\] IWM_DATA @([^ ]+) pos=(\d+): result=([0-9a-f]{2}) active=(\d) data=([0-9a-f]{2}) status=([0-9a-f]{2}) mode=([0-9a-f]{2}) floppy=(.+)'
     )
     iwm_data_pattern = re.compile(
         r'\[:fdc\] IWM_DATA @([^:]+): result=([0-9a-f]{2}) active=(\d) data=([0-9a-f]{2}) status=([0-9a-f]{2}) mode=([0-9a-f]{2}) floppy=(.+)'
     )
+    iwm_status_pattern_with_frame = re.compile(
+        r'\[:fdc\] IWM_STATUS @([^ ]+) frame=(\d+): result=([0-9a-f]{2}) \(bit7_wp=\d bit5_motor=(\d) mode=([0-9a-f]{2}) phases=([0-9a-f]+)\) floppy=(.+)'
+    )
     iwm_status_pattern = re.compile(
         r'\[:fdc\] IWM_STATUS @([^:]+): result=([0-9a-f]{2}) \(bit7_wp=\d bit5_motor=(\d) mode=([0-9a-f]{2}) phases=([0-9a-f]+)\) floppy=(.+)'
+    )
+    iwm_motor_on_pattern_with_frame = re.compile(
+        r'\[:fdc\] IWM_MOTOR_ON @([^ ]+) frame=(\d+): control=([0-9a-f]{2}) floppy=(.+)'
     )
     iwm_motor_on_pattern = re.compile(
         r'\[:fdc\] IWM_MOTOR_ON @([^:]+): control=([0-9a-f]{2}) floppy=(.+)'
@@ -130,7 +145,42 @@ def parse_mame_log(filename: str) -> List[IWMEvent]:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
 
-                # IWM_DATA - try new format with position first
+                # IWM_DATA - try new format with frame and position first
+                m = iwm_data_pattern_with_frame_pos.search(line)
+                if m:
+                    events.append(IWMEvent(
+                        source='mame',
+                        event_type='DATA',
+                        timestamp=m.group(1),
+                        frame=int(m.group(2)),
+                        position=int(m.group(3)),
+                        result=int(m.group(4), 16),
+                        active=int(m.group(5)),
+                        status=int(m.group(7), 16),
+                        mode=int(m.group(8), 16),
+                        extra=m.group(9),
+                        line_num=line_num
+                    ))
+                    continue
+
+                # IWM_DATA - format with frame but no position
+                m = iwm_data_pattern_with_frame.search(line)
+                if m:
+                    events.append(IWMEvent(
+                        source='mame',
+                        event_type='DATA',
+                        timestamp=m.group(1),
+                        frame=int(m.group(2)),
+                        result=int(m.group(3), 16),
+                        active=int(m.group(4)),
+                        status=int(m.group(6), 16),
+                        mode=int(m.group(7), 16),
+                        extra=m.group(8),
+                        line_num=line_num
+                    ))
+                    continue
+
+                # IWM_DATA - legacy format with position but no frame
                 m = iwm_data_pattern_with_pos.search(line)
                 if m:
                     events.append(IWMEvent(
@@ -147,7 +197,7 @@ def parse_mame_log(filename: str) -> List[IWMEvent]:
                     ))
                     continue
 
-                # IWM_DATA - old format without position
+                # IWM_DATA - legacy format without position or frame
                 m = iwm_data_pattern.search(line)
                 if m:
                     events.append(IWMEvent(
@@ -163,7 +213,26 @@ def parse_mame_log(filename: str) -> List[IWMEvent]:
                     ))
                     continue
 
-                # IWM_STATUS
+                # IWM_STATUS - try new format with frame first
+                m = iwm_status_pattern_with_frame.search(line)
+                if m:
+                    phases_val = int(m.group(6), 16)
+                    events.append(IWMEvent(
+                        source='mame',
+                        event_type='STATUS',
+                        timestamp=m.group(1),
+                        frame=int(m.group(2)),
+                        result=int(m.group(3), 16),
+                        motor=int(m.group(4)),
+                        mode=int(m.group(5), 16),
+                        phases=phases_val,
+                        latched=phases_val & 7,
+                        extra=m.group(7),
+                        line_num=line_num
+                    ))
+                    continue
+
+                # IWM_STATUS - legacy format without frame
                 m = iwm_status_pattern.search(line)
                 if m:
                     phases_val = int(m.group(5), 16)
@@ -183,7 +252,21 @@ def parse_mame_log(filename: str) -> List[IWMEvent]:
                     ))
                     continue
 
-                # IWM_MOTOR_ON
+                # IWM_MOTOR_ON - try new format with frame first
+                m = iwm_motor_on_pattern_with_frame.search(line)
+                if m:
+                    events.append(IWMEvent(
+                        source='mame',
+                        event_type='MOTOR_ON',
+                        timestamp=m.group(1),
+                        frame=int(m.group(2)),
+                        result=int(m.group(3), 16),
+                        extra=m.group(4),
+                        line_num=line_num
+                    ))
+                    continue
+
+                # IWM_MOTOR_ON - legacy format without frame
                 m = iwm_motor_on_pattern.search(line)
                 if m:
                     events.append(IWMEvent(
@@ -245,8 +328,12 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
     events = []
 
     # Patterns for vsim log lines
-    # New format with position: IWM_FLUX: READ DATA @1 -> ff pos=12345 (motor=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0)
-    # Old format: IWM_FLUX: READ DATA @1 -> ff (motor=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0)
+    # Current format with active/spin: IWM_FLUX: READ DATA @1 -> ff pos=12345 (active=0 spin=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0 async=0)
+    # Old format with motor: IWM_FLUX: READ DATA @1 -> ff pos=12345 (motor=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0)
+    # Older format without pos: IWM_FLUX: READ DATA @1 -> ff (motor=0 rsh=00 data=00 bc=0 dr=1 q6=0 q7=0)
+    iwm_flux_pattern_active = re.compile(
+        r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) pos=(\d+) \(active=(\d) spin=(\d) rsh=([0-9a-f]{2}) data=([0-9a-f]{2}) bc=(\d+) dr=(\d) q6=(\d) q7=(\d)'
+    )
     iwm_flux_pattern_with_pos = re.compile(
         r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) pos=(\d+) \(motor=(\d) rsh=([0-9a-f]{2}) data=([0-9a-f]{2}) bc=(\d+) dr=(\d) q6=(\d) q7=(\d)\)'
     )
@@ -261,6 +348,11 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
     flux_status_pattern = re.compile(
         r'FLUX_DRIVE\[(\d)\]: Status: motor=(\d) track_loaded=(\d) bit_pos=(\d+)/(\d+)'
     )
+    # Frame number tracking: "Frame: N"
+    frame_pattern = re.compile(r'^Frame: (\d+)$')
+
+    # Track current frame number
+    current_frame = None
 
     try:
         # Handle potential binary content
@@ -272,6 +364,12 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
 
         for line_num, line in enumerate(text.split('\n'), 1):
             line = line.strip()
+
+            # Check for frame number update
+            m = frame_pattern.match(line)
+            if m:
+                current_frame = int(m.group(1))
+                continue
 
             # IWM_FLUX READ STATUS - three possible formats
             # Newest: IWM_FLUX: READ STATUS @d -> 00 (sense=0 m_reg=0 latched=0 sel=0 phases=0000 is_35=1 motor_active=0 mounted=1)
@@ -302,7 +400,8 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                     latched=int(m.group(5), 16),
                     sel=int(m.group(6)),
                     extra=f"sense={m.group(3)} m_reg={m.group(4)} latched={m.group(5)} sel={m.group(6)} phases={m.group(7)} is_35={m.group(8)} mounted={m.group(10)}",
-                    line_num=line_num
+                    line_num=line_num,
+                    frame=current_frame
                 ))
                 continue
             m = status_pattern_new.search(line)
@@ -318,7 +417,8 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                     phases=phases_val,
                     latched=phases_val & 7,
                     extra=f"sense={m.group(3)} phases={m.group(4)} is_35={m.group(5)} mounted={m.group(7)}",
-                    line_num=line_num
+                    line_num=line_num,
+                    frame=current_frame
                 ))
                 continue
             m = status_pattern_old.search(line)
@@ -334,11 +434,34 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                     phases=phases_val,
                     latched=phases_val & 7,
                     extra=f"data_rdy={m.group(3)} phases={m.group(5)} is_35={m.group(6)} mounted={m.group(8)}",
-                    line_num=line_num
+                    line_num=line_num,
+                    frame=current_frame
                 ))
                 continue
 
-            # IWM_FLUX READ DATA - try new format with position first
+            # IWM_FLUX READ DATA - try newest format with active/spin first
+            m = iwm_flux_pattern_active.search(line)
+            if m:
+                # m.group(7) is the 'data' field - the assembled byte
+                assembled_data = int(m.group(7), 16)
+                events.append(IWMEvent(
+                    source='vsim',
+                    event_type='DATA',
+                    timestamp=m.group(1),  # phase number
+                    result=int(m.group(2), 16),  # what's actually returned
+                    position=int(m.group(3)),  # disk position
+                    active=int(m.group(4)),  # active flag
+                    motor=int(m.group(5)),  # spin flag (using motor field)
+                    shift_reg=int(m.group(6), 16),  # rsh
+                    status=assembled_data,  # store assembled data in status field
+                    q6=int(m.group(10)),
+                    q7=int(m.group(11)),
+                    line_num=line_num,
+                    frame=current_frame
+                ))
+                continue
+
+            # IWM_FLUX READ DATA - try older format with motor (no spin)
             m = iwm_flux_pattern_with_pos.search(line)
             if m:
                 # m.group(6) is the 'data' field - the assembled byte
@@ -354,7 +477,8 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                     status=assembled_data,  # store assembled data in status field
                     q6=int(m.group(9)),
                     q7=int(m.group(10)),
-                    line_num=line_num
+                    line_num=line_num,
+                    frame=current_frame
                 ))
                 continue
 
@@ -373,7 +497,8 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                     status=assembled_data,  # store assembled data in status field
                     q6=int(m.group(8)),
                     q7=int(m.group(9)),
-                    line_num=line_num
+                    line_num=line_num,
+                    frame=current_frame
                 ))
                 continue
 
@@ -386,7 +511,8 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                     timestamp='',
                     result=0,
                     extra=f"{m.group(1)}->{m.group(2)} (35={m.group(3)})",
-                    line_num=line_num
+                    line_num=line_num,
+                    frame=current_frame
                 ))
                 continue
 
@@ -400,7 +526,8 @@ def parse_vsim_log(filename: str) -> List[IWMEvent]:
                     result=0,
                     motor=int(m.group(2)),
                     extra=f"drive{m.group(1)} motor={m.group(2)} loaded={m.group(3)} pos={m.group(4)}/{m.group(5)}",
-                    line_num=line_num
+                    line_num=line_num,
+                    frame=current_frame
                 ))
                 continue
 
@@ -692,7 +819,7 @@ def parse_flux_events(filename: str, source: str) -> List[FluxEvent]:
     # MAME: IWM_FLUX: BYTE_COMPLETE_ASYNC data=de pos=50475987 @timestamp
     # vsim: IWM_FLUX: BYTE_COMPLETE_ASYNC data=de pos=12345 @cycle=12345
     byte_complete_pattern = re.compile(
-        r'IWM_FLUX: BYTE_COMPLETE_(?:ASYNC|SYNC) data=([0-9a-f]{2}) pos=(\d+)'
+        r'IWM_FLUX: BYTE_COMPLETE_(?:ASYNC|SYNC).*?data=([0-9a-f]{2}) pos=(\d+)'
     )
 
     # MAME: IWM_FLUX: EDGE_0->EDGE_1 flux_at=9311331 rsh=00 win=14 half=7
@@ -897,11 +1024,15 @@ def parse_cpu_data_reads_from_file(filename: str, source: str) -> List[Tuple[int
         r'\[:fdc\] IWM_DATA @[^:]+: result=([0-9a-f]{2}) active=(\d)'
     )
 
-    # vsim pattern: IWM_FLUX: READ DATA @X -> YY pos=ZZZ (motor=M ...)
+    # vsim pattern: IWM_FLUX: READ DATA @X -> YY pos=ZZZ (active=A spin=S ...)
+    vsim_pattern_active = re.compile(
+        r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) pos=(\d+) \(active=(\d) spin=(\d)'
+    )
+    # Old vsim pattern with motor: IWM_FLUX: READ DATA @X -> YY pos=ZZZ (motor=M ...)
     vsim_pattern = re.compile(
         r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) pos=(\d+) \(motor=(\d)'
     )
-    # Old vsim format without pos
+    # Older vsim format without pos
     vsim_pattern_old = re.compile(
         r'IWM_FLUX: READ DATA @([0-9a-f]+) -> ([0-9a-f]{2}) \(motor=(\d)'
     )
@@ -930,7 +1061,19 @@ def parse_cpu_data_reads_from_file(filename: str, source: str) -> List[Tuple[int
                         reads.append((line_num, result, 0, f"active={active}"))
                     continue
             else:  # vsim
-                # Try new format first
+                # Try newest format with active/spin first
+                m = vsim_pattern_active.search(line)
+                if m:
+                    addr = m.group(1)
+                    result = int(m.group(2), 16)
+                    pos = int(m.group(3))
+                    active = int(m.group(4))
+                    spin = int(m.group(5))
+                    # Only when motor is spinning
+                    if spin == 1:
+                        reads.append((line_num, result, pos, f"@{addr} active={active} spin={spin}"))
+                    continue
+                # Try older format with motor
                 m = vsim_pattern.search(line)
                 if m:
                     addr = m.group(1)
@@ -941,7 +1084,7 @@ def parse_cpu_data_reads_from_file(filename: str, source: str) -> List[Tuple[int
                     if motor == 1:
                         reads.append((line_num, result, pos, f"@{addr} motor={motor}"))
                     continue
-                # Try old format
+                # Try oldest format without pos
                 m = vsim_pattern_old.search(line)
                 if m:
                     addr = m.group(1)
@@ -1574,6 +1717,162 @@ def compare_track_changes(mame_file: str, vsim_file: str, limit: int = 50):
         print(f"  Track {e.track_from} -> {e.track_to} ({sign}{delta}) at line {e.line_num}")
 
 
+def compare_by_frame(mame_file: str, vsim_file: str, start_frame: int = 0, end_frame: int = 0, limit: int = 100):
+    """Compare IWM events grouped by frame number.
+
+    This enables frame-by-frame correlation between MAME and vsim logs.
+    Events are grouped by their frame number and compared within each frame.
+    """
+    from collections import defaultdict
+
+    print(f"=== Frame-by-Frame IWM Event Comparison ===")
+    print(f"Frame range: {start_frame} to {end_frame if end_frame > 0 else 'end'}")
+    print()
+
+    print(f"Parsing MAME log: {mame_file}...")
+    mame_events = parse_mame_log(mame_file)
+    mame_with_frame = [e for e in mame_events if e.frame is not None]
+    print(f"  Total events: {len(mame_events)}, with frame info: {len(mame_with_frame)}")
+
+    print(f"Parsing vsim log: {vsim_file}...")
+    vsim_events = parse_vsim_log(vsim_file)
+    vsim_with_frame = [e for e in vsim_events if e.frame is not None]
+    print(f"  Total events: {len(vsim_events)}, with frame info: {len(vsim_with_frame)}")
+
+    if not mame_with_frame and not vsim_with_frame:
+        print("\nNo frame info found in either log.")
+        return
+
+    # Group events by frame for both sources
+    mame_by_frame = defaultdict(list)
+    for e in mame_with_frame:
+        if e.frame >= start_frame and (end_frame == 0 or e.frame <= end_frame):
+            mame_by_frame[e.frame].append(e)
+
+    vsim_by_frame = defaultdict(list)
+    for e in vsim_with_frame:
+        if e.frame >= start_frame and (end_frame == 0 or e.frame <= end_frame):
+            vsim_by_frame[e.frame].append(e)
+
+    # Get all frames from both sources
+    all_frames = sorted(set(mame_by_frame.keys()) | set(vsim_by_frame.keys()))
+    if not all_frames:
+        print(f"\nNo events found in frame range {start_frame}-{end_frame}")
+        return
+
+    print(f"\nFound {len(mame_by_frame)} MAME frames, {len(vsim_by_frame)} vsim frames with IWM activity")
+    print(f"Frame range: {all_frames[0]} to {all_frames[-1]}")
+
+    # Show summary by frame - side by side comparison
+    print(f"\n{'Frame':>6}  {'MAME':>12}  {'vsim':>12}  {'Match':>8}")
+    print(f"{'':>6}  {'DATA/Valid':>12}  {'DATA/Valid':>12}  {'':>8}")
+    print("-" * 55)
+
+    total_mame_data = 0
+    total_mame_valid = 0
+    total_vsim_data = 0
+    total_vsim_valid = 0
+    frames_shown = 0
+    matching_frames = 0
+
+    for frame in all_frames:
+        if frames_shown >= limit:
+            print(f"... (showing first {limit} frames)")
+            break
+
+        m_events = mame_by_frame.get(frame, [])
+        v_events = vsim_by_frame.get(frame, [])
+
+        m_data = sum(1 for e in m_events if e.event_type == 'DATA')
+        m_valid = sum(1 for e in m_events if e.event_type == 'DATA' and e.result & 0x80)
+        v_data = sum(1 for e in v_events if e.event_type == 'DATA')
+        v_valid = sum(1 for e in v_events if e.event_type == 'DATA' and e.result & 0x80)
+
+        total_mame_data += m_data
+        total_mame_valid += m_valid
+        total_vsim_data += v_data
+        total_vsim_valid += v_valid
+
+        # Only show frames with activity
+        if m_data > 0 or v_data > 0:
+            m_str = f"{m_data:>5}/{m_valid:<5}" if m_data > 0 else "    -    "
+            v_str = f"{v_data:>5}/{v_valid:<5}" if v_data > 0 else "    -    "
+
+            # Check if valid byte counts are similar (within 20%)
+            if m_valid > 0 and v_valid > 0:
+                ratio = min(m_valid, v_valid) / max(m_valid, v_valid)
+                if ratio > 0.8:
+                    match = "OK"
+                    matching_frames += 1
+                else:
+                    match = f"{ratio*100:.0f}%"
+            elif m_valid == 0 and v_valid == 0:
+                match = "OK"
+                matching_frames += 1
+            else:
+                match = "DIFF"
+
+            print(f"{frame:>6}  {m_str:>12}  {v_str:>12}  {match:>8}")
+            frames_shown += 1
+
+    print("-" * 55)
+    print(f"MAME total: {total_mame_data} DATA, {total_mame_valid} valid")
+    print(f"vsim total: {total_vsim_data} DATA, {total_vsim_valid} valid")
+
+    # Show detailed view of first few interesting frames
+    print(f"\n=== Detailed Frame Comparison ===")
+
+    # Find frames where both have D5 headers
+    interesting_frames = []
+    for f in all_frames[:500]:
+        m_d5 = any(e.event_type == 'DATA' and e.result == 0xD5 for e in mame_by_frame.get(f, []))
+        v_d5 = any(e.event_type == 'DATA' and e.result == 0xD5 for e in vsim_by_frame.get(f, []))
+        if m_d5 or v_d5:
+            interesting_frames.append((f, m_d5, v_d5))
+        if len(interesting_frames) >= 5:
+            break
+
+    if interesting_frames:
+        print(f"Frames with D5 headers (first 5):")
+        for frame, m_d5, v_d5 in interesting_frames:
+            m_mark = "D5" if m_d5 else "--"
+            v_mark = "D5" if v_d5 else "--"
+            print(f"  Frame {frame}: MAME={m_mark}, vsim={v_mark}")
+
+            # Show bytes for this frame
+            m_data = [e for e in mame_by_frame.get(frame, []) if e.event_type == 'DATA' and e.result & 0x80]
+            v_data = [e for e in vsim_by_frame.get(frame, []) if e.event_type == 'DATA' and e.result & 0x80]
+
+            if m_data:
+                m_bytes = ' '.join(f'{e.result:02X}' for e in m_data[:20])
+                print(f"    MAME ({len(m_data):>4}): {m_bytes}...")
+            if v_data:
+                v_bytes = ' '.join(f'{e.result:02X}' for e in v_data[:20])
+                print(f"    vsim ({len(v_data):>4}): {v_bytes}...")
+    else:
+        print("No frames with D5 sector headers found in range")
+
+    # Summary statistics
+    print(f"\n=== Summary ===")
+    if mame_with_frame:
+        first_motor_on = next((e for e in mame_with_frame if e.event_type == 'MOTOR_ON'), None)
+        if first_motor_on:
+            print(f"MAME first MOTOR_ON at frame {first_motor_on.frame}")
+
+        first_d5 = next((e for e in mame_with_frame if e.event_type == 'DATA' and e.result == 0xD5), None)
+        if first_d5:
+            print(f"MAME first D5 header at frame {first_d5.frame}")
+
+    if vsim_with_frame:
+        first_valid = next((e for e in vsim_with_frame if e.event_type == 'DATA' and e.result & 0x80), None)
+        if first_valid:
+            print(f"vsim first valid data at frame {first_valid.frame}: 0x{first_valid.result:02X}")
+
+        first_d5 = next((e for e in vsim_with_frame if e.event_type == 'DATA' and e.result == 0xD5), None)
+        if first_d5:
+            print(f"vsim first D5 header at frame {first_d5.frame}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Compare IWM logs between MAME and vsim')
     parser.add_argument('mame_log', help='MAME log file')
@@ -1605,6 +1904,9 @@ def main():
     parser.add_argument('--num-sectors', type=int, default=5, help='Number of sectors to compare in --data-fields mode')
     parser.add_argument('--bytes-after', type=int, default=30, help='Number of bytes after D5 AA AD to show')
     parser.add_argument('--tracks', action='store_true', help='Compare track stepping/phase changes between MAME and vsim')
+    parser.add_argument('--by-frame', action='store_true', help='Compare events grouped by frame number')
+    parser.add_argument('--start-frame', type=int, default=0, help='Start frame for --by-frame comparison (default: 0)')
+    parser.add_argument('--end-frame', type=int, default=0, help='End frame for --by-frame comparison (default: 0 = no limit)')
 
     args = parser.parse_args()
 
@@ -1632,6 +1934,11 @@ def main():
     # Handle --tracks mode: compare track stepping between MAME and vsim
     if args.tracks:
         compare_track_changes(args.mame_log, args.vsim_log, args.limit)
+        return
+
+    # Handle --by-frame mode: compare events grouped by frame number
+    if args.by_frame:
+        compare_by_frame(args.mame_log, args.vsim_log, args.start_frame, args.end_frame, args.limit)
         return
 
     print(f"Loading MAME log: {args.mame_log}")

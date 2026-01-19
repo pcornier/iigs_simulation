@@ -10,7 +10,9 @@
 // Interface is compatible with iwm_controller.v for easy substitution in iigs.sv
 //
 
-module iwm_woz (
+module iwm_woz #(
+    parameter BRAM_LATENCY = 0  // 0 = combinational BRAM, 1 = registered BRAM
+) (
     // Global signals
     input           CLK_14M,
     input           CLK_7M_EN,
@@ -429,7 +431,7 @@ module iwm_woz (
 
     wire drive35_track_loaded = DISK_READY[2] && (WOZ_TRACK3_BIT_COUNT > 0);
 
-    flux_drive drive35 (
+    flux_drive #(.BRAM_LATENCY(BRAM_LATENCY)) drive35 (
         .IS_35_INCH(1'b1),
         .DRIVE_ID(2'd1),
         .CLK_14M(CLK_14M),
@@ -518,7 +520,7 @@ module iwm_woz (
     wire        drive35_2_motor_spinning;
     wire        drive35_2_ready;
 
-    flux_drive drive35_2 (
+    flux_drive #(.BRAM_LATENCY(BRAM_LATENCY)) drive35_2 (
         .IS_35_INCH(1'b1),
         .DRIVE_ID(2'd2),
         .CLK_14M(CLK_14M),
@@ -575,7 +577,7 @@ module iwm_woz (
 
     wire drive525_track_loaded = DISK_READY[0] && (WOZ_TRACK1_BIT_COUNT > 0);
 
-    flux_drive drive525 (
+    flux_drive #(.BRAM_LATENCY(BRAM_LATENCY)) drive525 (
         .IS_35_INCH(1'b0),
         .DRIVE_ID(2'd0),
         .CLK_14M(CLK_14M),

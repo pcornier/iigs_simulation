@@ -73,7 +73,39 @@ make clean             # Clean build artifacts
 | `--woz <file>` | WOZ flux-level disk image | WOZ 1.x/2.x (3.5"/5.25") |
 
 **Note:** 3.5" floppy images (PO/2MG) are automatically converted to nibblized format at load time.
-**Note:** WOZ format provides flux-level accuracy but boot support is work-in-progress (see `doc/woz_floppy_debugging.md`).
+**Note:** WOZ format provides flux-level accuracy for copy-protected disks. WOZ 3.5" disk images boot successfully in simulation.
+
+### WOZ Floppy Disk Support
+
+The WOZ format provides bit-level accuracy for floppy disk emulation, supporting copy-protected software that relies on precise flux timing.
+
+**Architecture:**
+- `rtl/flux_drive.v` - Physical drive emulation (motor, head position, flux transitions)
+- `rtl/iwm_woz.v` - IWM controller with WOZ/flux interface
+- `rtl/iwm_flux.v` - Flux decoding and IWM register reads
+- `vsim/sim.v` - Track data BRAM and C++ integration
+
+**BRAM Latency Parameter:**
+The WOZ path includes a `BRAM_LATENCY` parameter to support both simulation (combinational BRAM) and FPGA synthesis (registered BRAM with 1-cycle latency):
+
+```verilog
+// In vsim/sim.v - set before iigs instantiation
+`define WOZ_BRAM_LATENCY 0  // 0=combinational (simulation), 1=registered (FPGA)
+```
+
+The parameter flows through: `sim.v` → `iigs.sv` → `iwm_woz.v` → `flux_drive.v`
+
+**Current Status:**
+- BRAM_LATENCY=0: Fully working (boots GS/OS from WOZ disks)
+- BRAM_LATENCY=1: Work in progress (sector detection works, but position drift causes data corruption)
+
+**Known Issue (BRAM_LATENCY=1):**
+VCD analysis shows a 311-bit position drift by frame 460. The root cause is the timing relationship between:
+1. `woz_floppy_controller.sv` BRAM (stores track data with 1-cycle read latency)
+2. `flux_drive.v` bit_position tracking and flux generation
+3. Position resets (TRACK_LOAD_COMPLETE, drive_ready) that change BRAM address
+
+The BRAM address changes combinationally with bit_position, but with 1-cycle latency, valid data appears one cycle later. The current workaround (bram_first_read_pending) causes position to pause, accumulating drift over many resets.
 
 ### Keyboard Input (--send-keys)
 Send keyboard input at specific frames for automated testing:

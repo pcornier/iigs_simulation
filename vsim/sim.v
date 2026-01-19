@@ -1,6 +1,13 @@
 // Define DEBUG_SIM to enable verbose simulation debug output
 // `define DEBUG_SIM
 
+// BRAM_LATENCY: 0 = combinational (simulation), 1 = registered (FPGA)
+// Can be overridden via -DWOZ_BRAM_LATENCY=1 in Verilator command line
+// NOTE: BRAM_LATENCY=1 is work-in-progress; has 311-bit position drift issue
+`ifndef WOZ_BRAM_LATENCY
+`define WOZ_BRAM_LATENCY 1  // 0=combinational (sim), 1=registered (FPGA)
+`endif
+
 `timescale 1ns / 1ps
 /*============================================================================
 ===========================================================================*/
@@ -272,7 +279,7 @@ assign woz1_track_out = WOZ_TRACK1;
 assign woz1_bit_addr_out = WOZ_TRACK1_BIT_ADDR;
 
 wire clk_sys=CLK_14M;
-iigs  iigs(
+iigs #(.WOZ_BRAM_LATENCY(`WOZ_BRAM_LATENCY)) iigs(
         .reset(reset),
         .cold_reset(cold_reset),
         .CLK_28M(clk_sys),
@@ -749,12 +756,6 @@ always @(posedge clk_sys) begin
 `endif
     end
 end
-
-// BRAM_LATENCY: 0 = combinational (simulation), 1 = registered (FPGA)
-// Can be overridden via -DBRAM_LATENCY=1 in Verilator command line
-`ifndef WOZ_BRAM_LATENCY
-`define WOZ_BRAM_LATENCY 0
-`endif
 
 woz_floppy_controller #(
     .IS_35_INCH(1),
