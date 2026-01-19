@@ -70,6 +70,10 @@ module woz_track (
     reg [31:0] track_byte_count;
     reg        mount_pending;
 
+    // Capture metadata bytes as they arrive during SD block 0 transfer
+    reg [7:0] meta_byte0, meta_byte1, meta_byte2, meta_byte3;  // bit_count (LE)
+    reg [7:0] meta_byte4, meta_byte5, meta_byte6, meta_byte7;  // byte_count (LE)
+
     assign sd_lba = lba;
     assign bit_count = track_bit_count;
     assign sd_buff_din = 8'h00;  // No write support
@@ -119,12 +123,25 @@ module woz_track (
 
         if (sd_ack) sd_rd <= 0;
 
+        // Capture metadata bytes from block 0 header
+        if (sd_buff_wr && sd_ack && rel_lba == 0) begin
+            case (sd_buff_addr)
+                9'd0: meta_byte0 <= sd_buff_dout;
+                9'd1: meta_byte1 <= sd_buff_dout;
+                9'd2: meta_byte2 <= sd_buff_dout;
+                9'd3: meta_byte3 <= sd_buff_dout;
+                9'd4: meta_byte4 <= sd_buff_dout;
+                9'd5: meta_byte5 <= sd_buff_dout;
+                9'd6: meta_byte6 <= sd_buff_dout;
+                9'd7: meta_byte7 <= sd_buff_dout;
+                default: ; // Other bytes are track data
+            endcase
 `ifdef SIMULATION
-        if (sd_buff_wr && sd_ack && rel_lba == 0 && sd_buff_addr < 9'd8) begin
-            // Log metadata bytes
-            $display("WOZ_TRACK: Metadata byte[%0d] = %02h", sd_buff_addr, sd_buff_dout);
-        end
+            if (sd_buff_addr < 9'd8) begin
+                $display("WOZ_TRACK: Metadata byte[%0d] = %02h", sd_buff_addr, sd_buff_dout);
+            end
 `endif
+        end
 
         // Handle mount/change
         if (~old_change && change) begin
@@ -155,16 +172,15 @@ module woz_track (
             if (old_ack && ~sd_ack) begin
                 // Block transfer complete
 
-                // Extract metadata from first block
+                // Extract metadata from first block using captured bytes
                 if (rel_lba == 0) begin
-                    // Metadata is in bytes 0-7 of track_bram (but we stored from offset 0)
-                    // Actually, we skipped writing bytes 0-7, so we need to capture them
-                    // during the SD buffer write above. For now, use fixed values.
-                    // TODO: Capture metadata properly
-                    track_bit_count <= 32'd75000;  // ~75Kbits typical for 3.5"
-                    track_byte_count <= 32'd9375;  // 75000/8
+                    // Reconstruct 32-bit little-endian values from captured bytes
+                    track_bit_count <= {meta_byte3, meta_byte2, meta_byte1, meta_byte0};
+                    track_byte_count <= {meta_byte7, meta_byte6, meta_byte5, meta_byte4};
 `ifdef SIMULATION
-                    $display("WOZ_TRACK: Block 0 loaded, bit_count=%0d", 75000);
+                    $display("WOZ_TRACK: Block 0 loaded, bit_count=%0d byte_count=%0d",
+                             {meta_byte3, meta_byte2, meta_byte1, meta_byte0},
+                             {meta_byte7, meta_byte6, meta_byte5, meta_byte4});
 `endif
                 end
 

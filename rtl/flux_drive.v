@@ -61,6 +61,11 @@ module flux_drive (
     output wire [13:0] BRAM_ADDR,       // Byte address in track buffer
     input  wire [7:0]  BRAM_DATA,       // Byte data from track buffer
 
+    // WOZ v3 FLUX track support
+    input  wire        IS_FLUX_TRACK,   // Current track uses flux timing data (not bitstream)
+    input  wire [31:0] FLUX_DATA_SIZE,  // Size in bytes of flux timing data
+    input  wire [31:0] FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+
     // SD block interface for track loading (optional, for WOZ support)
     output reg  [7:0]  SD_TRACK_REQ,    // Track number to load (pulsed)
     output reg         SD_TRACK_STROBE, // Request new track load
@@ -81,6 +86,9 @@ module flux_drive (
     localparam BIT_CELL_525 = 6'd56;
     localparam BIT_CELL_35  = 6'd28;
 
+    // Nominal rotation period at 300 RPM (200ms) in 14MHz cycles.
+    localparam [31:0] ROTATION_CYCLES_14M = 32'd2863636;
+
     //=========================================================================
     // Internal State
     //=========================================================================
@@ -94,8 +102,8 @@ module flux_drive (
     // After motor turns on, drive needs ~2 rotations worth of bits to become ready.
     // Using fixed bit count instead of rotation detection because rapid side switching
     // can cause spurious rotation_complete signals that make spinup too short.
-    // 2 rotations at ~75,000 bits/track = ~150,000 bits
-    parameter SPINUP_BIT_COUNT = 150000;
+    // 2 rotations + ~19K bits = ~170,000 bits (to match MAME's ending position)
+    parameter SPINUP_BIT_COUNT = 170000;
     reg [17:0]  spinup_bits;            // Count bits during spin-up
     reg         drive_ready;            // True when drive is spun up and ready
     reg [5:0]   spinup_timer;           // 14MHz divider to approximate bit-cell timing for spinup
@@ -115,6 +123,18 @@ module flux_drive (
     // Flux generation state
     reg         prev_flux;              // Previous flux state for edge detection
 
+    // WOZ FLUX timing playback state (when IS_FLUX_TRACK=1)
+    // Flux tick phase accumulator.
+    // Uses total FLUX ticks per track to normalize timing to a fixed rotation period.
+    reg [31:0]  flux_phase_accum;       // Phase accumulator for scaled flux timing
+    reg [7:0]   flux_byte_counter;      // Current flux byte countdown (in 125ns ticks)
+    reg [15:0]  flux_byte_addr;         // Current byte address in flux data
+    reg [7:0]   next_flux_byte;         // Prefetched flux byte
+    reg         next_byte_valid;        // Prefetched byte is valid
+    reg         flux_byte_pending;      // Need to load next flux byte
+    reg         flux_waiting_bram;      // Waiting for BRAM read latency
+    reg         flux_is_continuation;   // Current byte was 0xFF (no transition, timing only)
+
     // Step direction tracking (MAME's m_dir equivalent)
     // Sony 3.5" drives use a command interface:
     //   - phases[3] = strobe (rising edge triggers command)
@@ -123,7 +143,8 @@ module flux_drive (
     //   - Command 4: step toward track 0 → m_dir = 1
     // Track per drive slot since MAME tracks m_dir per physical drive
     reg [1:0]   step_direction_slot;    // One per drive slot (0 and 1)
-    reg [1:0]   prev_strobe_slot;       // Previous strobe state per drive slot
+    reg         prev_lstrb;             // Previous LSTRB state (global, not per-slot)
+                                        // Fixes spurious strobes when DRIVE_SELECT changes
 
     // Immediate step direction for sense calculation
     // When a strobe fires, the sense read should see the NEW direction value immediately,
@@ -140,6 +161,7 @@ module flux_drive (
     // Disk switched flag (set on mount/reset, cleared by command)
     reg         disk_switched;
     reg         prev_disk_mounted;
+    reg         prev_drive_ready;  // For detecting drive_ready rising edge
 
     // Motor sense signal - for sense register 0x2 (MAME m_mon equivalent)
     // This follows the Sony command state, NOT the IWM motor bit
@@ -176,7 +198,12 @@ module flux_drive (
     wire lstrb = IMMEDIATE_PHASES[3];
     wire [3:0] sony_ctl = {ca1, ca0, DISKREG_SEL, ca2};
 
-    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && lstrb && !prev_strobe_slot[DRIVE_SELECT];
+    // Strobe fires on rising edge of LSTRB when this drive is selected.
+    // CRITICAL: Use global prev_lstrb (not per-slot) to prevent spurious strobes
+    // when DRIVE_SELECT changes. The ROM pulses LSTRB once per command; using
+    // per-slot tracking caused the strobe to fire multiple times when switching
+    // between drives (once for each drive with stale prev_strobe=0).
+    wire sony_cmd_strobe = IS_35_INCH && (DRIVE_SELECT == DRIVE_SLOT) && lstrb && !prev_lstrb;
 
     // Immediate direction reflects a same-cycle strobe of 0/1.
     assign step_direction_immediate = (sony_cmd_strobe && sony_ctl == 4'h0) ? 1'b0 :
@@ -189,6 +216,13 @@ module flux_drive (
 
     wire [9:0]  max_phase = IS_35_INCH ? MAX_PHASE_35 : MAX_PHASE_525;
     wire [5:0]  bit_cell_cycles = IS_35_INCH ? BIT_CELL_35 : BIT_CELL_525;
+    wire        flux_use_scaling = (FLUX_TOTAL_TICKS != 32'd0);
+    wire [31:0] flux_phase_inc = flux_use_scaling ? FLUX_TOTAL_TICKS : 32'd1000;
+    wire [31:0] flux_phase_mod = flux_use_scaling ? ROTATION_CYCLES_14M : 32'd1790;
+    wire [32:0] flux_phase_sum = {1'b0, flux_phase_accum} + {1'b0, flux_phase_inc};
+    wire [32:0] flux_phase_diff = flux_phase_sum - {1'b0, flux_phase_mod};
+    wire        flux_tick = (flux_phase_sum >= {1'b0, flux_phase_mod});
+    wire [31:0] flux_phase_next = flux_tick ? flux_phase_diff[31:0] : flux_phase_sum[31:0];
 
     // Current byte and bit within that byte
     // Use modulo-like calculation to handle track size changes during side selection
@@ -260,8 +294,9 @@ module flux_drive (
     assign DRIVE_READY = drive_ready;           // Ready after 2 rotation spinup
     assign TRACK = head_phase[8:2];             // Quarter-track to full track
     assign BIT_POSITION = bit_position;
-    // BRAM address with look-ahead for byte boundary crossings
-    assign BRAM_ADDR = need_lookahead ? next_byte_index : byte_index;
+    // BRAM address: flux mode uses flux_byte_addr, bitstream mode uses byte_index with look-ahead
+    assign BRAM_ADDR = IS_FLUX_TRACK ? flux_byte_addr[13:0] :
+                       (need_lookahead ? next_byte_index : byte_index);
     assign WRITE_PROTECT = DISK_WP;
 
     //=========================================================================
@@ -358,7 +393,7 @@ module flux_drive (
             head_phase <= 9'd0;
             prev_step <= 1'b0;
             step_direction_slot <= 2'b00;  // Default: toward higher tracks (matches MAME m_dir=0)
-            prev_strobe_slot <= 2'b00;     // No strobe active initially
+            prev_lstrb <= 1'b0;            // No strobe active initially
             sony_motor_on <= 1'b0;         // Default: motor off
             disk_switched <= 1'b1;         // Assume disk switched on reset
             prev_disk_mounted <= 1'b0;
@@ -393,12 +428,16 @@ module flux_drive (
             // Apple IIgs 3.5" drive command interface (ROM SDCLINES + LSTRB pulse).
 `ifdef SIMULATION
             // Debug: trace strobe conditions
-            if (IS_35_INCH && lstrb && !prev_strobe_slot[DRIVE_SELECT]) begin
+            if (IS_35_INCH && lstrb && !prev_lstrb) begin
                 $display("FLUX_DRIVE[%0d]: LSTRB! DRIVE_SELECT=%0d DRIVE_SLOT=%0d sel_match=%0d sony_ctl=%01x DISK_MOUNTED=%0d SEL35=%0d",
                          DRIVE_ID, DRIVE_SELECT, DRIVE_SLOT, (DRIVE_SELECT == DRIVE_SLOT), sony_ctl, DISK_MOUNTED, SEL35);
             end
 `endif
             if (sony_cmd_strobe) begin
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: sony_cmd_strobe! sony_ctl=%01x SEL35=%0d DISK_MOUNTED=%0d",
+                         DRIVE_ID, sony_ctl, SEL35, DISK_MOUNTED);
+`endif
                 case (sony_ctl)
                     4'h0: begin
                         // Direction inward (toward higher tracks) - ROM dirinadr=0
@@ -439,10 +478,16 @@ module flux_drive (
 
                     4'h8: begin
                         // Motor on - ROM mtronadr=8
-                        if (SEL35 && DISK_MOUNTED)
+                        if (SEL35 && DISK_MOUNTED) begin
                             sony_motor_on <= 1'b1;
 `ifdef SIMULATION
-                        $display("FLUX_DRIVE[%0d]: cmd motor ON", DRIVE_ID);
+                            $display("FLUX_DRIVE[%0d]: cmd motor ON (SEL35=%0d DISK_MOUNTED=%0d) -> sony_motor_on=1", DRIVE_ID, SEL35, DISK_MOUNTED);
+`endif
+                        end
+`ifdef SIMULATION
+                        else begin
+                            $display("FLUX_DRIVE[%0d]: cmd motor ON SKIPPED (SEL35=%0d DISK_MOUNTED=%0d)", DRIVE_ID, SEL35, DISK_MOUNTED);
+                        end
 `endif
                     end
 
@@ -485,7 +530,7 @@ module flux_drive (
                     end
                 endcase
             end
-            prev_strobe_slot[DRIVE_SELECT] <= lstrb;
+            prev_lstrb <= lstrb;
 
             if (motor_spinning) begin  // Only step when motor is on
             // NOTE: 3.5" Sony drives use command-based stepping (cmd 1 = step on)
@@ -571,6 +616,12 @@ module flux_drive (
                 // Sony motor command; do not gate rotation on SEL35 or we will "freeze"
                 // angular position during deselect windows and break subsequent prologue scans.
                 motor_spinning <= sony_motor_on && DISK_MOUNTED;
+`ifdef SIMULATION
+                if ((sony_motor_on && DISK_MOUNTED) != motor_spinning) begin
+                    $display("FLUX_DRIVE[%0d]: motor_spinning %0d -> %0d (sony_motor_on=%0d DISK_MOUNTED=%0d)",
+                             DRIVE_ID, motor_spinning, (sony_motor_on && DISK_MOUNTED), sony_motor_on, DISK_MOUNTED);
+                end
+`endif
             end else begin
                 // 5.25" drives: controlled by IWM enable line + inertia (handled in iwm_woz)
                 motor_spinning <= MOTOR_ON;
@@ -655,7 +706,17 @@ module flux_drive (
             track_valid <= 1'b0;
             rotation_complete <= 1'b0;
             prev_motor_for_position <= 1'b0;
+            prev_drive_ready <= 1'b0;
             prev_track_bit_count <= 32'd0;
+            // Flux timing playback state
+            flux_phase_accum <= 32'd0;
+            flux_byte_counter <= 8'd0;
+            flux_byte_addr <= 16'd0;
+            flux_byte_pending <= 1'b1;  // Need to load first byte
+            flux_waiting_bram <= 1'b0;
+            flux_is_continuation <= 1'b0;
+            next_flux_byte <= 8'd0;
+            next_byte_valid <= 1'b0;
 `ifdef SIMULATION
             side_transition_logged <= 1'b1;  // Start as logged to avoid spam at startup
             debug_read_count <= 5'd16;       // Disable log until first track change
@@ -673,15 +734,41 @@ module flux_drive (
             if (TRACK_LOAD_COMPLETE) begin
                 bit_position <= 17'd0;
                 bit_timer <= bit_cell_cycles;
+                // Reset flux playback state for new track
+                flux_phase_accum <= 32'd0;
+                flux_byte_counter <= 8'd0;
+                flux_byte_addr <= 16'd0;
+                flux_byte_pending <= 1'b1;  // Need to load first byte
+                flux_waiting_bram <= 1'b0;
+                flux_is_continuation <= 1'b0;
+                next_byte_valid <= 1'b0;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d)", DRIVE_ID, bit_position);
+                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d) is_flux=%0d", DRIVE_ID, bit_position, IS_FLUX_TRACK);
 `endif
             end
 
+            // Reset bit_position when drive becomes ready (after spinup completes)
+            // This ensures the decoder starts at a known position when the state machine activates.
+            // Without this reset, bit_position accumulates during spinup (~170000 bits) and the
+            // decoder starts mid-track, never seeing the D5 AA prologue markers at the track start.
+            if (drive_ready && !prev_drive_ready && TRACK_BIT_COUNT > 0) begin
+                bit_position <= 17'd0;
+                bit_timer <= bit_cell_cycles;
+                // Also reset flux playback state
+                flux_phase_accum <= 32'd0;
+                flux_byte_counter <= 8'd0;
+                flux_byte_addr <= 16'd0;
+                flux_byte_pending <= 1'b1;
+                flux_waiting_bram <= 1'b0;
+                flux_is_continuation <= 1'b0;
+                next_byte_valid <= 1'b0;
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: DRIVE_READY rising edge - resetting bit_position to 0 (was %0d)", DRIVE_ID, bit_position);
+`endif
+            end
+            prev_drive_ready <= drive_ready;
+
             // Track motor state transitions (for potential future use)
-            // NOTE: Angular offset is now applied when drive_ready becomes 1, not here.
-            // This fixes a bug where the old approach set the offset at motor start,
-            // but the spinup (2 wraps) would reset bit_position to 0 before reading began.
             prev_motor_for_position <= motor_spinning;
 
             // Handle TRACK_BIT_COUNT changes (side selection transitions)
@@ -719,62 +806,209 @@ module flux_drive (
                 $display("FLUX_DRIVE_WIN pos=%0d addr=%0d data=%02h shift=%0d bit=%0d",
                          bit_position, BRAM_ADDR, BRAM_DATA, bit_position[2:0], current_bit);
             end
+
+            // Debug divergence point at position 50885
+            if (motor_spinning && TRACK_LOADED &&
+                (bit_position >= 17'd50880) && (bit_position <= 17'd50900)) begin
+                $display("FLUX_DIV pos=%0d eff_pos=%0d addr=%0d data=%02h TBC=%0d shift=%0d bit=%0d timer=%0d",
+                         bit_position, effective_bit_position, BRAM_ADDR, BRAM_DATA,
+                         TRACK_BIT_COUNT, bit_shift, current_bit, bit_timer);
+            end
 `endif
 
             // Rotate whenever motor is spinning so angular position keeps advancing
             if (motor_spinning) begin
-                // Generate flux pulse.
-                // The WOZ bitstream encodes flux transitions as 1-bits in fixed bit cells.
-                //
-                // Emit transitions at the bit-cell boundary (start of cell). `iwm_flux.v` now treats
-                // 1-cycle pulses as visible in the same 14MHz tick (`flux_now`), so boundary pulses
-                // no longer risk being missed at window shift boundaries.
-                if (bit_timer == bit_cell_cycles) begin
-                    // Bit-cell boundary - generate flux if this bit is 1
-                    // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
-                    // During spinup, the IWM shouldn't receive flux transitions
-                    // This matches MAME behavior where m_data stays 0x00 during spinup
-                    // NOTE: bram_data_valid check removed - look-ahead should be sufficient
-                    if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
-                        FLUX_TRANSITION <= 1'b1;
-`ifdef SIMULATION
-                        if (flux_count_debug < 50) begin
-                            $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d",
-                                     DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer);
+                if (IS_FLUX_TRACK && TRACK_LOADED) begin
+                    //=================================================================
+                    // FLUX TIMING PLAYBACK MODE
+                    //=================================================================
+                    // Each flux byte = number of 125ns ticks until next transition
+                    // Phase accumulator: 125ns / 69.84ns = 1.79 clocks per tick
+                    // Using 1790/1000 ratio for ~0.01% error
+                    //
+                    // Algorithm:
+                    // 1. Each CLK_14M: accumulator += 1000
+                    // 2. When accumulator >= 1790: subtract 1790, decrement flux_byte_counter
+                    // 3. When counter reaches 0:
+                    //    - If byte was != 0xFF: output FLUX_TRANSITION
+                    //    - Load next byte from BRAM (with 1-cycle latency handling)
+                    // 4. Handle 0xFF: no transition, just add 255 ticks (timing extension)
+
+                    // Handle BRAM read latency - after requesting a byte, wait one cycle
+                    if (flux_waiting_bram) begin
+                        // BRAM data is now valid
+                        flux_waiting_bram <= 1'b0;
+                        
+                        if (flux_byte_pending) begin
+                            // This was the initial load (first byte)
+                            flux_byte_counter <= BRAM_DATA;
+                            flux_byte_pending <= 1'b0;
+                            flux_is_continuation <= (BRAM_DATA == 8'hFF);
+                        end else begin
+                            // This was a prefetch
+                            next_flux_byte <= BRAM_DATA;
+                            next_byte_valid <= 1'b1;
                         end
-                        if (effective_bit_position < 100) begin
-                            $display("FLUX_DRIVE[%0d]: Flux transition at bit %0d (eff=%0d, byte %04h, shift %0d)",
-                                     DRIVE_ID, bit_position, effective_bit_position, byte_index, bit_shift);
+
+`ifdef SIMULATION
+                        if (flux_byte_addr < 20 || (flux_byte_addr >= 95 && flux_byte_addr <= 105) || (flux_byte_addr >= FLUX_DATA_SIZE - 5)) begin
+                            $display("FLUX_PLAY[%0d]: Loaded byte[%0d] = %0d (0x%02X) cont=%0d pending=%0d",
+                                     DRIVE_ID, flux_byte_addr, BRAM_DATA, BRAM_DATA, (BRAM_DATA == 8'hFF), flux_byte_pending);
                         end
 `endif
-                    end
-                end
-
-                if (bit_timer == 6'd1) begin
-                    // End of bit cell - advance to next bit
-                    bit_timer <= bit_cell_cycles;
-
-                    // Advance bit position with wraparound
-                    // Use effective_bit_position for wrap check to handle side toggles correctly.
-                    // We wrap when the effective position completes a track, not raw position.
-                    if (TRACK_BIT_COUNT > 0) begin
-                        if (effective_bit_position + 1 >= track_bit_count_17) begin
-                            // Wrap: set bit_position to where effective_position would wrap to
-                            // This handles cases where bit_position > TRACK_BIT_COUNT
-                            bit_position <= 17'd0;
-                            // Signal that one full rotation has completed
+                        // Advance address for next read
+                        if (flux_byte_addr + 1 >= FLUX_DATA_SIZE) begin
+                            flux_byte_addr <= 16'd0;  // Wrap to start of track
                             rotation_complete <= 1'b1;
+                        end else begin
+                            flux_byte_addr <= flux_byte_addr + 1'd1;
+                        end
+                    end else if (flux_byte_pending) begin
+                        // Request first byte from BRAM (initial state)
+                        flux_waiting_bram <= 1'b1;
+                    end else begin
+                    // Normal flux timing: run phase accumulator (normalized to rotation period).
+                    // If FLUX_TOTAL_TICKS is unavailable, fall back to fixed 125ns timing.
+                    if (flux_tick) begin
+                        flux_phase_accum <= flux_phase_next;
+
+                        if (flux_byte_counter > 8'd1) begin
+                            // Still counting down
+                            flux_byte_counter <= flux_byte_counter - 8'd1;
+                            
+                            // PREFETCH LOGIC: If counter is low, request next byte now
+                            if (flux_byte_counter <= 8'd3 && !next_byte_valid && !flux_waiting_bram) begin
+                                flux_waiting_bram <= 1'b1;
+                            end
+                        end else if (flux_byte_counter <= 8'd1) begin
+                            // Counter expired - generate transition if not a continuation byte
+                            if (!flux_is_continuation && drive_ready) begin
+                                FLUX_TRANSITION <= 1'b1;
+`ifdef SIMULATION
+                                    if (flux_count_debug < 110) begin
+                                        $display("FLUX_PLAY[%0d]: Transition #%0d cycle=%0d byte_addr=%0d",
+                                                 DRIVE_ID, flux_count_debug, cycle_count_debug, flux_byte_addr - 1);
+                                    end
+`endif
+                                end
+                                
+                                // Load next byte from prefetch buffer
+                                if (next_byte_valid) begin
+                                    flux_byte_counter <= next_flux_byte;
+                                    flux_is_continuation <= (next_flux_byte == 8'hFF);
+                                    next_byte_valid <= 1'b0;
+                                    // Trigger immediate fetch for NEXT byte if the loaded one is small
+                                    if (next_flux_byte <= 8'd3) begin
+                                        flux_waiting_bram <= 1'b1;
+                                    end
+                                end else begin
+                                    // UNDERFLOW - Prefetch didn't finish in time (or initial)
+                                    // Stall and wait for BRAM (via flux_byte_pending logic above)
+                                    // But flux_byte_pending triggers a wait state which stops accumulator
+                                    // Here we just want to fetch.
+                                    // If we are here, next_byte_valid is false.
+                                    // Check if a fetch is already in progress
+                                    if (flux_waiting_bram) begin
+                                        // Fetch is in progress, we must wait (STALL)
+                                        // Ideally we shouldn't stall, but if we have 0-byte, we must.
+                                        // For now, allow stall if we missed deadline.
+                                        flux_byte_pending <= 1'b1; // Fall back to stall logic
+`ifdef SIMULATION
+                                        $display("FLUX_PLAY[%0d]: UNDERFLOW/STALL at byte_addr=%0d", DRIVE_ID, flux_byte_addr);
+`endif
+                                    end else begin
+                                        // No fetch in progress? Request one immediately.
+                                        // This implies we missed the prefetch window.
+                                        flux_byte_pending <= 1'b1;
+                                        flux_waiting_bram <= 1'b1;
+                                    end
+                                end
+                        end
+                    end else begin
+                        flux_phase_accum <= flux_phase_next;
+                        
+                        // Opportunity to start prefetch during non-tick cycles
+                        if (!next_byte_valid && !flux_waiting_bram && !flux_byte_pending) begin
+                            flux_waiting_bram <= 1'b1;
+                            end
+                        end
+                    end
+
+                    // Track bit position in FLUX mode using same bit_timer mechanism as bitstream mode.
+                    // This ensures DISK_BIT_POSITION advances at the expected rate for IWM timing.
+                    if (bit_timer == 6'd1) begin
+                        bit_timer <= bit_cell_cycles;
+                        // Advance bit position with wraparound
+                        if (TRACK_BIT_COUNT > 0) begin
+                            if (effective_bit_position + 1 >= track_bit_count_17) begin
+                                bit_position <= 17'd0;
+                            end else begin
+                                bit_position <= bit_position + 1'd1;
+                            end
                         end else begin
                             bit_position <= bit_position + 1'd1;
                         end
                     end else begin
-                        // No track loaded yet; keep angular position advancing.
-                        bit_position <= bit_position + 1'd1;
+                        bit_timer <= bit_timer - 1'd1;
                     end
 
-                end else begin
-                    // Still in current bit cell
-                    bit_timer <= bit_timer - 1'd1;
+                end else if (!IS_FLUX_TRACK) begin
+                    //=================================================================
+                    // BITSTREAM PLAYBACK MODE (original code)
+                    //=================================================================
+                    // Generate flux pulse.
+                    // The WOZ bitstream encodes flux transitions as 1-bits in fixed bit cells.
+                    //
+                    // Emit transitions at the bit-cell boundary (start of cell). `iwm_flux.v` now treats
+                    // 1-cycle pulses as visible in the same 14MHz tick (`flux_now`), so boundary pulses
+                    // no longer risk being missed at window shift boundaries.
+                    if (bit_timer == bit_cell_cycles) begin
+                        // Bit-cell boundary - generate flux if this bit is 1
+                        // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
+                        // During spinup, the IWM shouldn't receive flux transitions
+                        // This matches MAME behavior where m_data stays 0x00 during spinup
+                        // NOTE: bram_data_valid check removed - look-ahead should be sufficient
+                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
+                            FLUX_TRANSITION <= 1'b1;
+`ifdef SIMULATION
+                            if (flux_count_debug < 50) begin
+                                $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d",
+                                         DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer);
+                            end
+                            if (effective_bit_position < 100) begin
+                                $display("FLUX_DRIVE[%0d]: Flux transition at bit %0d (eff=%0d, byte %04h, shift %0d)",
+                                         DRIVE_ID, bit_position, effective_bit_position, byte_index, bit_shift);
+                            end
+`endif
+                        end
+                    end
+
+                    if (bit_timer == 6'd1) begin
+                        // End of bit cell - advance to next bit
+                        bit_timer <= bit_cell_cycles;
+
+                        // Advance bit position with wraparound
+                        // Use effective_bit_position for wrap check to handle side toggles correctly.
+                        // We wrap when the effective position completes a track, not raw position.
+                        if (TRACK_BIT_COUNT > 0) begin
+                            if (effective_bit_position + 1 >= track_bit_count_17) begin
+                                // Wrap: set bit_position to where effective_position would wrap to
+                                // This handles cases where bit_position > TRACK_BIT_COUNT
+                                bit_position <= 17'd0;
+                                // Signal that one full rotation has completed
+                                rotation_complete <= 1'b1;
+                            end else begin
+                                bit_position <= bit_position + 1'd1;
+                            end
+                        end else begin
+                            // No track loaded yet; keep angular position advancing.
+                            bit_position <= bit_position + 1'd1;
+                        end
+
+                    end else begin
+                        // Still in current bit cell
+                        bit_timer <= bit_timer - 1'd1;
+                    end
                 end
             end else begin
                 // Motor not spinning or track not loaded - reset timer

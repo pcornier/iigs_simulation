@@ -119,9 +119,13 @@ module iigs
    // 3.5" drive 1 WOZ bit interface
    output [7:0]       WOZ_TRACK3,           // Track number being read
    output [13:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer
+   output             WOZ_TRACK3_STABLE_SIDE, // Stable side for data reads (captured when motor starts)
    input  [7:0]       WOZ_TRACK3_BIT_DATA,  // Byte from track bit buffer
    input  [31:0]      WOZ_TRACK3_BIT_COUNT, // Total bits in track
    input              WOZ_TRACK3_LOAD_COMPLETE, // Pulses when track load finishes (reset bit_position)
+   input              WOZ_TRACK3_IS_FLUX,   // Track data is flux timing (not bitstream)
+   input  [31:0]      WOZ_TRACK3_FLUX_SIZE, // Size in bytes of flux data (when IS_FLUX)
+   input  [31:0]      WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
 
    // 5.25" drive 1 WOZ bit interface
    output [5:0]       WOZ_TRACK1,           // Track number being read
@@ -2796,6 +2800,7 @@ wire ready_out;
   // Stub WOZ bit interfaces
   assign WOZ_TRACK3 = 8'd0;
   assign WOZ_TRACK3_BIT_ADDR = 14'd0;
+  assign WOZ_TRACK3_STABLE_SIDE = 1'b0;
   assign WOZ_TRACK1 = 6'd0;
   assign WOZ_TRACK1_BIT_ADDR = 13'd0;
   `else
@@ -2823,9 +2828,13 @@ wire ready_out;
       // WOZ bit interface for 3.5" drive 1
       .WOZ_TRACK3(WOZ_TRACK3),
       .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+      .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
       .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
       .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
       .WOZ_TRACK3_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
+      .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
+      .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
+      .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
       // WOZ bit interface for 5.25" drive 1
       .WOZ_TRACK1(WOZ_TRACK1),
       .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),

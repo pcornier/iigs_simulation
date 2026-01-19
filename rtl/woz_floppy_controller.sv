@@ -30,12 +30,18 @@ module woz_floppy_controller #(
     // Bitstream Interface (to IWM)
     output wire [31:0] bit_count,    // Number of bits in current track (combinational mux)
     input      [13:0] bit_addr,      // Read address
+    input             stable_side,   // Stable side for data reads (captured when motor starts)
     output     [7:0]  bit_data,      // Read data
     input      [7:0]  bit_data_in,   // Write data
     input             bit_we,        // Write enable (sets dirty)
 
     // Track load notification (for flux_drive to reset position)
-    output reg        track_load_complete  // Pulses high for 1 cycle when physical track finishes loading
+    output reg        track_load_complete,  // Pulses high for 1 cycle when physical track finishes loading
+
+    // FLUX track support (WOZ v3)
+    output wire       is_flux_track,        // Current track uses flux timing data (not bitstream)
+    output wire [31:0] flux_data_size,      // Size in bytes of flux timing data (when is_flux_track=1)
+    output wire [31:0] flux_total_ticks     // Sum of FLUX bytes for timing normalization
 );
 
     //=========================================================================
@@ -115,7 +121,9 @@ module woz_floppy_controller #(
         .q_b(bit_data1)
     );
 
-    assign bit_data = (IS_35_INCH && track_id[0]) ? bit_data1 : bit_data0;
+    // Use stable_side for data reads - this prevents SEL toggling during status reads
+    // from causing the mux to return data from the wrong side
+    assign bit_data = (IS_35_INCH && stable_side) ? bit_data1 : bit_data0;
 
     // bit_count: Return the correct bit_count for the requested track.
     //
@@ -135,13 +143,28 @@ module woz_floppy_controller #(
     // bit_count is returned for subsequent reads.
     wire track_side0_match = (current_track_id_side0 == track_id);
     wire track_side1_match = (current_track_id_side1 == track_id);
-    wire selected_track_match = (IS_35_INCH && track_id[0]) ? track_side1_match : track_side0_match;
-    wire [31:0] selected_bit_count = (IS_35_INCH && track_id[0]) ? bit_count_side1 : bit_count_side0;
+    // Use stable_side for all runtime selections to prevent toggling during status reads
+    wire selected_track_match = (IS_35_INCH && stable_side) ? track_side1_match : track_side0_match;
+    wire [31:0] selected_bit_count = (IS_35_INCH && stable_side) ? bit_count_side1 : bit_count_side0;
     wire is_loading = (state == S_SEEK_LOOKUP) || (state == S_READ_TRACK);
-    // During loading, use the pending track's bit_count (or cached if not yet known)
-    wire [31:0] loading_bit_count = (trk_bit_count > 0) ? trk_bit_count : selected_bit_count;
+    // During loading, use the pending track's bit_count IF we're loading the stable_side.
+    // If we're loading the other side, keep using selected_bit_count to avoid glitches.
+    wire loading_matches_stable = (!IS_35_INCH) || (load_side == stable_side);
+    wire [31:0] loading_bit_count = (trk_bit_count > 0 && loading_matches_stable) ? trk_bit_count : selected_bit_count;
     assign bit_count = woz_valid ? (selected_track_match ? selected_bit_count :
                                     (is_loading ? loading_bit_count : selected_bit_count)) : 32'd0;
+
+    // FLUX track format selection - use stable_side like bit_count
+    wire selected_is_flux = (IS_35_INCH && stable_side) ? is_flux_side1 : is_flux_side0;
+    wire [31:0] selected_flux_size = (IS_35_INCH && stable_side) ? flux_size_side1 : flux_size_side0;
+    wire [31:0] selected_flux_total_ticks = (IS_35_INCH && stable_side) ?
+                                            flux_total_ticks_side1 : flux_total_ticks_side0;
+    assign is_flux_track = woz_valid ? (selected_track_match ? selected_is_flux :
+                                        (is_loading ? pending_is_flux : selected_is_flux)) : 1'b0;
+    assign flux_data_size = woz_valid ? (selected_track_match ? selected_flux_size :
+                                         (is_loading && pending_is_flux ? trk_bit_count : selected_flux_size)) : 32'd0;
+    assign flux_total_ticks = woz_valid ? (selected_track_match ? selected_flux_total_ticks :
+                                           (is_loading && pending_is_flux ? pending_flux_total_ticks : selected_flux_total_ticks)) : 32'd0;
 
     // State Machine
     localparam S_INIT        = 0;
@@ -166,6 +189,9 @@ module woz_floppy_controller #(
 
     reg [31:0] bit_count_side0;
     reg [31:0] bit_count_side1;
+    reg [31:0] flux_total_ticks_side0;
+    reg [31:0] flux_total_ticks_side1;
+    reg [31:0] pending_flux_total_ticks;
 
     // Debug
     reg [7:0] last_debug_track_id;
@@ -185,6 +211,7 @@ module woz_floppy_controller #(
 
     localparam [10:0] META_TMAP_BASE = 11'd0;
     localparam [10:0] META_TRKS_BASE = 11'd256;
+    localparam [10:0] META_FLUX_BASE = 11'd1536;  // After TRKS (256 + 160*8 = 1536)
 
     // Streaming WOZ parser: caches INFO/TMAP/TRKS by scanning file chunks (WOZ1/WOZ2).
     reg        have_info;
@@ -206,8 +233,20 @@ module woz_floppy_controller #(
     reg  [7:0] info_disk_type;
     reg  [7:0] info_bit_timing;
 
-    wire parser_done = have_info && have_tmap && have_trks;
-    localparam [15:0] SCAN_BLOCK_LIMIT = 16'd256; // safety: stop scanning after 128KB
+    // WOZ v3 FLUX support
+    reg [15:0] info_flux_block;      // Starting block for flux data in TRKS (INFO offset 46-47)
+    reg        have_flux;            // FLUX chunk was parsed
+    reg        pending_is_flux;      // Track being loaded is flux format
+    reg        is_flux_side0;        // Side 0 has flux data (not bitstream)
+    reg        is_flux_side1;        // Side 1 has flux data (not bitstream)
+    reg [31:0] flux_size_side0;      // Flux data size in bytes for side 0
+    reg [31:0] flux_size_side1;      // Flux data size in bytes for side 1
+
+    // Parser is done when we have all required chunks.
+    // For INFO v3 with flux_block set, we also need the FLUX chunk.
+    wire need_flux = (info_version >= 8'd3) && (info_flux_block != 16'd0);
+    wire parser_done = have_info && have_tmap && have_trks && (!need_flux || have_flux);
+    localparam [15:0] SCAN_BLOCK_LIMIT = 16'd3000; // safety: stop scanning after ~1.5MB (FLUX chunk may be after large TRKS)
     reg scan_failed;
     
     // Current Track Info
@@ -226,17 +265,29 @@ module woz_floppy_controller #(
     // It's cleared when the transfer completes (sd_ack falls)
     reg transfer_active;
 
+    // Track when we've issued a new request that the C++ hasn't processed yet
+    // This prevents attributing an old transfer's sd_ack to our new request
+    reg request_issued;
+
     always @(posedge clk) begin
         old_ack <= sd_ack;
 
         // Track when a real transfer is in progress
-        // Rising edge of sd_ack after we asserted sd_rd/sd_wr means transfer started
-        if (!old_ack && sd_ack && (sd_rd || sd_wr)) begin
+        // Rising edge of sd_ack after we issued a request means OUR transfer started
+        // Only accept if request_issued is true (we sent a NEW request)
+        if (!old_ack && sd_ack && request_issued) begin
             transfer_active <= 1'b1;
+            request_issued <= 1'b0;  // Request has been acknowledged
         end
         // Falling edge of sd_ack means transfer complete - clear for next one
         if (old_ack && !sd_ack) begin
             transfer_active <= 1'b0;
+        end
+
+        // Set request_issued when we assert sd_rd/sd_wr while no transfer is active
+        // This marks the start of OUR request
+        if ((sd_rd || sd_wr) && !sd_ack && !transfer_active && !request_issued) begin
+            request_issued <= 1'b1;
         end
 
 	        if (reset) begin
@@ -255,10 +306,14 @@ module woz_floppy_controller #(
 	            track_load_side <= 1'b0;
             old_ack <= 1'b0;
             transfer_active <= 1'b0;
+            request_issued <= 1'b0;
             loading_second_side <= 1'b0;
             target_physical_track <= 7'h7F;
-	            bit_count_side0 <= 32'd0;
-	            bit_count_side1 <= 32'd0;
+            bit_count_side0 <= 32'd0;
+            bit_count_side1 <= 32'd0;
+            flux_total_ticks_side0 <= 32'd0;
+            flux_total_ticks_side1 <= 32'd0;
+            pending_flux_total_ticks <= 32'd0;
             track_load_complete <= 1'b0;
 	            // bit_count is now a wire (combinational mux), no reset needed
 	            sd_buff_din <= 8'h00;
@@ -275,7 +330,14 @@ module woz_floppy_controller #(
 	            info_version <= 8'd0;
 	            info_disk_type <= 8'd0;
 	            info_bit_timing <= 8'd0;
-	            scan_failed <= 1'b0;
+	            info_flux_block <= 16'd0;
+	            have_flux <= 1'b0;
+	            pending_is_flux <= 1'b0;
+	            is_flux_side0 <= 1'b0;
+	            is_flux_side1 <= 1'b0;
+                flux_size_side0 <= 32'd0;
+                flux_size_side1 <= 32'd0;
+                scan_failed <= 1'b0;
 	        end else begin
 
             // Default signals
@@ -317,8 +379,11 @@ module woz_floppy_controller #(
 	                dirty <= 0;
 	                current_track_id_side0 <= 8'hFF;
 	                current_track_id_side1 <= 8'hFF;
-	                bit_count_side0 <= 32'd0;
-	                bit_count_side1 <= 32'd0;
+                bit_count_side0 <= 32'd0;
+                bit_count_side1 <= 32'd0;
+                flux_total_ticks_side0 <= 32'd0;
+                flux_total_ticks_side1 <= 32'd0;
+                pending_flux_total_ticks <= 32'd0;
 	                // We will load the requested track after parsing metadata.
 	                pending_track_id <= track_id;
 	                load_side <= track_id[0];
@@ -338,6 +403,13 @@ module woz_floppy_controller #(
 	                info_version <= 8'd0;
 	                info_disk_type <= 8'd0;
 	                info_bit_timing <= 8'd0;
+	                info_flux_block <= 16'd0;
+	                have_flux <= 1'b0;
+	                pending_is_flux <= 1'b0;
+	                is_flux_side0 <= 1'b0;
+	                is_flux_side1 <= 1'b0;
+	                flux_size_side0 <= 32'd0;
+	                flux_size_side1 <= 32'd0;
 	                scan_failed <= 1'b0;
 	            end
 	            // Unmount: drop validity immediately.
@@ -347,12 +419,20 @@ module woz_floppy_controller #(
 	                busy <= 1'b0;
 	                current_track_id_side0 <= 8'hFF;
 	                current_track_id_side1 <= 8'hFF;
-	                bit_count_side0 <= 32'd0;
-	                bit_count_side1 <= 32'd0;
-	                track_load_side <= 1'b0;
+                bit_count_side0 <= 32'd0;
+                bit_count_side1 <= 32'd0;
+                flux_total_ticks_side0 <= 32'd0;
+                flux_total_ticks_side1 <= 32'd0;
+                pending_flux_total_ticks <= 32'd0;
+                track_load_side <= 1'b0;
 	                have_info <= 1'b0;
 	                have_tmap <= 1'b0;
 	                have_trks <= 1'b0;
+	                have_flux <= 1'b0;
+	                is_flux_side0 <= 1'b0;
+	                is_flux_side1 <= 1'b0;
+	                flux_size_side0 <= 32'd0;
+	                flux_size_side1 <= 32'd0;
 	                state <= S_INIT;
 	                scan_failed <= 1'b0;
 	            end
@@ -394,8 +474,8 @@ module woz_floppy_controller #(
 	                            woz_valid <= 1'b1;
 	                            busy <= 0;
 	                            state <= S_IDLE;
-	                            $display("WOZ_CTRL: Parsed INFO/TMAP/TRKS (ver=%0d type=%0d timing=%0d), entering IDLE",
-	                                     info_version, info_disk_type, info_bit_timing);
+	                            $display("WOZ_CTRL: Parsed INFO/TMAP/TRKS%s (ver=%0d type=%0d timing=%0d flux_block=%0d), entering IDLE",
+	                                     have_flux ? "/FLUX" : "", info_version, info_disk_type, info_bit_timing, info_flux_block);
 	                            pending_track_id <= track_id;
 	                            load_side <= track_id[0];
 	                        end else if (scan_blocks >= SCAN_BLOCK_LIMIT) begin
@@ -500,24 +580,57 @@ module woz_floppy_controller #(
                     end
                 end
                 
-                // Lookup TMAP and TRKS
+                // Lookup FLUX (if available) then TMAP, then TRKS
 	                S_SEEK_LOOKUP: begin
 	                    case (blocks_processed)
+	                        // Step 0: Start lookup - check FLUX first if available
 	                        0: begin
-	                             // Set Addr for cached TMAP
-	                             // For both 3.5" and 5.25" disks: track_id IS the TMAP index
-	                             // (The IIgs sends the TMAP index directly, not {cylinder,side})
-	                             meta_read_addr <= META_TMAP_BASE + {3'b0, pending_track_id};
-	                             blocks_processed <= 1;
+	                             pending_is_flux <= 1'b0;  // Default to bitstream
+	                             if (have_flux && info_version >= 8'd3) begin
+	                                 // WOZ v3 with FLUX chunk - check FLUX map first
+	                                 meta_read_addr <= META_FLUX_BASE + {3'b0, pending_track_id};
+	                                 blocks_processed <= 1;
+	                                 $display("WOZ_CTRL: Checking FLUX[%0d] (have_flux=%0d ver=%0d)",
+	                                          pending_track_id, have_flux, info_version);
+	                             end else begin
+	                                 // No FLUX support - go directly to TMAP
+	                                 meta_read_addr <= META_TMAP_BASE + {3'b0, pending_track_id};
+	                                 blocks_processed <= 21;  // Skip to TMAP check
+	                             end
 	                        end
-                        1: begin // RAM is fetching TMAP
+	                        // Step 1: Wait for FLUX RAM read
+                        1: begin
                              blocks_processed <= 2;
                         end
+                        // Step 2: Check FLUX result
                         2: begin
+                             reg [7:0] flux_index;
+                             flux_index = meta_read_data;
+
+                             if (flux_index != 8'hFF) begin
+                                 // FLUX data available for this track!
+                                 pending_is_flux <= 1'b1;
+                                 $display("WOZ_CTRL: Track %0d has FLUX data at TRKS entry %0d", pending_track_id, flux_index);
+                                 // Read TRKS entry for flux data (same structure as bitstream)
+                                 meta_read_addr <= META_TRKS_BASE + {flux_index, 3'b000};
+                                 blocks_processed <= 3;  // Continue to TRKS lookup
+                             end else begin
+                                 // No FLUX data - fall back to TMAP
+                                 $display("WOZ_CTRL: No FLUX for track %0d (0xFF), checking TMAP", pending_track_id);
+                                 meta_read_addr <= META_TMAP_BASE + {3'b0, pending_track_id};
+                                 blocks_processed <= 21;  // Go to TMAP check
+                             end
+                        end
+                        // Steps 21-22: TMAP check (fallback from FLUX or direct for non-v3)
+                        21: begin // Wait for TMAP RAM read
+                             blocks_processed <= 22;
+                        end
+                        22: begin
                              // meta_read_data is TMAP[id]
                              reg [7:0] trks_index;
                              trks_index = meta_read_data;
-                             
+                             pending_is_flux <= 1'b0;  // TMAP = bitstream
+
                              if (trks_index == 8'hFF) begin
                                  $display("WOZ_CTRL: Track %0d is empty (FF in TMAP)", pending_track_id);
                                  trk_block_count <= 0;
@@ -526,20 +639,37 @@ module woz_floppy_controller #(
                                  if (IS_35_INCH && pending_track_id[0]) begin
                                      current_track_id_side1 <= pending_track_id;
                                      bit_count_side1 <= 32'd0;
+                                     is_flux_side1 <= 1'b0;
+                                     flux_size_side1 <= 32'd0;
+                                     flux_total_ticks_side1 <= 32'd0;
                                  end else begin
                                      current_track_id_side0 <= pending_track_id;
                                      bit_count_side0 <= 32'd0;
+                                     is_flux_side0 <= 1'b0;
+                                     flux_size_side0 <= 32'd0;
+                                     flux_total_ticks_side0 <= 32'd0;
                                  end
                                  dirty <= 0;
 
                                  // 3.5" DUAL-SIDE: Even for empty tracks, need to check/load side 1
                                  if (IS_35_INCH && !loading_second_side) begin
-                                     loading_second_side <= 1'b1;
-                                     pending_track_id <= {target_physical_track, 1'b1};
-                                     load_side <= 1'b1;
-                                     blocks_processed <= 0;
-                                     $display("WOZ_CTRL: Side 0 empty, checking side 1 for physical track %0d",
-                                              target_physical_track);
+                                     // First check if physical track changed
+                                     if (track_id[7:1] != target_physical_track) begin
+                                         // Physical track changed - start fresh
+                                         target_physical_track <= track_id[7:1];
+                                         pending_track_id <= track_id;
+                                         load_side <= track_id[0];
+                                         blocks_processed <= 0;
+                                         $display("WOZ_CTRL: Physical track moved during empty track: %0d -> %0d, restarting",
+                                                  target_physical_track, track_id[7:1]);
+                                     end else begin
+                                         loading_second_side <= 1'b1;
+                                         pending_track_id <= {target_physical_track, 1'b1};
+                                         load_side <= 1'b1;
+                                         blocks_processed <= 0;
+                                         $display("WOZ_CTRL: Side 0 empty, checking side 1 for physical track %0d",
+                                                  target_physical_track);
+                                     end
                                      // Stay in S_SEEK_LOOKUP, will restart from step 0
                                  end else begin
                                      state <= S_IDLE;
@@ -547,7 +677,7 @@ module woz_floppy_controller #(
                                      loading_second_side <= 1'b0;
                                  end
 	                             end else begin
-	                                 $display("WOZ_CTRL: Track %0d maps to TRKS entry %0d", pending_track_id, trks_index);
+	                                 $display("WOZ_CTRL: Track %0d maps to TRKS entry %0d (bitstream)", pending_track_id, trks_index);
 	                                 // Start reading TRK entry (StartBlock, BlockCount, BitCount)
 	                                 meta_read_addr <= META_TRKS_BASE + {trks_index, 3'b000}; // Byte 0
 	                                 blocks_processed <= 3;
@@ -619,14 +749,28 @@ module woz_floppy_controller #(
                              blocks_processed <= 19;
                         end
                         19: begin
-                             $display("WOZ_CTRL: Track Info: StartBlock=%0d BlockCount=%0d BitCount=%0d",
-                                      trk_start_block, trk_block_count, trk_bit_count);
+                             // Set flux track info based on pending_is_flux
+                             // For flux tracks: trk_bit_count contains flux data size in BYTES
+                             // For flux tracks: trk_bit_count contains flux data size in BYTES
+                             // For bitstream tracks: trk_bit_count contains bit count
+                             // pending_is_flux is already set; per-side flags will be set on load completion
+                             if (pending_is_flux) begin
+                                 $display("WOZ_CTRL: FLUX Track Info: StartBlock=%0d BlockCount=%0d FluxBytes=%0d",
+                                          trk_start_block, trk_block_count, trk_bit_count);
+                             end else begin
+                                 $display("WOZ_CTRL: Track Info: StartBlock=%0d BlockCount=%0d BitCount=%0d",
+                                          trk_start_block, trk_block_count, trk_bit_count);
+                             end
                              // Start Loading Track
                              state <= S_READ_TRACK;
                              sd_lba <= {16'b0, trk_start_block};
                              blocks_processed <= 0; // Reset for block counting
                              old_ack <= sd_ack;  // Prevent spurious falling edge detection on state entry
+                             transfer_active <= 1'b0;  // Clear stale transfer_active from previous track load
                              track_load_side <= load_side; // Latch side before DMA begins
+                             pending_flux_total_ticks <= 32'd0;
+                             $display("WOZ_TRACK_ENTER: track=%0d sd_ack=%0d sd_rd will be %0d old_ack will be %0d lba=%0d",
+                                      pending_track_id, sd_ack, !sd_ack, sd_ack, trk_start_block);
                              if (!sd_ack) sd_rd <= 1'b1;
                         end
                     endcase
@@ -672,6 +816,7 @@ module woz_floppy_controller #(
                             blocks_processed <= 0;
                             old_ack <= sd_ack;
                             transfer_active <= 1'b0;
+                            request_issued <= 1'b0;
                         end
                         // else: requested side is cached, continue loading the other side
                     end
@@ -694,33 +839,75 @@ module woz_floppy_controller #(
                             if (IS_35_INCH && pending_track_id[0]) begin
                                 current_track_id_side1 <= pending_track_id;
                                 bit_count_side1 <= trk_bit_count;
-                                $display("WOZ_CTRL: Stored track %0d to side1 RAM, bit_count=%0d", pending_track_id, trk_bit_count);
+                                is_flux_side1 <= pending_is_flux;
+                                flux_size_side1 <= pending_is_flux ? trk_bit_count : 32'd0;
+                                flux_total_ticks_side1 <= pending_is_flux ? pending_flux_total_ticks : 32'd0;
+                                $display("WOZ_CTRL: Stored track %0d to side1 RAM, %s=%0d is_flux=%0d",
+                                         pending_track_id, pending_is_flux ? "flux_bytes" : "bit_count",
+                                         trk_bit_count, pending_is_flux);
                             end else begin
                                 current_track_id_side0 <= pending_track_id;
                                 bit_count_side0 <= trk_bit_count;
-                                $display("WOZ_CTRL: Stored track %0d to side0 RAM, bit_count=%0d", pending_track_id, trk_bit_count);
+                                is_flux_side0 <= pending_is_flux;
+                                flux_size_side0 <= pending_is_flux ? trk_bit_count : 32'd0;
+                                flux_total_ticks_side0 <= pending_is_flux ? pending_flux_total_ticks : 32'd0;
+                                $display("WOZ_CTRL: Stored track %0d to side0 RAM, %s=%0d is_flux=%0d",
+                                         pending_track_id, pending_is_flux ? "flux_bytes" : "bit_count",
+                                         trk_bit_count, pending_is_flux);
+                            end
+                            if (pending_is_flux) begin
+                                $display("WOZ_CTRL: Flux ticks sum=%0d", pending_flux_total_ticks);
                             end
 
-                            // 3.5" DUAL-SIDE: After first side, load the other side
+                            // 3.5" DUAL-SIDE: After first side, check if track changed, then load other side
                             if (IS_35_INCH && !loading_second_side) begin
-                                // First side done, now load the opposite side
-                                loading_second_side <= 1'b1;
-                                pending_track_id <= {target_physical_track, ~pending_track_id[0]};
-                                load_side <= ~pending_track_id[0];
-                                state <= S_SEEK_LOOKUP;
-                                blocks_processed <= 0;
-                                $display("WOZ_CTRL: First side complete, starting other side load for physical track %0d",
-                                         target_physical_track);
+                                // First check if physical track changed during first side load
+                                if (track_id[7:1] != target_physical_track) begin
+                                    // Physical track changed - start fresh load for new track
+                                    target_physical_track <= track_id[7:1];
+                                    pending_track_id <= track_id;
+                                    load_side <= track_id[0];
+                                    // DON'T set loading_second_side - we're starting fresh
+                                    state <= S_SEEK_LOOKUP;
+                                    blocks_processed <= 0;
+                                    $display("WOZ_CTRL: Physical track moved during first side: %0d -> %0d, restarting",
+                                             target_physical_track, track_id[7:1]);
+                                end else begin
+                                    // First side done for correct track, now load the opposite side
+                                    loading_second_side <= 1'b1;
+                                    pending_track_id <= {target_physical_track, ~pending_track_id[0]};
+                                    load_side <= ~pending_track_id[0];
+                                    state <= S_SEEK_LOOKUP;
+                                    blocks_processed <= 0;
+                                    $display("WOZ_CTRL: First side complete, starting other side load for physical track %0d",
+                                             target_physical_track);
+                                end
                             end else begin
-                                // 5.25" single-sided OR 3.5" side 1 complete - done!
-                                state <= S_IDLE;
-                                busy <= 0;
+                                // 5.25" single-sided OR 3.5" side 1 complete
                                 loading_second_side <= 1'b0;
                                 track_load_complete <= 1'b1;  // Pulse to signal flux_drive to reset position
-                                if (IS_35_INCH) begin
-                                    $display("WOZ_CTRL: Both sides loaded for physical track %0d", target_physical_track);
+
+                                // Check if physical track changed during load
+                                // This can happen if the drive head stepped while we were loading
+                                if (IS_35_INCH && (track_id[7:1] != target_physical_track)) begin
+                                    // Physical track changed during load - immediately start new load
+                                    target_physical_track <= track_id[7:1];
+                                    pending_track_id <= track_id;
+                                    load_side <= track_id[0];
+                                    state <= S_SEEK_LOOKUP;
+                                    blocks_processed <= 0;
+                                    busy <= 1'b1;
+                                    $display("WOZ_CTRL: Physical track moved during load: %0d -> %0d, reloading",
+                                             target_physical_track, track_id[7:1]);
                                 end else begin
-                                    $display("WOZ_CTRL: Track %0d loaded (5.25\")", pending_track_id);
+                                    // No change, normal completion
+                                    state <= S_IDLE;
+                                    busy <= 0;
+                                    if (IS_35_INCH) begin
+                                        $display("WOZ_CTRL: Both sides loaded for physical track %0d", target_physical_track);
+                                    end else begin
+                                        $display("WOZ_CTRL: Track %0d loaded (5.25\")", pending_track_id);
+                                    end
                                 end
                             end
                             dirty <= 0;
@@ -787,6 +974,10 @@ module woz_floppy_controller #(
 	                                         chunk_index <= 32'd0;
 	                                         chunk_hdr_pos <= 3'd0;
 	                                         chunk_size_acc <= 32'd0;
+	                                         // Debug: show chunk being parsed
+	                                         $display("WOZ_CHUNK: Parsing '%c%c%c%c' size=%0d",
+	                                                  chunk_id[31:24], chunk_id[23:16], chunk_id[15:8], chunk_id[7:0],
+	                                                  chunk_size_acc | ({{24{1'b0}}, b} << 24));
 	                                     end
 	                                 end
 	                             end else begin
@@ -801,6 +992,28 @@ module woz_floppy_controller #(
 	                                     // ver(0), disk_type(1), wp(2), sync(3), cleaned(4), creator(5..36),
 	                                     // sides(37), boot_type(38), bit_timing(39)
 	                                     if (chunk_index == 32'd39) info_bit_timing <= b;
+	                                     // WOZ3: flux_block at offset 46-47 (little-endian uint16)
+	                                     // Starting block number for flux data in TRKS chunk
+	                                     if (chunk_index == 32'd46) info_flux_block[7:0] <= b;
+	                                     if (chunk_index == 32'd47) begin
+	                                         info_flux_block[15:8] <= b;
+	                                         $display("WOZ_SCAN: INFO v%0d flux_block=%0d", info_version, {b, info_flux_block[7:0]});
+	                                     end
+	                                 end else if (chunk_id == "FLUX") begin
+	                                     // FLUX chunk: 160-byte map (same as TMAP)
+	                                     // Maps track_id to flux TRKS entry index, 0xFF = no flux data
+	                                     if (chunk_index < 32'd160) begin
+	                                         meta_addr <= META_FLUX_BASE + chunk_index[10:0];
+	                                         meta_din <= b;
+	                                         meta_we <= 1'b1;
+	                                         if (chunk_index < 5 || chunk_index == 80) begin
+	                                             $display("FLUX_SCAN: FLUX[%0d] = %0d (0x%02X)", chunk_index, b, b);
+	                                         end
+	                                         if (chunk_index == 32'd159) begin
+	                                             have_flux <= 1'b1;
+	                                             $display("WOZ_SCAN: FLUX chunk parsed (160 bytes)");
+	                                         end
+	                                     end
 	                                 end else if (chunk_id == "TMAP") begin
 	                                     if (chunk_index < 32'd160) begin
 	                                         meta_addr <= META_TMAP_BASE + chunk_index[10:0];
@@ -831,25 +1044,38 @@ module woz_floppy_controller #(
 	                                 end
 	                             end
 	                         end
-	                     end else if (state == S_READ_TRACK) begin
-	                         // Track RAM Address: (blocks_processed * 512) + sd_buff_addr
-	                         // blocks_processed is 16-bit, sd_buff_addr is 9-bit
-	                         track_load_addr <= {blocks_processed[4:0], sd_buff_addr};
-	                         track_load_data <= sd_buff_dout;
-	                         track_load_we <= 1;
-	                         // Debug: log first/last bytes of each block and bytes around problem areas
-	                         if (sd_buff_addr == 9'd0 || sd_buff_addr == 9'd511 ||
-	                             sd_buff_addr == 9'd1 || sd_buff_addr == 9'd510) begin
+                     end else if (state == S_READ_TRACK && (transfer_active || (!old_ack && sd_ack))) begin
+                         // Track RAM Address: (blocks_processed * 512) + sd_buff_addr
+                         // blocks_processed is 16-bit, sd_buff_addr is 9-bit
+                         // Write when transfer_active is set (normal case) OR when sd_ack just rose
+                         // (first byte of our request). The rising edge check catches byte 0 before
+                         // transfer_active is set. We won't get false positives from previous transfers
+                         // because old_ack is set to sd_ack when entering S_READ_TRACK.
+                         track_load_addr <= {blocks_processed[4:0], sd_buff_addr};
+                         track_load_data <= sd_buff_dout;
+                         track_load_we <= 1;
+                         if (pending_is_flux) begin
+                             pending_flux_total_ticks <= pending_flux_total_ticks + sd_buff_dout;
+                         end
+                         // Debug: log first 4 bytes of first block for each track to verify data
+                         if (blocks_processed == 0 && sd_buff_addr < 9'd4) begin
+	                             $display("WOZ_DMA_FIRST4: track=%0d side=%0d addr=%0d data=%02X (ta=%0d oa=%0d ack=%0d lba=%0d)",
+	                                      pending_track_id, track_load_side, sd_buff_addr, sd_buff_dout,
+	                                      transfer_active, old_ack, sd_ack, sd_lba);
+	                         end
+                        // Debug: log first/last bytes of each block and bytes around problem areas
+                         if (sd_buff_addr == 9'd0 || sd_buff_addr == 9'd511 ||
+                             sd_buff_addr == 9'd1 || sd_buff_addr == 9'd510) begin
 	                             $display("WOZ_DMA_DBG: blk=%0d buf_addr=%0d track_addr=%0d data=%02X track=%0d side=%0d",
-	                                      blocks_processed, sd_buff_addr,
-	                                      {blocks_processed[4:0], sd_buff_addr},
+                                      blocks_processed, sd_buff_addr,
+                                      {blocks_processed[4:0], sd_buff_addr},
 	                                      sd_buff_dout, pending_track_id, load_side);
 	                         end
 	                         // Debug block 16 (addresses 8192+) where we saw 0x69 issues
-	                         if (blocks_processed == 16 && (sd_buff_addr >= 9'd40 && sd_buff_addr <= 9'd60)) begin
-	                             $display("WOZ_DMA_BLK16: buf_addr=%0d track_addr=%0d data=%02X",
-	                                      sd_buff_addr, {5'd16, sd_buff_addr}, sd_buff_dout);
-	                         end
+                         if (blocks_processed == 16 && (sd_buff_addr >= 9'd40 && sd_buff_addr <= 9'd60)) begin
+                             $display("WOZ_DMA_BLK16: buf_addr=%0d track_addr=%0d data=%02X",
+                                      sd_buff_addr, {5'd16, sd_buff_addr}, sd_buff_dout);
+                         end
 	                     end
 	                end else begin // Writing RAM -> SD
                     if (state == S_SAVE_TRACK) begin

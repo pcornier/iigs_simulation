@@ -38,9 +38,13 @@ module iwm_woz (
     // WOZ Track bit interface for 3.5" drive 1 (directly to sim.v)
     output [7:0]    WOZ_TRACK3,
     output [13:0]   WOZ_TRACK3_BIT_ADDR,
+    output          WOZ_TRACK3_STABLE_SIDE,    // Stable side for data reads (captured when motor starts)
     input  [7:0]    WOZ_TRACK3_BIT_DATA,
     input  [31:0]   WOZ_TRACK3_BIT_COUNT,
     input           WOZ_TRACK3_LOAD_COMPLETE,  // Pulses when track load finishes (reset bit_position)
+    input           WOZ_TRACK3_IS_FLUX,        // Track data is flux timing (not bitstream)
+    input  [31:0]   WOZ_TRACK3_FLUX_SIZE,      // Size in bytes of flux data (when IS_FLUX)
+    input  [31:0]   WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
 
     // WOZ Track bit interface for 5.25" drive 1
     output [5:0]    WOZ_TRACK1,
@@ -455,6 +459,9 @@ module iwm_woz (
         .TRACK_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
         .BRAM_ADDR(drive35_bram_addr),
         .BRAM_DATA(WOZ_TRACK3_BIT_DATA),
+        .IS_FLUX_TRACK(WOZ_TRACK3_IS_FLUX),
+        .FLUX_DATA_SIZE(WOZ_TRACK3_FLUX_SIZE),
+        .FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
         .SD_TRACK_ACK(1'b0)
@@ -469,6 +476,17 @@ module iwm_woz (
     wire [7:0] woz_track3_comb = {drive35_track, 1'b0} | {7'b0, diskreg_sel};
     assign WOZ_TRACK3 = woz_track3_comb;
     assign WOZ_TRACK3_BIT_ADDR = drive35_bram_addr;
+
+    // Stable side for data reads: Use the track_id[0] directly since it captures the
+    // requested side. The track_id is {drive35_track, diskreg_sel}, so bit 0 is the side.
+    //
+    // Previously this was only captured on motor start, which caused track 1 (side 1)
+    // to use track 0's bit_count (75215 instead of 74992), preventing proper boot.
+    //
+    // Using the track_id LSB directly ensures the correct bit_count and BRAM data are
+    // selected for each track, regardless of when the side selection changes.
+    wire stable_side_35 = woz_track3_comb[0];
+    assign WOZ_TRACK3_STABLE_SIDE = stable_side_35;
 
 `ifdef SIMULATION
     // Debug: track diskreg_sel changes to detect oscillation bug
@@ -530,6 +548,9 @@ module iwm_woz (
         .TRACK_LOAD_COMPLETE(1'b0),
         .BRAM_ADDR(),
         .BRAM_DATA(8'h00),
+        .IS_FLUX_TRACK(1'b0),
+        .FLUX_DATA_SIZE(32'd0),
+        .FLUX_TOTAL_TICKS(32'd0),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
         .SD_TRACK_ACK(1'b0)
@@ -584,6 +605,9 @@ module iwm_woz (
         .TRACK_LOAD_COMPLETE(1'b0),  // TODO: Add 5.25" track load signal when needed
         .BRAM_ADDR(drive525_bram_addr),
         .BRAM_DATA(WOZ_TRACK1_BIT_DATA),
+        .IS_FLUX_TRACK(1'b0),        // TODO: Add 5.25" flux support when needed
+        .FLUX_DATA_SIZE(32'd0),
+        .FLUX_TOTAL_TICKS(32'd0),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
         .SD_TRACK_ACK(1'b0)
@@ -781,19 +805,35 @@ module iwm_woz (
 
     // Debug: Monitor flux transitions
     reg [15:0] flux_count;
+    reg [15:0] flux35_raw_count;
     reg        prev_flux;
+    reg        prev_flux35_raw;
     always @(posedge CLK_14M) begin
         if (RESET) begin
             flux_count <= 16'd0;
+            flux35_raw_count <= 16'd0;
             prev_flux <= 1'b0;
+            prev_flux35_raw <= 1'b0;
         end else begin
             prev_flux <= flux_transition;
-            if (flux_transition && !prev_flux && motor_spinning) begin
+            prev_flux35_raw <= flux_transition_35;
+
+            // Debug: trace raw flux_transition_35 from drive35 (before mux)
+            if (flux_transition_35 && !prev_flux35_raw) begin
+                flux35_raw_count <= flux35_raw_count + 1'd1;
+                if (flux35_raw_count < 16'd50) begin
+                    $display("IWM_WOZ: RAW flux_transition_35 #%0d (flux_is_35=%0d drive_sel=%0d mux_out=%0d any_spinning=%0d)",
+                             flux35_raw_count, flux_is_35_inch, drive_sel, flux_transition, any_disk_spinning);
+                end
+            end
+
+            // Debug: trace muxed flux_transition (should match flux_transition_35 when 3.5" active)
+            if (flux_transition && !prev_flux && any_disk_spinning) begin
                 flux_count <= flux_count + 1'd1;
                 if (flux_count < 16'd50) begin
-                    $display("IWM_WOZ: Flux #%0d at bit_pos=%0d (is_35=%0d active=%0d)",
-                             flux_count, is_35_inch ? drive35_bit_position : drive525_bit_position,
-                             is_35_inch, drive_active);
+                    $display("IWM_WOZ: Flux #%0d at bit_pos=%0d (flux_is_35=%0d drive_sel=%0d active=%0d)",
+                             flux_count, flux_is_35_inch ? drive35_bit_position : drive525_bit_position,
+                             flux_is_35_inch, drive_sel, drive_active);
                 end
             end
         end
