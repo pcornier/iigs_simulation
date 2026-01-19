@@ -96,7 +96,13 @@ module woz_floppy_controller #(
     reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
     // Dual port RAM for Track Data (Side 0)
-    bram #(.width_a(8), .widthad_a(14), .BRAM_LATENCY(BRAM_LATENCY)) track_ram_side0 (
+    bram #(.width_a(8), .widthad_a(14)
+`ifdef SIMULATION
+	,
+	    .BRAM_LATENCY(BRAM_LATENCY)
+`endif
+)
+	    track_ram_side0 (
         .clock_a(clk),
         .address_a(track_load_addr),
         .wren_a(track_load_we && (!IS_35_INCH || (track_load_side == 1'b0))),
@@ -111,7 +117,12 @@ module woz_floppy_controller #(
     );
 
     // Dual port RAM for Track Data (Side 1) - only meaningful for 3.5"
-    bram #(.width_a(8), .widthad_a(14), .BRAM_LATENCY(BRAM_LATENCY)) track_ram_side1 (
+    bram #(.width_a(8), .widthad_a(14)
+`ifdef SIMULATION
+	,
+	    .BRAM_LATENCY(BRAM_LATENCY)
+`endif
+	    ) track_ram_side1 (
         .clock_a(clk),
         .address_a(track_load_addr),
         .wren_a(track_load_we && (IS_35_INCH && (track_load_side == 1'b1))),
