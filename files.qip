@@ -16,6 +16,7 @@ set_global_assignment -name VERILOG_FILE rtl/syncram.v
 set_global_assignment -name VERILOG_FILE rtl/sound.v
 set_global_assignment -name VERILOG_FILE rtl/clock_divider.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/iwm_woz.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/iwm_flux.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/woz_floppy_controller.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/woz_track.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/flux_drive.v
