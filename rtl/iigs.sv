@@ -156,12 +156,6 @@ module iigs
    logic [9:0]        H;
    logic [8:0]        V;
    
-   // Video counter intermediate calculations for C02E/C02F
-   // Per TN 39, 9'h100 corresponds to the first buffer line.
-   logic [8:0] v_adjusted;
-   assign v_adjusted = V + 9'hF0;
-
-
   logic [7:0]         bank_bef;
   logic [15:0]        addr_bef;
 
@@ -281,6 +275,9 @@ module iigs
 
   logic               lcram2_sel;
 
+  // Legacy Mega II VBL status bit for $C019
+  wire                mega2_vbl;
+
   assign VPB=cpu_vpb;
   assign CXROM=INTCXROM;
   assign { bank, addr } = addr_bus;
@@ -324,11 +321,8 @@ module iigs
                ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
-  // LC_IO: Language Card soft switches ($C080-$C08F) should ALWAYS trigger their side effects,
-  // even when IOLC is inhibited (shadow[6]=1). This is because IOLC inhibit only affects
-  // data routing, not the LC state machine. The ROM RAM address test relies on this.
   wire LC_IO = ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 & (cpu_addr[7:4] == 4'h8) &
-               (bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1);
+               ((~shadow[6] & (bank_bef == 8'h00 | bank_bef == 8'h01)) | bank_bef == 8'he0 | bank_bef == 8'he1);
 
   // Debug: IOLC inhibit testing
   always @(posedge CLK_14M) begin
@@ -469,7 +463,7 @@ module iigs
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (txt1_shadow || txt2_shadow || shr_master_shadow || hgr1_shadow || hgr2_shadow) begin
@@ -496,7 +490,7 @@ module iigs
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (shr_master_shadow) begin
@@ -1318,7 +1312,7 @@ module iigs
             12'h016: io_dout <= {ALTZP, key_keys};
             12'h017: io_dout <= {SLOTC3ROM, key_keys};
             12'h018: io_dout <= {STORE80, key_keys};
-            12'h019: io_dout <= {(V >= 199), key_keys};  // IIgs VBL: bit 7 HIGH when V >= 199 (like Clemens)
+            12'h019: io_dout <= {mega2_vbl, key_keys};  // Mega II VBL flag
             12'h01a: io_dout <= {TEXTG, key_keys};
             12'h01b: io_dout <= {MIXG, key_keys};
             12'h01c: io_dout <= {PAGE2, key_keys};
@@ -1359,8 +1353,8 @@ module iigs
             12'h02b: io_dout <= C02BVAL; // from gsplus
             12'h02c: io_dout <= 'h0; // from gsplus
             12'h02d: io_dout <= SLTROMSEL;
-            12'h02e: io_dout <= v_adjusted >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
-            12'h02f: io_dout <= {v_adjusted[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
+            12'h02e: io_dout <= V >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
+            12'h02f: io_dout <= {V[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
             12'h030: begin io_dout <= SPKR; if (phi2) speaker_state <= ~speaker_state; end
             12'h031: io_dout <= DISK35;
             // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
@@ -1977,6 +1971,7 @@ video_timing video_timing(
 .vsync(VS),
 .hblank(HBlank),
 .vblank(VBlank),
+.mega2_vbl(mega2_vbl),
 .hpos(H),
 .vpos(V)
 );
@@ -2015,7 +2010,7 @@ vgc vgc(
         .PAGE2(PAGE2),
         .TEXTG(TEXTG),
         .MIXG(MIXG),
-        .NEWVIDEO(NEWVIDEO)
+        .SHRG(NEWVIDEO[7])
 );
 
 
@@ -2080,7 +2075,7 @@ wire [7:0] din =
     (cpu_addr[7:0] == 8'h16) ? {ALTZP, key_keys} :
     (cpu_addr[7:0] == 8'h17) ? {SLOTC3ROM, key_keys} :
     (cpu_addr[7:0] == 8'h18) ? {STORE80, key_keys} :
-    (cpu_addr[7:0] == 8'h19) ? {(V >= 199), key_keys} :  // VBL: bit 7 HIGH when V >= 199
+    (cpu_addr[7:0] == 8'h19) ? {mega2_vbl, key_keys} :  // Mega II VBL flag
     (cpu_addr[7:0] == 8'h1a) ? {TEXTG, key_keys} :
     (cpu_addr[7:0] == 8'h1b) ? {MIXG, key_keys} :
     (cpu_addr[7:0] == 8'h1c) ? {PAGE2, key_keys} :

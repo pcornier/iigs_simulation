@@ -1,4 +1,4 @@
-
+/* verilator lint_off TIMESCALEMOD */
 module vgc (
 input CLK_28M,
 input CLK_14M,
@@ -14,7 +14,7 @@ output reg [7:0] G,
 output reg [7:0] B,
 output [22:0] video_addr,
 input [7:0] video_data,
-input [7:0] TEXTCOLOR,
+input [7:0] TEXTCOLOR, // 7:4 text color 3:0 background
 input [3:0] BORDERCOLOR,
 input HIRES_MODE,
 input AN3,
@@ -24,17 +24,27 @@ input EIGHTYCOL,
 input PAGE2,
 input TEXTG,
 input MIXG,
-input [7:0] NEWVIDEO
+input SHRG
 
 );
 
+// Counter values for the border boundaries
 
-// TEXTCOLOR -- 7:4 text color 3:0 background
+// NB: Top border range is non-monotonic due to the legacy counter reset.
+// It spans counts 499 to 511, then 250 to 255.
+// See comments in video_timing.v for more information.
+localparam HTOTAL = 10'd911;      // count 911, 912 total pixel clocks
+localparam V_SCAN_PRE = 9'd255;   // Line before buffer scan
+localparam V_SCAN = 9'd256;       // Buffer line 0
+localparam BBE = V_SCAN + 9'd192; // bottom border (IIe)
+localparam BB = V_SCAN + 9'd200;  // bottom border (SHRG)
+localparam BT = 9'd499;           // top border start
+localparam BL = 10'd44;           // left border (SHRG)
+localparam BLE = 10'd84;          // left border (IIe)
+localparam BR = BL + 10'd640;     // right border (SHRG)
+localparam BRE = BLE + 10'd560;   // right border (IIe)
 
-
-// if NEWVIDEO[7] == 1 then we are in SHRG mode
-
-assign video_addr = NEWVIDEO[7] ? video_addr_shrg : video_addr_ii;
+assign video_addr = SHRG ? video_addr_shrg : video_addr_ii;
 // NEWVIDEO[6] controls CPU memory mapping for Double Hi-Res, but per the IIgs Hardware Reference,
 // when NEWVIDEO[7]=1 (SHR mode), bit 6 is overridden and VGC always uses linear addressing.
 // The video buffer is $E1/2000-$9CFF with SCBs at $9D00 and palettes at $9E00.
@@ -128,33 +138,30 @@ begin
 	if (H == 0)
 		bordercolor_latched <= BORDERCOLOR;
 	// Pre-fetch SCB during HBLANK for next scanline's display
-	// At V=15, fetch SCB[0] for scanline 0 (displayed at V=16)
-	// At V=16, fetch SCB[1] for scanline 1 (displayed at V=17), etc.
-	// Formula: at V=N, fetch SCB[N-15] = $9D00 + (V-16+1) = $9D00 + (V-15)
-	if (H=='h38c) begin
-		video_addr_shrg <= 'h19D00+(V-'d15);
+	if (H==(HTOTAL-4)) begin
+		video_addr_shrg <= 'h19D00+{14'b0,  (V[7:0]+1'b1)};
 	end
-	else if (H=='h38e) begin
+	else if (H==(HTOTAL-2)) begin
 		scb <= video_data;
 		// Check for scanline interrupt: SCB bit 6, SHR mode enabled, valid scanline range
 		// V >= 15 allows SCB[0] interrupt to fire at V=15 (just before scanline 0 displays at V=16)
-`ifdef SIMULATION
-		if (V >= 'd15 && V < 'd206 && V[4:0] == 5'd0)  // Debug every 32nd line in valid range
-			$display("VGC_SCANIRQ_CHECK: V=%d H=%03x SCB=%02x SCB[6]=%d NEWVIDEO[7]=%d (NEWVIDEO=%02x) -> fire=%d",
-			         V, H, video_data, video_data[6], NEWVIDEO[7], NEWVIDEO, (video_data[6] && NEWVIDEO[7]));
+`ifdef VGC_DEBUG
+		if (V >= (BT-1) && V < 'd206 && V[4:0] == 5'd0)  // Debug every 32nd line in valid range
+			$display("VGC_SCANIRQ_CHECK: V=%d H=%03x SCB=%02x SCB[6]=%d NEWVIDEO[7]=%d -> fire=%d",
+			         V, H, video_data, video_data[6], SHRG, (video_data[6] && SHRG));
 `endif
-		if (video_data[6] && NEWVIDEO[7] && V >= 'd15 && V < 'd216)
+		if (video_data[6] && SHRG && V >= V_SCAN_PRE && V < BB)
 			scanline_irq<=1;
 		// Setup palette base address from SCB palette selector (bits 3:0)
 		// Each palette is 32 bytes at $9E00 + (palette * 32)
-		video_addr_shrg_1 <= 'h19E00 + {video_data[3:0],5'b00000};
-		video_addr_shrg <= 'h19E00 + {video_data[3:0],5'b00000};
-	end else if (H=='h390) begin
+		video_addr_shrg_1 <= 'h19E00 + {14'b0, video_data[3:0], 5'b00000};
+		video_addr_shrg <= 'h19E00 + {14'b0, video_data[3:0], 5'b00000};
+	end else if (H==HTOTAL) begin
 		pal_counter<=0;
 		scanline_irq<=0;
 		video_addr_shrg <= video_addr_shrg + 1'b1;
 		video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
-	end else if (H < 32) begin
+	end else if (H < 32) begin // 32 = 2 bytes * 16 palette entries, not a border width
 		// Read palette data - due to address pre-increment at H=0x390, first read is at ODD address
 		// Palette format: odd addresses have G[7:4],B[3:0]; even addresses have 0,R[3:0]
 		if (video_addr_shrg[0]) begin
@@ -166,19 +173,16 @@ begin
 		end
 		video_addr_shrg <= video_addr_shrg + 1'b1;
 		video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
-		if (H==31)
-		begin
-			// Setup pixel data address: $2000 + (scanline * 160 bytes/line)
-			// V=16 is scanline 0, so offset = (V-16) * 160
-			video_addr_shrg_1 <= 'h12000 + ((V-16) * 'd160);
-			video_addr_shrg <= 'h12000 + ((V-16) * 'd160);
-			h_counter<=0;
-		end
-	end else if (H < ('d32+640)) begin
+	end else if (H==(BL-1)) begin
+	   // Setup pixel data address: $2000 + (scanline * 160 bytes/line)
+	   video_addr_shrg_1 <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
+	   video_addr_shrg <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
+	   h_counter<=0;
+	end else if (H < BR) begin
 		h_counter<=h_counter+1'b1;
 		// Only advance address for first 159 advances (byte 0->159), skip the 160th
 		// With 1-cycle display shift, advance #159 happens at H=667, so skip advance at H>=668
-		if (h_counter==2'd2 && H < 'd668) begin
+		if (h_counter==2'd2 && H < (BR-4)) begin
 			video_addr_shrg <= video_addr_shrg + 1'b1;
 			video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
 		end
@@ -246,7 +250,7 @@ begin
 
 	// Clear SHRG pixel registers during left border to ensure clean start
 	// Also clear at right border for completeness
-	if (NEWVIDEO[7] && (H < 'd32 || H >= 'd672)) begin
+	if (SHRG && (H < BL || H >= BR)) begin
 		shrg_r_pix <= 4'b0;
 		shrg_g_pix <= 4'b0;
 		shrg_b_pix <= 4'b0;
@@ -394,7 +398,7 @@ wire [11:0] graphics_rgb = lores_mode ? palette_rgb_r[final_graphics_color] :
                                        {apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]};
 
 reg [12:0] BASEADDR;
-wire  [ 4:0] vert = V[7:3]-5'h02;  // (V-16)
+wire  [ 4:0] vert = V[7:3];
 always @(*) begin
 	case (vert)
 		5'h00: BASEADDR= 13'h000;
@@ -602,11 +606,11 @@ wire ldps_load;
 // So ldps_load at xpos=10 gives us reload at xpos=11, which is still too early.
 // We need reload to happen AFTER video_data is valid at xpos=13.
 // Solution: change ldps_load to xpos=12 so reload happens at xpos=13 when data is ready.
-assign ldps_load = (NEWVIDEO[7]) ?
+assign ldps_load = (SHRG) ?
                    // SHRG mode timing
-                   ((H >= 28 && H < 32) || (H >= 32 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12))))) :
+                   ((H >= (BL-4) && H < BL) || (H >= BL && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12))))) :
                    // Apple II mode timing
-                   ((H >= 68 && H < 72) || (H >= 72 && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12)))));
+                   ((H >= (BLE-4) && H < BLE) || (H >= BLE && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12)))));
 
 reg [3:0] xpos;
 reg [16:0] aux;
@@ -614,11 +618,11 @@ always @(posedge clk_vid)
 begin
    if (ce_pix)
    begin
-	if ((NEWVIDEO[7] && H<32) || (!NEWVIDEO[7] && H<72))
+	if ((SHRG && H<BL) || (!SHRG && H<BLE))
 	begin
 		// Early character loading during border period
 		// Different timing for SHRG vs Apple II modes
-		if (NEWVIDEO[7]) begin
+		if (SHRG) begin
 			// SHRG mode: start loading at H=28
 			if (H == 26) begin
 				if (EIGHTYCOL) begin
@@ -628,15 +632,15 @@ begin
 					chram_x <= 0;
 					aux <= 0;
 				end
-			end else if (H == 28) begin
+			end else if (H == BL-4) begin
 				buffer_needs_reload <= 1'b1;
-			end else if (H == 30) begin
+			end else if (H == BL-2) begin
 				buffer_needs_reload <= 1'b1;
 			end
 		end else begin
 			// Apple II modes: start loading at H=68
 			// Pre-fetch timing: chram_x=0 at H=68, reload at H=71, data ready at H=72
-			if (H == 68) begin
+			if (H == BLE-4) begin
 				if (EIGHTYCOL) begin
 					chram_x <= 0;
 					aux[16] <= 1'b1;
@@ -644,7 +648,7 @@ begin
 					chram_x <= 0;
 					aux <= 0;
 				end
-			end else if (H == 71) begin
+			end else if (H == (BLE-1)) begin
 				// Pre-load the shift register at H=71 so first pixel is ready at H=72
 				// This is the ONLY place where we load during the init block
 				if (hires_mode) begin
@@ -673,21 +677,23 @@ begin
 	begin
 		// Graphics pixel buffer system - coordinate with memory timing
 		// Debug start and end of line to check horizontal alignment
+`ifdef VGC_DEBUG
 		if (((H >= 70 && H <= 90) || (H >= 620 && H <= 640)) && V == 100 && hires_mode)
 			$display("HPIX: H=%d xpos=%d chram_x=%d reload=%b shift=%b pixel=%b video_data=%h",
 			         H, xpos, chram_x, buffer_needs_reload, graphics_pix_shift, graphics_pix_shift[0], video_data);
+`endif
 		if (graphics_mode && GR) begin
 			// Reload buffer when chram_x changes (new memory data available)
-			// Only reload if chram_x is within valid range (0-39 for 40-col, 0-79 for 80-col)
+			// Only reload if chram_x is within valid range (0-39 for 40-col, 0-59 for 80-col)
 			if (buffer_needs_reload) begin
-				// Only load valid data if chram_x is within valid range (0-39 for 40-col, 0-79 for 80-col)
-				if ((EIGHTYCOL && chram_x < 80) || (!EIGHTYCOL && chram_x < 40)) begin
+				// Only load valid data if chram_x is within valid range (0-59 for 40-col, 0-79 for 80-col)
+				if ((EIGHTYCOL && chram_x < 60) || (!EIGHTYCOL && chram_x < 40)) begin
 					if (lores_mode) begin
 						// Lores: expand nibbles based on line position
 						graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
 						graphics_color <= window_y_w[2] ? video_data[7:4] : video_data[3:0];
 `ifdef VGC_DEBUG
-						if (H >= 32 && H <= 100 && V == 16)
+						if (H >= BL && H <= 100 && V == BT)
 							$display("  LORES RELOAD: H=%d video_data=%h expanded=%b color=%h", H, video_data, {expandLores40(video_data, window_y_w[2]), 1'b0}, window_y_w[2] ? video_data[7:4] : video_data[3:0]);
 `endif
 					end else if (hires_mode) begin
@@ -707,13 +713,13 @@ begin
                     // Shift with last-pixel fill to avoid introducing black seams
                     graphics_pix_shift <= {graphics_pix_shift[0], graphics_pix_shift[7:1]};
 `ifdef VGC_DEBUG
-                    if (H >= 32 && H <= 100 && V == 16)
+                    if (H >= BL && H <= 100 && V == BT)
                         $display("  PIXEL SHIFT: H=%d xpos=%d shift_before=%b shift_after=%b pixel_out=%b", H, xpos, graphics_pix_shift, {graphics_pix_shift[0], graphics_pix_shift[7:1]}, graphics_pix_shift[0]);
 `endif
                 end else begin
 					// Hold pixel for doubling in 40-column mode
 `ifdef VGC_DEBUG
-					if (H >= 32 && H <= 100 && V == 16)
+					if (H >= BL && H <= 100 && V == BT)
 						$display("  PIXEL HOLD: H=%d xpos=%d shift=%b pixel_out=%b", H, xpos, graphics_pix_shift, graphics_pix_shift[0]);
 `endif
 				end
@@ -725,17 +731,17 @@ begin
 			
 			// Increment pixel counter for color phase (during active video)
 			// Mode-dependent boundaries: SHRG uses full width, Apple II modes are centered
-			if (NEWVIDEO[7]) begin
+			if (SHRG) begin
 				// SHRG mode: use full 640-pixel width (within 704 visible area)
-				if (H >= 32 && H < 672 && V >= 16 && V < 216)
+				if (H >= BL && H < BR && V >= V_SCAN && V < BB)
 					pixel_counter <= pixel_counter + 1'b1;
-				else if (H < 32)
+				else if (H < BL)
 					pixel_counter <= 11'b0; // Reset at start of each line
 			end else begin
 				// Apple II modes: 192 lines starting at V=16 (scanline 0 to 191)
-				if (H >= 72 && H < 632 && V >= 16 && V < 208)
+				if (H >= BLE && H < BRE && V >= V_SCAN && V < BBE)
 					pixel_counter <= pixel_counter + 1'b1;
-				else if (H < 72)
+				else if (H < BLE)
 					pixel_counter <= 11'b0; // Reset at start of each line
 			end
 		end
@@ -797,10 +803,10 @@ begin
 
 		// Clear shift registers at right border to prevent stray pixels
 		// Text mode right border starts at H=632, Graphics at H=637
-		if (!NEWVIDEO[7] && !GR && H > 'd631) begin
+		if (!SHRG && !GR && H >= BRE) begin
 			text_shift_reg <= 7'b0;
 		end
-		if (!NEWVIDEO[7] && GR && H > 'd636) begin
+		if (!SHRG && GR && H > (BRE+4)) begin
 			graphics_pix_shift <= 8'b0;
 			apple2_shift_reg <= 6'b0;
 			graphics_pixel <= 1'b0;
@@ -831,9 +837,9 @@ begin
 // Apple II TEXT: active display H=72-631 (560 pixels), V=16-207 (192 lines)
 // Apple II GFX:  active display H=77-636 (560 pixels), V=16-207 (192 lines)
 // SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
-if ((!NEWVIDEO[7] && GR && ((H < 'd77 || H > 'd636) || (V < 'd16 || V >= 'd208))) ||
-    (!NEWVIDEO[7] && !GR && ((H < 'd72 || H > 'd631) || (V < 'd16 || V >= 'd208))) ||
-    (NEWVIDEO[7] && ((H < 'd33 || H >= 'd672 || V < 'd16 || V >= 'd216))))  // SHRG: 33px left border (mem latency), 639px active
+if ((!SHRG && GR && ((H < (BLE+5) || H > (BRE+4)) || (V < V_SCAN || V >= BBE))) ||
+    (!SHRG && !GR && ((H < BLE || H >= BRE) || (V < V_SCAN || V >= BBE))) ||
+    (SHRG && ((H < (BL+1) || H >= BR || V < V_SCAN || V >= BB))))  // SHRG: 33px left border (mem latency), 639px active
 begin
 R <= {BORGB[11:8],BORGB[11:8]};
 G <= {BORGB[7:4],BORGB[7:4]};
@@ -841,13 +847,13 @@ B <= {BORGB[3:0],BORGB[3:0]};
 end
 else
 begin
-    if (NEWVIDEO[7]) begin
+    if (SHRG) begin
         // SHRG mode - use combinational first_pix to bypass pipeline latency
         // At H=33, video_data has first pixel byte (addr set H=31, mem latency)
         // In 320 mode, pixel 0 spans H=33-34. In 640 mode, pixel 0 is at H=33.
         // Also at H=34, shrg_r_pix has stale data (computed H=32 from wrong video_data)
         // So bypass H=33-34 for 320 mode, H=33 for 640 mode
-        if (H == 'd33 || (H == 'd34 && !scb[7])) begin
+        if (H == (BL+1) || (H == (BL+2) && !scb[7])) begin
             R <= {first_pix_r, first_pix_r};
             G <= {first_pix_g, first_pix_g};
             B <= {first_pix_b, first_pix_b};
@@ -875,10 +881,10 @@ end
 // Window coordinates derived from H and V
 // Apple II modes: Active display H=72-632 (560 pixels for 40 chars × 14 pixels)
 // SHRG modes: Active display H=32-672 (640 pixels)
-wire [9:0] window_x_w = NEWVIDEO[7] ? 
-    ((H >= 32) ? H - 32 : 10'b0) :          // SHRG: start at H=32
-    ((H >= 72) ? H - 72 : 10'b0);           // Apple II: start at H=72
-wire [9:0] window_y_w = (V >= 16) ? V - 16 : 10'b0;  // Apple II display starts at V=16 (scanline 0)
+wire [9:0] window_x_w = SHRG ?
+    ((H >= BL) ? H - BL : 10'b0) :          // SHRG: start at H=32
+    ((H >= BLE) ? H - BLE : 10'b0);           // Apple II: start at H=72
+wire [9:0] window_y_w = (V >= V_SCAN) ? {2'b0, V[7:0]} : 10'b0;  // Apple II display starts at V=16 (scanline 0)
 
 // Apple II coordinate mapping: Now properly centered, window_y_w is 0-191 (192 lines)
 // No clamping needed since we're properly centered within the 200-line area
@@ -891,7 +897,7 @@ wire GR = ~(TEXTG | mixed_mode_active);
 
 // Apple II address generation using lineaddr() function with clamped coordinates
 wire [15:0] lineaddr_result = lineaddr({2'b0, apple_ii_y_clamped});
-wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + chram_x;
+wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + {17'b0, chram_x};
 
 // 80-column modes (text80 and double hi-res) need aux memory bank switching
 wire text80_mode = (!GR & EIGHTYCOL);
@@ -923,7 +929,7 @@ assign chrom_addr = {1'b0, chrom_bit10, chrom_bit9, video_data[5:0], chpos_y};
 `ifdef DEBUG_MOUSETEXT
 always @(posedge clk_vid) if (ce_pix) begin
     // Trace any MouseText character (0x40-0x5F range with ALTCHARSET)
-    if (H >= 72 && H <= 200 && V >= 80 && V <= 88 && !GR && text80_mode &&
+    if (H >= BLE && H <= 200 && V >= 80 && V <= 88 && !GR && text80_mode &&
         ALTCHARSET && video_data >= 8'h40 && video_data < 8'h60 && xpos == 0) begin
         $display("MT: H=%d V=%d chpos_y=%d vdata=%h addr=%h data=%h bits=%b%b%b%b%b%b%b",
                  H, V, chpos_y, video_data, chrom_addr, chrom_data_out,
@@ -946,7 +952,7 @@ end
 
 
 
-`ifdef SIMULATION
+`ifdef VGC_DEBUG
 /*
     reg [8:0] V_d;
     always @(posedge clk_vid) if(ce_pix) begin
@@ -962,7 +968,7 @@ end
 // VBL Pulse Generation
 // Generate a single-cycle pulse at the start of the vertical blanking interval
 // to avoid IRQ storms.
-wire v_blank = (V >= 208); // V=208 is scanline 192 (V-16), where VBL begins per TN.IIGS.040
+wire v_blank = (V >= BBE); // V=208 is scanline 192 (V-16), where VBL begins per TN.IIGS.040
 reg v_blank_d;
 always @(posedge clk_vid) if(ce_pix) v_blank_d <= v_blank;
 assign vbl_irq = v_blank & ~v_blank_d;
