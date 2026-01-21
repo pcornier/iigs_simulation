@@ -177,15 +177,24 @@ module es5503
 	       if (r_control[current_osc][2]) begin // Sync/swap/AM
 		  accumulator[current_osc] <= 0;
 
-		  // Sync/swap occurs when the current oscillator is even and not 0, the mode is 2 or 3, and the previous oscillator is not halted
-		  // Swap seems to arise naturally from sync+oneshot; halting the current oscillator was already handled above
-		  if ((current_osc != 5'd0) && (current_osc[0] == 1'd0) && (r_control[current_osc - 1][0] == 1'b0))
+		  // Sync occurs when the current oscillator is even and not 0,
+		  // the mode is 2, and the previous oscillator is not halted.
+		  // Halting the current oscillator was already handled above
+		  if ((current_osc != 5'd0) && (current_osc[0] == 1'd0) && (r_control[current_osc - 1][1] == 1'b0))
 		    accumulator[current_osc - 1] <= 32'h0;
 
-		  // AM occurs when the current oscillator is odd and not 31, and the mode is 2
-		  if ((current_osc != 5'd31) && (current_osc[0] == 1'd1) && (r_control[current_osc][1:0] == 2'd2))
+		  // AM occurs when the current oscillator is odd and not 31,
+		  // and the mode is 2
+		  if ((current_osc != 5'd31) && (current_osc[0] == 1'd1) && (r_control[current_osc][2:1] == 2'd2))
 		    // Our data becomes next osc's volume instead of being played
 		    r_volume[next_osc] <= r_sample_data[current_osc] ^ 8'h80;
+
+		  // Swap occurs when the mode is 3 for both even and odd
+		  if (r_control[current_osc][2:1] == 2'd3) begin
+		     r_control[current_osc ^ 5'h01][0] <= 1'b0;   // Swap occurs even if partner is halted
+		     r_sample_data[current_osc ^ 5'h01] <= 8'h80; // Prevent halt on the first scan
+		     accumulator[current_osc ^ 5'h01] <= 32'h0;
+		  end
 	       end
 
 	       // IRQ handling
