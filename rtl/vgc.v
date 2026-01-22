@@ -24,8 +24,8 @@ input EIGHTYCOL,
 input PAGE2,
 input TEXTG,
 input MIXG,
-input SHRG
-
+input SHRG,
+input DHRG_MONO
 );
 
 // Counter values for the border boundaries
@@ -353,7 +353,13 @@ always @(*) begin
         // The dhires_mode monochrome rendering was breaking games like 8bit-Slicks
         // that run in standard HIRES but with EIGHTYCOL left set by menu software.
         // True DHIRES color (16-color) mode would need different handling.
-        if (consistent_tint) begin
+        if (dhires_mode && DHRG_MONO) begin
+            // Color processing bypassed by NEWVIDEO[5]; simple 1bpp monochrome
+            apple2_r = apple2_shift_reg[0] ? 8'hff : 8'h00;
+            apple2_g = apple2_shift_reg[0] ? 8'hff : 8'h00;
+            apple2_b = apple2_shift_reg[0] ? 8'hff : 8'h00;
+        end
+        else if (consistent_tint) begin
             // Regular hires with consistent tint: display color using basis vectors
             // Add contributions from 4 adjacent pixels
             if (apple2_shift_reg[3]) begin

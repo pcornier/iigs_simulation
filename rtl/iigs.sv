@@ -2010,7 +2010,8 @@ vgc vgc(
         .PAGE2(PAGE2),
         .TEXTG(TEXTG),
         .MIXG(MIXG),
-        .SHRG(NEWVIDEO[7])
+        .SHRG(NEWVIDEO[7]),
+        .DHRG_MONO(NEWVIDEO[5])
 );
 
 
