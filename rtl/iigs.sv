@@ -441,7 +441,11 @@ module iigs
   
   // Shadow region detection (when shadow bit = 0, shadowing is ACTIVE)
   wire txt1_shadow  = ~shadow[0] && (page == 4'h0 && addr_bef[11:8] >= 4'h4 && addr_bef[11:8] <= 4'h7);  // $0400-$07FF
-  wire txt2_shadow  = ~shadow[5] && (page == 4'h0 && addr_bef[11:8] <= 4'hB && addr_bef[11:8] >= 4'h8);  // $0800-$0BFF
+`ifdef ROM3
+  wire txt2_shadow  = ~shadow[5] && (page == 4'h0 && addr_bef[11:8] >= 4'h8 && addr_bef[11:8] <= 4'hB);  // $0800-$0BFF (ROM3+ only)
+`else
+  wire txt2_shadow  = 1'b0;  // Text page 2 shadowing not supported on ROM1 hardware (bit 5 reserved)
+`endif
   wire hgr1_shadow  = ~shadow[1] && (page >= 4'h2 && page <= 4'h3);          // $2000-$3FFF
   wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
   // SHR shadow bit 3: When 0, entire $2000-$9FFF shadows (master enable for SHR mode)
