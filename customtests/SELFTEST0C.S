@@ -88,14 +88,26 @@ RETURN
         PHK
         PLB
 
-        ; Check carry flag for pass/fail per Apple IIGS Diagnostics documentation
-        ; Carry clear = pass, carry set = fail
+        ; Branch based on carry (pass/fail) BEFORE switching modes
+        ; (PHK/PLB don't affect carry flag)
         BCS FAIL_BRANCH
+
+        ; PASS path: switch to emulation mode (forces 8-bit M/X)
+        SEC
+        XCE
         LDA #$00
+        JMP SHOWRESULT
+
 FAIL_BRANCH
+        ; FAIL path: switch to emulation mode (forces 8-bit M/X)
+        SEC
+        XCE
+        LDA #$01
+
+SHOWRESULT
         STA RESULT
 
-        ; Display "RESULT:" message
+        ; Display "TEST 0C:" message
         LDX #$00
 RESLP   LDA RESMSG,X
         BEQ SHOWRES
@@ -107,8 +119,43 @@ SHOWRES
         ; Display the result code in hex
         LDA RESULT
         JSR PRINTHEX
-        STA SCREEN+$58
-        STX SCREEN+$59
+        STA SCREEN+$5C
+        STX SCREEN+$5D
+
+        ; Display extended error codes from TST.STATUS
+        ; Format: AABBCCDD at $000315-$000318
+        ; Display on next line
+        LDX #$00
+ERRLP   LDA EXTMSG,X
+        BEQ SHOWERR
+        STA SCREEN+$80,X
+        INX
+        JMP ERRLP
+
+SHOWERR
+        ; Display AA (from $000315)
+        LDA $0315
+        JSR PRINTHEX
+        STA SCREEN+$88
+        STX SCREEN+$89
+
+        ; Display BB (from $000316)
+        LDA $0316
+        JSR PRINTHEX
+        STA SCREEN+$8A
+        STX SCREEN+$8B
+
+        ; Display CC (from $000317)
+        LDA $0317
+        JSR PRINTHEX
+        STA SCREEN+$8C
+        STX SCREEN+$8D
+
+        ; Display DD (from $000318)
+        LDA $0318
+        JSR PRINTHEX
+        STA SCREEN+$8E
+        STX SCREEN+$8F
 
         ; Check if zero (pass)
         LDA RESULT
@@ -119,7 +166,7 @@ TESTPASS
         LDX #$00
 PASSLP  LDA PASSMSG,X
         BEQ HANG
-        STA SCREEN+$5B,X
+        STA SCREEN+$5F,X
         INX
         JMP PASSLP
 
@@ -127,7 +174,7 @@ TESTFAIL
         LDX #$00
 FAILLP  LDA FAILMSG,X
         BEQ HANG
-        STA SCREEN+$5B,X
+        STA SCREEN+$5F,X
         INX
         JMP FAILLP
 
@@ -167,15 +214,19 @@ RUNMSG
         HEX 00
 
 RESMSG
-        ASC "RESULT:"
+        ASC "TEST 0C:"
+        HEX 00
+
+EXTMSG
+        ASC "ERROR:"
         HEX 00
 
 PASSMSG
-        ASC " PASS"
+        ASC "PASS"
         HEX 00
 
 FAILMSG
-        ASC " FAIL"
+        ASC "FAIL"
         HEX 00
 
 ; Storage for result
