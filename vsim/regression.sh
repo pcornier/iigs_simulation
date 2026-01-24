@@ -32,9 +32,9 @@ fi
 FAILED=0
 
 echo "Running Total Replay test..."
-./obj_dir/Vemu --disk totalreplay.hdv --stop-at-frame 155 --screenshot 155 &> totalreplay.txt
-if [ -f "regression_images/totalreplay_screenshot_frame_0155.png" ]; then
-    if diff screenshot_frame_0155.png regression_images/totalreplay_screenshot_frame_0155.png > /dev/null 2>&1; then
+./obj_dir/Vemu --disk totalreplay.hdv --stop-at-frame 175 --screenshot 175 &> totalreplay.txt
+if [ -f "regression_images/totalreplay_screenshot_frame_0175.png" ]; then
+    if diff screenshot_frame_0175.png regression_images/totalreplay_screenshot_frame_0175.png > /dev/null 2>&1; then
         echo "  PASS: Total Replay"
     else
         echo "  FAIL: Total Replay - screenshot differs"

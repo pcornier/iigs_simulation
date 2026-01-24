@@ -2590,7 +2590,7 @@ wire ready_out;
     // Legacy slot-7 HDD (supports 4 units)
     hdd hdd(
         .CLK_14M(CLK_14M),
-        .phi0(phi0),
+        .phi0(phi2),    // Gate on CPU clock (ph2_en) not raw ph0 to prevent double-fire during sync waits
         .IO_SELECT(io_select[7]),
         .DEVICE_SELECT(device_select[7]),
         //.IO_SELECT(1'b0),
@@ -2737,6 +2737,9 @@ wire ready_out;
   wire sw2 = joystick_0[6];                 // Button 2  
   //wire sw3 = joystick_0[7];                 // Button 3
 
+// ROM access signal: refresh penalty is hidden during ROM reads
+wire is_rom_access = rom1_ce | rom2_ce | romc_ce | romd_ce;
+
 // Clock divider instance
 clock_divider clk_div_inst (
     .clk_14M(CLK_14M),
@@ -2746,6 +2749,8 @@ clock_divider clk_div_inst (
     .shadow(shadow),
     .IO(IO),
     .we(we),
+    .valid(valid),
+    .is_rom_access(is_rom_access),
     .reset(reset),
     .stretch(1'b0),  // TODO: Connect to VGC stretch signal
     .clk_14M_en(),
