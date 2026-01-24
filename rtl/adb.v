@@ -80,6 +80,7 @@ reg strobe_prev;  // Previous strobe value for edge detection
 reg rw_prev;      // Previous rw value to detect read->write transitions
 reg c024_was_read;  // Track if C024 was read on previous strobe (for falling edge handling)
 reg c026_status_read_with_data;  // Track if C026 status was read with pending data (for IDLE->DATA transition)
+reg data_last_byte_read;  // Flag: last DATA byte was output, waiting for strobe to fall before IDLE
 
 // Device configuration registers
 reg [7:0] adb_mode;
@@ -595,6 +596,7 @@ always @(posedge CLK_14M) begin
     rw_prev <= 1'b1;  // Initialize to read (high) so first write is detected
     c024_was_read <= 1'b0;
     c026_status_read_with_data <= 1'b0;
+    data_last_byte_read <= 1'b0;
 
     // Initialize command processing registers
     cmd <= 8'd0;
@@ -929,6 +931,18 @@ always @(posedge CLK_14M) begin
     
     // Key repeat moved back to $C000 reads - no background repeat generation
 
+    // DATA state: Complete the IDLE transition after CPU finishes reading (strobe falls)
+    // This prevents the IDLE handler from overwriting dout while the CPU is still
+    // latching the last data byte from a DATA state read.
+    if (data_last_byte_read && !strobe) begin
+      state <= IDLE;
+      data <= 32'h00000008;  // SRQ bit set, ready for keyboard operations
+      data_last_byte_read <= 1'b0;
+`ifdef DEBUG_ADB
+      $display("ADB DATA->IDLE: strobe fell, transitioning to IDLE");
+`endif
+    end
+
     // CMD state machine: When all bytes received, transition to CMD_EXEC for 1-cycle delay
     // This delay is needed because ROM reads are synchronous (1-cycle latency)
     if (state == CMD && cmd_len == 4'd0) begin
@@ -944,7 +958,8 @@ always @(posedge CLK_14M) begin
       $display("ADB CMD EXEC: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
 `endif
       state <= IDLE;
-      cmd_response_ready <= 1'b1;  // Signal that command has been processed
+      // Don't set cmd_response_ready here - each command sets it as needed
+      // Microcontroller commands go directly to DATA state (no status byte)
 
       case (cmd)
         8'h09: begin
@@ -1042,9 +1057,9 @@ always @(posedge CLK_14M) begin
 `endif
           end
           pending_data <= 3'd1;
-          // Standard two-step flow: ROM reads status byte (0x80) first, then data
-          // The c026_status_read_with_data mechanism handles transition to DATA state
-          cmd_response_ready <= 1'b1;
+          // KEGS goes directly to SENDING_DATA (no status byte) for microcontroller commands
+          // The first C026 read returns the data directly
+          state <= DATA;
         end
         // Add other commands that need execution here if needed in future
         default: begin
@@ -1088,19 +1103,19 @@ always @(posedge CLK_14M) begin
               // Bit 5: Reset key sequence
               // Bit 4: Buffer flush key sequence
               // Bit 3: SRQ (keyboard ready)
-              // Bits 2-0: Number of data bytes to return (count - 1, or 0 if no data)
+              // Bits 2-0: Number of data bytes to return
               if (cmd_response_ready) begin
                 // Command completed - return response with bit 7 set
                 // Format: bit 7=response, bit 6=0, bits 5-4=0, bit 3=SRQ, bits 2-0=data count
                 if (pending_data > 3'd0) begin
-                  dout <= 8'h80 | {5'd0, pending_data - 3'd1};  // Response + data count
+                  dout <= 8'h80 | {5'd0, pending_data};  // Response + data count
                   // Transition IMMEDIATELY to DATA state on rising edge (like KEGS)
                   // dout is already set above and won't change until next clock
                   if (strobe & ~strobe_prev) begin
                     state <= DATA;
                     cmd_response_ready <= 1'b0;
 `ifdef DEBUG_ADB
-                    $display("ADB C026: returning 0x%02h, transitioning to DATA immediately", 8'h80 | {5'd0, pending_data - 3'd1});
+                    $display("ADB C026: returning 0x%02h, transitioning to DATA immediately", 8'h80 | {5'd0, pending_data});
 `endif
                   end
                 end else begin
@@ -1136,9 +1151,12 @@ always @(posedge CLK_14M) begin
 `endif
                 // Shift data and decrement counter on rising edge only
                 if (pending_data == 3'd1) begin
-                  // Last data byte - restore SRQ status for subsequent IDLE reads
-                  data <= 32'h00000008;  // SRQ bit set, ready for keyboard operations
-                  state <= IDLE;
+                  // Last data byte - DON'T transition to IDLE yet!
+                  // The CPU hasn't latched dout yet. If we go to IDLE now,
+                  // the IDLE handler will overwrite dout with 0x00 on the next
+                  // clock while strobe is still high, corrupting the read.
+                  // Instead, set a flag to transition after strobe falls.
+                  data_last_byte_read <= 1'b1;
                 end else begin
                   data <= { 8'd0, data[31:8] };
                 end
@@ -1209,13 +1227,14 @@ always @(posedge CLK_14M) begin
 `endif
                 end
                 8'h0a: begin
-                  // Read ADB modes
+                  // Read ADB modes - KEGS goes directly to SENDING_DATA (no status byte)
                   data <= { 24'd0, adb_mode };
                   pending_data <= 3'd1;
-                  cmd_response_ready <= 1'b1;  // Signal response ready
+                  state <= DATA;  // Go directly to DATA state
                 end
                 8'h0b: begin
                   // Read device info - returns config including repeat_info
+                  // KEGS goes directly to SENDING_DATA (no status byte)
                   data <= {
                     {mouse_ctl_addr[3:0], kbd_ctl_addr[3:0]},  // Combined addr byte
                     repeat_info,   // Key repeat settings
@@ -1223,26 +1242,26 @@ always @(posedge CLK_14M) begin
                     layout
                   };
                   pending_data <= 3'd4;
-                  cmd_response_ready <= 1'b1;  // Signal response ready
+                  state <= DATA;  // Go directly to DATA state
                 end
                 8'h0d: begin
                   // ADB Version command - return version number
-                  // Standard two-step flow: ROM reads status byte first (0x80|count), then data
+                  // KEGS goes directly to SENDING_DATA (no status byte)
                   data <= {24'd0, VERSION[7:0]};  // Clear upper bits, set version in LSB
                   pending_data <= 3'd1;
-                  cmd_response_ready <= 1'b1;  // Set so first C026 read returns 0x80 status
+                  state <= DATA;  // Go directly to DATA state
                 end
                 8'h0e: begin
-                  // Read charsets
+                  // Read charsets - KEGS goes directly to SENDING_DATA (no status byte)
                   data <= { 16'd0, 8'd0, 8'd1 };
                   pending_data <= 3'd2;
-                  cmd_response_ready <= 1'b1;  // Signal response ready
+                  state <= DATA;  // Go directly to DATA state
                 end
                 8'h0f: begin
-                  // Read layouts
+                  // Read layouts - KEGS goes directly to SENDING_DATA (no status byte)
                   data <= { 16'd0, 8'd0, 8'h1 };
                   pending_data <= 3'd2;
-                  cmd_response_ready <= 1'b1;  // Signal response ready
+                  state <= DATA;  // Go directly to DATA state
                 end
                 8'h10: soft_reset <= 1'b1;
                 8'h11: begin cmd_len <= 4'd1; initial_cmd_len <= 4'd1; state <= CMD; end
@@ -1503,6 +1522,7 @@ always @(posedge CLK_14M) begin
               pending_data <= 3'd0;
               cmd_response_ready <= 1'b0;
               c026_status_read_with_data <= 1'b0;
+              data_last_byte_read <= 1'b0;
 
               // Process as new command (same as IDLE state)
               cmd <= din;
@@ -1541,7 +1561,7 @@ always @(posedge CLK_14M) begin
                 8'h0a: begin
                   data <= { 24'd0, adb_mode };
                   pending_data <= 3'd1;
-                  cmd_response_ready <= 1'b1;
+                  state <= DATA;  // Go directly to DATA state
                 end
                 8'h0b: begin
                   data <= {
@@ -1551,12 +1571,12 @@ always @(posedge CLK_14M) begin
                     layout
                   };
                   pending_data <= 3'd4;
-                  cmd_response_ready <= 1'b1;
+                  state <= DATA;  // Go directly to DATA state
                 end
                 8'h0d: begin
                   data <= {24'd0, VERSION[7:0]};
                   pending_data <= 3'd1;
-                  cmd_response_ready <= 1'b1;
+                  state <= DATA;  // Go directly to DATA state
                 end
                 default: begin
                   if (din >= 8'h10) begin
