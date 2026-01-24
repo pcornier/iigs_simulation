@@ -213,8 +213,6 @@ module iigs
   logic [1:0]         scc_rs;
   logic               scc_irq_n;
   logic               scc_rd_active; // one-shot read strobe helper
-  wire                scc_txd_a;     // Channel A TX output for loopback
-  wire                scc_txd_b;     // Channel B TX output for loopback
 
   logic               aux;
 
@@ -2653,6 +2651,11 @@ wire ready_out;
   assign AUDIO_R = AUDIO_L;
 
   // SCC (Serial Communications Controller) - Zilog 8530
+  // Apple IIgs port assignment:
+  //   Modem port (Port 1, Slot 1) = SCC Channel B (C038/C03A)
+  //   Printer port (Port 2, Slot 2) = SCC Channel A (C039/C03B)
+  // ROM selftest uses internal loopback (WR14 bit 4), not cross-channel,
+  // so external wiring doesn't affect selftest results.
   scc_iigs_wrapper scc_inst(
             .clk_14m(CLK_14M),
             .ph0_en(phi0),
@@ -2665,17 +2668,17 @@ wire ready_out;
             .wdata(scc_din),
             .rdata(scc_dout),
             .irq_n(scc_irq_n),
-            // Serial ports - bidirectional cross-channel loopback for diagnostic external test
-            // Channel A TX -> Channel B RX, Channel B TX -> Channel A RX
-            .txd_a(scc_txd_a),
-            .rxd_a(scc_txd_b),  // Channel A RX <- Channel B TX
+            // Channel A = Printer port (no external connection)
+            .txd_a(),
+            .rxd_a(1'b1),       // Idle (mark state) - no external input
             .rts_a(),
-            .cts_a(1'b0),
-            // Channel B cross-connected to Channel A
-            .txd_b(scc_txd_b),  // Channel B TX (looped back to A RX)
-            .rxd_b(scc_txd_a),  // Channel B RX <- Channel A TX
+            .cts_a(1'b0),       // Always clear to send
+            // Channel B = Modem port → MiSTer UART
+            .txd_b(UART_TXD),
+            .rxd_b(UART_RXD),
             .rts_b(UART_RTS),
-            .cts_b(UART_CTS)
+            .cts_b(UART_CTS),
+            .dsr_a(1'b0)        // DSR asserted (active low on real hardware)
 				);
 
   // Apple IIe compatibility signals now come from ADB module

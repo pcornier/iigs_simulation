@@ -201,6 +201,7 @@ module scc
 
 		// FIFO enqueue: add byte to queue if space available
 		if (rx_wr_a) begin
+			$display("SCC_SERIAL_IN: ch=A byte=%02x time=%0t", data_a, $time);
 			if (rx_queue_pos_a < 3) begin
 				rx_queue_a[rx_queue_pos_a] <= data_a;
 				rx_queue_pos_a <= rx_queue_pos_a + 1;
@@ -216,6 +217,7 @@ module scc
 
 		// Channel B FIFO enqueue: add byte to queue if space available (from rxuart_b)
 		if (rx_wr_b) begin
+			$display("SCC_SERIAL_IN: ch=B byte=%02x time=%0t", data_b, $time);
 			if (rx_queue_pos_b < 3) begin
 				rx_queue_b[rx_queue_pos_b] <= data_b;
 				rx_queue_pos_b <= rx_queue_pos_b + 1;
@@ -1147,7 +1149,7 @@ end
         // Set on TX complete (busy 1->0) independent of bus activity
         if (tx_busy_a_r == 1'b1 && tx_busy_a == 1'b0) begin
             tx_empty_latch_a <= 1'b1;
-            $display("SCC_LATCH: tx_empty_latch_a <= 1 (TX complete)");
+            $display("SCC_SERIAL_OUT: ch=A byte=%02x time=%0t", tx_data_a, $time);
         end
     end
 	end
@@ -1167,6 +1169,7 @@ always@(posedge clk or posedge reset) begin
         // Set on TX complete (busy 1->0)
         if (tx_busy_b_r == 1'b1 && tx_busy_b == 1'b0) begin
             tx_empty_latch_b <= 1'b1;
+            $display("SCC_SERIAL_OUT: ch=B byte=%02x time=%0t", tx_data_b, $time);
         end
     end
 end

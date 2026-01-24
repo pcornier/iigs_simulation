@@ -109,12 +109,11 @@ module emu (
 
 wire [15:0] joystick_a0 =  joystick_l_analog_0;
 
-wire UART_CTS;
 wire UART_RTS;
-wire UART_RXD;
 wire UART_TXD;
-wire UART_DTR;
-wire UART_DSR;
+// UART inputs: RXD idle (mark=1), CTS asserted (clear to send=0)
+wire UART_RXD = 1'b1;
+wire UART_CTS = 1'b0;
     wire [22:0] fastram_address;
     wire [7:0] fastram_datatoram;
     wire [7:0] fastram_datafromram;
@@ -215,7 +214,13 @@ iigs  iigs(
 
         // Audio outputs
         .AUDIO_L(AUDIO_L),
-        .AUDIO_R(AUDIO_R)
+        .AUDIO_R(AUDIO_R),
+
+        // Serial (SCC Channel A = Modem port)
+        .UART_TXD(UART_TXD),
+        .UART_RXD(UART_RXD),
+        .UART_RTS(UART_RTS),
+        .UART_CTS(UART_CTS)
 );
 
   reg prev_fastram_we;
