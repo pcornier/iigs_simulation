@@ -2637,7 +2637,7 @@ wire ready_out;
   sound snd(
             .CLK_14M(CLK_14M),
             .clk_7M_en(clk_7M_en),
-            .ph0_en(phi0),
+            .ph0_en(phi2),    // Gate on CPU clock (ph2_en) not raw ph0 to prevent double-fire during sync waits
             .reset(reset),
             .select(snd_strobe),
             .wr(snd_rw),

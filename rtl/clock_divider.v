@@ -342,29 +342,24 @@ always @(posedge clk_14M) begin
 			ph2_sync_pulse <= 1'b0;
 		end
 	end else if (slowMem==1'b1) begin
-		// Sync cycle (fast CPU accessing Mega II peripheral/slow RAM):
-		// Per Clemens/FPI docs: wait for PHI0 alignment, then one full PHI0
-		// period for the Mega II to complete the bus transaction.
-		// This means we fire on the SECOND PHI0 boundary, not the first.
-		if (ph0_counter_next == 4'd0) begin
-			if (sync_aligned) begin
-				// Second PHI0 boundary: bus cycle complete, fire!
-				ph2_en <= 1'b1;
-				ph2_counter <= 4'd0;
-				ph2_sync_pulse <= 1'b1;
-				refresh_counter <= 4'd0;
-				cycle_is_refresh <= 1'b0;
-				sync_aligned <= 1'b0;
-			end else begin
-				// First PHI0 boundary: alignment done, now wait one PHI0 period
-				sync_aligned <= 1'b1;
-				ph2_en <= 1'b0;
-				ph2_counter <= 4'd0;
-				ph2_sync_pulse <= 1'b0;
-			end
+		// Sync cycle per krue FPI doc: extend PH2 to overlap one full PH0 cycle.
+		// Total cycle = 14-27 ticks (2 low + 12-25 high).
+		// Fire ph2_en at first PH0 falling edge where total cycle >= 14 ticks,
+		// ensuring one complete PH0 period is contained within PH2 high.
+		// ph2_counter tracks elapsed ticks since cycle start (inherited from
+		// fast path, keeps counting through sync).
+		sync_aligned <= 1'b0;
+		if (ph2_counter < 4'd15)
+			ph2_counter <= ph2_counter + 4'd1;
+
+		if (ph0_counter_next == 4'd0 && ph2_counter >= 4'd13) begin
+			ph2_en <= 1'b1;
+			ph2_counter <= 4'd0;
+			ph2_sync_pulse <= 1'b1;
+			refresh_counter <= 4'd0;
+			cycle_is_refresh <= 1'b0;
 		end else begin
 			ph2_en <= 1'b0;
-			ph2_counter <= 4'd0;
 			ph2_sync_pulse <= 1'b0;
 		end
 	end else begin
