@@ -38,14 +38,19 @@ module adb(
   parameter VERSION = 5;  // Version 5 for ROM1 (256K Apple IIgs)
 `endif
 
-// ADB microcontroller ROM (4KB for ROM3, loaded from file)
+// ADB microcontroller ROM (4KB, loaded from file)
+// ROM3: M50741 maps ROM at $1000-$1FFF (4KB file, data starts at index 0)
+// ROM1: M50740 maps ROM at $1400-$1FFF (3KB file, pre-padded with $400 zeros so data starts at index $400)
 // This allows the selftest to read and verify the ROM checksum
-// Use the rom module which works reliably with Quartus synthesis
 wire [11:0] adb_rom_addr;
 wire [7:0] adb_rom_data;
 reg [11:0] adb_rom_addr_reg;
 
+`ifdef ROM3
 rom #(12, 8, "rtl/roms/adb_rom3.hex") adb_rom_inst (
+`else
+rom #(12, 8, "rtl/roms/adb_rom1.hex") adb_rom_inst (
+`endif
   .clock(CLK_14M),
   .ce(1'b1),
   .address(adb_rom_addr),
