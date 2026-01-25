@@ -2742,9 +2742,12 @@ int main(int argc, char** argv, char** env) {
 			if (event.type == SDL_QUIT)
 				done = true;
 			// Handle mouse motion when captured
+			// Note: Using absolute position deltas since SDL_SetRelativeMouseMode crashes on some platforms
 			if (event.type == SDL_MOUSEMOTION && mouse_captured) {
-				mouse_x += event.motion.xrel;
-				mouse_y -= event.motion.yrel;  // RTL negates Y, so don't negate here
+				mouse_x += (event.motion.x - prev_mouse_x);
+				mouse_y -= (event.motion.y - prev_mouse_y);  // Negate Y for screen coords
+				prev_mouse_x = event.motion.x;
+				prev_mouse_y = event.motion.y;
 			}
 			// Handle mouse buttons when captured
 			if (mouse_captured) {
@@ -2760,8 +2763,9 @@ int main(int argc, char** argv, char** env) {
 			// Escape key releases mouse capture
 			if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE && mouse_captured) {
 				mouse_captured = false;
-				SDL_SetRelativeMouseMode(SDL_FALSE);
-				ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+				// Don't use SDL_SetRelativeMouseMode - it crashes on some platforms
+				// SDL_SetRelativeMouseMode(SDL_FALSE);
+				// ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
 			}
 		}
 		// Clamp mouse deltas to signed 8-bit range
@@ -2952,10 +2956,17 @@ int main(int argc, char** argv, char** env) {
 		ImGui::Image(video.texture_id, ImVec2(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y));
 
 		// Mouse capture for Apple IIgs: capture when clicking on VGA output, release with Escape
+		// Note: SDL_SetRelativeMouseMode crashes on some platforms, so we track deltas manually
 		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
 			mouse_captured = true;
-			SDL_SetRelativeMouseMode(SDL_TRUE);
-			ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+			// Initialize previous position to avoid large initial delta
+			int mx, my;
+			SDL_GetMouseState(&mx, &my);
+			prev_mouse_x = mx;
+			prev_mouse_y = my;
+			// Don't use SDL_SetRelativeMouseMode - it crashes on some platforms
+			// SDL_SetRelativeMouseMode(SDL_TRUE);
+			// ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
 		}
 		if (mouse_captured) {
 			ImGui::Text("Mouse captured - Press ESC to release");
