@@ -196,11 +196,13 @@ module scc
 	reg wr_data_b;
 
 	reg rx_first_a=1;
+	reg rx_first_b=1;
 
 	always@(posedge clk /*or posedge reset*/) begin
 
 		// FIFO enqueue: add byte to queue if space available
 		if (rx_wr_a) begin
+			$display("SCC_SERIAL_IN: ch=A byte=%02x time=%0t", data_a, $time);
 			if (rx_queue_pos_a < 3) begin
 				rx_queue_a[rx_queue_pos_a] <= data_a;
 				rx_queue_pos_a <= rx_queue_pos_a + 1;
@@ -216,6 +218,7 @@ module scc
 
 		// Channel B FIFO enqueue: add byte to queue if space available (from rxuart_b)
 		if (rx_wr_b) begin
+			$display("SCC_SERIAL_IN: ch=B byte=%02x time=%0t", data_b, $time);
 			if (rx_queue_pos_b < 3) begin
 				rx_queue_b[rx_queue_pos_b] <= data_b;
 				rx_queue_pos_b <= rx_queue_pos_b + 1;
@@ -248,6 +251,7 @@ module scc
 			wr_data_a<=0;
 			wr_data_b<=0;
 			rx_first_a<=1;
+			rx_first_b<=1;
 		end else begin
 			if (cen && cs) begin
             if (!rs[1]) begin
@@ -311,6 +315,9 @@ module scc
 								wdata, {((wdata[5:3] == 3'b001) ? 1'b1 : 1'b0), wdata[2:0]},
 								(wdata[5:3] == 3'b001));
 `endif
+							/* enable int on next rx char */
+							if (wdata[5:3] == 3'b100)
+								rx_first_b<=1;
 						end else begin
 							/* State REGISTER: This write is to selected register */
 `ifdef DEBUG_SCC
@@ -383,6 +390,7 @@ module scc
 					rx_queue_b[1] <= rx_queue_b[2];
 					rx_queue_b[2] <= 8'h00;
 					rx_queue_pos_b <= rx_queue_pos_b - 1;
+					rx_first_b<=0;
 					end else begin
 					$display("SCC_RX_FIFO_EMPTY: ch=B read from empty FIFO");
 					end
@@ -864,6 +872,7 @@ reg tx_busy_a_r;
 reg tx_busy_b_r;
 
 	reg tx_int_latch_a;
+	reg tx_int_latch_b;
 
 
 
@@ -903,9 +912,9 @@ end
 
 			end
 
-			// Clear on Reset Tx Interrupt Pending command (WR0)
+			// Clear on Reset Tx Interrupt Pending command (WR0) - command 5 = 3'b101
 
-			if (wreg_a & (rindex_latch == 0) & (wdata[5:3] == 3'b010)) begin
+			if (wreg_a & (rindex_latch == 0) & (wdata[5:3] == 3'b101)) begin
 
 				tx_int_latch_a <= 0;
 
@@ -925,9 +934,29 @@ end
 
 	end
 
-	 
-
-	 
+	// TX interrupt latch for Channel B (mirrors Channel A logic)
+	always@(posedge clk) begin
+		if (reset | reset_b) begin
+			tx_int_latch_b <= 1'b0;
+		end else begin
+			// Clear on BDATA write (rs[1]=1, rs[0]=0)
+			if (cs && we && rs[1] && !rs[0]) begin
+				tx_int_latch_b <= 1'b0;
+			end
+			// Clear on WR8 write for Channel B
+			if (cep && (wreg_b && rindex_latch == 8)) begin
+				tx_int_latch_b <= 1'b0;
+			end
+			// Clear on Reset Tx Interrupt Pending command (WR0) for Channel B - command 5 = 3'b101
+			if (wreg_b & (rindex_latch == 0) & (wdata[5:3] == 3'b101)) begin
+				tx_int_latch_b <= 0;
+			end
+			// Set on TX complete (busy 1->0)
+			if (tx_busy_b_r == 1'b1 && tx_busy_b == 1'b0) begin
+				tx_int_latch_b <= 1'b1;
+			end
+		end
+	end
 
 	 wire wreq_n;
 
@@ -972,9 +1001,12 @@ end
 
    wire cts_interrupt = wr1_a[0] &&  wr15_a[5] || (tx_busy_a_r ==1 && tx_busy_a==0) || (tx_busy_a_r ==0 && tx_busy_a==1);/* if cts changes */
 
-	assign ex_irq_pend_a = ex_irq_ip_a ; 
-	assign rx_irq_pend_b = 0;
-	assign tx_irq_pend_b = 0 /*& wr1_b[1]*/; /* Tx always empty for now */
+	assign ex_irq_pend_a = ex_irq_ip_a ;
+	// Channel B RX interrupt: same logic as Channel A
+	//                         rx enable   char waiting           01,10 only             first char
+	assign rx_irq_pend_b =   wr3_b[0] & (rx_queue_pos_b > 0) & (wr1_b[3] ^ wr1_b[4]) & ((wr1_b[3] & rx_first_b )|(wr1_b[4]));
+	// Channel B TX interrupt: use falling-edge TX latch (buffer empty)
+	assign tx_irq_pend_b = wr1_b[1] & tx_int_latch_b;
 	assign ex_irq_pend_b = ex_irq_ip_b;
 
 	assign _irq = ~(wr9[3] & (rx_irq_pend_a |
@@ -1147,7 +1179,7 @@ end
         // Set on TX complete (busy 1->0) independent of bus activity
         if (tx_busy_a_r == 1'b1 && tx_busy_a == 1'b0) begin
             tx_empty_latch_a <= 1'b1;
-            $display("SCC_LATCH: tx_empty_latch_a <= 1 (TX complete)");
+            $display("SCC_SERIAL_OUT: ch=A byte=%02x time=%0t", tx_data_a, $time);
         end
     end
 	end
@@ -1167,6 +1199,7 @@ always@(posedge clk or posedge reset) begin
         // Set on TX complete (busy 1->0)
         if (tx_busy_b_r == 1'b1 && tx_busy_b == 1'b0) begin
             tx_empty_latch_b <= 1'b1;
+            $display("SCC_SERIAL_OUT: ch=B byte=%02x time=%0t", tx_data_b, $time);
         end
     end
 end

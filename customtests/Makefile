@@ -871,6 +871,22 @@ scc_wr15.2mg: SCCWR15.SYSTEM
 	$(CP2) sa scc_wr15.2mg type=SYS "SCCWR15.SYSTEM"
 	@echo "SCC WR15 test disk ready: scc_wr15.2mg"
 
+# SCC Cross-Channel Loopback Test - tests actual UART path via A TX -> B RX wiring
+.PHONY: scc_crosschan
+scc_crosschan: SCCCROSS.SYSTEM scc_crosschan.2mg
+
+SCCCROSS.SYSTEM: SCC_CROSSCHAN_TEST.S
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
+
+scc_crosschan.2mg: SCCCROSS.SYSTEM
+	@echo "Creating SCC cross-channel test disk..."
+	@cp blank.2mg scc_crosschan.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm scc_crosschan.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm scc_crosschan.2mg "SCCCROSS.SYSTEM" 2>/dev/null || true
+	$(CP2) add scc_crosschan.2mg "SCCCROSS.SYSTEM"
+	$(CP2) sa scc_crosschan.2mg type=SYS "SCCCROSS.SYSTEM"
+	@echo "SCC cross-channel test disk ready: scc_crosschan.2mg"
+
 # SCC Baud Rate Generator Test
 .PHONY: scc_baud_test
 scc_baud_test: SCCBAUD.SYSTEM scc_baud_test.2mg
