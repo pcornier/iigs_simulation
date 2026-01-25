@@ -912,9 +912,9 @@ end
 
 			end
 
-			// Clear on Reset Tx Interrupt Pending command (WR0)
+			// Clear on Reset Tx Interrupt Pending command (WR0) - command 5 = 3'b101
 
-			if (wreg_a & (rindex_latch == 0) & (wdata[5:3] == 3'b010)) begin
+			if (wreg_a & (rindex_latch == 0) & (wdata[5:3] == 3'b101)) begin
 
 				tx_int_latch_a <= 0;
 
@@ -947,8 +947,8 @@ end
 			if (cep && (wreg_b && rindex_latch == 8)) begin
 				tx_int_latch_b <= 1'b0;
 			end
-			// Clear on Reset Tx Interrupt Pending command (WR0) for Channel B
-			if (wreg_b & (rindex_latch == 0) & (wdata[5:3] == 3'b010)) begin
+			// Clear on Reset Tx Interrupt Pending command (WR0) for Channel B - command 5 = 3'b101
+			if (wreg_b & (rindex_latch == 0) & (wdata[5:3] == 3'b101)) begin
 				tx_int_latch_b <= 0;
 			end
 			// Set on TX complete (busy 1->0)
