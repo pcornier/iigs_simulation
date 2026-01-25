@@ -1794,6 +1794,7 @@ int prev_mouse_x = 0;
 int prev_mouse_y = 0;
 int prev_mouse_buttons = 0;  // Track previous button state to detect changes
 bool mouse_captured = false;  // True when mouse is captured for IIgs control
+extern SDL_Window* window;  // From sim_video.cpp - needed for SDL_WarpMouseInWindow
 
 char spinner_toggle = 0;
 
@@ -2741,13 +2742,25 @@ int main(int argc, char** argv, char** env) {
 			ImGui_ImplSDL2_ProcessEvent(&event);
 			if (event.type == SDL_QUIT)
 				done = true;
-			// Handle mouse motion when captured
-			// Note: Using absolute position deltas since SDL_SetRelativeMouseMode crashes on some platforms
+			// Handle mouse motion when captured using SDL_WarpMouseInWindow
+			// Warp cursor to center after each motion, use displacement as delta
 			if (event.type == SDL_MOUSEMOTION && mouse_captured) {
-				mouse_x += (event.motion.x - prev_mouse_x);
-				mouse_y -= (event.motion.y - prev_mouse_y);  // Negate Y for screen coords
-				prev_mouse_x = event.motion.x;
-				prev_mouse_y = event.motion.y;
+				int win_w, win_h;
+				SDL_GetWindowSize(window, &win_w, &win_h);
+				int center_x = win_w / 2;
+				int center_y = win_h / 2;
+
+				// Calculate delta from center (not from previous position)
+				int dx = event.motion.x - center_x;
+				int dy = event.motion.y - center_y;
+
+				// Only process if not already at center (avoid feedback loop from warp)
+				if (dx != 0 || dy != 0) {
+					mouse_x += dx;
+					mouse_y -= dy;  // Negate Y for screen coords
+					// Warp cursor back to center
+					SDL_WarpMouseInWindow(window, center_x, center_y);
+				}
 			}
 			// Handle mouse buttons when captured
 			if (mouse_captured) {
@@ -2760,12 +2773,10 @@ int main(int argc, char** argv, char** env) {
 						mouse_buttons &= ~0x01;
 				}
 			}
-			// Escape key releases mouse capture
-			if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE && mouse_captured) {
+			// ESC or F1 releases mouse capture
+			if (event.type == SDL_KEYDOWN && mouse_captured &&
+			    (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_F1)) {
 				mouse_captured = false;
-				// Don't use SDL_SetRelativeMouseMode - it crashes on some platforms
-				// SDL_SetRelativeMouseMode(SDL_FALSE);
-				// ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
 			}
 		}
 		// Clamp mouse deltas to signed 8-bit range
@@ -2952,24 +2963,26 @@ int main(int argc, char** argv, char** env) {
 			}
 		}
 
-		// Draw VGA output
-		ImGui::Image(video.texture_id, ImVec2(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y));
+		// Draw VGA output with invisible button overlay to capture clicks
+		ImVec2 vga_size(video.output_width * VGA_SCALE_X, video.output_height * VGA_SCALE_Y);
+		ImVec2 cursor_pos = ImGui::GetCursorPos();
+		ImGui::Image(video.texture_id, vga_size);
 
-		// Mouse capture for Apple IIgs: capture when clicking on VGA output, release with Escape
-		// Note: SDL_SetRelativeMouseMode crashes on some platforms, so we track deltas manually
-		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(0)) {
+		// Overlay an invisible button to capture mouse clicks without moving the window
+		ImGui::SetCursorPos(cursor_pos);
+		ImGui::InvisibleButton("##vga_capture", vga_size);
+
+		// Mouse capture for Apple IIgs: capture when clicking on VGA output, release with ESC or F1
+		// Note: SDL_SetRelativeMouseMode and SDL_ShowCursor crash on some platforms
+		if (ImGui::IsItemClicked(0)) {
 			mouse_captured = true;
-			// Initialize previous position to avoid large initial delta
-			int mx, my;
-			SDL_GetMouseState(&mx, &my);
-			prev_mouse_x = mx;
-			prev_mouse_y = my;
-			// Don't use SDL_SetRelativeMouseMode - it crashes on some platforms
-			// SDL_SetRelativeMouseMode(SDL_TRUE);
-			// ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
+			// Warp cursor to center of window to start capture
+			int win_w, win_h;
+			SDL_GetWindowSize(window, &win_w, &win_h);
+			SDL_WarpMouseInWindow(window, win_w / 2, win_h / 2);
 		}
 		if (mouse_captured) {
-			ImGui::Text("Mouse captured - Press ESC to release");
+			ImGui::Text("Mouse captured - Press ESC or F1 to release");
 		} else {
 			ImGui::Text("Click on display to capture mouse");
 		}
