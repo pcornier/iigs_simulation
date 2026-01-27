@@ -15,7 +15,7 @@
 
 // Enable detailed byte framing debug output for comparing with MAME
 // Uncomment the following line to enable:
-`define BYTE_FRAME_DEBUG
+// `define BYTE_FRAME_DEBUG
 
 // Enable sector read logging with checksum validation
 // Uncomment the following line to enable:
@@ -88,6 +88,7 @@ module iwm_flux (
     reg        m_data_read; // Flag: data register has been read since last byte loaded
     reg        m_rw_mode;   // 0 = read mode, 1 = write mode (tracks Q7 for mode changes)
     reg        m_motor_was_on; // Track motor state for edge detection
+    reg [31:0] m_data_gen;  // Generation counter for m_data updates (guards async clear)
     // Minimal write-mode underrun handling:
     // We don't implement flux writing yet, but the IIgs ROM/SmartPort code can enter the
     // WHD polling loop while Q7=1. In MAME, if no data is written in write mode, the IWM
@@ -95,10 +96,15 @@ module iwm_flux (
     // Without this, WHD can remain 0xFF and hang at FF:57B7 (LDA $C08C,X; AND #$40; BNE).
     reg [9:0]  write_underrun_cnt;
     localparam [9:0] WRITE_UNDERRUN_DELAY_7M = 10'd64; // ~9µs at 7MHz
-    reg [9:0]  async_update;   // Countdown to clear "data valid" bit7 in async mode (7MHz domain)
+    reg [31:0] async_tick_14m;      // 14MHz tick counter for async timing
+    reg [31:0] last_sync_14m;       // Last bit-cell sync tick (approx m_last_sync)
+    reg [31:0] async_update_deadline;
+    reg        async_update_pending;
+    reg [31:0] async_clear_gen;     // m_data_gen snapshot for async clear
     // CPU read tracking (PHI2/CEN-relative)
     reg        rd_in_progress;     // RD captured during this PHI2-high bus cycle
     reg        rd_was_data_reg;    // Latched Q7/Q6 decode for this read
+    reg        rd_latched_valid;   // Latched a valid data byte during this read
     reg [7:0]  rd_data_latched;    // Byte value observed by CPU during PHI2-high
     reg        prev_cen;           // CEN (PHI2) edge detect
     // CPU access tracking (read OR write) for MAME-like async_update scheduling
@@ -106,22 +112,20 @@ module iwm_flux (
     reg        access_q7_latched;     // Latched Q7 state for this access (MAME uses !(m_control & 0x80))
     reg        access_q6_latched;     // Latched Q6 state for this access (needed to distinguish DATA vs STATUS)
     reg        access_data_valid;     // Latched "byte valid" at access time (m_data bit7)
+    reg [31:0] access_gen_latched;    // Latched m_data_gen at access START (not end!)
     wire       rd_is_data_reg;        // Combinational decode for DATA register reads
+    reg [3:0]  latch_hold_cnt;       // Latched read hold in bit-times (mode bit0)
+    wire       latch_mode = SW_MODE[0];
+    wire       latch_hold_active = (latch_hold_cnt != 4'd0);
 
     // MAME async behavior: In async mode, completed bytes remain in m_data until overwritten by
     // the next completed byte. After the CPU performs an IWM register access while a valid byte
     // is present, MAME schedules m_data to clear after 14 internal cycles (~2µs at 7MHz).
-    // This provides the "bit7 drops after read" behavior that ROM polling loops depend on.
-    localparam [9:0] ASYNC_CLEAR_DELAY_7M = 10'd14;
+    // We track time at 14MHz, so this is 28 cycles.
+    localparam [31:0] ASYNC_CLEAR_DELAY_14M = 32'd28;
 
     // Async mode: mode bit 1 = 1 means async (MAME: is_sync() = !(mode & 0x02))
     wire       is_async = SW_MODE[1];
-    // Data-ready gating: avoid returning stale bytes after they've been read.
-    wire       byte_completing = (m_rsh >= 8'h80) && DISK_READY;
-    wire       data_ready = byte_completing || (m_data[7] && !m_data_read);
-    wire [7:0] effective_data_raw = byte_completing ? m_rsh : m_data;
-    wire [7:0] effective_data = data_ready ? effective_data_raw : 8'h00;
-
     //=========================================================================
     // State Machine (from MAME)
     //=========================================================================
@@ -158,13 +162,9 @@ module iwm_flux (
 
     wire        fast_mode = SW_MODE[3];
     // Window timing: MAME uses 7MHz clock, we run at 14MHz.
-    // For 3.5" drives: 2µs bit cells, window = 28 @ 14MHz (matches MAME mode 0x08 fast)
-    // For 5.25" drives: 4µs bit cells (slow) or 2µs (fast)
-    // Note: ROM typically sets mode=0x0F for 3.5" drives (fast mode + async).
+    // 3.5" bit cells are 2us -> 28.636 cycles @14.318MHz, so use fractional windows.
     wire [5:0]  base_full_window = IS_35_INCH ? 6'd28 : (fast_mode ? 6'd28 : 6'd56);
     wire [5:0]  base_half_window = IS_35_INCH ? 6'd14 : (fast_mode ? 6'd14 : 6'd28);
-    // Fractional window adjust for 2us cells at 14.318MHz (~28.636 cycles).
-    // Alternate 28/29 cycles using a fixed-point accumulator.
     wire        use_fractional_window = IS_35_INCH;
     wire [9:0]  full_window_step = use_fractional_window ? 10'd636 : 10'd0;
     wire [9:0]  half_window_step = use_fractional_window ? 10'd318 : 10'd0;
@@ -210,6 +210,32 @@ module iwm_flux (
     // which can miss edges that land on window boundaries.
     wire       flux_now  = flux_edge || flux_seen;
 
+    // Data-ready gating: avoid returning stale bytes after they've been read.
+    // Predict same-cycle byte completion so reads can see the new byte immediately.
+    wire       shift_edge0_now = (rw_state == SR_WINDOW_EDGE_0) && (window_counter == 6'd1) && !flux_now;
+    wire       shift_edge1_now = (rw_state == SR_WINDOW_EDGE_1) && (window_counter == 6'd1);
+    wire [7:0] next_rsh_edge0 = {m_rsh[6:0], 1'b0};
+    wire [7:0] next_rsh_edge1 = {m_rsh[6:0], 1'b1};
+    wire       byte_completing = DISK_READY &&
+                                 ((shift_edge0_now && next_rsh_edge0[7]) ||
+                                  (shift_edge1_now && next_rsh_edge1[7]));
+    wire [7:0] byte_complete_data = shift_edge0_now ? next_rsh_edge0 :
+                                    shift_edge1_now ? next_rsh_edge1 :
+                                    8'h00;
+    wire       data_ready = byte_completing || (m_data[7] && (!m_data_read || latch_hold_active));
+    wire [7:0] effective_data_raw = byte_completing ? byte_complete_data : m_data;
+    wire [7:0] effective_data = data_ready ? effective_data_raw : 8'h00;
+    // If a byte completes during an active data read, treat it as consumed.
+    wire       rd_consumes_byte = rd_in_progress && rd_was_data_reg && data_out_mux[7];
+
+    // Ack the byte only if it matches the value observed by the CPU.
+    // This avoids a late PHI2-fall ack clearing a newly completed byte.
+    wire       rd_ack_match_old = (rd_data_latched == m_data);
+    wire       rd_ack_match_new = byte_completing && (rd_data_latched == byte_complete_data);
+    wire       rd_ack_take = rd_latched_valid && rd_data_latched[7] &&
+                             ((byte_completing && rd_ack_match_new) ||
+                              (!byte_completing && rd_ack_match_old));
+
 `ifdef SIMULATION
     reg [31:0] debug_cycle;
     reg [31:0] byte_counter;  // Sequential byte counter for comparison with MAME
@@ -217,6 +243,14 @@ module iwm_flux (
     reg [31:0] bytes_lost_counter;  // How many bytes were cleared by async_update before CPU read
     reg [7:0]  prev_m_data;  // For tracking m_data changes
     reg [31:0] m_data_change_count;  // Count of m_data changes
+    reg [7:0]  flux_edge_log_count;
+    reg [15:0] dbg_bp_count;
+    reg [7:0]  prolog_last1;  // Most recent completed byte (for prolog detection)
+    reg [7:0]  prolog_last2;  // Second most recent completed byte
+    wire       dbg_prolog_window = ((DISK_BIT_POSITION >= 17'd21500) && (DISK_BIT_POSITION <= 17'd21540)) ||
+                                   ((DISK_BIT_POSITION >= 17'd21660) && (DISK_BIT_POSITION <= 17'd21690)) ||
+                                   ((DISK_BIT_POSITION >= 17'd21910) && (DISK_BIT_POSITION <= 17'd21940)) ||
+                                   ((DISK_BIT_POSITION >= 17'd55840) && (DISK_BIT_POSITION <= 17'd55870));
 `endif
 
     // Clear the read shift register shortly after a completed byte.
@@ -237,10 +271,15 @@ module iwm_flux (
             m_rsh          <= 8'h00;
             m_data         <= 8'h00;
             m_whd          <= 8'hBF;  // MAME: initialized to 0xBF
-            async_update   <= 10'd0;
+            async_tick_14m <= 32'd0;
+            last_sync_14m  <= 32'd0;
+            async_update_deadline <= 32'd0;
+            async_update_pending <= 1'b0;
+            async_clear_gen <= 32'd0;
             m_data_read    <= 1'b1;   // Start as "read" so first byte triggers ready
             m_rw_mode      <= 1'b0;   // Start in read mode
             m_motor_was_on <= 1'b0;
+            m_data_gen     <= 32'd0;
             prev_flux      <= 1'b0;
             prev_sm_active <= 1'b0;
             flux_seen      <= 1'b0;
@@ -255,8 +294,10 @@ module iwm_flux (
             access_q7_latched  <= 1'b0;
             access_q6_latched  <= 1'b0;
             access_data_valid  <= 1'b0;
+            access_gen_latched <= 32'd0;
             write_underrun_cnt <= 10'd0;
             clear_rsh_pending   <= 1'b0;
+            latch_hold_cnt <= 4'd0;
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
             byte_counter   <= 32'd0;
@@ -264,11 +305,20 @@ module iwm_flux (
             bytes_lost_counter <= 32'd0;
             prev_m_data    <= 8'd0;
             m_data_change_count <= 32'd0;
+            flux_edge_log_count <= 8'd0;
+            dbg_bp_count <= 16'd0;
+            prolog_last1 <= 8'h00;
+            prolog_last2 <= 8'h00;
 `endif
         end else begin
 `ifdef SIMULATION
             debug_cycle <= debug_cycle + 1;
 `endif
+            async_tick_14m <= async_tick_14m + 1'd1;
+            // Approximate MAME's m_last_sync using bit-cell boundaries.
+            if (shift_edge0_now || shift_edge1_now) begin
+                last_sync_14m <= async_tick_14m + 1'd1;
+            end
             if (clear_rsh_pending) begin
                 clear_rsh_pending <= 1'b0;
                 m_rsh <= 8'h00;
@@ -314,14 +364,38 @@ module iwm_flux (
             end
             m_motor_was_on <= MOTOR_ACTIVE;
 
-            // MAME async_update logic - NOTE: Countdown runs at 7MHz (see CLK_7M_EN block below)
-            // In async mode, m_data is cleared ~2µs after a CPU IWM access when a valid byte is present.
+            // MAME async behavior: in async mode, m_data clears ~2µs after a CPU IWM access
+            // when a valid byte is present. We emulate this with 14MHz tick scheduling.
 
             // Always track flux edges at 14M (so we don't miss any)
             prev_flux <= FLUX_TRANSITION;
+`ifdef SIMULATION
+            if (flux_edge && DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230 &&
+                flux_edge_log_count < 8) begin
+                $display("IWM_FLUX_EDGE pos=%0d state=%0d win=%0d frac=%0d seen=%0d",
+                         DISK_BIT_POSITION, rw_state, window_counter, full_window_frac, flux_seen);
+                flux_edge_log_count <= flux_edge_log_count + 1'd1;
+            end
 
-            // Latch flux edges only in EDGE_0; MAME ignores edges during EDGE_1.
-            if (flux_edge && (rw_state == SR_WINDOW_EDGE_0)) begin
+            // Latch mode hold counter (8 bit times after a completed byte).
+            if (!latch_mode) begin
+                latch_hold_cnt <= 4'd0;
+            end else if ((shift_edge0_now || shift_edge1_now) && latch_hold_cnt != 4'd0) begin
+                latch_hold_cnt <= latch_hold_cnt - 1'd1;
+`ifdef SIMULATION
+                if ((DISK_BIT_POSITION >= 17'd7135) && (DISK_BIT_POSITION <= 17'd7205) &&
+                    latch_hold_cnt == 4'd1) begin
+                    $display("IWM_LATCH_END: pos=%0d m_data=%02h m_data_read=%0d",
+                             DISK_BIT_POSITION, m_data, m_data_read);
+                end
+`endif
+            end
+`endif
+
+            // Latch flux edges that arrive in EDGE_1 so they can be applied to the next cell.
+            // Do not latch EDGE_0 edges (they are handled immediately), and avoid carrying
+            // edges that arrive exactly at the EDGE_1 shift boundary.
+            if (flux_edge && (rw_state == SR_WINDOW_EDGE_1) && (window_counter != 6'd1)) begin
                 flux_seen <= 1'b1;
 `ifdef SIMULATION
                 // Debug: trace flux edges as they arrive at IWM
@@ -329,40 +403,41 @@ module iwm_flux (
                     $display("IWM_FLUX: FLUX_EDGE #%0d pos=%0d state=%0d win=%0d rsh=%02h",
                              byte_counter, DISK_BIT_POSITION, rw_state, window_counter, m_rsh);
                 end
+                // Log late edges in EDGE_1 that are now carried to the next window.
+                if ((rw_state == SR_WINDOW_EDGE_1) &&
+                    (DISK_BIT_POSITION >= 17'd70190) && (DISK_BIT_POSITION <= 17'd70230)) begin
+                    $display("IWM_FLUX_EDGE_LATE pos=%0d win=%0d frac=%0d seen=%0d",
+                             DISK_BIT_POSITION, window_counter, full_window_frac, flux_seen);
+                end
 `endif
             end
 
-            // MAME async_update countdown at 7MHz (matches iwm.cpp update_phases logic)
-            // In async mode, clear m_data (to 0x00) when the scheduled timeout expires.
-            if (CLK_7M_EN) begin
-                if (async_update != 0) begin
-                    if (async_update == 1) begin
-                        // Counter about to hit 0 - clear m_data NOW (unless a new byte is completing).
-                        //
-                        // Important: do not change the data register during PHI2-high while the CPU
-                        // is in the middle of an IWM access, or the CPU can sample a different value
-                        // than the one we "returned" at the start of the bus cycle (seen in logs as
-                        // `read_iwm ret: xx` with the ROM still taking `BPL` as if bit7 were 0).
-                        //
-                        // If an access is in progress, hold the clear until the next 7MHz tick.
-                        if (!(CEN && (RD || WR))) begin
-                            if (is_async && !byte_completing && m_data[7]) begin
-                                m_data <= 8'h00;
+            // MAME async_update behavior: schedule m_data clear relative to the last bit-cell sync.
+            // We track sync at 14MHz, so clear when async_tick_14m reaches last_sync_14m + 28.
+            if (async_update_pending && (async_tick_14m >= async_update_deadline)) begin
+                // Do not clear during latch hold or PHI2-high; defer by 1 tick if active.
+                if (latch_hold_active) begin
+                    async_update_deadline <= async_tick_14m + 32'd1;
+                end else if (!(CEN && (RD || WR))) begin
+                    if (is_async && !byte_completing && m_data[7] && (m_data_gen == async_clear_gen)) begin
+                        m_data <= 8'h00;
 `ifdef SIMULATION
-                                // Always log ASYNC_CLEAR to debug m_data clearing issues
-                                $display("IWM_FLUX: ASYNC_CLEAR m_data %02h -> 00 (bc=%0d async=%0d byte_cnt=%0d)",
-                                         m_data, byte_completing, async_update, byte_counter);
+                        $display("IWM_FLUX: ASYNC_CLEAR m_data %02h -> 00 (cycle=%0d bc=%0d pending=%0d byte_cnt=%0d gen=%0d)",
+                                 m_data, debug_cycle, byte_completing, async_update_pending, byte_counter, m_data_gen);
 `endif
-                            end
-                            async_update <= 10'd0;
-                        end else begin
-                            async_update <= 10'd1;
-                        end
-                    end else begin
-                        async_update <= async_update - 10'd1;
                     end
+                    async_update_pending <= 1'b0;
+                end else begin
+                    async_update_deadline <= async_tick_14m + 32'd1;
                 end
+            end
 
+            // If async mode is disabled, drop any pending clear.
+            if (!is_async) begin
+                async_update_pending <= 1'b0;
+            end
+
+            if (CLK_7M_EN) begin
                 // Minimal MAME-like write underrun: if we entered write mode (Q7=1) but no data writes
                 // occur (we don't implement writes yet), clear WHD bit6 after a short delay so ROM
                 // polling loops can proceed.
@@ -420,10 +495,36 @@ module iwm_flux (
                             $display("IWM_FLUX: EDGE_0->EDGE_1 flux pos=%0d win=%0d half=%0d",
                                      DISK_BIT_POSITION, base_full_window, base_half_window);
 `endif
+`ifdef SIMULATION
+                            if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
+                                $display("IWM_EDGE0_HIT pos=%0d cyc=%0d win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d rsh=%02h",
+                                         DISK_BIT_POSITION, debug_cycle, window_counter, full_window_frac, half_window_frac,
+                                         rw_state, flux_edge, flux_seen, m_rsh);
+                            end
+                            if (dbg_prolog_window) begin
+                                $display("IWM_EDGE0_HIT_DBG pos=%0d cyc=%0d win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d rsh=%02h",
+                                         DISK_BIT_POSITION, debug_cycle, window_counter, full_window_frac, half_window_frac,
+                                         rw_state, flux_edge, flux_seen, m_rsh);
+                            end
+`endif
                         end else if (window_counter == 6'd1) begin
 `ifdef BYTE_FRAME_DEBUG
                             $display("IWM_FLUX: SHIFT bit=0 rsh=%02h->%02h state=EDGE_0 endw=%0d",
                                      m_rsh, {m_rsh[6:0], 1'b0}, window_counter);
+`endif
+`ifdef SIMULATION
+                            if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
+                                $display("IWM_SHIFT0 pos=%0d cyc=%0d rsh=%02h->%02h win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
+                                         DISK_BIT_POSITION, debug_cycle, m_rsh, {m_rsh[6:0], 1'b0},
+                                         window_counter, full_window_frac, half_window_frac,
+                                         rw_state, flux_edge, flux_seen);
+                            end
+                            if (dbg_prolog_window) begin
+                                $display("IWM_SHIFT0_DBG pos=%0d cyc=%0d rsh=%02h->%02h win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
+                                         DISK_BIT_POSITION, debug_cycle, m_rsh, {m_rsh[6:0], 1'b0},
+                                         window_counter, full_window_frac, half_window_frac,
+                                         rw_state, flux_edge, flux_seen);
+                            end
 `endif
                             shifted_rsh = {m_rsh[6:0], 1'b0};
                             m_rsh <= shifted_rsh;
@@ -432,8 +533,55 @@ module iwm_flux (
                                 $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d", shifted_rsh, DISK_BIT_POSITION);
 `endif
 `ifdef SIMULATION
+                                    if (prolog_last1 == 8'hD5 && shifted_rsh != 8'hAA) begin
+                                        $display("IWM_PROLOG_BAD: d5 %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
+                                                 shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
+                                         rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                    end
+                                    if (prolog_last2 == 8'hD5 && prolog_last1 == 8'hAA) begin
+                                        if (shifted_rsh == 8'h96 || shifted_rsh == 8'hAD) begin
+                                            $display("IWM_PROLOG_OK: d5 aa %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
+                                                     shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
+                                                     rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                        end else begin
+                                            $display("IWM_PROLOG_MISS: d5 aa %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
+                                                     shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
+                                                     rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                        end
+                                    end
+                                    prolog_last2 <= prolog_last1;
+                                    prolog_last1 <= shifted_rsh;
+                                    if (dbg_prolog_window) begin
+                                        $display("IWM_BYTE_DBG pos=%0d data=%02h win=%0d frac=%0d state=%0d q6=%0d q7=%0d cyc=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, window_counter, full_window_frac,
+                                                 rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd7130) && (DISK_BIT_POSITION <= 17'd7190) &&
+                                        (shifted_rsh == 8'h9A)) begin
+                                        $display("IWM_9A_COMPLETE(E0): pos=%0d data=%02h rsh=%02h win=%0d frac=%0d state=%0d async_pending=%0d m_data=%02h m_data_read=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, m_rsh, window_counter, full_window_frac,
+                                                 rw_state, async_update_pending, m_data, m_data_read);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd13280) && (DISK_BIT_POSITION <= 17'd13450)) begin
+                                        $display("IWM_BC_WIN(E0): pos=%0d data=%02h rsh=%02h m_data=%02h m_data_read=%0d data_ready=%0d eff=%02h bc=%0d async_pending=%0d q6=%0d q7=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, m_rsh, m_data, m_data_read,
+                                                 data_ready, effective_data, byte_completing, async_update_pending,
+                                                 immediate_q6, immediate_q7);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd7100) && (DISK_BIT_POSITION <= 17'd7200)) begin
+                                        $display("IWM_DEC_BYTE: cycle=%0d pos=%0d data=%02h byte_idx=%0d win=%0d frac=%0d state=%0d m_data=%02h m_data_read=%0d",
+                                                 debug_cycle, DISK_BIT_POSITION, shifted_rsh, DISK_BIT_POSITION[16:3],
+                                                 window_counter, full_window_frac, rw_state, m_data, m_data_read);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd29500) && (DISK_BIT_POSITION <= 17'd29850) &&
+                                        (dbg_bp_count < 16'd200)) begin
+                                        dbg_bp_count <= dbg_bp_count + 1'd1;
+                                        $display("IWM_BC_WIN(P): pos=%0d data=%02h rsh=%02h win=%0d frac=%0d state=%0d flux_edge=%0d flux_seen=%0d m_data=%02h m_data_read=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, m_rsh, window_counter, full_window_frac,
+                                                 rw_state, flux_edge, flux_seen, m_data, m_data_read);
+                                    end
                                     byte_counter <= byte_counter + 1;
-                                    if (!m_data_read && m_data[7]) begin
+                                    if (!m_data_read && m_data[7] && !rd_consumes_byte) begin
                                         bytes_lost_counter <= bytes_lost_counter + 1;
 `ifdef IWM_BYTELOG
                                         $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
@@ -441,14 +589,24 @@ module iwm_flux (
 `endif
                                     end
                                     // Debug near divergence point - compare internal state
-                                    if (DISK_BIT_POSITION >= 17'd50800 && DISK_BIT_POSITION <= 17'd50950) begin
-                                        $display("IWM_DIV_E0: byte=%0d pos=%0d data=%02h win=%0d frac=%0d state=%0d",
-                                                 byte_counter + 1, DISK_BIT_POSITION, shifted_rsh, window_counter, full_window_frac, rw_state);
+                                    if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
+                                        $display("IWM_DIV_E0: byte=%0d pos=%0d data=%02h win=%0d frac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
+                                                 byte_counter + 1, DISK_BIT_POSITION, shifted_rsh, window_counter, full_window_frac, rw_state, flux_edge, flux_seen);
                                     end
 `endif
                                     m_data <= shifted_rsh;
-                                    m_data_read <= 1'b0;
-                                    async_update <= 10'd0;
+                                    m_data_gen <= m_data_gen + 32'd1;
+                                    m_data_read <= rd_consumes_byte ? 1'b1 : 1'b0;
+                                    async_update_pending <= 1'b0;
+                                    if (latch_mode) begin
+                                        latch_hold_cnt <= 4'd8;
+`ifdef SIMULATION
+                                        if ((DISK_BIT_POSITION >= 17'd7135) && (DISK_BIT_POSITION <= 17'd7205)) begin
+                                            $display("IWM_LATCH_START: pos=%0d data=%02h",
+                                                     DISK_BIT_POSITION, shifted_rsh);
+                                        end
+`endif
+                                    end
                                     clear_rsh_pending <= 1'b1;
 `ifdef SIMULATION
                                     if (byte_counter < 50) begin
@@ -469,6 +627,20 @@ module iwm_flux (
                             $display("IWM_FLUX: SHIFT bit=1 rsh=%02h->%02h state=EDGE_1 endw=%0d",
                                      m_rsh, {m_rsh[6:0], 1'b1}, window_counter);
 `endif
+`ifdef SIMULATION
+                            if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
+                                $display("IWM_SHIFT1 pos=%0d cyc=%0d rsh=%02h->%02h win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
+                                         DISK_BIT_POSITION, debug_cycle, m_rsh, {m_rsh[6:0], 1'b1},
+                                         window_counter, full_window_frac, half_window_frac,
+                                         rw_state, flux_edge, flux_seen);
+                            end
+                            if (dbg_prolog_window) begin
+                                $display("IWM_SHIFT1_DBG pos=%0d cyc=%0d rsh=%02h->%02h win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
+                                         DISK_BIT_POSITION, debug_cycle, m_rsh, {m_rsh[6:0], 1'b1},
+                                         window_counter, full_window_frac, half_window_frac,
+                                         rw_state, flux_edge, flux_seen);
+                            end
+`endif
                             shifted_rsh = {m_rsh[6:0], 1'b1};
                             m_rsh <= shifted_rsh;
                             if (shifted_rsh[7]) begin
@@ -476,8 +648,55 @@ module iwm_flux (
                                 $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d", shifted_rsh, DISK_BIT_POSITION);
 `endif
 `ifdef SIMULATION
+                                    if (prolog_last1 == 8'hD5 && shifted_rsh != 8'hAA) begin
+                                        $display("IWM_PROLOG_BAD: d5 %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
+                                                 shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
+                                         rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                    end
+                                    if (prolog_last2 == 8'hD5 && prolog_last1 == 8'hAA) begin
+                                        if (shifted_rsh == 8'h96 || shifted_rsh == 8'hAD) begin
+                                            $display("IWM_PROLOG_OK: d5 aa %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
+                                                     shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
+                                                     rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                        end else begin
+                                            $display("IWM_PROLOG_MISS: d5 aa %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
+                                                     shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
+                                                     rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                        end
+                                    end
+                                    prolog_last2 <= prolog_last1;
+                                    prolog_last1 <= shifted_rsh;
+                                    if (dbg_prolog_window) begin
+                                        $display("IWM_BYTE_DBG pos=%0d data=%02h win=%0d frac=%0d state=%0d q6=%0d q7=%0d cyc=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, window_counter, full_window_frac,
+                                                 rw_state, immediate_q6, immediate_q7, debug_cycle);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd7130) && (DISK_BIT_POSITION <= 17'd7190) &&
+                                        (shifted_rsh == 8'h9A)) begin
+                                        $display("IWM_9A_COMPLETE(E1): pos=%0d data=%02h rsh=%02h win=%0d frac=%0d state=%0d async_pending=%0d m_data=%02h m_data_read=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, m_rsh, window_counter, full_window_frac,
+                                                 rw_state, async_update_pending, m_data, m_data_read);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd13280) && (DISK_BIT_POSITION <= 17'd13450)) begin
+                                        $display("IWM_BC_WIN(E1): pos=%0d data=%02h rsh=%02h m_data=%02h m_data_read=%0d data_ready=%0d eff=%02h bc=%0d async_pending=%0d q6=%0d q7=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, m_rsh, m_data, m_data_read,
+                                                 data_ready, effective_data, byte_completing, async_update_pending,
+                                                 immediate_q6, immediate_q7);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd7100) && (DISK_BIT_POSITION <= 17'd7200)) begin
+                                        $display("IWM_DEC_BYTE: cycle=%0d pos=%0d data=%02h byte_idx=%0d win=%0d frac=%0d state=%0d m_data=%02h m_data_read=%0d",
+                                                 debug_cycle, DISK_BIT_POSITION, shifted_rsh, DISK_BIT_POSITION[16:3],
+                                                 window_counter, full_window_frac, rw_state, m_data, m_data_read);
+                                    end
+                                    if ((DISK_BIT_POSITION >= 17'd29500) && (DISK_BIT_POSITION <= 17'd29850) &&
+                                        (dbg_bp_count < 16'd200)) begin
+                                        dbg_bp_count <= dbg_bp_count + 1'd1;
+                                        $display("IWM_BC_WIN(P): pos=%0d data=%02h rsh=%02h win=%0d frac=%0d state=%0d flux_edge=%0d flux_seen=%0d m_data=%02h m_data_read=%0d",
+                                                 DISK_BIT_POSITION, shifted_rsh, m_rsh, window_counter, full_window_frac,
+                                                 rw_state, flux_edge, flux_seen, m_data, m_data_read);
+                                    end
                                     byte_counter <= byte_counter + 1;
-                                    if (!m_data_read && m_data[7]) begin
+                                    if (!m_data_read && m_data[7] && !rd_consumes_byte) begin
                                         bytes_lost_counter <= bytes_lost_counter + 1;
 `ifdef IWM_BYTELOG
                                         $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
@@ -485,14 +704,24 @@ module iwm_flux (
 `endif
                                     end
                                     // Debug near divergence point - compare internal state
-                                    if (DISK_BIT_POSITION >= 17'd50800 && DISK_BIT_POSITION <= 17'd50950) begin
-                                        $display("IWM_DIV_E1: byte=%0d pos=%0d data=%02h win=%0d frac=%0d state=%0d",
-                                                 byte_counter + 1, DISK_BIT_POSITION, shifted_rsh, window_counter, full_window_frac, rw_state);
+                                    if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
+                                        $display("IWM_DIV_E1: byte=%0d pos=%0d data=%02h win=%0d frac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
+                                                 byte_counter + 1, DISK_BIT_POSITION, shifted_rsh, window_counter, full_window_frac, rw_state, flux_edge, flux_seen);
                                     end
 `endif
                                     m_data <= shifted_rsh;
-                                    m_data_read <= 1'b0;
-                                    async_update <= 10'd0;
+                                    m_data_gen <= m_data_gen + 32'd1;
+                                    m_data_read <= rd_consumes_byte ? 1'b1 : 1'b0;
+                                    async_update_pending <= 1'b0;
+                                    if (latch_mode) begin
+                                        latch_hold_cnt <= 4'd8;
+`ifdef SIMULATION
+                                        if ((DISK_BIT_POSITION >= 17'd7135) && (DISK_BIT_POSITION <= 17'd7205)) begin
+                                            $display("IWM_LATCH_START: pos=%0d data=%02h",
+                                                     DISK_BIT_POSITION, shifted_rsh);
+                                        end
+`endif
+                                    end
                                     clear_rsh_pending <= 1'b1;
 `ifdef SIMULATION
                                     if (byte_counter < 50) begin
@@ -528,7 +757,8 @@ module iwm_flux (
                 full_window_frac <= 10'd0;
                 half_window_frac <= 10'd0;
                 flux_seen <= 1'b0;
-                async_update <= 10'd0;
+                async_update_pending <= 1'b0;
+                latch_hold_cnt <= 4'd0;
             end
 
             prev_sm_active <= MOTOR_SPINNING && DISK_READY;
@@ -539,11 +769,15 @@ module iwm_flux (
             prev_cen <= CEN;
 
             // Start of a CPU access cycle (PHI2-high). Capture Q6, Q7 and whether a valid byte is present.
+            // IMPORTANT: Capture m_data_gen at access START so async_clear targets the correct byte.
+            // If captured at access END, a byte completing mid-cycle would increment gen, and
+            // async_clear would incorrectly target the NEW byte instead of the one actually read.
             if ((RD || WR) && CEN && !access_in_progress) begin
                 access_in_progress <= 1'b1;
                 access_q7_latched <= immediate_q7;
                 access_q6_latched <= immediate_q6;
                 access_data_valid <= data_ready;
+                access_gen_latched <= m_data_gen;
             end
 
             // MAME behavior: In active mode, a write to Q6=1,Q7=1 with odd offset is a DATA write
@@ -551,48 +785,77 @@ module iwm_flux (
             // iwm_woz.v gates mode writes on !iwm_active; handle the active case here.
             if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE && !smartport_mode) begin
                 m_data <= DATA_IN;
+                m_data_gen <= m_data_gen + 32'd1;
                 if (SW_MODE[0]) begin
                     m_whd <= m_whd & 8'h7f;
                 end
             end
 
-    // Start of a CPU read cycle (PHI2-high). Capture what the CPU will see.
-            if (RD && CEN && !rd_in_progress) begin
-                rd_in_progress <= 1'b1;
-                rd_was_data_reg <= rd_is_data_reg;
-                rd_data_latched <= data_out_mux;
-                if (rd_is_data_reg && data_ready) begin
-                    // Only consume when a valid byte is actually presented.
-                    m_data_read <= 1'b1;
+            // Start of a CPU read cycle (PHI2-high). Track what the CPU will see.
+            // Capture data throughout PHI2-high so same-cycle byte completes are acknowledged.
+            if (RD && CEN) begin
+                if (!rd_in_progress) begin
+                    rd_in_progress <= 1'b1;
+                    rd_was_data_reg <= rd_is_data_reg;
+                    rd_latched_valid <= 1'b0;
+                    rd_data_latched <= data_out_mux;
+                    if (data_out_mux[7]) begin
+                        rd_latched_valid <= 1'b1;
+                    end
+                end else if (rd_was_data_reg && data_out_mux[7]) begin
+                    // Latch the most recent valid data byte seen during this cycle.
+                    rd_data_latched <= data_out_mux;
+                    rd_latched_valid <= 1'b1;
                 end
             end
 
             // End of CPU bus cycle (PHI2 falling). Now it is safe to acknowledge the read.
             if (prev_cen && !CEN) begin
-                // MAME async_update scheduling: if we're in async mode and the CPU read the DATA register
-                // (Q6=0, Q7=0) while a valid byte was present, schedule m_data to clear shortly after.
-                // Important: Only schedule on DATA register reads, not STATUS register reads (Q6=1, Q7=0).
+                // MAME async_update scheduling: any IWM access in read mode (Q7=0) while a valid byte
+                // is present schedules m_data to clear ~2us after the last bit-cell sync.
                 if (access_in_progress) begin
-                    if (is_async && !access_q7_latched && !access_q6_latched && access_data_valid) begin
-                        // Key behavioral tweak vs MAME: do not indefinitely postpone the clear if
-                        // the CPU polls too quickly (ROM loops like `LDA $C0EC / BPL`).
-                        // If we reschedule every access, bit7 can stay high continuously and the ROM
-                        // may burn its byte-timeout counter on duplicate reads of the same byte.
-                        if (async_update == 10'd0) begin
-                            async_update <= ASYNC_CLEAR_DELAY_7M;
+                    if (MOTOR_ACTIVE && is_async && access_data_valid && !access_q7_latched) begin
+                        async_update_pending <= 1'b1;
+                        // FIX: Schedule clear relative to CPU ACCESS time, not last bit shift.
+                        // MAME fires async_update ~2µs (28 cycles@14M) after the CPU access.
+                        // Using last_sync_14m caused the clear to fire too early when CPU read
+                        // happened shortly after a bit shift, preventing consecutive byte reads.
+                        async_update_deadline <= async_tick_14m + ASYNC_CLEAR_DELAY_14M;
+                        // FIX: Use gen captured at access START, not current gen which may have
+                        // been incremented by a byte completing during this access cycle.
+                        async_clear_gen <= access_gen_latched;
+`ifdef SIMULATION
+                        if ((DISK_BIT_POSITION >= 17'd7100) && (DISK_BIT_POSITION <= 17'd7200)) begin
+                            $display("IWM_ASYNC_SCHED: pos=%0d tick=%0d deadline=%0d data=%02h q6=%0d q7=%0d",
+                                     DISK_BIT_POSITION, async_tick_14m, async_tick_14m + ASYNC_CLEAR_DELAY_14M,
+                                     m_data, access_q6_latched, access_q7_latched);
                         end
+`endif
                     end
                 end
                 if (rd_in_progress) begin
                     if (rd_was_data_reg) begin
+                        if (rd_ack_take) begin
+                            // Only consume when the byte read matches the current (or completing) byte.
+                            m_data_read <= 1'b1;
+                            if (latch_hold_active) begin
+                                latch_hold_cnt <= 4'd0; // Stop latch hold once CPU has consumed the byte.
+                            end
+                        end
 `ifdef SIMULATION
-                        if (MOTOR_ACTIVE && rd_data_latched[7]) begin
+                        if (MOTOR_ACTIVE && rd_ack_take) begin
                             bytes_read_counter <= bytes_read_counter + 1;
+                        end
+                        if (MOTOR_ACTIVE) begin
+                            $display("IWM_READ_ACK: cycle=%0d pos=%0d latched=%02h m_data=%02h bc=%0d bc_data=%02h rd_valid=%0d ack=%0d",
+                                     debug_cycle, DISK_BIT_POSITION, rd_data_latched, m_data, byte_completing,
+                                     byte_complete_data, rd_latched_valid, rd_ack_take);
                         end
 `endif
                     end
                 end
                 rd_in_progress <= 1'b0;
+                rd_latched_valid <= 1'b0;
                 access_in_progress <= 1'b0;
             end
 
@@ -602,6 +865,11 @@ module iwm_flux (
             end
             if (!(RD || WR)) begin
                 access_in_progress <= 1'b0;
+            end
+
+            // If data becomes ready during a bus cycle, latch that fact for async clear scheduling.
+            if (access_in_progress && CEN && data_ready) begin
+                access_data_valid <= 1'b1;
             end
 
 `ifdef SIMULATION
@@ -666,7 +934,8 @@ module iwm_flux (
     reg [7:0] data_out_mux;
     always @(*) begin
         case ({immediate_q7, immediate_q6})
-            2'b00: data_out_mux = MOTOR_ACTIVE ? effective_data : 8'hFF;
+            // Data register should reflect actual disk motion, not just the motor command.
+            2'b00: data_out_mux = (MOTOR_SPINNING && DISK_READY) ? effective_data : 8'hFF;
             2'b01: data_out_mux = status_reg;
             2'b10: data_out_mux = handshake_reg;
             2'b11: data_out_mux = 8'hFF;
@@ -687,15 +956,30 @@ module iwm_flux (
     // Debug: log register reads (only on CEN/PH2 to log once per CPU access)
     reg [31:0] debug_win_count;
     always @(posedge CLK_14M) begin
-        if (RD && CEN) begin
+            if (RD && CEN) begin
             case ({immediate_q7, immediate_q6})
-                2'b00: $display("IWM_FLUX: READ DATA @%01h -> %02h pos=%0d (active=%0d spin=%0d rsh=%02h data=%02h bc=%0d dr=%0d q6=%0d q7=%0d async=%0d)",
-                               ADDR, data_out_mux, DISK_BIT_POSITION, MOTOR_ACTIVE, MOTOR_SPINNING, m_rsh, m_data, byte_completing, DISK_READY, SW_Q6, SW_Q7, async_update);
-                2'b01: $display("IWM_FLUX: READ STATUS @%01h -> %02h (sense=%0d m_reg=%01h latched=%01h sel=%0d phases=%04b is_35=%0d motor_active=%0d mounted=%0d)",
-                               ADDR, data_out_mux, SENSE_BIT, {DISKREG_SEL, LATCHED_SENSE_REG}, LATCHED_SENSE_REG, DISKREG_SEL, SW_PHASES, IS_35_INCH, MOTOR_ACTIVE, DISK_MOUNTED);
+                2'b00: $display("IWM_FLUX: READ DATA @%01h -> %02h cycle=%0d pos=%0d (active=%0d spin=%0d rsh=%02h data=%02h bc=%0d dr=%0d q6=%0d q7=%0d async_pending=%0d)",
+                               ADDR, data_out_mux, debug_cycle, DISK_BIT_POSITION, MOTOR_ACTIVE, MOTOR_SPINNING, m_rsh, m_data, byte_completing, DISK_READY, SW_Q6, SW_Q7, async_update_pending);
+                2'b01: $display("IWM_FLUX: READ STATUS @%01h -> %02h cycle=%0d pos=%0d (sense=%0d m_reg=%01h latched=%01h sel=%0d phases=%04b is_35=%0d motor_active=%0d mounted=%0d data_ready=%0d m_data=%02h m_data_read=%0d)",
+                               ADDR, data_out_mux, debug_cycle, DISK_BIT_POSITION, SENSE_BIT,
+                               {LATCHED_SENSE_REG[1], LATCHED_SENSE_REG[0], DISKREG_SEL, LATCHED_SENSE_REG[2]},
+                               LATCHED_SENSE_REG, DISKREG_SEL, SW_PHASES, IS_35_INCH, MOTOR_ACTIVE, DISK_MOUNTED,
+                               data_ready, m_data, m_data_read);
                 2'b10: $display("IWM_FLUX: READ HANDSHAKE @%01h -> %02h", ADDR, data_out_mux);
                 2'b11: $display("IWM_FLUX: READ @%01h -> %02h (q7=q6=1)", ADDR, data_out_mux);
             endcase
+            if ((DISK_BIT_POSITION >= 17'd7100) && (DISK_BIT_POSITION <= 17'd7200)) begin
+                $display("IWM_READ_WIN: cycle=%0d pos=%0d dout=%02h eff=%02h m_data=%02h m_data_read=%0d data_ready=%0d rsh=%02h bc=%0d dr=%0d q6=%0d q7=%0d async_pending=%0d latch=%0d spin=%0d rd_valid=%0d",
+                         debug_cycle, DISK_BIT_POSITION, data_out_mux, effective_data, m_data, m_data_read, data_ready,
+                         m_rsh, byte_completing, DISK_READY, immediate_q6, immediate_q7, async_update_pending,
+                         latch_hold_cnt, MOTOR_SPINNING, rd_latched_valid);
+            end
+            if ((DISK_BIT_POSITION >= 17'd13280) && (DISK_BIT_POSITION <= 17'd13450)) begin
+                $display("IWM_READ_WIN2: cycle=%0d pos=%0d dout=%02h eff=%02h m_data=%02h m_data_read=%0d data_ready=%0d rsh=%02h bc=%0d dr=%0d q6=%0d q7=%0d async_pending=%0d spin=%0d rd_data=%0d",
+                         debug_cycle, DISK_BIT_POSITION, data_out_mux, effective_data, m_data, m_data_read, data_ready,
+                         m_rsh, byte_completing, DISK_READY, immediate_q6, immediate_q7, async_update_pending,
+                         MOTOR_SPINNING, rd_is_data_reg);
+            end
         end
 
         // Periodic statistics - every 10M cycles (~0.7 seconds)
@@ -709,9 +993,9 @@ module iwm_flux (
         if (MOTOR_ACTIVE && DISK_READY &&
             (DISK_BIT_POSITION >= 17'd27460) && (DISK_BIT_POSITION <= 17'd27490) &&
             debug_win_count < 500) begin
-            $display("IWM_FLUX_WIN pos=%0d flux=%0d state=%0d win=%0d rsh=%02h data=%02h bc=%0d async=%0d",
+            $display("IWM_FLUX_WIN pos=%0d flux=%0d state=%0d win=%0d rsh=%02h data=%02h bc=%0d async_pending=%0d",
                      DISK_BIT_POSITION, FLUX_TRANSITION, rw_state, window_counter,
-                     m_rsh, m_data, byte_completing, async_update);
+                     m_rsh, m_data, byte_completing, async_update_pending);
             debug_win_count <= debug_win_count + 1;
         end
     end
