@@ -690,7 +690,7 @@ wire fd_disk_2;
 // WOZ bit interfaces for flux-based IWM
 // 3.5" drive 1 WOZ bit interface
 wire [7:0]  WOZ_TRACK3;
-wire [13:0] WOZ_TRACK3_BIT_ADDR;
+wire [15:0] WOZ_TRACK3_BIT_ADDR;  // 16-bit for FLUX tracks up to 64KB
 wire        WOZ_TRACK3_STABLE_SIDE;
 wire [7:0]  WOZ_TRACK3_BIT_DATA;
 wire [31:0] WOZ_TRACK3_BIT_COUNT;
