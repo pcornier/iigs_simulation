@@ -296,7 +296,7 @@ module flux_drive #(
         end
     endtask
 
-    wire [15:0] raw_byte_index = effective_bit_position[18:3];    // effective_bit_position / 8 (16-bit for large tracks)
+    wire [15:0] raw_byte_index = {2'b00, effective_bit_position[16:3]};    // effective_bit_position / 8 (14-bit result zero-extended)
     wire [15:0] max_byte_index = (TRACK_BIT_COUNT > 0) ? ((TRACK_BIT_COUNT - 1) >> 3) : 16'd0;
     wire [15:0] byte_index = (raw_byte_index > max_byte_index) ? max_byte_index : raw_byte_index;
     wire [2:0]  bit_shift = 3'd7 - effective_bit_position[2:0]; // MSB first (bit 7 = first bit)
