@@ -33,7 +33,7 @@ module woz_floppy_controller #(
 
     // Bitstream Interface (to IWM)
     output wire [31:0] bit_count,    // Number of bits in current track (combinational mux)
-    input      [13:0] bit_addr,      // Read address
+    input      [15:0] bit_addr,      // Read address (16-bit for FLUX tracks up to 64KB)
     input             stable_side,   // Stable side for data reads (captured when motor starts)
     output     [7:0]  bit_data,      // Read data
     input      [7:0]  bit_data_in,   // Write data
@@ -85,7 +85,7 @@ module woz_floppy_controller #(
     // which would cause a naïve SD-backed loader to thrash-reload side 0/1 repeatedly.
     // Real hardware switches heads instantly; emulate that by caching each side's track
     // bitstream independently and just muxing the output on SEL changes.
-    reg  [13:0] track_load_addr;
+    reg  [15:0] track_load_addr;  // 16-bit to support FLUX tracks up to 128 blocks (64KB)
     reg         track_load_we;
     reg  [7:0]  track_load_data;
     wire [7:0]  track_ram_dout0;
@@ -95,8 +95,8 @@ module woz_floppy_controller #(
     reg         load_side;   // Which side is currently being DMA-loaded/saved (3.5" only)
     reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
-    // Dual port RAM for Track Data (Side 0)
-    bram #(.width_a(8), .widthad_a(14)
+    // Dual port RAM for Track Data (Side 0) - 64KB to support FLUX tracks
+    bram #(.width_a(8), .widthad_a(16)
 `ifdef SIMULATION
 	,
 	    .BRAM_LATENCY(BRAM_LATENCY)
@@ -116,8 +116,8 @@ module woz_floppy_controller #(
         .q_b(bit_data0)
     );
 
-    // Dual port RAM for Track Data (Side 1) - only meaningful for 3.5"
-    bram #(.width_a(8), .widthad_a(14)
+    // Dual port RAM for Track Data (Side 1) - 64KB to support FLUX tracks
+    bram #(.width_a(8), .widthad_a(16)
 `ifdef SIMULATION
 	,
 	    .BRAM_LATENCY(BRAM_LATENCY)
@@ -261,8 +261,13 @@ module woz_floppy_controller #(
     // For INFO v3 with flux_block set, we also need the FLUX chunk.
     wire need_flux = (info_version >= 8'd3) && (info_flux_block != 16'd0);
     wire parser_done = have_info && have_tmap && have_trks && (!need_flux || have_flux);
-    localparam [15:0] SCAN_BLOCK_LIMIT = 16'd3000; // safety: stop scanning after ~1.5MB (FLUX chunk may be after large TRKS)
+    localparam [15:0] SCAN_BLOCK_LIMIT = 16'd16000; // safety: stop scanning after ~8MB (FLUX chunk comes after large TRKS in v3 files)
     reg scan_failed;
+
+    // TRKS skip optimization: after parsing TRKS metadata, skip remaining data blocks
+    reg [15:0] scan_skip_target;   // Target block to skip to (0 = no skip pending)
+    reg        scan_skip_active;   // Skip is in progress
+    reg        scan_skip_discard;  // Discard remaining bytes in current block after skip
     
     // Current Track Info
     reg [15:0] trk_start_block;
@@ -336,6 +341,9 @@ module woz_floppy_controller #(
 	            have_tmap <= 1'b0;
 	            have_trks <= 1'b0;
 	            scan_blocks <= 16'd0;
+	            scan_skip_target <= 16'd0;
+	            scan_skip_active <= 1'b0;
+	            scan_skip_discard <= 1'b0;
 	            hdr_pos <= 4'd0;
 	            chunk_hdr_pos <= 3'd0;
 	            chunk_id <= 32'd0;
@@ -409,6 +417,8 @@ module woz_floppy_controller #(
 	                have_tmap <= 1'b0;
 	                have_trks <= 1'b0;
 	                scan_blocks <= 16'd0;
+	                scan_skip_target <= 16'd0;
+	                scan_skip_active <= 1'b0;
 	                hdr_pos <= 4'd0;
 	                chunk_hdr_pos <= 3'd0;
 	                chunk_id <= 32'd0;
@@ -472,6 +482,9 @@ module woz_floppy_controller #(
 	                    state <= S_SCAN_WOZ;
 	                    sd_lba <= 32'd0;
 	                    scan_blocks <= 16'd0;
+	                    scan_skip_target <= 16'd0;
+	                    scan_skip_active <= 1'b0;
+	                    scan_skip_discard <= 1'b0;
 	                    if (!sd_ack) sd_rd <= 1'b1;
 	                end
 
@@ -482,9 +495,29 @@ module woz_floppy_controller #(
 	                    if (!sd_ack && !(old_ack && transfer_active)) begin
 	                        sd_rd <= 1'b1;
 	                    end
-	                    // Only count block completion if we had an active transfer
-	                    if (old_ack && !sd_ack && transfer_active) begin
+
+	                    // SKIP HANDLING: When scan_skip_active, jump directly to target block
+	                    // This avoids reading 2000+ unnecessary blocks.
+	                    // Set sd_lba one less than target since block completion will increment it.
+	                    if (scan_skip_active) begin
+	                        // Seek directly to target block (subtract 1 because block completion will +1)
+	                        sd_lba <= {16'b0, scan_skip_target} - 32'd1;
+	                        scan_blocks <= scan_skip_target - 16'd1;
+	                        scan_skip_active <= 1'b0;
+	                        scan_skip_discard <= 1'b1;  // Discard remaining bytes in current block
+	                        // Reset chunk state to parse new chunk header at target position
+	                        chunk_id <= 32'd0;
+	                        chunk_hdr_pos <= 3'd0;
+	                        chunk_size_acc <= 32'd0;
+	                        chunk_left <= 32'd0;
+	                        chunk_index <= 32'd0;
+	                        $display("WOZ_SCAN: Skip - setting sd_lba to %0d (target %0d), discarding rest of current block",
+	                                 scan_skip_target - 16'd1, scan_skip_target);
+	                    end
+	                    // Only count block completion if we had an active transfer (normal parsing)
+	                    else if (!scan_skip_active && old_ack && !sd_ack && transfer_active) begin
 	                        scan_blocks <= scan_blocks + 1'd1;
+	                        scan_skip_discard <= 1'b0;  // Clear discard flag - new block starts fresh
 	                        if (parser_done) begin
 	                            woz_valid <= 1'b1;
 	                            busy <= 0;
@@ -498,8 +531,8 @@ module woz_floppy_controller #(
 	                            busy <= 0;
 	                            state <= S_INIT;
 	                            scan_failed <= 1'b1;
-	                            $display("WOZ_CTRL: ERROR: WOZ scan limit reached without required chunks (INFO=%0d TMAP=%0d TRKS=%0d)",
-	                                     have_info, have_tmap, have_trks);
+	                            $display("WOZ_CTRL: ERROR: WOZ scan limit reached without required chunks (INFO=%0d TMAP=%0d TRKS=%0d FLUX=%0d need_flux=%0d)",
+	                                     have_info, have_tmap, have_trks, have_flux, need_flux);
 	                        end else begin
 	                            sd_lba <= sd_lba + 1'd1;
 	                        end
@@ -961,8 +994,9 @@ module woz_floppy_controller #(
             // This runs in parallel with state machine waiting for sd_ack
 	            if (sd_ack) begin
 	                if (sd_buff_wr) begin // Reading from SD -> RAM
-	                     if (state == S_SCAN_WOZ) begin
+	                     if (state == S_SCAN_WOZ && !scan_skip_discard) begin
 	                         // Streaming parser: process file bytes sequentially.
+	                         // Skip processing if scan_skip_discard is set (discarding current block)
 	                         reg [7:0] b;
 	                         b = sd_buff_dout;
 
@@ -1051,6 +1085,21 @@ module woz_floppy_controller #(
 
 	                                 chunk_index <= chunk_index + 1'd1;
 	                                 chunk_left <= chunk_left - 1'd1;
+
+	                                 // TRKS SKIP OPTIMIZATION: After parsing first 1280 bytes of TRKS metadata,
+	                                 // skip the rest of the chunk (track data) if we need FLUX.
+	                                 // WOZ file layout: Header(12) + INFO(68) + TMAP(168) + TRKS(8+data) + FLUX
+	                                 // FLUX position = 256 + TRKS_data_size
+	                                 // We're at chunk_index=1280, chunk_left = TRKS_size - 1280
+	                                 // FLUX block = (256 + chunk_left + 1280) / 512 = (1536 + chunk_left) / 512
+	                                 //            ≈ 3 + chunk_left/512 (since 1536/512 = 3)
+	                                 if (chunk_id == "TRKS" && chunk_index == 32'd1280 && chunk_left > 32'd512 && need_flux && !scan_skip_active) begin
+	                                     scan_skip_target <= 16'd3 + chunk_left[24:9];
+	                                     scan_skip_active <= 1'b1;
+	                                     $display("WOZ_SCAN: TRKS skip - seeking to FLUX at block %0d (chunk_left=%0d)",
+	                                              16'd3 + chunk_left[24:9], chunk_left);
+	                                 end
+
 	                                 if (chunk_left == 32'd1) begin
 	                                     // End of chunk; next bytes start a new header.
 	                                     chunk_id <= 32'd0;
@@ -1066,7 +1115,7 @@ module woz_floppy_controller #(
                          // (first byte of our request). The rising edge check catches byte 0 before
                          // transfer_active is set. We won't get false positives from previous transfers
                          // because old_ack is set to sd_ack when entering S_READ_TRACK.
-                         track_load_addr <= {blocks_processed[4:0], sd_buff_addr};
+                         track_load_addr <= {blocks_processed[6:0], sd_buff_addr};
                          track_load_data <= sd_buff_dout;
                          track_load_we <= 1;
                          if (pending_is_flux) begin
@@ -1094,7 +1143,7 @@ module woz_floppy_controller #(
 	                     end
 	                end else begin // Writing RAM -> SD
                     if (state == S_SAVE_TRACK) begin
-                         track_load_addr <= {blocks_processed[4:0], sd_buff_addr}; 
+                         track_load_addr <= {blocks_processed[6:0], sd_buff_addr}; 
                          if (IS_35_INCH && load_side) begin
                              sd_buff_din <= track_ram_dout1;
                          end else begin

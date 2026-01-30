@@ -5,7 +5,7 @@
 // Can be overridden via -DWOZ_BRAM_LATENCY=1 in Verilator command line
 // NOTE: BRAM_LATENCY=1 is work-in-progress; has 311-bit position drift issue
 `ifndef WOZ_BRAM_LATENCY
-`define WOZ_BRAM_LATENCY 1  // 0=combinational (sim), 1=registered (FPGA)
+`define WOZ_BRAM_LATENCY 0  // 0=combinational (sim), 1=registered (FPGA)
 `endif
 
 `timescale 1ns / 1ps
@@ -119,7 +119,7 @@ module emu (
         // WOZ track/address outputs (to C++ for data lookup)
         // 3.5" drive 1
         output [7:0]            woz3_track_out,
-        output [13:0]           woz3_bit_addr_out,
+        output [15:0]           woz3_bit_addr_out,
         // 5.25" drive 1
         output [5:0]            woz1_track_out,
         output [12:0]           woz1_bit_addr_out,
@@ -175,13 +175,15 @@ wire FD_DISK_3;
 // WOZ bit interfaces for flux-based IWM
 // 3.5" drive 1 WOZ bit interface
 wire [7:0]  WOZ_TRACK3;           // Track number being read
-wire [13:0] WOZ_TRACK3_BIT_ADDR;  // Byte address in track bit buffer
+wire [15:0] WOZ_TRACK3_BIT_ADDR;  // Byte address in track bit buffer (16-bit for FLUX)
 wire        WOZ_TRACK3_STABLE_SIDE; // Stable side for data reads (captured when motor starts)
 wire [7:0]  WOZ_TRACK3_BIT_DATA;  // Byte from track bit buffer
 wire [31:0] WOZ_TRACK3_BIT_COUNT; // Total bits in track
+wire        WOZ_TRACK3_READY;     // Track data valid for current WOZ_TRACK3
 wire        WOZ_TRACK3_IS_FLUX;   // Track data is flux timing (not bitstream)
 wire [31:0] WOZ_TRACK3_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
 wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
+wire        woz_ctrl_ready;
 
 // 5.25" drive 1 WOZ bit interface
 wire [5:0]  WOZ_TRACK1;           // Track number being read
@@ -210,7 +212,7 @@ end
 // Use delayed C++ data to match BRAM's 1-cycle latency
 reg [31:0] flux_data_log_count = 0;
 reg [31:0] flux_data_mismatch_count = 0;
-reg [13:0] flux_data_last_addr = 0;
+reg [15:0] flux_data_last_addr = 0;
 always @(posedge CLK_14M) begin
     if (woz3_bit_count > 0 && WOZ_TRACK3_BIT_ADDR != flux_data_last_addr) begin
         flux_data_last_addr <= WOZ_TRACK3_BIT_ADDR;
@@ -244,12 +246,14 @@ end
 // The flux_drive expects immediate data response (no latency).
 assign WOZ_TRACK3_BIT_DATA = woz3_bit_data;       // C++ immediate data
 assign WOZ_TRACK3_BIT_COUNT = woz3_bit_count;        // bit_count is immediate
+assign WOZ_TRACK3_READY = (woz3_bit_count > 0);
 assign WOZ_TRACK3_FLUX_TOTAL_TICKS = 32'd0;
 `else
 // Verilog controller BRAM has 1-cycle read latency.
 // The woz_floppy_controller needs to account for this internally.
 assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;   // Verilog woz_floppy_controller (BRAM has 1-cycle latency)
 assign WOZ_TRACK3_BIT_COUNT = woz_ctrl_bit_count; // Verilog woz_floppy_controller
+assign WOZ_TRACK3_READY = woz_ctrl_ready;
 assign WOZ_TRACK3_FLUX_TOTAL_TICKS = woz_ctrl_flux_total_ticks;
 `endif
 assign WOZ_TRACK1_BIT_DATA = woz1_bit_data;
@@ -340,6 +344,7 @@ iigs #(.WOZ_BRAM_LATENCY(`WOZ_BRAM_LATENCY)) iigs(
     .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
     .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
     .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+    .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
     .WOZ_TRACK3_LOAD_COMPLETE(woz_ctrl_track_load_complete),
     .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
     .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
@@ -732,7 +737,6 @@ floppy35_track floppy35_track_1
 //=============================================================================
 
 // Verilog WOZ controller outputs (for comparison with C++ implementation)
-wire        woz_ctrl_ready;
 wire        woz_ctrl_disk_mounted;
 wire        woz_ctrl_busy;
 wire [31:0] woz_ctrl_bit_count;
@@ -818,9 +822,9 @@ wire cpu_wait_combined = cpu_wait_hdd | cpu_wait_woz;
 // WOZ Controller Validation - Compare C++ vs Verilog outputs
 //=============================================================================
 `ifdef SIMULATION
-reg [13:0] woz_cmp_last_addr;
-reg [13:0] woz_cmp_last_addr_d;  // Delayed by 1 cycle for BRAM latency
-reg [13:0] woz_cmp_last_addr_d2; // Delayed by 2 cycles for display
+reg [15:0] woz_cmp_last_addr;
+reg [15:0] woz_cmp_last_addr_d;  // Delayed by 1 cycle for BRAM latency
+reg [15:0] woz_cmp_last_addr_d2; // Delayed by 2 cycles for display
 reg [31:0] woz_cmp_mismatch_count;
 reg [31:0] woz_cmp_match_count;
 reg        woz_cmp_enabled;
@@ -841,9 +845,9 @@ localparam [31:0] IWM_DATA_READ_LOG_END_FRAME = 400;
 localparam [31:0] IWM_DATA_READ_LOG_MAX = 200000;
 
 initial begin
-    woz_cmp_last_addr = 14'h3FFF;
-    woz_cmp_last_addr_d = 14'h3FFF;
-    woz_cmp_last_addr_d2 = 14'h3FFF;
+    woz_cmp_last_addr = 16'hFFFF;
+    woz_cmp_last_addr_d = 16'hFFFF;
+    woz_cmp_last_addr_d2 = 16'hFFFF;
     woz_cmp_mismatch_count = 0;
     woz_cmp_match_count = 0;
     woz_cmp_enabled = 0;
@@ -866,7 +870,7 @@ reg [3:0] woz_cmp_track_stable_count = 4'd0;
 wire woz_cmp_track_stable = (woz_cmp_track_stable_count >= 4'd3);
 
 // Hierarchical taps for flux-drive internals (simulation-only)
-wire [13:0] sim_drive35_bram_addr = emu.iigs.iwmc.drive35.BRAM_ADDR;
+wire [15:0] sim_drive35_bram_addr = emu.iigs.iwmc.drive35.BRAM_ADDR;
 wire [16:0] sim_drive35_bit_position = emu.iigs.iwmc.drive35.BIT_POSITION;
 wire [6:0]  sim_drive35_track = emu.iigs.iwmc.drive35_track;
 wire        sim_drive35_track_loaded = emu.iigs.iwmc.drive35_track_loaded;
@@ -879,8 +883,6 @@ wire [7:0]  sim_iwm_data_out = emu.iigs.iwmc.iwm_data_out;
 wire        sim_iwm_q6 = emu.iigs.iwmc.q6;
 wire        sim_iwm_q7 = emu.iigs.iwmc.q7;
 wire        sim_iwm_q7_for_flux = emu.iigs.iwmc.q7_for_flux;
-wire        sim_iwm_smartport_mode = emu.iigs.iwmc.smartport_mode;
-wire        sim_iwm_force_q7_data_read = emu.iigs.iwmc.force_q7_data_read;
 wire [16:0] sim_iwm_bit_position = emu.iigs.iwmc.current_bit_position;
 wire [13:0] sim_iwm_bram_addr = emu.iigs.iwmc.drive35_bram_addr;
 wire [6:0]  sim_iwm_track = emu.iigs.iwmc.drive35_track;
@@ -969,7 +971,7 @@ always @(posedge clk_sys) begin
     if (woz_cmp_enabled && woz_cmp_track_stable) begin
         // BRAM address should match WOZ bit addr or be one byte ahead (prefetch)
         if ((sim_drive35_bram_addr != WOZ_TRACK3_BIT_ADDR) &&
-            (sim_drive35_bram_addr != (WOZ_TRACK3_BIT_ADDR + 14'd1))) begin
+            (sim_drive35_bram_addr != (WOZ_TRACK3_BIT_ADDR + 16'd1))) begin
             if (woz_cmp_addr_mismatch_count < 100) begin
                 $display("WOZ_CMP ADDR MISMATCH #%0d: frame=%0d bram_addr=%0d woz_addr=%0d",
                          woz_cmp_addr_mismatch_count + 1, woz_cmp_frame,
@@ -980,7 +982,7 @@ always @(posedge clk_sys) begin
 
         // Bit position should align with BRAM addr (same byte or one behind)
         if ((sim_drive35_bram_addr != sim_drive35_bit_position[16:3]) &&
-            (sim_drive35_bram_addr != (sim_drive35_bit_position[16:3] + 14'd1))) begin
+            (sim_drive35_bram_addr != (sim_drive35_bit_position[16:3] + 16'd1))) begin
             if (woz_cmp_bitpos_mismatch_count < 100) begin
                 $display("WOZ_CMP BITPOS MISMATCH #%0d: frame=%0d bit_pos=%0d bram_addr=%0d",
                          woz_cmp_bitpos_mismatch_count + 1, woz_cmp_frame,
@@ -1035,10 +1037,10 @@ always @(posedge clk_sys) begin
         (woz_cmp_frame >= IWM_DATA_READ_LOG_START_FRAME) &&
         (woz_cmp_frame <= IWM_DATA_READ_LOG_END_FRAME)) begin
         if (iwm_data_read_log_count < IWM_DATA_READ_LOG_MAX) begin
-            $display("IWM_DATA_READ #%0d: frame=%0d addr=%01h dout=%02h q6=%0d q7=%0d q7_for_flux=%0d force_q7=%0d smartport=%0d drive_on=%0d motor_spin=%0d sony_motor=%0d bit_pos=%0d bram_addr=%0d track=%0d bit_count=%0d woz_state=%0d woz_pending=%0d woz_s0=%0d woz_s1=%0d bc_s0=%0d bc_s1=%0d trk_bc=%0d woz_valid=%0d woz_busy=%0d sd_rd=%0d sd_ack=%0d load2=%0d",
+            $display("IWM_DATA_READ #%0d: frame=%0d addr=%01h dout=%02h q6=%0d q7=%0d q7_for_flux=%0d drive_on=%0d motor_spin=%0d sony_motor=%0d bit_pos=%0d bram_addr=%0d track=%0d bit_count=%0d woz_state=%0d woz_pending=%0d woz_s0=%0d woz_s1=%0d bc_s0=%0d bc_s1=%0d trk_bc=%0d woz_valid=%0d woz_busy=%0d sd_rd=%0d sd_ack=%0d load2=%0d",
                      iwm_data_read_log_count + 1, woz_cmp_frame, sim_iwm_bus_addr, sim_iwm_data_out,
-                     sim_iwm_q6, sim_iwm_q7, sim_iwm_q7_for_flux, sim_iwm_force_q7_data_read,
-                     sim_iwm_smartport_mode, sim_drive35_motor_on, sim_iwm_motor_spinning,
+                     sim_iwm_q6, sim_iwm_q7, sim_iwm_q7_for_flux, sim_drive35_motor_on,
+                     sim_iwm_motor_spinning,
                      sim_iwm_sony_motor_on, sim_iwm_bit_position, sim_iwm_bram_addr,
                      sim_iwm_track, WOZ_TRACK3_BIT_COUNT, sim_woz_state, sim_woz_pending_track,
                      sim_woz_track_s0, sim_woz_track_s1, sim_woz_bit_count_s0, sim_woz_bit_count_s1,

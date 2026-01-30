@@ -119,10 +119,11 @@ module iigs #(
    // --- WOZ bit interfaces (for flux-based IWM) ---
    // 3.5" drive 1 WOZ bit interface
    output [7:0]       WOZ_TRACK3,           // Track number being read
-   output [13:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer
+   output [15:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer (16-bit for FLUX tracks)
    output             WOZ_TRACK3_STABLE_SIDE, // Stable side for data reads (captured when motor starts)
    input  [7:0]       WOZ_TRACK3_BIT_DATA,  // Byte from track bit buffer
    input  [31:0]      WOZ_TRACK3_BIT_COUNT, // Total bits in track
+   input              WOZ_TRACK3_READY,     // Track data valid for current WOZ_TRACK3
    input              WOZ_TRACK3_LOAD_COMPLETE, // Pulses when track load finishes (reset bit_position)
    input              WOZ_TRACK3_IS_FLUX,   // Track data is flux timing (not bitstream)
    input  [31:0]      WOZ_TRACK3_FLUX_SIZE, // Size in bytes of flux data (when IS_FLUX)
@@ -959,10 +960,14 @@ module iigs #(
 
     // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & cpu_we_n) begin
-      $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x) PH2=%0d VDA=%0d VPA=%0d iwm_addr=%02x iwm_rw=%0d q6=%0d q7=%0d drive_on=%0d diskreg_sel=%0d bitpos=%0d bram_addr=%0d bit_count=%0d",
-               addr[11:0], iwm_dout, CYAREG, addr, cpu_addr, phi2, cpu_vda, cpu_vpa, iwm_addr, iwm_rw,
+      $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x) PH2=%0d ph2_gap=%0d slow=%0d slowMem=%0d VDA=%0d VPA=%0d iwm_addr=%02x iwm_rw=%0d q6=%0d q7=%0d drive_on=%0d diskreg_sel=%0d bitpos=%0d bram_addr=%0d bit_count=%0d",
+               addr[11:0], iwm_dout, CYAREG, addr, cpu_addr, phi2, phi2_gap_ticks, slow, slowMem, cpu_vda, cpu_vpa, iwm_addr, iwm_rw,
                iwmc.q6, iwmc.q7, iwmc.drive_on, iwmc.diskreg_sel, iwmc.current_bit_position,
                iwmc.drive35_bram_addr, iwmc.WOZ_TRACK3_BIT_COUNT);
+      if (iwmc.current_bit_position >= 17'd7135 && iwmc.current_bit_position <= 17'd7205) begin
+        $display("CLKDIV_IWM_WIN: pos=%0d ph2_gap=%0d slow=%0d slowMem=%0d cyareg=%02x addr=%03x",
+                 iwmc.current_bit_position, phi2_gap_ticks, slow, slowMem, CYAREG, addr[11:0]);
+      end
       io_dout <= iwm_dout;
     end
     iwm_strobe <= 1'b0;
@@ -2800,7 +2805,7 @@ wire ready_out;
   assign floppy_motor_on = 1'b0;
   // Stub WOZ bit interfaces
   assign WOZ_TRACK3 = 8'd0;
-  assign WOZ_TRACK3_BIT_ADDR = 14'd0;
+  assign WOZ_TRACK3_BIT_ADDR = 16'd0;
   assign WOZ_TRACK3_STABLE_SIDE = 1'b0;
   assign WOZ_TRACK1 = 6'd0;
   assign WOZ_TRACK1_BIT_ADDR = 13'd0;
@@ -2832,6 +2837,7 @@ wire ready_out;
       .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
       .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
       .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+      .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
       .WOZ_TRACK3_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
       .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
       .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
@@ -2984,13 +2990,25 @@ wire ready_out;
   wire [3:0] paddle_timer_expired;
   reg paddle_trigger;
   reg [31:0] tick_counter_14m;  // 14MHz tick counter for wall-clock timing
+  reg [31:0] last_phi2_tick;
+  reg [31:0] phi2_gap_ticks;
+  reg        prev_phi2;
 
   // Increment 14MHz tick counter (wall-clock time, independent of CPU speed)
   always @(posedge CLK_14M) begin
-    if (reset)
+    if (reset) begin
       tick_counter_14m <= 32'd0;
-    else
+      last_phi2_tick <= 32'd0;
+      phi2_gap_ticks <= 32'd0;
+      prev_phi2 <= 1'b0;
+    end else begin
       tick_counter_14m <= tick_counter_14m + 32'd1;
+      if (phi2 && !prev_phi2) begin
+        phi2_gap_ticks <= tick_counter_14m - last_phi2_tick;
+        last_phi2_tick <= tick_counter_14m;
+      end
+      prev_phi2 <= phi2;
+    end
   end
 
   genvar i;

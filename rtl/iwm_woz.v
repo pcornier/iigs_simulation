@@ -39,10 +39,11 @@ module iwm_woz #(
 
     // WOZ Track bit interface for 3.5" drive 1 (directly to sim.v)
     output [7:0]    WOZ_TRACK3,
-    output [13:0]   WOZ_TRACK3_BIT_ADDR,
+    output [15:0]   WOZ_TRACK3_BIT_ADDR,
     output          WOZ_TRACK3_STABLE_SIDE,    // Stable side for data reads (captured when motor starts)
     input  [7:0]    WOZ_TRACK3_BIT_DATA,
     input  [31:0]   WOZ_TRACK3_BIT_COUNT,
+    input           WOZ_TRACK3_READY,         // Track data valid for current WOZ_TRACK3
     input           WOZ_TRACK3_LOAD_COMPLETE,  // Pulses when track load finishes (reset bit_position)
     input           WOZ_TRACK3_IS_FLUX,        // Track data is flux timing (not bitstream)
     input  [31:0]   WOZ_TRACK3_FLUX_SIZE,      // Size in bytes of flux data (when IS_FLUX)
@@ -415,7 +416,7 @@ module iwm_woz #(
     wire        drive35_ready;          // Drive ready after spinup
     wire [6:0]  drive35_track;
     wire [16:0] drive35_bit_position;
-    wire [13:0] drive35_bram_addr;
+    wire [15:0] drive35_bram_addr;
 
     // 3.5" drives must NOT use the 5.25" inertia-managed motor_spinning signal.
     // The IIgs ROM (Sony driver) can toggle DISK35 during command boundaries, and
@@ -429,7 +430,8 @@ module iwm_woz #(
     // Drive is active when the 3.5" motor is physically spinning and disk is present
     wire drive35_active = drive35_motor_spinning && DISK_READY[2];
 
-    wire drive35_track_loaded = DISK_READY[2] && (WOZ_TRACK3_BIT_COUNT > 0);
+    // Keep track data available during loads; BRAM retains previous track until update completes.
+    wire drive35_track_loaded = (WOZ_TRACK3_BIT_COUNT > 0);
 
     flux_drive #(.BRAM_LATENCY(BRAM_LATENCY)) drive35 (
         .IS_35_INCH(1'b1),
@@ -469,26 +471,56 @@ module iwm_woz #(
         .SD_TRACK_ACK(1'b0)
     );
 
-    // WOZ_TRACK3: Use combinational track selection for hardware correctness.
+    // Stable side for data reads:
+    // MAME approach: Update side select immediately when $C031 (DISK35) is written
+    // while 35SEL is active. The ROM sets HDSEL (bit 7) to select the head before
+    // reading data. Unlike the previous approach that tried to detect phase=0100,
+    // this directly tracks DISK35[7] changes, matching MAME's behavior.
+    wire force_q7_data_read;
+    reg stable_side_reg;
+    reg [2:0] side_reset_cnt;
+    reg prev_drive35_motor_spinning;
+    reg prev_diskreg_sel_for_side;
+    always @(posedge CLK_14M or posedge RESET) begin
+        if (RESET) begin
+            stable_side_reg <= 1'b0;
+            side_reset_cnt <= 3'd0;
+            prev_drive35_motor_spinning <= 1'b0;
+            prev_diskreg_sel_for_side <= 1'b0;
+        end else if (!DISK_READY[2]) begin
+            stable_side_reg <= 1'b0;
+            side_reset_cnt <= 3'd0;
+            prev_drive35_motor_spinning <= 1'b0;
+            prev_diskreg_sel_for_side <= 1'b0;
+        end else begin
+            // MAME-style: Update head select immediately when HDSEL (DISK35[7]) changes
+            // while 3.5" mode is active. This matches MAME's apple2gs.cpp line 1952-1956.
+            if (is_35_inch && (diskreg_sel != prev_diskreg_sel_for_side)) begin
+                stable_side_reg <= diskreg_sel;
+                side_reset_cnt <= 3'd4;
+`ifdef SIMULATION
+                $display("IWM_WOZ: HEAD_SELECT update (MAME-style) old=%0d new=%0d bitpos=%0d",
+                         prev_diskreg_sel_for_side, diskreg_sel, drive35_bit_position);
+`endif
+            end else if (side_reset_cnt != 0) begin
+                side_reset_cnt <= side_reset_cnt - 1'd1;
+            end
+            prev_diskreg_sel_for_side <= diskreg_sel;
+            prev_drive35_motor_spinning <= drive35_motor_spinning;
+        end
+    end
+    assign WOZ_TRACK3_STABLE_SIDE = stable_side_reg;
+    wire side_reset_active = (side_reset_cnt != 0);
+
+    // WOZ_TRACK3: Use stable side for track selection to avoid SEL thrash.
     // The C++ path can apply its own register stage in sim.v to align with BeforeEval.
     //
     // IMPORTANT (ROM-confirmed): The IIgs Sony driver addresses tracks as cylinder*2 + side
     // (see IIgsRomSource/Bank FF/ad35driver_subroutines.asm:2198). That means side 1 is the
     // LSB, not an +80 offset. Using +80 causes completely wrong tracks beyond cylinder 0.
-    wire [7:0] woz_track3_comb = {drive35_track, 1'b0} | {7'b0, diskreg_sel};
+    wire [7:0] woz_track3_comb = {drive35_track, 1'b0} | {7'b0, stable_side_reg};
     assign WOZ_TRACK3 = woz_track3_comb;
     assign WOZ_TRACK3_BIT_ADDR = drive35_bram_addr;
-
-    // Stable side for data reads: Use the track_id[0] directly since it captures the
-    // requested side. The track_id is {drive35_track, diskreg_sel}, so bit 0 is the side.
-    //
-    // Previously this was only captured on motor start, which caused track 1 (side 1)
-    // to use track 0's bit_count (75215 instead of 74992), preventing proper boot.
-    //
-    // Using the track_id LSB directly ensures the correct bit_count and BRAM data are
-    // selected for each track, regardless of when the side selection changes.
-    wire stable_side_35 = woz_track3_comb[0];
-    assign WOZ_TRACK3_STABLE_SIDE = stable_side_35;
 
 `ifdef SIMULATION
     // Debug: track diskreg_sel changes to detect oscillation bug
@@ -650,6 +682,8 @@ module iwm_woz #(
     // its motor is gated off when DISK_READY[2]=1 (disk in primary 3.5" drive)
     wire any_disk_ready = (drive35_ready && DISK_READY[2]) ||
                           (drive525_ready && DISK_READY[0]);
+    // Briefly deassert DISK_READY on 3.5" side changes to reset IWM byte framing.
+    wire iwm_disk_ready = any_disk_ready && !(flux_is_35_inch && side_reset_active);
 
     //=========================================================================
     // Sense Mux - Select active drive's status sense
@@ -704,7 +738,7 @@ module iwm_woz #(
     // (Q7=1,Q6=0) using `ASL $C08C,X` polling. Forcing Q7 low there breaks the
     // handshake loop and the ROM will hang in `smartdrvr.asm` at FF:56CD.
     wire smartport_mode = (!immediate_mode[3]) && immediate_mode[1];
-    wire force_q7_data_read = bus_rd && (bus_addr == 4'hC) &&
+    assign force_q7_data_read = bus_rd && (bus_addr == 4'hC) &&
                               selected_disk_present &&
                               selected_track_cached &&
                               drive_on &&
@@ -739,7 +773,7 @@ module iwm_woz #(
         // MAME-style active/delay behavior (not just raw motor soft switch).
         .MOTOR_ACTIVE(iwm_active),
         .MOTOR_SPINNING(any_disk_spinning),  // Physical spinning (for flux decoding)
-        .DISK_READY(any_disk_ready),
+        .DISK_READY(iwm_disk_ready),
         .DISK_MOUNTED(disk_mounted),
         .IS_35_INCH(flux_is_35_inch),
         .SENSE_BIT(current_sense),
