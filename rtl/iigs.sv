@@ -960,6 +960,7 @@ module iigs #(
 
     // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & cpu_we_n) begin
+`ifdef SIMULATION
       $display("read_iwm %x ret: %x GC036: %x (addr %x) cpu_addr(%x) PH2=%0d ph2_gap=%0d slow=%0d slowMem=%0d VDA=%0d VPA=%0d iwm_addr=%02x iwm_rw=%0d q6=%0d q7=%0d drive_on=%0d diskreg_sel=%0d bitpos=%0d bram_addr=%0d bit_count=%0d",
                addr[11:0], iwm_dout, CYAREG, addr, cpu_addr, phi2, phi2_gap_ticks, slow, slowMem, cpu_vda, cpu_vpa, iwm_addr, iwm_rw,
                iwmc.q6, iwmc.q7, iwmc.drive_on, iwmc.diskreg_sel, iwmc.current_bit_position,
@@ -968,6 +969,7 @@ module iigs #(
         $display("CLKDIV_IWM_WIN: pos=%0d ph2_gap=%0d slow=%0d slowMem=%0d cyareg=%02x addr=%03x",
                  iwmc.current_bit_position, phi2_gap_ticks, slow, slowMem, CYAREG, addr[11:0]);
       end
+`endif
       io_dout <= iwm_dout;
     end
     iwm_strobe <= 1'b0;
