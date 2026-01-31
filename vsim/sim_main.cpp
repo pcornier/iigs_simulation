@@ -1824,6 +1824,7 @@ bool memory_dump_mode = false;
 std::string disk_image = "";   // HDD unit 0 (--disk)
 std::string disk_image2 = "";  // HDD unit 1 (--disk2)
 std::string floppy_image = "";  // Floppy disk image (NIB format, 5.25" 140K)
+std::string woz_image = "";  // WOZ disk image (flux-based)
 
 // Key injection functionality
 // ---------------------------
@@ -2129,6 +2130,7 @@ void show_help() {
 	printf("  --disk <filename>             Use specified HDD image (slot 7 unit 0, no disk mounted by default)\n");
 	printf("  --disk2 <filename>            Use specified HDD image for slot 7 unit 1\n");
 	printf("  --floppy <filename>           Use specified floppy image (5.25\" NIB format, drive 1)\n");
+	printf("  --woz <filename>              Use specified WOZ disk image (flux-based floppy)\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
 	printf("  --dump-vcd-after <frame>      Start dumping vsim.vcd after a frame number\n");
@@ -2367,6 +2369,10 @@ int main(int argc, char** argv, char** env) {
             floppy_image = argv[i + 1];
             printf("Using floppy image: %s (will mount to drive 1, 5.25\" 140K)\n", floppy_image.c_str());
             i++; // Skip the next argument since it's the filename
+        } else if (strcmp(argv[i], "--woz") == 0 && i + 1 < argc) {
+            woz_image = argv[i + 1];
+            printf("Using WOZ disk image: %s\n", woz_image.c_str());
+            i++;
         } else if (strcmp(argv[i], "--send-keys") == 0 && i + 1 < argc) {
             // Parse frame:keys format
             std::string arg = argv[i + 1];
@@ -2601,8 +2607,12 @@ int main(int argc, char** argv, char** env) {
         printf("Mounting disk image: %s to index 3 (HDD slot 7 unit 1)\n", disk_image2.c_str());
         blockdevice.MountDisk(disk_image2.c_str(), 3);
     }
+    if (!woz_image.empty()) {
+        printf("Mounting WOZ image: %s to index 5\n", woz_image.c_str());
+        blockdevice.MountDisk(woz_image.c_str(), 5);
+    }
 
-    if (disk_image.empty() && disk_image2.empty() && floppy_image.empty()) {
+    if (disk_image.empty() && disk_image2.empty() && floppy_image.empty() && woz_image.empty()) {
         printf("No disk images specified - booting without disk\n");
     }
 

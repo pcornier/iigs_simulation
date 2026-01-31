@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is an Apple IIgs hardware simulation written in Verilog using the Verilator simulator. The project implements a cycle-accurate emulation of the Apple IIgs computer system, including the 65C816 CPU, video graphics controller (VGC), sound system (ES5503), and various peripherals.
 
+The goal is to run this code on an FPGA. Don't make any changes to memory or clocks that aren't FPGA friendly. Make sure to use clock enables. Some clocks may be labeled incorrectly as clocks, but are actually enables.
+
 ## Essential Build Commands
 
 **Always run from the `vsim/` directory due to relative file paths:**
@@ -41,15 +43,44 @@ make clean             # Clean build artifacts
 ./obj_dir/Vemu --screenshot 245 --stop-at-frame 245
 
 # Run with selftest mode
-./obj_dir/Vemu --selftest 
+./obj_dir/Vemu --selftest
 
 # With debug output to file
 ./obj_dir/Vemu > debug.log 2>&1
 
-# use a disk image
+# VCD waveform capture (for signal-level debugging)
+# IMPORTANT: VCD files grow very fast. Only capture 2-3 frames maximum.
+# Use --stop-at-frame no more than 3 frames after the dump start frame.
+./obj_dir/Vemu --dump-vcd-after 400 --stop-at-frame 403  # Capture frames 400-403 to vsim.vcd
+
+# use a disk image (HDD slot 7)
 ./Vemu --disk totalreplay.hdv
 ./Vemu --disk pd.hdv --screenshot 50 --stop-at-frame 100
+
+# use floppy disk images
+./Vemu --floppy game.nib                # 5.25" floppy (NIB format, 140K)
+./Vemu --woz ArkanoidIIgs.woz           # WOZ format flux-level disk image
 ```
+
+### Disk Image Options
+
+| Option | Description | Formats |
+|--------|-------------|---------|
+| `--disk <file>` | HDD slot 7 unit 0 | HDV, PO, 2MG |
+| `--disk2 <file>` | HDD slot 7 unit 1 | HDV, PO, 2MG |
+| `--woz <file>` | WOZ flux-level disk image | WOZ 1.x/2.x (3.5"/5.25") |
+
+**Note:** WOZ format provides flux-level accuracy for copy-protected disks. WOZ 3.5" disk images boot successfully in simulation.
+
+### WOZ Floppy Disk Support
+
+The WOZ format provides bit-level accuracy for floppy disk emulation, supporting copy-protected software that relies on precise flux timing.
+
+**Architecture:**
+- `rtl/flux_drive.v` - Physical drive emulation (motor, head position, flux transitions)
+- `rtl/iwm_woz.v` - IWM controller with WOZ/flux interface
+- `rtl/iwm_flux.v` - Flux decoding and IWM register reads
+- `vsim/sim.v` - Track data BRAM and C++ integration
 
 ### Keyboard Input (--send-keys)
 Send keyboard input at specific frames for automated testing:
@@ -238,6 +269,7 @@ Use `--screenshot N` to capture specific frame states for visual debugging of gr
 
 ## Reference Materials
 
+- **IIgsRomSource/**: Original source code with comments of the IIgs ROM
 - **doc/**: Official Apple IIgs documentation and technical references
 - **ref/**: Reference implementation for comparison
 - **software_emulators/**: C-based emulators for algorithm reference

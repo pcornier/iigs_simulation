@@ -99,7 +99,27 @@ module emu (
 
         // Keyboard-triggered reset outputs (from Ctrl+F11 or Ctrl+OpenApple+F11)
         output keyboard_reset,
-        output keyboard_cold_reset
+        output keyboard_cold_reset,
+
+        // WOZ bit data inputs (from C++ sim_main.cpp)
+        // 3.5" drive 1
+        input [7:0]             woz3_bit_data,
+        input [31:0]            woz3_bit_count,
+        // 5.25" drive 1
+        input [7:0]             woz1_bit_data,
+        input [31:0]            woz1_bit_count,
+
+        // WOZ track/address outputs (to C++ for data lookup)
+        // 3.5" drive 1
+        output [7:0]            woz3_track_out,
+        output [15:0]           woz3_bit_addr_out,
+        // 5.25" drive 1
+        output [5:0]            woz1_track_out,
+        output [12:0]           woz1_bit_addr_out,
+
+        // WOZ disk ready inputs (from C++)
+        input                   woz3_ready,
+        input                   woz1_ready
 
 );
   initial begin
@@ -134,7 +154,40 @@ wire [7:0] TRACK2_RAM_DO;
 wire TRACK2_RAM_WE;
 wire [5:0] TRACK2;
 
+// WOZ bit interfaces for flux-based IWM
+// 3.5" drive 1 WOZ bit interface
+wire [7:0]  WOZ_TRACK3;           // Track number being read
+wire [15:0] WOZ_TRACK3_BIT_ADDR;  // Byte address in track bit buffer (16-bit for FLUX)
+wire        WOZ_TRACK3_STABLE_SIDE; // Stable side for data reads (captured when motor starts)
+wire [7:0]  WOZ_TRACK3_BIT_DATA;  // Byte from track bit buffer
+wire [31:0] WOZ_TRACK3_BIT_COUNT; // Total bits in track
+wire        WOZ_TRACK3_READY;     // Track data valid for current WOZ_TRACK3
+wire        WOZ_TRACK3_IS_FLUX;   // Track data is flux timing (not bitstream)
+wire [31:0] WOZ_TRACK3_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
+wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
+wire        woz_ctrl_ready;
 
+// 5.25" drive 1 WOZ bit interface
+wire [5:0]  WOZ_TRACK1;           // Track number being read
+wire [12:0] WOZ_TRACK1_BIT_ADDR;  // Byte address in track bit buffer
+wire [7:0]  WOZ_TRACK1_BIT_DATA;  // Byte from track bit buffer
+wire [31:0] WOZ_TRACK1_BIT_COUNT; // Total bits in track
+
+// WOZ data assignments - connect to C++ interface
+assign WOZ_TRACK1_BIT_DATA = woz1_bit_data;
+assign WOZ_TRACK1_BIT_COUNT = woz1_bit_count;
+
+// WOZ track/address outputs to C++ for data lookup
+assign woz3_track_out = WOZ_TRACK3;
+assign woz3_bit_addr_out = WOZ_TRACK3_BIT_ADDR;
+assign woz1_track_out = WOZ_TRACK1;
+assign woz1_bit_addr_out = WOZ_TRACK1_BIT_ADDR;
+
+// Register stable_side to match BRAM timing - prevents 1-cycle glitches on side change
+reg woz3_stable_side_reg;
+always @(posedge CLK_14M) begin
+    woz3_stable_side_reg <= WOZ_TRACK3_STABLE_SIDE;
+end
 
 wire clk_sys=CLK_14M;
 iigs  iigs(
@@ -183,8 +236,24 @@ iigs  iigs(
     .TRACK2_BUSY(TRACK2_RAM_BUSY),
     .FD_DISK_2(fd_disk_2),
     // Disk ready to IWM (pad to 4 bits)
-    .DISK_READY({2'b00, DISK_READY}),
+    .DISK_READY({1'b0, woz_ctrl_disk_mounted, DISK_READY}),
 
+    .WOZ_TRACK3(WOZ_TRACK3),
+    .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+    .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
+    .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
+    .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+    .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
+    .WOZ_TRACK3_LOAD_COMPLETE(woz_ctrl_track_load_complete),
+    .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
+    .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
+    .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+
+    // WOZ bit interface for 5.25" drive 1
+    .WOZ_TRACK1(WOZ_TRACK1),
+    .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
+    .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
+    .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
 
         .fastram_address(fastram_address),
         .fastram_datatoram(fastram_datatoram),
@@ -510,6 +579,85 @@ floppy_track floppy_track_2
 );
 
 
+// Verilog WOZ controller outputs (for comparison with C++ implementation)
+wire        woz_ctrl_disk_mounted;
+wire        woz_ctrl_busy;
+wire [31:0] woz_ctrl_bit_count;
+wire [7:0]  woz_ctrl_bit_data;
+wire        woz_ctrl_track_load_complete;  // Pulses when track load finishes
+wire [31:0] woz_ctrl_flux_total_ticks;
+
+// Mount detection for WOZ controller (index 5)
+reg         img_mounted5_d = 0;
+reg         woz_ctrl_mount = 0;          
+reg         woz_ctrl_change = 0;
+        
+always @(posedge clk_sys) begin
+    img_mounted5_d <= img_mounted[5];
+    // Detect rising edge of img_mounted[5]
+    if (~img_mounted5_d & img_mounted[5]) begin
+        woz_ctrl_mount  <= (img_size != 0);
+        woz_ctrl_change <= ~woz_ctrl_change;
+`ifdef SIMULATION
+        $display("WOZ_CTRL: Mount detected for index 5 (size=%0d)", img_size);
+`endif 
+    end
+end
+
+
+woz_floppy_controller #(
+    .IS_35_INCH(1)
+) woz_ctrl (
+    .clk(clk_sys),
+    .reset(reset),
+
+    // SD Block Device Interface (index 5)
+    .sd_lba(sd_lba[5]),
+    .sd_rd(sd_rd[5]),
+    .sd_wr(sd_wr[5]),
+    .sd_ack(sd_ack[5]),
+    .sd_buff_addr(sd_buff_addr),
+    .sd_buff_dout(sd_buff_dout),
+    .sd_buff_din(sd_buff_din[5]),
+    .sd_buff_wr(sd_buff_wr),
+
+    // Disk Status
+    .img_mounted(woz_ctrl_mount),
+    .img_readonly(img_readonly),
+    .img_size(img_size),
+
+    // Drive Interface - use immediate track_id for correct bit_count timing
+    // The woz_floppy_controller needs immediate track_id for position calculations.
+    .track_id(WOZ_TRACK3),
+    .ready(woz_ctrl_ready),
+    .disk_mounted(woz_ctrl_disk_mounted),
+    .busy(woz_ctrl_busy),
+    .active(FD_DISK_3),
+
+    // Bitstream Interface - use same bit_addr as C++ path
+    // Use REGISTERED stable_side to match C++ timing.
+    // When side changes, the BRAM mux must switch in sync with the BRAM data update.
+    // Using immediate stable_side causes a 1-cycle glitch where stale data is returned.
+    .bit_count(woz_ctrl_bit_count),
+    .bit_addr(WOZ_TRACK3_BIT_ADDR),
+    .stable_side(woz3_stable_side_reg),
+    .bit_data(woz_ctrl_bit_data),
+    .bit_data_in(8'h00),
+    .bit_we(1'b0),
+    // Track load notification (for flux_drive to reset bit_position)
+    .track_load_complete(woz_ctrl_track_load_complete),
+
+    // FLUX track support (WOZ v3)
+    .is_flux_track(WOZ_TRACK3_IS_FLUX),
+    .flux_data_size(WOZ_TRACK3_FLUX_SIZE),
+    .flux_total_ticks(woz_ctrl_flux_total_ticks)
+);
+
+// Connect WOZ controller outputs to IIgs inputs
+assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;
+assign WOZ_TRACK3_BIT_COUNT = woz_ctrl_bit_count;
+assign WOZ_TRACK3_READY = woz_ctrl_ready;
+assign WOZ_TRACK3_FLUX_TOTAL_TICKS = woz_ctrl_flux_total_ticks;
 
 
 endmodule

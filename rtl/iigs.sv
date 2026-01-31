@@ -105,6 +105,24 @@ module iigs
    input              TRACK2_BUSY,
    output             FD_DISK_2,     // Drive 2 active (for track buffer coordination)
 
+   // --- WOZ bit interface for 3.5" drive 1 ---
+   output [7:0]       WOZ_TRACK3,           // Track number being read
+   output [15:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer (16-bit for FLUX tracks)
+   output             WOZ_TRACK3_STABLE_SIDE, // Stable side for data reads (captured when motor starts)
+   input  [7:0]       WOZ_TRACK3_BIT_DATA,  // Byte from track bit buffer
+   input  [31:0]      WOZ_TRACK3_BIT_COUNT, // Total bits in track
+   input              WOZ_TRACK3_READY,     // Track data valid for current WOZ_TRACK3
+   input              WOZ_TRACK3_LOAD_COMPLETE, // Pulses when track load finishes (reset bit_position)
+   input              WOZ_TRACK3_IS_FLUX,   // Track data is flux timing (not bitstream)
+   input  [31:0]      WOZ_TRACK3_FLUX_SIZE, // Size in bytes of flux data (when IS_FLUX)
+   input  [31:0]      WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+
+   // --- WOZ bit interface for 5.25" drive 1 ---
+   output [5:0]       WOZ_TRACK1,           // Track number being read
+   output [12:0]      WOZ_TRACK1_BIT_ADDR,  // Byte address in track bit buffer
+   input  [7:0]       WOZ_TRACK1_BIT_DATA,  // Byte from track bit buffer
+   input  [31:0]      WOZ_TRACK1_BIT_COUNT, // Total bits in track
+
    input [3:0]        DISK_READY,
    input              FLOPPY_WP,
 
@@ -231,6 +249,7 @@ module iigs
   logic [7:0]         SPKR;
   logic               speaker_state;  // Apple II speaker toggle state
   logic [7:0]         DISK35;
+  logic               floppy_motor_on;  // From IWM for clock slowdown
   logic [7:0]         C02BVAL;
 
   logic [7:0]         VGCINT; //23
@@ -319,8 +338,14 @@ module iigs
                ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
+  // LC_IO: Language Card soft switches ($C080-$C08F) should ALWAYS trigger their side effects,
+  // even when IOLC is inhibited (shadow[6]=1). This is because IOLC inhibit only affects
+  // data routing, not the LC state machine. The ROM RAM address test relies on this.
   wire LC_IO = ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 & (cpu_addr[7:4] == 4'h8) &
-               ((~shadow[6] & (bank_bef == 8'h00 | bank_bef == 8'h01)) | bank_bef == 8'he0 | bank_bef == 8'he1);
+               (bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1);
+
+  // IWM device select ($C0E0-$C0EF)
+  wire iwm_device_select = IO & (cpu_addr[7:4] == 4'hE);
 
   // Debug: IOLC inhibit testing
   always @(posedge CLK_14M) begin
@@ -465,7 +490,7 @@ module iigs
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (txt1_shadow || txt2_shadow || shr_master_shadow || hgr1_shadow || hgr2_shadow) begin
@@ -492,7 +517,7 @@ module iigs
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (shr_master_shadow) begin
@@ -2543,46 +2568,89 @@ wire ready_out;
           .strobe(iwm_strobe),
           .DISK35(DISK35)
           );
+  // Stub outputs for old nibble-based track interfaces
+  assign TRACK1 = 6'd0;
+  assign TRACK1_ADDR = 14'd0;
+  assign TRACK1_DI = 8'd0;
+  assign TRACK1_WE = 1'b0;
+  assign FD_DISK_1 = 1'b0;
+  assign TRACK2 = 6'd0;
+  assign TRACK2_ADDR = 14'd0;
+  assign TRACK2_DI = 8'd0;
+  assign TRACK2_WE = 1'b0;
+  assign FD_DISK_2 = 1'b0;
+  assign TRACK3 = 7'd0;
+  assign TRACK3_ADDR = 14'd0;
+  assign TRACK3_SIDE = 1'b0;
+  assign TRACK3_DI = 8'd0;
+  assign TRACK3_WE = 1'b0;
+  assign FD_DISK_3 = 1'b0;
+  assign floppy_motor_on = 1'b0;
+  // Stub WOZ bit interfaces
+  assign WOZ_TRACK3 = 8'd0;
+  assign WOZ_TRACK3_BIT_ADDR = 16'd0;
+  assign WOZ_TRACK3_STABLE_SIDE = 1'b0;
+  assign WOZ_TRACK1 = 6'd0;
+  assign WOZ_TRACK1_BIT_ADDR = 13'd0;
   `else
-        iwm_controller iwmc (
+  // Hardware-accurate IWM with WOZ/flux-based disk interface
+  iwm_woz iwmc (
       // Global clocks/resets
       .CLK_14M(CLK_14M),
       .CLK_7M_EN(clk_7M_en),
       .Q3(q3_en),
       .PH0(phi0),
+      .PH2(phi2),
       .RESET(reset),
       // Bus interface
-      .IO_SELECT(iwm_strobe),
-      .DEVICE_SELECT(iwm_strobe),
-      .WR_CYCLE(iwm_rw),
-      //.ACCESS_STROBE(iwm_strobe),
-      .A(iwm_addr),
-      .D_IN(iwm_din),
+      .IO_SELECT(iwm_device_select),
+      .DEVICE_SELECT(iwm_device_select),
+      .WR_CYCLE(cpu_we_n),  // 1 = read, 0 = write (matches cpu_we_n)
+      .VDA(cpu_vda),
+      .A(cpu_addr[7:0]),    // Combinational address
+      .D_IN(cpu_dout),      // Combinational data
       .D_OUT(iwm_dout),
       // Drive status and control
       .DISK_READY(DISK_READY),
       .DISK35(DISK35),
       .WRITE_PROTECT(floppy_wp),
-      // 5.25" Drive 1
-      .TRACK1(TRACK1),
-      .TRACK1_ADDR(TRACK1_ADDR),
-      .TRACK1_DI(TRACK1_DI),
-      .TRACK1_DO(TRACK1_DO),
-      .TRACK1_WE(TRACK1_WE),
-      .TRACK1_BUSY(TRACK1_BUSY),
-      .FD_DISK_1(FD_DISK_1),
-      // 5.25" Drive 2
-      .TRACK2(TRACK2),
-      .TRACK2_ADDR(TRACK2_ADDR),
-      .TRACK2_DI(TRACK2_DI),
-      .TRACK2_DO(TRACK2_DO),
-      .TRACK2_WE(TRACK2_WE),
-      .TRACK2_BUSY(TRACK2_BUSY),
-      .FD_DISK_2(FD_DISK_2),
-      // 3.5" not yet wired
-      .TRACK3(), .TRACK3_ADDR(), .TRACK3_SIDE(), .TRACK3_DI(), .TRACK3_DO(8'h00), .TRACK3_WE(), .TRACK3_BUSY(1'b0),
-      .TRACK4(), .TRACK4_ADDR(), .TRACK4_SIDE(), .TRACK4_DI(), .TRACK4_DO(8'h00), .TRACK4_WE(), .TRACK4_BUSY(1'b0)
+      // WOZ bit interface for 3.5" drive 1
+      .WOZ_TRACK3(WOZ_TRACK3),
+      .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+      .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
+      .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
+      .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+      .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
+      .WOZ_TRACK3_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
+      .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
+      .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
+      .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+      // WOZ bit interface for 5.25" drive 1
+      .WOZ_TRACK1(WOZ_TRACK1),
+      .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
+      .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
+      .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
+      // Motor status for clock slowdown
+      .FLOPPY_MOTOR_ON(floppy_motor_on)
   );
+  // Old nibble-based track interfaces are not used with flux-based IWM
+  // Tie to defaults since floppy_track modules in sim.v may still be instantiated
+  assign TRACK1 = 6'd0;
+  assign TRACK1_ADDR = 14'd0;
+  assign TRACK1_DI = 8'd0;
+  assign TRACK1_WE = 1'b0;
+  assign FD_DISK_1 = 1'b0;
+  assign TRACK2 = 6'd0;
+  assign TRACK2_ADDR = 14'd0;
+  assign TRACK2_DI = 8'd0;
+  assign TRACK2_WE = 1'b0;
+  assign FD_DISK_2 = 1'b0;
+  assign TRACK3 = 7'd0;
+  assign TRACK3_ADDR = 14'd0;
+  assign TRACK3_SIDE = 1'b0;
+  assign TRACK3_DI = 8'd0;
+  assign TRACK3_WE = 1'b0;
+  assign FD_DISK_3 = 1'b0;
   `endif
 
     // Legacy slot-7 HDD (supports 4 units)

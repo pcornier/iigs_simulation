@@ -90,11 +90,12 @@ V_SRC = \
 	$(RTL)/es5503.v \
 	$(RTL)/keyboard.v \
 	$(RTL)/paddle_timer.v \
-	$(RTL)/iwm_core_ref.v \
-	$(RTL)/iwm_controller.v \
-	$(RTL)/apple_drive.v \
-	$(RTL)/floppy_track.sv \
-	$(RTL)/iwm.v \
+	$(RTL)/iwm_woz.v \
+	$(RTL)/iwm_flux.v \
+	$(RTL)/flux_drive.v \
+	$(RTL)/woz_track.sv \
+	$(RTL)/bram.sv \
+	$(RTL)/woz_floppy_controller.sv \
 	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \
 	$(RTL)/dpram.sv \

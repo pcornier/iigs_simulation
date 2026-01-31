@@ -11,18 +11,18 @@ module bram #(
     input   wire    [widthad_a-1:0]  address_a,
     input   wire    [width_a-1:0]  data_a,
     output  reg     [width_a-1:0]  q_a,
-     
+
     // Port B
     input   wire                clock_b,
     input   wire                wren_b,
     input   wire    [widthad_a-1:0]  address_b,
     input   wire    [width_a-1:0]  data_b,
-    output  reg     [width_a-1:0]  q_b,
+    output  wire    [width_a-1:0]  q_b,
 
-    input wire byteena_a,
-    input wire byteena_b,
-    input wire enable_a,
-    input wire enable_b 
+    input wire byteena_a = 1'b1,
+    input wire byteena_b = 1'b1,
+    input wire enable_a = 1'b1,
+    input wire enable_b = 1'b1
 );
 
     initial begin
@@ -32,11 +32,11 @@ module bram #(
         	$readmemh(init_file, mem);
     end
 
- 
+
 // Shared memory
 reg [width_a-1:0] mem [(2**widthad_a)-1:0];
 
-// Port A
+// Port A - Registered (standard BRAM behavior)
 always @(posedge clock_a) begin
     if(wren_a) begin
         mem[address_a] <= data_a;
@@ -45,16 +45,18 @@ always @(posedge clock_a) begin
         q_a      <= mem[address_a];
     end
 end
- 
-// Port B
+
+// Port B - Registered read (standard FPGA BRAM behavior with 1-cycle latency)
+// Address is registered, data appears on the next clock edge.
+reg [width_a-1:0] q_b_reg;
 always @(posedge clock_b) begin
     if(wren_b) begin
         mem[address_b] <= data_b;
-        q_b      <= data_b;
-        $display("writingb: %x %x",address_b,data_b);
+        q_b_reg <= data_b;
     end else begin
-        q_b      <= mem[address_b];
+        q_b_reg <= mem[address_b];
     end
 end
- 
+assign q_b = q_b_reg;
+
 endmodule

@@ -38,7 +38,7 @@ module dpram #(
 // Shared ramory
 reg [width_a-1:0] ram [(2**widthad_a)-1:0];
 
-// Port A
+// Port A - Synchronous read/write
 always @(posedge clock_a) begin
   if (ce_a) begin
     if(wren_a) begin
