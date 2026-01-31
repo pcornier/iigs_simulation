@@ -168,6 +168,7 @@ assign UART_DTR = UART_DSR;
 
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;  
+assign SDRAM_CKE = 1;
 
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
