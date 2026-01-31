@@ -27,6 +27,12 @@ set_global_assignment -name VERILOG_FILE rtl/uart/rxuart.v
 set_global_assignment -name VERILOG_FILE rtl/uart/txuart.v
 #set_global_assignment -name SYSTEMVERILOG_FILE rtl/bram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/floppy_track.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/floppy35_track.sv
+set_global_assignment -name VERILOG_FILE rtl/iwm_woz.v 
+set_global_assignment -name VERILOG_FILE rtl/iwm_flux.v 
+set_global_assignment -name VERILOG_FILE rtl/iwm_drive.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/woz_track.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/woz_floppy_controller.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
 set_global_assignment -name VHDL_FILE rtl/dpram_bram.vhd
