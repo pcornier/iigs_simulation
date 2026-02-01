@@ -74,21 +74,19 @@ module iigs
    input [7:0]        paddle_2,
    input [7:0]        paddle_3,
 
- 
-   // HDD control
-  output [31:0] HDD_SECTOR,
-  output        HDD_READ,
-  output        HDD_WRITE,
-  output        HDD_UNIT,           // Which unit (0-1) is being accessed (from bit 7)
-  input  [1:0]  HDD_MOUNTED,        // Per-unit mounted status
-  input  [1:0]  HDD_PROTECT,        // Per-unit write protect
-  input [8:0]   HDD_RAM_ADDR,
-  input [7:0]   HDD_RAM_DI,
-  output [7:0]  HDD_RAM_DO,
-  input         HDD_RAM_WE,
+   // SCSI HDD control
+   output [31:0]     sd_lba[SCSI_DEVS],
+   output [SCSI_DEVS-1:0] sd_rd,
+   output [SCSI_DEVS-1:0] sd_wr,
+   input [SCSI_DEVS-1:0] sd_ack,
+   input [SCSI_DEVS-1:0] img_mounted,
+   input [63:0]      img_size,
+   input [8:0]       sd_buff_addr,
+   input [7:0]       sd_buff_dout,
+   output [7:0]      sd_buff_din[SCSI_DEVS],
+   input             sd_buff_wr,
 
-
-      // --- 5.25" floppy track interfaces (Drive 1/2) ---
+   // --- 5.25" floppy track interfaces (Drive 1/2) ---
    output [5:0]       TRACK1,
    output [12:0]      TRACK1_ADDR,
    output [7:0]       TRACK1_DI,
@@ -152,6 +150,7 @@ module iigs
    logic VPB;
 
    parameter RAMSIZE = 128; // 16x64k = 1MB, max = 127x64k = 8MB
+   parameter SCSI_DEVS = 2;
 
    logic [9:0]        H;
    logic [8:0]        V;
@@ -2605,13 +2604,6 @@ wire ready_out;
   );
   `endif
 
-    localparam SCSI_DEVS = 1;
-
-    wire [31:0] scsicard_lba[SCSI_DEVS];
-    wire [7:0]  scsicard_buff_din[SCSI_DEVS];
-    assign HDD_SECTOR = scsicard_lba[0];
-    assign HDD_RAM_DO = scsicard_buff_din[0];
-
     // Apple II SCSI Card
     scsicard #(.DEVS(SCSI_DEVS)) scsicard(
         .CLK_14M(CLK_14M),
@@ -2624,15 +2616,16 @@ wire ready_out;
         .RD(~we),
         .D_IN(dout),
         .D_OUT(HDD_DO),
-        .sd_lba(scsicard_lba),
+        .sd_lba(sd_lba),
         .sd_rd(sd_rd),
         .sd_wr(sd_wr),
         .sd_ack(sd_ack),
         .img_mounted(img_mounted),
-        .sd_buff_addr(HDD_RAM_ADDR),
-        .sd_buff_dout(HDD_RAM_DI),
-        .sd_buff_din(scsicard_buff_din),
-        .sd_buff_wr(HDD_RAM_WE)
+        .img_size(img_size),
+        .sd_buff_addr(sd_buff_addr),
+        .sd_buff_dout(sd_buff_dout),
+        .sd_buff_din(sd_buff_din),
+        .sd_buff_wr(sd_buff_wr)
     );
 
    /*

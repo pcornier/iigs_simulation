@@ -135,6 +135,27 @@ wire TRACK2_RAM_WE;
 wire [5:0] TRACK2;
 
 
+localparam SCSI_DEVS = 2;
+
+wire [31:0] scsi_sd_lba[SCSI_DEVS];
+wire [SCSI_DEVS-1:0] scsi_sd_rd;
+wire [SCSI_DEVS-1:0] scsi_sd_wr;
+wire [SCSI_DEVS-1:0] scsi_sd_ack;
+wire [SCSI_DEVS-1:0] scsi_img_mounted;
+wire [7:0] scsi_sd_buff_din[SCSI_DEVS];
+
+assign sd_lba[1] = scsi_sd_lba[0];
+assign sd_lba[3] = scsi_sd_lba[1];
+assign sd_rd[1]  = scsi_sd_rd[0];
+assign sd_rd[3]  = scsi_sd_rd[1];
+assign sd_wr[1]  = scsi_sd_wr[0];
+assign sd_wr[3]  = scsi_sd_wr[1];
+assign scsi_sd_ack[0]  = sd_ack[1];
+assign scsi_sd_ack[1]  = sd_ack[3];
+assign scsi_img_mounted[0]  = img_mounted[1];
+assign scsi_img_mounted[1]  = img_mounted[3];
+assign sd_buff_din[1]  = scsi_sd_buff_din[0];
+assign sd_buff_din[3]  = scsi_sd_buff_din[1];
 
 wire clk_sys=CLK_14M;
 iigs  iigs(
@@ -144,7 +165,7 @@ iigs  iigs(
         .CLK_14M(clk_sys),
         .clk_vid(clk_sys),
         .ce_pix(ce_pix),
-        .cpu_wait(cpu_wait_hdd),
+        .cpu_wait(0),
         .timestamp(TIMESTAMP),//{33{1'b0}}),  // Add missing timestamp connection
         .floppy_wp(1'b1),  // Add missing floppy_wp
         .R(VGA_R),
@@ -154,17 +175,18 @@ iigs  iigs(
         .VBlank(vblank),
         .HS(hsync),
         .VS(vsync),
-        /* hard drive (supports 2 units - ProDOS limit) */
-        .HDD_SECTOR(hdd_sector),
-        .HDD_READ(hdd_read),
-        .HDD_WRITE(hdd_write),
-        .HDD_UNIT(hdd_unit),
-        .HDD_MOUNTED(hdd_mounted),
-        .HDD_PROTECT(hdd_protect),
-        .HDD_RAM_ADDR(sd_buff_addr),
-        .HDD_RAM_DI(sd_buff_dout),
-        .HDD_RAM_DO(hdd_ram_do),
-        .HDD_RAM_WE(sd_buff_wr & hdd_ack),
+
+        // SCSI control
+        .sd_lba(scsi_sd_lba),
+        .sd_rd(scsi_sd_rd),
+        .sd_wr(scsi_sd_wr),
+        .sd_ack(scsi_sd_ack),
+        .img_mounted(scsi_img_mounted),
+        .img_size(img_size),
+        .sd_buff_addr(sd_buff_addr),
+        .sd_buff_dout(sd_buff_dout),
+        .sd_buff_din(scsi_sd_buff_din),
+        .sd_buff_wr(sd_buff_wr),
 
     //-- track buffer interface for disk 1
     .TRACK1(TRACK1),
@@ -283,6 +305,7 @@ assign VGA_HB=hblank;
 assign VGA_VB=vblank;
 
 
+/* -----\/----- EXCLUDED -----\/-----
 // HARD DRIVE PARTS (supports 2 units - ProDOS limit)
 wire [15:0] hdd_sector;
 wire        hdd_unit;           // Which unit (0-1) is being accessed (from bit 7)
@@ -418,6 +441,7 @@ always @(posedge clk_sys) begin
         if (cpu_wait_hdd) hdd_wait_14m_cycles <= hdd_wait_14m_cycles + 1;
 `endif
 end
+ -----/\----- EXCLUDED -----/\----- */
 
 
 wire fd_disk_1;
