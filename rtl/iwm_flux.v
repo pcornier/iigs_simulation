@@ -561,18 +561,8 @@ module iwm_flux (
                         dbg_flux_count_after_idle <= 8'd0;
 `endif
                         rw_state <= SR_WINDOW_EDGE_0;
-                        // SYNC FIX: Instead of starting a fresh window, synchronize to
-                        // flux_drive's current bit-cell phase. This matches MAME's behavior
-                        // where m_next_state_change = m_last_sync + window_size() aligns
-                        // the window to the existing bit-cell timing.
+                        // Sync window_counter to flux_drive's bit_timer for byte alignment.
                         // FLUX_BIT_TIMER is the remaining time until flux_drive's next bit-cell.
-                        //
-                        // SYNC TO FLUX_DRIVE: Set window_counter to match flux_drive's bit_timer.
-                        // This ensures the IWM window is aligned to the bit-cell grid, matching
-                        // MAME's m_last_sync + window_size() approach.
-                        //
-                        // When flux_bit_timer is valid (1 to base_full_window), use it directly.
-                        // This aligns our window to expire at the same time as flux_drive's bit-cell.
                         if (FLUX_BIT_TIMER > 6'd0 && FLUX_BIT_TIMER <= base_full_window) begin
                             window_counter <= FLUX_BIT_TIMER;
                         end else begin
@@ -581,11 +571,11 @@ module iwm_flux (
                         end
                         m_rsh <= 8'h00;
                         flux_seen <= 1'b0;
-                        // Reset fractional accumulators to sync with flux_drive
+                        // Reset fractional accumulators
                         full_window_frac <= 10'd0;
                         half_window_frac <= 10'd0;
 `ifdef SIMULATION
-                        $display("IWM_FLUX: START_READ cycle=%0d win=%0d flux_timer=%0d mode=%02h (synced to flux_drive)",
+                        $display("IWM_FLUX: START_READ cycle=%0d win=%0d flux_timer=%0d mode=%02h",
                                  debug_cycle, (FLUX_BIT_TIMER > 6'd0 && FLUX_BIT_TIMER <= base_full_window) ? FLUX_BIT_TIMER : base_full_window,
                                  FLUX_BIT_TIMER, SW_MODE);
 `endif

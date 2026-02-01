@@ -365,7 +365,11 @@ module flux_drive (
     // Motor restart: motor_spinning 0→1 while drive_ready already true (common with 3.5" drives)
     wire        drive_ready_rising = drive_ready && !prev_drive_ready && (TRACK_BIT_COUNT > 0);
     wire        motor_restart_ready = motor_spinning && !prev_motor_for_position && drive_ready && (TRACK_BIT_COUNT > 0);
-    wire        track_load_reset = TRACK_LOAD_COMPLETE && !motor_spinning;
+    // FIX: Allow TRACK_LOAD_COMPLETE to reset position even when motor is spinning.
+    // In full simulation, motor may start before track data is ready. When track finally
+    // loads, we MUST reset bit_position/bit_timer to align with the new track data.
+    // Without this, bit_timer phase is random relative to track data, causing 1-bit offset.
+    wire        track_load_reset = TRACK_LOAD_COMPLETE;
     wire        skip_position_advance = track_load_reset || drive_ready_rising || motor_restart_ready;
 
     //=========================================================================
@@ -869,11 +873,13 @@ module flux_drive (
                 flux_startup_delay <= flux_startup_delay - 6'd1;
             end
 
-            // Reset bit_position when track load completes while stopped.
-            // Avoid mid-rotation jumps that would desync the bitstream from flux timing.
+            // Reset bit_position when track load completes.
+            // FIX: Now resets even when motor is spinning. This aligns bit_timer phase with
+            // the new track data, fixing the 1-bit offset bug where full sim had different
+            // byte framing than testbench (motor starts before track loads in full sim).
             //
-            // NOTE: For FPGA BRAM with 1-cycle read latency, we start bit_timer at bit_cell_cycles-1
-            // to give BRAM one cycle to load the new track's first byte before flux checks.
+            // NOTE: For FPGA BRAM with 1-cycle read latency, we set bram_first_read_pending
+            // to wait one cycle for BRAM data before first flux check.
             if (track_load_reset) begin
                 bit_position <= 17'd0;
                 bit_timer <= bit_cell_base;  // Full bit cell time
@@ -902,7 +908,7 @@ module flux_drive (
             end
 `ifdef SIMULATION
             if (TRACK_LOAD_COMPLETE && motor_spinning) begin
-                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE ignored while spinning (pos=%0d)",
+                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE while spinning - resetting bit_position (was %0d)",
                          DRIVE_ID, bit_position);
             end
 `endif
