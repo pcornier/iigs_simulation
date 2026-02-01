@@ -62,10 +62,10 @@ module woz_track (
     // WOZ_DRIVE_BASE is set in C++ (sim_blkdevice.cpp)
     // track_with_side = track | (side << 7) for 0-159 addressing
 
-    localparam BLOCKS_PER_TRACK = 5'd25;  // 12.5KB / 512 = 25 blocks max
+    localparam BLOCKS_PER_TRACK = 8'd128;  // 64KB / 512 = 128 blocks max
 
     reg [31:0] lba;
-    reg  [4:0] rel_lba;
+    reg  [6:0] rel_lba;  // 7 bits for up to 128 blocks
     reg [31:0] track_bit_count;
     reg [31:0] track_byte_count;
     reg        mount_pending;
@@ -79,10 +79,10 @@ module woz_track (
     assign sd_buff_din = 8'h00;  // No write support
 
     //=========================================================================
-    // Dual-Port BRAM for Track Bits (16KB)
+    // Dual-Port BRAM for Track Bits (64KB)
     //=========================================================================
 
-    reg [7:0] track_bram [0:16383];  // 16KB = 128Kbits max
+    reg [7:0] track_bram [0:65535];  // 64KB for WOZ FLUX tracks
 
     // Port A: Write from SD buffer (during load)
     // Port B: Read for bit access
@@ -96,11 +96,11 @@ module woz_track (
             if (rel_lba == 0) begin
                 // Block 0: skip first 8 bytes (metadata), store rest
                 if (sd_buff_addr >= 9'd8) begin
-                    track_bram[{5'b0, sd_buff_addr} - 8] <= sd_buff_dout;
+                    track_bram[{7'b0, sd_buff_addr} - 16'd8] <= sd_buff_dout;
                 end
             end else begin
                 // Blocks 1+: full 512 bytes offset by 504 bytes from block 0
-                track_bram[504 + ({rel_lba - 1, sd_buff_addr[8:0]})] <= sd_buff_dout;
+                track_bram[16'd504 + ({rel_lba - 7'd1, sd_buff_addr[8:0]})] <= sd_buff_dout;
             end
         end
     end

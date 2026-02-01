@@ -12,6 +12,10 @@
 // Reference: MAME iwm.cpp, real Apple IIgs drive architecture
 //
 
+// Enable byte offset debugging - tracks first flux transitions and BRAM addresses
+// Uncomment the following line to enable:
+`define DEBUG_BYTE_OFFSET
+
 module flux_drive (
     // Configuration
     input  wire        IS_35_INCH,      // 1 = 3.5" drive, 0 = 5.25" drive
@@ -53,6 +57,7 @@ module flux_drive (
     // Track data interface (SD block or BRAM)
     // For initial testing, uses direct BRAM interface like apple_drive.v
     output wire [16:0] BIT_POSITION,    // Current bit position within track (for debug)
+    output wire [5:0]  BIT_TIMER_OUT,   // Current bit cell timer value (for IWM sync)
     input  wire [31:0] TRACK_BIT_COUNT, // Total bits in current track
     input  wire        TRACK_LOADED,    // Track data is available
     input  wire        TRACK_LOAD_COMPLETE, // Pulses when track finishes loading (reset bit_position)
@@ -69,7 +74,14 @@ module flux_drive (
     // SD block interface for track loading (optional, for WOZ support)
     output reg  [7:0]  SD_TRACK_REQ,    // Track number to load (pulsed)
     output reg         SD_TRACK_STROBE, // Request new track load
-    input  wire        SD_TRACK_ACK     // Track load complete
+    input  wire        SD_TRACK_ACK,    // Track load complete
+
+    // Chunk-based streaming support for large flux tracks (>16KB)
+    // When flux tracks exceed BRAM size, we reload 16KB chunks on demand
+    output wire        CHUNK_RELOAD_REQ,   // Request next 16KB chunk load
+    output wire [1:0]  CHUNK_NEEDED,       // Which chunk (0-3) is needed next
+    input  wire [1:0]  CHUNK_LOADED,       // Which chunk (0-3) is currently in BRAM
+    input  wire        CHUNK_LOADING       // A chunk load is in progress
 );
 
     //=========================================================================
@@ -132,6 +144,11 @@ module flux_drive (
     // BRAM first-read wait - wait 1 cycle for registered BRAM data after position reset
     // After bit_position resets (track load, drive_ready), wait 1 cycle for BRAM data
     reg         bram_first_read_pending;
+
+    // Flux startup delay - suppress FLUX_TRANSITION for first bit-cell after DRIVE_READY
+    // This ensures bit_position advances to 1 before first flux, matching MAME byte alignment.
+    // Without this, fast flux timing bytes can cause first flux at pos=0, leading to 1-position offset.
+    reg [5:0]   flux_startup_delay;
 
     // WOZ FLUX timing playback state (when IS_FLUX_TRACK=1)
     // Flux tick phase accumulator.
@@ -359,10 +376,52 @@ module flux_drive (
     assign DRIVE_READY = drive_ready;           // Ready after 2 rotation spinup
     assign TRACK = head_phase[8:2];             // Quarter-track to full track
     assign BIT_POSITION = bit_position;
-    // BRAM address: flux mode uses flux_byte_addr (16-bit), bitstream mode uses byte_index with look-ahead
+    assign BIT_TIMER_OUT = bit_timer;           // Export for IWM window synchronization
+
+    // BRAM address: flux mode uses full flux_byte_addr (16 bits for 64KB BRAM)
+    // Bitstream mode uses byte_index with look-ahead
     assign BRAM_ADDR = IS_FLUX_TRACK ? flux_byte_addr :
                        (need_prefetch ? prefetch_byte_index : byte_index);
     assign WRITE_PROTECT = DISK_WP;
+
+    //=========================================================================
+    // Chunk-Based Streaming for Large FLUX Tracks
+    //=========================================================================
+    // FLUX tracks can be ~50KB but BRAM is only 16KB. We divide the track into
+    // 16KB chunks and reload from SD when crossing chunk boundaries.
+    //
+    // Chunk layout (for 50KB track):
+    //   Chunk 0: bytes 0-16383 (addresses 0x0000-0x3FFF)
+    //   Chunk 1: bytes 16384-32767 (addresses 0x4000-0x7FFF)
+    //   Chunk 2: bytes 32768-49151 (addresses 0x8000-0xBFFF)
+    //   Chunk 3: bytes 49152-65535 (addresses 0xC000-0xFFFF)
+    //
+    // The controller preloads chunk 0 initially. When flux_byte_addr approaches
+    // a chunk boundary, we request the next chunk. The controller loads it,
+    // replacing the previous chunk in BRAM. flux_byte_addr[13:0] is used for
+    // BRAM access, so the same 16KB address space maps to whichever chunk is loaded.
+
+    // Current chunk based on full flux_byte_addr
+    wire [1:0] current_chunk = flux_byte_addr[15:14];
+
+    // Request next chunk when within 2KB of chunk boundary
+    // (gives ~2-3ms of margin for SD load at typical flux rates)
+    localparam [13:0] CHUNK_REQUEST_THRESHOLD = 14'd14336;  // 16KB - 2KB = 14KB
+    wire approaching_boundary = IS_FLUX_TRACK && motor_spinning && TRACK_LOADED &&
+                                (flux_byte_addr[13:0] >= CHUNK_REQUEST_THRESHOLD) &&
+                                !CHUNK_LOADING;
+
+    // Next chunk to load (with wraparound)
+    wire [1:0] next_chunk = current_chunk + 2'd1;
+    wire need_next_chunk = (next_chunk != CHUNK_LOADED);
+
+    // Check if next chunk has data (don't request beyond track end)
+    wire [15:0] next_chunk_start = {next_chunk, 14'd0};
+    wire next_chunk_valid = (next_chunk_start < FLUX_DATA_SIZE) || (next_chunk == 2'd0);
+
+    // Chunk reload request output
+    assign CHUNK_RELOAD_REQ = approaching_boundary && need_next_chunk && next_chunk_valid;
+    assign CHUNK_NEEDED = next_chunk;
 
     //=========================================================================
     // Status Sensing (3.5" drives)
@@ -790,6 +849,7 @@ module flux_drive (
             next_flux_byte <= 8'd0;
             next_byte_valid <= 1'b0;
             bram_first_read_pending <= 1'b1;  // Wait for registered BRAM on startup
+            flux_startup_delay <= 6'd0;
 `ifdef SIMULATION
             side_transition_logged <= 1'b1;  // Start as logged to avoid spam at startup
             debug_read_count <= 5'd16;       // Disable log until first track change
@@ -800,6 +860,14 @@ module flux_drive (
             FLUX_TRANSITION <= 1'b0;
             SD_TRACK_STROBE <= 1'b0;
             rotation_complete <= 1'b0;
+
+            // Count down startup delay (if active)
+            // This ensures bit_position advances before first FLUX_TRANSITION
+            // IMPORTANT: Only count down when bit_timer also counts down (not during BRAM wait)
+            // to keep them synchronized
+            if (flux_startup_delay > 6'd0 && !bram_first_read_pending) begin
+                flux_startup_delay <= flux_startup_delay - 6'd1;
+            end
 
             // Reset bit_position when track load completes while stopped.
             // Avoid mid-rotation jumps that would desync the bitstream from flux timing.
@@ -869,10 +937,17 @@ module flux_drive (
                 flux_waiting_bram <= 1'b0;
                 flux_is_continuation <= 1'b0;
                 next_byte_valid <= 1'b0;
+                // Startup delay: suppress flux for first bit-cell to ensure bit_position advances
+                // before first flux is detected by IWM. This matches testbench behavior.
+                flux_startup_delay <= bit_cell_base;  // One full bit cell (28 cycles for 3.5")
 `ifdef SIMULATION
                 $display("FLUX_DRIVE[%0d]: DRIVE_READY rising edge - resetting bit_position to 0 (was %0d)", DRIVE_ID, bit_position);
                 $display("FLUX_DRIVE[%0d]: DRIVE_READY bram_wait=1 bit_timer=%0d cell=%0d addr=%0d pos=%0d",
                          DRIVE_ID, bit_timer, bit_cell_cycles, BRAM_ADDR, bit_position);
+`endif
+`ifdef DEBUG_BYTE_OFFSET
+                $display("BYTE_OFFSET_READY: drive_ready=1 FLUX_TRANSITION=%0d flux_byte_counter=%0d flux_byte_addr=%0d",
+                         FLUX_TRANSITION, flux_byte_counter, flux_byte_addr);
 `endif
             end
             prev_drive_ready <= drive_ready;
@@ -963,6 +1038,11 @@ module flux_drive (
                     //    - Load next byte from BRAM (with 1-cycle latency handling)
                     // 4. Handle 0xFF: no transition, just add 255 ticks (timing extension)
 
+                    // Clear bram_first_read_pending - needed for startup delay countdown
+                    if (bram_first_read_pending) begin
+                        bram_first_read_pending <= 1'b0;
+                    end
+
                     // Handle BRAM read latency - after requesting a byte, wait one cycle
                     if (flux_waiting_bram) begin
                         // BRAM data is now valid
@@ -1011,13 +1091,20 @@ module flux_drive (
                             end
                         end else if (flux_byte_counter <= 8'd1) begin
                             // Counter expired - generate transition if not a continuation byte
-                            if (!flux_is_continuation && drive_ready) begin
+                            // Also check startup delay - suppress transitions until bit_position has time to advance
+                            if (!flux_is_continuation && drive_ready && flux_startup_delay == 6'd0) begin
                                 FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                                     if (flux_count_debug < 110) begin
                                         $display("FLUX_PLAY[%0d]: Transition #%0d cycle=%0d byte_addr=%0d",
                                                  DRIVE_ID, flux_count_debug, cycle_count_debug, flux_byte_addr - 1);
                                     end
+`endif
+`ifdef DEBUG_BYTE_OFFSET
+                                if (dbg_ready_started && dbg_flux_count < 20) begin
+                                    $display("BYTE_OFFSET_FLUX: Transition #%0d at pos=%0d cycle=%0d flux_addr=%0d phase_accum=%0d",
+                                             dbg_flux_count, bit_position, cycle_count_debug, flux_byte_addr - 1, flux_phase_accum);
+                                end
 `endif
                                 end
                                 
@@ -1105,9 +1192,10 @@ module flux_drive (
                     end else if (bit_timer == bit_half_timer) begin
                         // Generate flux near mid-cell using the current cell timing.
                         // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
+                        // and after startup delay (ensures bit_position has advanced for proper byte alignment).
                         // During spinup, the IWM shouldn't receive flux transitions
                         // This matches MAME behavior where m_data stays 0x00 during spinup
-                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
+                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready && flux_startup_delay == 6'd0) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                             if (flux_count_debug < 50) begin
@@ -1190,6 +1278,15 @@ module flux_drive (
     end
 
     reg [4:0] debug_read_count;  // Counter for track dump logging
+
+`ifdef DEBUG_BYTE_OFFSET
+    // Byte offset debugging - track first BRAM reads
+    reg        dbg_ready_started;
+    reg [31:0] dbg_flux_count;
+    reg [7:0]  dbg_bram_history [0:15];  // First 16 BRAM bytes
+    reg [3:0]  dbg_bram_idx;
+`endif
+
 `ifdef SIMULATION
     // Debug output
     reg [8:0] prev_head_phase;
@@ -1205,6 +1302,11 @@ module flux_drive (
             stopped_cycles <= 0;
             cycle_count_debug <= 0;
             prev_motor_on <= 1'b0;
+`ifdef DEBUG_BYTE_OFFSET
+            dbg_ready_started <= 1'b0;
+            dbg_flux_count <= 32'd0;
+            dbg_bram_idx <= 4'd0;
+`endif
         end else begin
             // Debug: Track MOTOR_ON transitions
             if (MOTOR_ON != prev_motor_on) begin
@@ -1229,6 +1331,30 @@ module flux_drive (
                              DRIVE_ID, flux_count_debug, cycle_count_debug, bit_position,
                              byte_index, BRAM_DATA, current_bit);
                 end
+`ifdef DEBUG_BYTE_OFFSET
+                // Track first flux transitions and BRAM data after drive ready
+                if (drive_ready && !dbg_ready_started) begin
+                    dbg_ready_started <= 1'b1;
+                    dbg_flux_count <= 32'd0;
+                    dbg_bram_idx <= 4'd0;
+                    $display("FLUX_OFFSET: Drive ready, tracking first flux transitions...");
+                end
+                if (dbg_ready_started && dbg_flux_count < 100) begin
+                    dbg_flux_count <= dbg_flux_count + 1;
+                    $display("FLUX_OFFSET: flux[%0d] at pos=%0d byte_addr=%0d bram_data=0x%02X bit=%0d cycle=%0d",
+                             dbg_flux_count, bit_position, byte_index, BRAM_DATA, current_bit, cycle_count_debug);
+                    // Track BRAM data at byte boundaries
+                    if (bit_position[2:0] == 3'd0 && dbg_bram_idx < 16) begin
+                        dbg_bram_history[dbg_bram_idx] <= BRAM_DATA;
+                        dbg_bram_idx <= dbg_bram_idx + 1;
+                        $display("FLUX_OFFSET: BRAM[%0d] at pos=%0d = 0x%02X",
+                                 dbg_bram_idx, bit_position, BRAM_DATA);
+                    end
+                end
+                if (!drive_ready && dbg_ready_started) begin
+                    dbg_ready_started <= 1'b0;
+                end
+`endif
             end
 
             // Periodic status every 1M cycles

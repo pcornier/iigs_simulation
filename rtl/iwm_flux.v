@@ -21,6 +21,10 @@
 // Uncomment the following line to enable:
 // `define SECTOR_DEBUG
 
+// Enable byte offset debugging - tracks first D5 prologue position
+// Uncomment the following line to enable:
+`define DEBUG_BYTE_OFFSET
+
 // For simulator builds that already use `+define+debug=1`, enable a limited
 // sector/prologue trace without needing to edit this file per-run.
 `ifdef debug
@@ -69,12 +73,16 @@ module iwm_flux (
     // Disk position for debug logging (to compare with MAME)
     input  wire [16:0] DISK_BIT_POSITION, // Current bit position on track
 
+    // Bit-cell timing from flux_drive for window synchronization
+    input  wire [5:0]  FLUX_BIT_TIMER,    // Current bit timer value from flux_drive
+
     // Write output (future use)
     output wire        FLUX_WRITE,      // Pulse when writing flux transition
 
     // Debug
     output wire [7:0]  DEBUG_RSH,       // Read shift register (for debug)
-    output wire [2:0]  DEBUG_STATE      // State machine state (for debug)
+    output wire [2:0]  DEBUG_STATE,     // State machine state (for debug)
+    output wire        DEBUG_BYTE_VALID // Pulse when byte completes (new_byte signal)
 );
 
     //=========================================================================
@@ -168,6 +176,9 @@ module iwm_flux (
     // 3.5" bit cells are 2us -> 28.636 cycles @14.318MHz, so use fractional windows.
     wire [5:0]  base_full_window = IS_35_INCH ? 6'd28 : (fast_mode ? 6'd28 : 6'd56);
     wire [5:0]  base_half_window = IS_35_INCH ? 6'd14 : (fast_mode ? 6'd14 : 6'd28);
+    // Fractional window timing for 3.5" drives.
+    // Both flux_drive.v and iwm_flux.v need fractional timing to achieve 28.636 cycles/bit.
+    // Without it, the windows drift relative to the flux transitions.
     wire        use_fractional_window = IS_35_INCH;
     wire [9:0]  full_window_step = use_fractional_window ? 10'd636 : 10'd0;
     wire [9:0]  half_window_step = use_fractional_window ? 10'd318 : 10'd0;
@@ -225,6 +236,11 @@ module iwm_flux (
     wire [7:0] byte_complete_data = shift_edge0_now ? next_rsh_edge0 :
                                     shift_edge1_now ? next_rsh_edge1 :
                                     8'h00;
+
+    // Edge detection for byte completion (for DEBUG_BYTE_VALID output)
+    // Moved outside ifdef blocks so it's always available
+    reg        prev_byte_completing_dbg;
+    wire       new_byte_dbg = byte_completing && !prev_byte_completing_dbg;
     // FIX4 REMOVED: The is_flux_async bypass caused the CPU to see stale bytes when timing
     // was tight between prologue read and first data byte read. Without the bypass,
     // the CPU correctly sees 00 after reading a byte (via m_data_read flag), then waits
@@ -263,6 +279,22 @@ module iwm_flux (
                                    ((DISK_BIT_POSITION >= 17'd21660) && (DISK_BIT_POSITION <= 17'd21690)) ||
                                    ((DISK_BIT_POSITION >= 17'd21910) && (DISK_BIT_POSITION <= 17'd21940)) ||
                                    ((DISK_BIT_POSITION >= 17'd55840) && (DISK_BIT_POSITION <= 17'd55870));
+`endif
+
+`ifdef DEBUG_BYTE_OFFSET
+    // Track first prologue position after motor start
+    reg        dbg_motor_started;
+    reg [31:0] dbg_first_byte_count;
+    reg        dbg_first_d5_found;
+    reg [16:0] dbg_first_d5_position;
+    reg [31:0] dbg_first_d5_cycle;
+    reg [7:0]  dbg_byte_history [0:15];  // Last 16 bytes before first D5
+    reg [3:0]  dbg_history_idx;
+    // Track first flux after S_IDLE transition
+    reg        dbg_waiting_first_flux;
+    reg [5:0]  dbg_first_flux_win;      // window_counter when first flux arrived
+    reg [31:0] dbg_first_flux_cycle;
+    reg [7:0]  dbg_flux_count_after_idle; // Count flux transitions since S_IDLE
 `endif
 
     // Clear the read shift register shortly after a completed byte.
@@ -311,6 +343,7 @@ module iwm_flux (
             write_underrun_cnt <= 10'd0;
             clear_rsh_pending   <= 1'b0;
             latch_hold_cnt <= 4'd0;
+            prev_byte_completing_dbg <= 1'b0;
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
             byte_counter   <= 32'd0;
@@ -323,10 +356,25 @@ module iwm_flux (
             prolog_last1 <= 8'h00;
             prolog_last2 <= 8'h00;
 `endif
+`ifdef DEBUG_BYTE_OFFSET
+            dbg_motor_started <= 1'b0;
+            dbg_first_byte_count <= 32'd0;
+            dbg_first_d5_found <= 1'b0;
+            dbg_first_d5_position <= 17'd0;
+            dbg_first_d5_cycle <= 32'd0;
+            dbg_history_idx <= 4'd0;
+            dbg_waiting_first_flux <= 1'b0;
+            dbg_first_flux_win <= 6'd0;
+            dbg_first_flux_cycle <= 32'd0;
+            dbg_flux_count_after_idle <= 8'd0;
+`endif
         end else begin
 `ifdef SIMULATION
             debug_cycle <= debug_cycle + 1;
 `endif
+            // Track byte_completing edges for DEBUG_BYTE_VALID
+            prev_byte_completing_dbg <= byte_completing;
+
             async_tick_14m <= async_tick_14m + 1'd1;
             // Approximate MAME's m_last_sync using bit-cell boundaries.
             if (shift_edge0_now || shift_edge1_now) begin
@@ -490,23 +538,56 @@ module iwm_flux (
             if (MOTOR_SPINNING && DISK_READY) begin
                 case (rw_state)
                     S_IDLE: begin
+                        // MAME COMPATIBILITY FIX: Always start with EDGE_0 and rsh=0x00
+                        //
+                        // MAME's S_IDLE unconditionally sets:
+                        //   m_rsh = 0x00;
+                        //   m_rw_state = SR_WINDOW_EDGE_0;
+                        //   m_next_state_change = m_last_sync + window_size();
+                        //
+                        // Previous vsim code checked for flux_edge and conditionally went to
+                        // EDGE_1 with rsh=0x01. This caused a 1-bit byte framing offset because
+                        // if a flux edge happened to be present at S_IDLE transition, vsim would
+                        // start with a different shift register state than MAME.
+                        //
+                        // The flux detection during EDGE_0 handles the flux-at-start case
+                        // correctly by transitioning to EDGE_1 within the first window.
+`ifdef DEBUG_BYTE_OFFSET
+                        $display("BYTE_OFFSET_IDLE: S_IDLE->EDGE_0 (MAME-style) - FLUX_TRANSITION=%0d prev_flux=%0d flux_edge=%0d pos=%0d cycle=%0d",
+                                 FLUX_TRANSITION, prev_flux, flux_edge, DISK_BIT_POSITION, debug_cycle);
+                        $display("BYTE_OFFSET_IDLE: window_counter=%0d base_full=%0d full_frac=%0d flux_bit_timer=%0d (will sync to flux)",
+                                 window_counter, base_full_window, full_window_frac, FLUX_BIT_TIMER);
+                        dbg_waiting_first_flux <= 1'b1;
+                        dbg_flux_count_after_idle <= 8'd0;
+`endif
                         rw_state <= SR_WINDOW_EDGE_0;
-                        load_full_window();
+                        // SYNC FIX: Instead of starting a fresh window, synchronize to
+                        // flux_drive's current bit-cell phase. This matches MAME's behavior
+                        // where m_next_state_change = m_last_sync + window_size() aligns
+                        // the window to the existing bit-cell timing.
+                        // FLUX_BIT_TIMER is the remaining time until flux_drive's next bit-cell.
+                        //
+                        // SYNC TO FLUX_DRIVE: Set window_counter to match flux_drive's bit_timer.
+                        // This ensures the IWM window is aligned to the bit-cell grid, matching
+                        // MAME's m_last_sync + window_size() approach.
+                        //
+                        // When flux_bit_timer is valid (1 to base_full_window), use it directly.
+                        // This aligns our window to expire at the same time as flux_drive's bit-cell.
+                        if (FLUX_BIT_TIMER > 6'd0 && FLUX_BIT_TIMER <= base_full_window) begin
+                            window_counter <= FLUX_BIT_TIMER;
+                        end else begin
+                            // Fallback for invalid timer values
+                            window_counter <= base_full_window;
+                        end
                         m_rsh <= 8'h00;
                         flux_seen <= 1'b0;
+                        // Reset fractional accumulators to sync with flux_drive
+                        full_window_frac <= 10'd0;
+                        half_window_frac <= 10'd0;
 `ifdef SIMULATION
-                        if (byte_counter < 20 && m_rsh != 8'h00) begin
-                            $display("IWM_FLUX: RSH_CLEAR by S_IDLE (was %02h)", m_rsh);
-                        end
-`endif
-`ifdef BYTE_FRAME_DEBUG
-                        $display("BYTE_START: pos=%0d window=%0d half=%0d mode=%02h",
-                                 DISK_BIT_POSITION, base_full_window, base_half_window, SW_MODE);
-`else
-`ifdef SIMULATION
-                        $display("IWM_FLUX: START_READ cycle=%0d win=%0d mode=%02h",
-                                 debug_cycle, base_full_window, SW_MODE);
-`endif
+                        $display("IWM_FLUX: START_READ cycle=%0d win=%0d flux_timer=%0d mode=%02h (synced to flux_drive)",
+                                 debug_cycle, (FLUX_BIT_TIMER > 6'd0 && FLUX_BIT_TIMER <= base_full_window) ? FLUX_BIT_TIMER : base_full_window,
+                                 FLUX_BIT_TIMER, SW_MODE);
 `endif
                     end
 
@@ -515,6 +596,16 @@ module iwm_flux (
                             rw_state <= SR_WINDOW_EDGE_1;
                             load_half_window();
                             flux_seen <= 1'b0;
+`ifdef DEBUG_BYTE_OFFSET
+                            dbg_flux_count_after_idle <= dbg_flux_count_after_idle + 1'd1;
+                            if (dbg_waiting_first_flux) begin
+                                dbg_waiting_first_flux <= 1'b0;
+                                dbg_first_flux_win <= window_counter;
+                                dbg_first_flux_cycle <= debug_cycle;
+                                $display("BYTE_OFFSET_FIRST_FLUX: window_counter=%0d pos=%0d cycle=%0d (flux #%0d since S_IDLE)",
+                                         window_counter, DISK_BIT_POSITION, debug_cycle, dbg_flux_count_after_idle + 1);
+                            end
+`endif
 `ifdef BYTE_FRAME_DEBUG
                             $display("IWM_FLUX: EDGE_0->EDGE_1 flux pos=%0d win=%0d half=%0d",
                                      DISK_BIT_POSITION, base_full_window, base_half_window);
@@ -641,6 +732,47 @@ module iwm_flux (
                                                  byte_counter, shifted_rsh, m_data, m_rsh);
                                     end
 `endif
+`ifdef DEBUG_BYTE_OFFSET
+                                    // Track first prologue after motor start
+                                    if (MOTOR_SPINNING && !dbg_motor_started) begin
+                                        dbg_motor_started <= 1'b1;
+                                        dbg_first_byte_count <= 32'd0;
+                                        dbg_first_d5_found <= 1'b0;
+                                        dbg_history_idx <= 4'd0;
+                                        $display("BYTE_OFFSET: Motor started spinning, tracking bytes...");
+                                    end
+                                    if (dbg_motor_started && !dbg_first_d5_found) begin
+                                        dbg_first_byte_count <= dbg_first_byte_count + 1;
+                                        dbg_byte_history[dbg_history_idx] <= shifted_rsh;
+                                        dbg_history_idx <= dbg_history_idx + 1;
+                                        // Log first 20 bytes after motor start
+                                        if (dbg_first_byte_count < 20) begin
+                                            $display("BYTE_OFFSET: byte[%0d] = 0x%02X at pos=%0d cycle=%0d",
+                                                     dbg_first_byte_count, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
+                                        end
+                                        // Track first D5 (non-sync byte)
+                                        if (shifted_rsh == 8'hD5) begin
+                                            dbg_first_d5_found <= 1'b1;
+                                            dbg_first_d5_position <= DISK_BIT_POSITION;
+                                            dbg_first_d5_cycle <= debug_cycle;
+                                            $display("BYTE_OFFSET: *** FIRST D5 FOUND *** at byte[%0d] pos=%0d cycle=%0d",
+                                                     dbg_first_byte_count, DISK_BIT_POSITION, debug_cycle);
+                                            $display("BYTE_OFFSET: Last 8 bytes before D5: %02X %02X %02X %02X %02X %02X %02X %02X",
+                                                     dbg_byte_history[(dbg_history_idx-8)&4'hF],
+                                                     dbg_byte_history[(dbg_history_idx-7)&4'hF],
+                                                     dbg_byte_history[(dbg_history_idx-6)&4'hF],
+                                                     dbg_byte_history[(dbg_history_idx-5)&4'hF],
+                                                     dbg_byte_history[(dbg_history_idx-4)&4'hF],
+                                                     dbg_byte_history[(dbg_history_idx-3)&4'hF],
+                                                     dbg_byte_history[(dbg_history_idx-2)&4'hF],
+                                                     dbg_byte_history[(dbg_history_idx-1)&4'hF]);
+                                        end
+                                    end
+                                    // Reset tracking when motor stops
+                                    if (!MOTOR_SPINNING && dbg_motor_started) begin
+                                        dbg_motor_started <= 1'b0;
+                                    end
+`endif
                                     clear_rsh_pending <= 1'b1;
                             end
                             load_full_window();
@@ -755,6 +887,32 @@ module iwm_flux (
                                     if (byte_counter < 50) begin
                                         $display("IWM_FLUX: BYTE_COMPLETE(E1) #%0d assigning m_data<=%02h (prev=%02h rsh=%02h)",
                                                  byte_counter, shifted_rsh, m_data, m_rsh);
+                                    end
+`endif
+`ifdef DEBUG_BYTE_OFFSET
+                                    // Track first prologue after motor start (E1 path)
+                                    if (MOTOR_SPINNING && !dbg_motor_started) begin
+                                        dbg_motor_started <= 1'b1;
+                                        dbg_first_byte_count <= 32'd0;
+                                        dbg_first_d5_found <= 1'b0;
+                                        dbg_history_idx <= 4'd0;
+                                        $display("BYTE_OFFSET: Motor started spinning (E1), tracking bytes...");
+                                    end
+                                    if (dbg_motor_started && !dbg_first_d5_found) begin
+                                        dbg_first_byte_count <= dbg_first_byte_count + 1;
+                                        dbg_byte_history[dbg_history_idx] <= shifted_rsh;
+                                        dbg_history_idx <= dbg_history_idx + 1;
+                                        if (dbg_first_byte_count < 20) begin
+                                            $display("BYTE_OFFSET: byte[%0d] = 0x%02X at pos=%0d cycle=%0d (E1)",
+                                                     dbg_first_byte_count, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
+                                        end
+                                        if (shifted_rsh == 8'hD5) begin
+                                            dbg_first_d5_found <= 1'b1;
+                                            dbg_first_d5_position <= DISK_BIT_POSITION;
+                                            dbg_first_d5_cycle <= debug_cycle;
+                                            $display("BYTE_OFFSET: *** FIRST D5 FOUND (E1) *** at byte[%0d] pos=%0d cycle=%0d",
+                                                     dbg_first_byte_count, DISK_BIT_POSITION, debug_cycle);
+                                        end
                                     end
 `endif
                                     clear_rsh_pending <= 1'b1;
@@ -993,6 +1151,7 @@ module iwm_flux (
     assign FLUX_WRITE   = 1'b0;  // TODO: implement write support
     assign DEBUG_RSH    = m_rsh;
     assign DEBUG_STATE  = rw_state;
+    assign DEBUG_BYTE_VALID = new_byte_dbg;
 
 `ifdef SIMULATION
     // Debug: log register reads (only on CEN/PH2 to log once per CPU access)

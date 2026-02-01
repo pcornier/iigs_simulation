@@ -1517,6 +1517,61 @@ int verilate() {
                             // parallel_clemens_dump_recent_writes removed
                         }
 
+                        // WOZ denibble debug: trap at FF:4C84 (STA $0F30,Y - after denibble lookup)
+                        // This shows what value A has after the LDA $FF3C00,X
+                        {
+                            static int denib_debug_count = 0;
+                            static unsigned char last_x = 0;
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            // Capture X at FF:4C80 (LDA $FF3C00,X)
+                            if (pbr_now == 0xFF && pc_now == 0x4C80 && vpa) {
+                                last_x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X & 0xFF;
+                            }
+                            // Trigger on FF:4C84 (STA $0F30,Y - after denibble lookup completes)
+                            if (pbr_now == 0xFF && pc_now == 0x4C84 && vpa && denib_debug_count < 30) {
+                                denib_debug_count++;
+                                unsigned short a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short y_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                printf("WOZ_DENIBBLE #%d: X=%02X -> A=%02X (storing to %02X:0F%02X) Y=%d DBR=%02X\n",
+                                       denib_debug_count, last_x, a_reg & 0xFF, dbr, 0x30 + (y_reg & 0xFF), y_reg & 0xFF, dbr);
+                            }
+                        }
+
+                        // WOZ sector comparison debug: trap at FF:407D (LDA sectfnd instruction)
+                        // This shows what sector was found vs what sector is expected
+                        {
+                            static int sector_cmp_debug_count = 0;
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            // Trigger on FF:407D (LDA sectfnd instruction, right before CMP)
+                            if (pbr_now == 0xFF && pc_now == 0x407D && vpa && sector_cmp_debug_count < 50) {
+                                sector_cmp_debug_count++;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                // Read memory values from bank E1 (slow RAM) where the driver stores them
+                                // Bank E1 is at offset 0x10000 in slowram (E0=0x00000, E1=0x10000)
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                const int bank_e1_offset = 0x10000;
+                                // sectinfo array at $0F30: track, sector, side, format, checksum
+                                uint8_t sectinfo_0 = slowram[bank_e1_offset + 0x0F30];  // checksum
+                                uint8_t sectinfo_1 = slowram[bank_e1_offset + 0x0F31];  // format
+                                uint8_t sidefnd    = slowram[bank_e1_offset + 0x0F32];  // sidefnd
+                                uint8_t sectfnd    = slowram[bank_e1_offset + 0x0F33];  // sectfnd (sector found)
+                                uint8_t trkfnd     = slowram[bank_e1_offset + 0x0F34];  // trkfnd (track found)
+                                uint8_t sector     = slowram[bank_e1_offset + 0x0F2A];  // sector (expected)
+                                uint8_t cyl        = slowram[bank_e1_offset + 0x0F29];  // cyl (expected cylinder)
+                                uint8_t side       = slowram[bank_e1_offset + 0x0F2B];  // side (expected)
+                                printf("WOZ_SECTOR_CMP #%d: sectfnd=%02X vs sector=%02X (match=%s)\n",
+                                       sector_cmp_debug_count, sectfnd, sector,
+                                       (sectfnd == sector) ? "YES" : "NO");
+                                printf("  Address field: trkfnd=%02X sidefnd=%02X sectfnd=%02X info[0]=%02X info[1]=%02X\n",
+                                       trkfnd, sidefnd, sectfnd, sectinfo_0, sectinfo_1);
+                                printf("  Expected: cyl=%02X sector=%02X side=%02X\n",
+                                       cyl, sector, side);
+                            }
+                        }
+
                         // Loader entry detection: first ifetch at 00:0801
                         if (!loader_entry_trap_fired) {
                             unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;

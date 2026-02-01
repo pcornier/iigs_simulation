@@ -81,7 +81,7 @@ module woz_floppy_controller #(
     // which would cause a naïve SD-backed loader to thrash-reload side 0/1 repeatedly.
     // Real hardware switches heads instantly; emulate that by caching each side's track
     // bitstream independently and just muxing the output on SEL changes.
-    reg  [13:0] track_load_addr;  // 14-bit to support tracks up to 32 blocks (16KB)
+    reg  [15:0] track_load_addr;  // 16-bit to support tracks up to 128 blocks (64KB)
     reg         track_load_we;
     reg  [7:0]  track_load_data;
     wire [7:0]  track_ram_dout0;
@@ -91,8 +91,8 @@ module woz_floppy_controller #(
     reg         load_side;   // Which side is currently being DMA-loaded/saved (3.5" only)
     reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
-    // Dual port RAM for Track Data (Side 0) - 16KB per side (sufficient for 100Kbit tracks)
-    bram #(.width_a(8), .widthad_a(14)) track_ram_side0 (
+    // Dual port RAM for Track Data (Side 0) - 64KB per side (for WOZ FLUX tracks)
+    bram #(.width_a(8), .widthad_a(16)) track_ram_side0 (
         .clock_a(clk),
         .address_a(track_load_addr),
         .wren_a(track_load_we && (!IS_35_INCH || (track_load_side == 1'b0))),
@@ -106,8 +106,8 @@ module woz_floppy_controller #(
         .q_b(bit_data0)
     );
 
-    // Dual port RAM for Track Data (Side 1) - 16KB per side (sufficient for 100Kbit tracks)
-    bram #(.width_a(8), .widthad_a(14)) track_ram_side1 (
+    // Dual port RAM for Track Data (Side 1) - 64KB per side (for WOZ FLUX tracks)
+    bram #(.width_a(8), .widthad_a(16)) track_ram_side1 (
         .clock_a(clk),
         .address_a(track_load_addr),
         .wren_a(track_load_we && (IS_35_INCH && (track_load_side == 1'b1))),
@@ -1100,7 +1100,7 @@ module woz_floppy_controller #(
                          // (first byte of our request). The rising edge check catches byte 0 before
                          // transfer_active is set. We won't get false positives from previous transfers
                          // because old_ack is set to sd_ack when entering S_READ_TRACK.
-                         track_load_addr <= {blocks_processed[4:0], sd_buff_addr};
+                         track_load_addr <= {blocks_processed[6:0], sd_buff_addr};
                          track_load_data <= sd_buff_dout;
                          track_load_we <= 1;
                          if (pending_is_flux) begin
@@ -1117,18 +1117,18 @@ module woz_floppy_controller #(
                              sd_buff_addr == 9'd1 || sd_buff_addr == 9'd510) begin
 	                             $display("WOZ_DMA_DBG: blk=%0d buf_addr=%0d track_addr=%0d data=%02X track=%0d side=%0d",
                                       blocks_processed, sd_buff_addr,
-                                      {blocks_processed[4:0], sd_buff_addr},
+                                      {blocks_processed[6:0], sd_buff_addr},
 	                                      sd_buff_dout, pending_track_id, load_side);
 	                         end
 	                         // Debug block 16 (addresses 8192+) where we saw 0x69 issues
                          if (blocks_processed == 16 && (sd_buff_addr >= 9'd40 && sd_buff_addr <= 9'd60)) begin
                              $display("WOZ_DMA_BLK16: buf_addr=%0d track_addr=%0d data=%02X",
-                                      sd_buff_addr, {5'd16, sd_buff_addr}, sd_buff_dout);
+                                      sd_buff_addr, {7'd16, sd_buff_addr}, sd_buff_dout);
                          end
 	                     end
 	                end else begin // Writing RAM -> SD
                     if (state == S_SAVE_TRACK) begin
-                         track_load_addr <= {blocks_processed[4:0], sd_buff_addr}; 
+                         track_load_addr <= {blocks_processed[6:0], sd_buff_addr}; 
                          if (IS_35_INCH && load_side) begin
                              sd_buff_din <= track_ram_dout1;
                          end else begin

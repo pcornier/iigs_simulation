@@ -414,6 +414,7 @@ module iwm_woz (
     wire        drive35_ready;          // Drive ready after spinup
     wire [6:0]  drive35_track;
     wire [16:0] drive35_bit_position;
+    wire [5:0]  drive35_bit_timer;      // Bit timer for IWM window sync
     wire [15:0] drive35_bram_addr;
 
     // 3.5" drives must NOT use the 5.25" inertia-managed motor_spinning signal.
@@ -456,6 +457,7 @@ module iwm_woz (
         .DRIVE_READY(drive35_ready),
         .TRACK(drive35_track),
         .BIT_POSITION(drive35_bit_position),
+        .BIT_TIMER_OUT(drive35_bit_timer),
         .TRACK_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
         .TRACK_LOADED(drive35_track_loaded),
         .TRACK_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
@@ -575,6 +577,7 @@ module iwm_woz (
         .DRIVE_READY(drive35_2_ready),
         .TRACK(),
         .BIT_POSITION(),
+        .BIT_TIMER_OUT(),               // Unconnected for empty drive
         .TRACK_BIT_COUNT(32'd0),
         .TRACK_LOADED(1'b0),
         .TRACK_LOAD_COMPLETE(1'b0),
@@ -600,6 +603,7 @@ module iwm_woz (
     wire [6:0]  drive525_track_7bit;
     wire [5:0]  drive525_track = drive525_track_7bit[5:0];
     wire [16:0] drive525_bit_position;
+    wire [5:0]  drive525_bit_timer;     // Bit timer for IWM window sync
     wire [13:0] drive525_bram_addr;
 
     // Drive is active when motor is spinning, 5.25" mode, and disk ready
@@ -632,6 +636,7 @@ module iwm_woz (
         .DRIVE_READY(drive525_ready),
         .TRACK(drive525_track_7bit),
         .BIT_POSITION(drive525_bit_position),
+        .BIT_TIMER_OUT(drive525_bit_timer),
         .TRACK_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
         .TRACK_LOADED(drive525_track_loaded),
         .TRACK_LOAD_COMPLETE(1'b0),  // TODO: Add 5.25" track load signal when needed
@@ -680,8 +685,11 @@ module iwm_woz (
     // its motor is gated off when DISK_READY[2]=1 (disk in primary 3.5" drive)
     wire any_disk_ready = (drive35_ready && DISK_READY[2]) ||
                           (drive525_ready && DISK_READY[0]);
-    // Briefly deassert DISK_READY on 3.5" side changes to reset IWM byte framing.
-    wire iwm_disk_ready = any_disk_ready && !(flux_is_35_inch && side_reset_active);
+    // FIX: Removed the side_reset_active check that was causing byte framing corruption.
+    // The brief DISK_READY glitch would reset the IWM state machine mid-read, corrupting
+    // byte boundaries. The state machine doesn't need to reset on side changes - the flux
+    // data will change naturally and the IWM will resync via self-sync patterns.
+    wire iwm_disk_ready = any_disk_ready;
 
     //=========================================================================
     // Sense Mux - Select active drive's status sense
@@ -711,6 +719,10 @@ module iwm_woz (
     // Use flux_is_35_inch (based on which motor is spinning) instead of is_35_inch (register)
     // to ensure correct drive's position is used even when ROM temporarily accesses other slot
     wire [16:0] current_bit_position = flux_is_35_inch ? drive35_bit_position : drive525_bit_position;
+
+    // Muxed bit timer for IWM window synchronization
+    // This allows iwm_flux to sync its window timing to flux_drive's bit-cell phase
+    wire [5:0]  current_bit_timer = flux_is_35_inch ? drive35_bit_timer : drive525_bit_timer;
 
     // Disk II / IWM compatibility behavior:
     // The IIgs ROM writes the mode register via $C0EF (which sets Q7=1) and can then
@@ -778,6 +790,7 @@ module iwm_woz (
         .LATCHED_SENSE_REG(immediate_latched_sense_reg),  // Use immediate for same-cycle visibility
         .DISKREG_SEL(diskreg_sel),
         .DISK_BIT_POSITION(current_bit_position),
+        .FLUX_BIT_TIMER(current_bit_timer),
         .FLUX_WRITE(),
         .DEBUG_RSH(),
         .DEBUG_STATE()
