@@ -131,8 +131,11 @@ module iwm_woz (
     // This is critical: writing to $C0EF (Q7=1) must trigger mode write in the same cycle
     wire access_q6 = (bus_addr[3:1] == 3'b110);
     wire access_q7 = (bus_addr[3:1] == 3'b111);
-    wire immediate_q6 = access_q6 ? bus_addr[0] : q6;
-    wire immediate_q7 = access_q7 ? bus_addr[0] : q7;
+    // Only treat Q6/Q7 as "immediate" during an actual IWM bus access.
+    // This prevents unrelated CPU addresses with low nibble E/F from glitching
+    // Q6/Q7 high and forcing spurious read/write mode transitions.
+    wire immediate_q6 = (cpu_access_edge && access_q6) ? bus_addr[0] : q6;
+    wire immediate_q7 = (cpu_access_edge && access_q7) ? bus_addr[0] : q7;
 
     //=========================================================================
     // Mode Register Write Detection (ROM3 verify loop at FF:4720)
@@ -753,7 +756,11 @@ module iwm_woz (
                               selected_track_cached &&
                               drive_on &&
                               !smartport_mode;
-    wire q7_for_flux = force_q7_data_read ? 1'b0 : q7;
+    // Use immediate Q7 so iwm_flux sees same-cycle Q7 changes on $C0EE/$C0EF accesses.
+    wire q7_for_flux = force_q7_data_read ? 1'b0 : immediate_q7;
+    // Use latched Q7 for read/write mode transitions so forced data reads
+    // don't constantly reset the read state machine.
+    wire q7_mode_for_flux = q7;
 
     iwm_flux iwm (
         .CLK_14M(CLK_14M),
@@ -772,8 +779,9 @@ module iwm_woz (
         .SW_PHASES(motor_phase),
         .SW_MOTOR_ON(drive_on),
         .SW_DRIVE_SEL(drive_sel),
-        .SW_Q6(q6),
+        .SW_Q6(immediate_q6),
         .SW_Q7(q7_for_flux),
+        .SW_Q7_MODE(q7_mode_for_flux),
         .SW_MODE(immediate_mode),
 
         .FLUX_TRANSITION(flux_transition),

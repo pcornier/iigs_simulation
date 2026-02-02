@@ -467,7 +467,9 @@ module flux_drive (
             4'h0: sense_35 = step_direction_immediate;  // Dir readback (IS35DRIVE)
             4'h1: sense_35 = step_direction_immediate;  // Dir readback (paired test)
             4'h2: sense_35 = ~DISK_MOUNTED;             // /DIP: 0=disk present, 1=no disk
-            4'h4: sense_35 = ~step_busy;                // Disk stepping (0=stepping, 1=idle)
+            // STAT35 polarity tweak: MAME logs show sense low while idle.
+            // Try matching that (1=stepping, 0=idle) to align ROM handshakes.
+            4'h4: sense_35 = step_busy;                 // Disk stepping (1=stepping, 0=idle)
             4'h8: sense_35 = ~motor_on_sense;           // /MOTOR: 0=on, 1=off
             4'hA: sense_35 = ~at_track0;                // /TK0: 0=at track0, 1=not track0
             4'hB: sense_35 = ~drive_ready;              // /READY: 0=ready, 1=not ready
@@ -1096,9 +1098,9 @@ module flux_drive (
                                 flux_waiting_bram <= 1'b1;
                             end
                         end else if (flux_byte_counter <= 8'd1) begin
-                            // Counter expired - generate transition if not a continuation byte
-                            // Also check startup delay - suppress transitions until bit_position has time to advance
-                            if (!flux_is_continuation && drive_ready && flux_startup_delay == 6'd0) begin
+                            // Counter expired - generate transition if not a continuation byte.
+                            // Do NOT suppress the first bit-cell here; that drops a bit and shifts byte alignment.
+                            if (!flux_is_continuation && drive_ready) begin
                                 FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                                     if (flux_count_debug < 110) begin
@@ -1197,11 +1199,9 @@ module flux_drive (
 `endif
                     end else if (bit_timer == bit_half_timer) begin
                         // Generate flux near mid-cell using the current cell timing.
-                        // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready)
-                        // and after startup delay (ensures bit_position has advanced for proper byte alignment).
-                        // During spinup, the IWM shouldn't receive flux transitions
-                        // This matches MAME behavior where m_data stays 0x00 during spinup
-                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready && flux_startup_delay == 6'd0) begin
+                        // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready).
+                        // Do not suppress the first bit-cell; that drops a bit and shifts byte alignment.
+                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                             if (flux_count_debug < 50) begin
@@ -1301,6 +1301,14 @@ module flux_drive (
     reg [31:0] rotate_cycles;    // Cycles where disk is rotating
     reg [31:0] stopped_cycles;   // Cycles where disk is stopped
     reg        prev_motor_on;    // Track MOTOR_ON transitions
+    // Bitstream debug: reconstruct bytes directly from BRAM bitstream
+    reg [7:0]  dbg_bit_shift;
+    reg [2:0]  dbg_bit_count;
+    reg [7:0]  dbg_last1;
+    reg [7:0]  dbg_last2;
+    reg        dbg_in_sync_run;
+    reg [7:0]  dbg_sync_count;
+    reg [3:0]  dbg_prolog_count;
     always @(posedge CLK_14M) begin
         if (RESET) begin
             flux_count_debug <= 0;
@@ -1308,6 +1316,13 @@ module flux_drive (
             stopped_cycles <= 0;
             cycle_count_debug <= 0;
             prev_motor_on <= 1'b0;
+            dbg_bit_shift <= 8'h00;
+            dbg_bit_count <= 3'd0;
+            dbg_last1 <= 8'h00;
+            dbg_last2 <= 8'h00;
+            dbg_in_sync_run <= 1'b0;
+            dbg_sync_count <= 8'd0;
+            dbg_prolog_count <= 4'd0;
 `ifdef DEBUG_BYTE_OFFSET
             dbg_ready_started <= 1'b0;
             dbg_flux_count <= 32'd0;
@@ -1327,6 +1342,39 @@ module flux_drive (
                 rotate_cycles <= rotate_cycles + 1;
             end else begin
                 stopped_cycles <= stopped_cycles + 1;
+            end
+
+            // Bitstream reconstruction: sample one bit per bit cell (bit_timer==bit_cell_cycles)
+            if (motor_spinning && TRACK_LOADED && (bit_timer == bit_cell_cycles)) begin
+                dbg_bit_shift <= {dbg_bit_shift[6:0], current_bit};
+                dbg_bit_count <= dbg_bit_count + 1'd1;
+
+                if (dbg_bit_count == 3'd7) begin
+                    // Completed byte from serial bitstream
+                    // Use the newly shifted bit as the LSB
+                    // new_byte = {dbg_bit_shift[6:0], current_bit}
+                    if (dbg_last2 == 8'hD5 && dbg_last1 == 8'hAA && {dbg_bit_shift[6:0], current_bit} == 8'hAD) begin
+                        dbg_in_sync_run <= 1'b1;
+                        dbg_sync_count <= 8'd0;
+                        if (dbg_prolog_count < 4'd4) begin
+                            $display("FLUX_STREAM_PROLOG_AD: pos=%0d byte=%02h", bit_position, {dbg_bit_shift[6:0], current_bit});
+                            dbg_prolog_count <= dbg_prolog_count + 1'd1;
+                        end
+                    end
+
+                    if (dbg_in_sync_run) begin
+                        if ({dbg_bit_shift[6:0], current_bit} == 8'h96) begin
+                            dbg_sync_count <= dbg_sync_count + 1'd1;
+                        end else begin
+                            $display("FLUX_STREAM_SYNC_RUN: pos=%0d count=%0d next=%02h",
+                                     bit_position, dbg_sync_count, {dbg_bit_shift[6:0], current_bit});
+                            dbg_in_sync_run <= 1'b0;
+                        end
+                    end
+
+                    dbg_last2 <= dbg_last1;
+                    dbg_last1 <= {dbg_bit_shift[6:0], current_bit};
+                end
             end
 
             // Log first flux transitions
