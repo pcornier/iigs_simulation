@@ -174,6 +174,15 @@ module iwm_flux (
     // Disable sync-run resync for now; it appears to drop one sync byte.
     wire       sync_resync_enable = 1'b0;
 
+    // Track wrap detection: reset fractional accumulators when disk completes a rotation
+    // to prevent accumulated drift from causing byte framing misalignment.
+    reg [16:0] prev_disk_bit_position;
+    // Wrap detected when position drops by more than half the typical track size
+    // (3.5" tracks have ~70000 bits, so detecting a drop of >30000 is safe)
+    wire       track_wrap_detected = (prev_disk_bit_position > 17'd30000) &&
+                                     (DISK_BIT_POSITION < 17'd1000) &&
+                                     motor_decode_ok;
+
     //=========================================================================
     // Window Timing (from MAME iwm.cpp half_window_size/window_size)
     //=========================================================================
@@ -389,6 +398,7 @@ module iwm_flux (
             prev_flux      <= 1'b0;
             prev_sm_active <= 1'b0;
             flux_seen      <= 1'b0;
+            prev_disk_bit_position <= 17'd0;
             window_counter <= 6'd0;
             full_window_frac <= 10'd0;
             half_window_frac <= 10'd0;
@@ -462,6 +472,20 @@ module iwm_flux (
 `endif
             // Track byte_completing edges for DEBUG_BYTE_VALID
             prev_byte_completing_dbg <= byte_completing;
+
+            // Track disk position for wrap detection
+            prev_disk_bit_position <= DISK_BIT_POSITION;
+
+            // Reset fractional accumulators on track wrap to prevent accumulated drift
+            // from causing byte framing misalignment after a full rotation.
+            if (track_wrap_detected) begin
+                full_window_frac <= 10'd0;
+                half_window_frac <= 10'd0;
+`ifdef SIMULATION
+                $display("IWM_FLUX: TRACK_WRAP_RESET prev_pos=%0d cur_pos=%0d - resetting fractional accumulators",
+                         prev_disk_bit_position, DISK_BIT_POSITION);
+`endif
+            end
 
             async_tick_14m <= async_tick_14m + 1'd1;
             // Approximate MAME's m_last_sync using bit-cell boundaries.
@@ -644,24 +668,28 @@ module iwm_flux (
 `ifdef DEBUG_BYTE_OFFSET
                         $display("BYTE_OFFSET_IDLE: S_IDLE->EDGE_0 (MAME-style) - FLUX_TRANSITION=%0d prev_flux=%0d flux_edge=%0d pos=%0d cycle=%0d",
                                  FLUX_TRANSITION, prev_flux, flux_edge, DISK_BIT_POSITION, debug_cycle);
-                        $display("BYTE_OFFSET_IDLE: window_counter=%0d base_full=%0d full_frac=%0d flux_bit_timer=%0d",
+                        $display("BYTE_OFFSET_IDLE: window_counter=%0d base_full=%0d full_frac=%0d flux_bit_timer=%0d (will sync to flux)",
                                  window_counter, base_full_window, full_window_frac, FLUX_BIT_TIMER);
                         dbg_waiting_first_flux <= 1'b1;
                         dbg_flux_count_after_idle <= 8'd0;
 `endif
                         rw_state <= SR_WINDOW_EDGE_0;
-                        // Sync window_counter to flux_drive's bit_timer for byte alignment.
+                        // SYNC FIX: Instead of starting a fresh window, synchronize to
+                        // flux_drive's current bit-cell phase. This matches MAME's behavior
+                        // where m_next_state_change = m_last_sync + window_size() aligns
+                        // the window to the existing bit-cell timing.
                         // FLUX_BIT_TIMER is the remaining time until flux_drive's next bit-cell.
-                        // MAME starts the read window immediately; do not lock to flux_drive's bit_timer,
-                        // which can skew the byte phase for flux tracks.
+                        //
+                        // MAME starts the read window immediately; do not lock to flux_drive's
+                        // bit_timer, which can skew the byte phase for flux tracks.
                         window_counter <= base_full_window;
                         m_rsh <= 8'h00;
                         flux_seen <= 1'b0;
-                        // Reset fractional accumulators
+                        // Reset fractional accumulators to sync with flux_drive
                         full_window_frac <= 10'd0;
                         half_window_frac <= 10'd0;
 `ifdef SIMULATION
-                        $display("IWM_FLUX: START_READ cycle=%0d win=%0d flux_timer=%0d mode=%02h",
+                        $display("IWM_FLUX: START_READ cycle=%0d win=%0d flux_timer=%0d mode=%02h (synced to flux_drive)",
                                  debug_cycle, (FLUX_BIT_TIMER > 6'd0 && FLUX_BIT_TIMER <= base_full_window) ? FLUX_BIT_TIMER : base_full_window,
                                  FLUX_BIT_TIMER, SW_MODE);
 `endif

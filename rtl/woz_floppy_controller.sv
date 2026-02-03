@@ -187,6 +187,15 @@ module woz_floppy_controller #(
     reg       loading_second_side;    // Set after side 0 loaded, cleared after side 1
     reg [6:0] target_physical_track;  // Physical track being loaded (track_id[7:1])
 
+    // Settling time: wait for PHYSICAL track to be stable before loading
+    // During fast seeks (boot), the head steps rapidly through tracks.
+    // Starting a load before settling causes thrashing restarts.
+    // IMPORTANT: Use physical track (track_id[7:1]) NOT full track_id,
+    // because SEL toggles (track_id[0]) shouldn't reset settling.
+    reg [6:0]  last_physical_track;   // Previous physical track for change detection
+    reg [15:0] settle_counter;        // Cycles since last physical track change
+    localparam SETTLE_THRESHOLD = 16'd50000;  // ~3.5ms at 14MHz for head settle (longer to survive fast seeks)
+
     reg [31:0] bit_count_side0;
     reg [31:0] bit_count_side1;
     reg [31:0] flux_total_ticks_side0;
@@ -314,6 +323,8 @@ module woz_floppy_controller #(
             request_issued <= 1'b0;
             loading_second_side <= 1'b0;
             target_physical_track <= 7'h7F;
+            last_physical_track <= 7'h7F;
+            settle_counter <= 16'd0;
             bit_count_side0 <= 32'd0;
             bit_count_side1 <= 32'd0;
             flux_total_ticks_side0 <= 32'd0;
@@ -527,7 +538,24 @@ module woz_floppy_controller #(
                 S_IDLE: begin
                     busy <= 0;
 
-                    // Check for Track Change
+                    // Settling time: track how long PHYSICAL track has been stable
+                    // Use track_id[7:1] for 3.5" (physical track without side bit)
+                    // SEL toggles (side bit) should NOT reset settling
+                    if (track_id[7:1] != last_physical_track) begin
+                        // Physical track changed - reset settle counter
+                        last_physical_track <= track_id[7:1];
+                        settle_counter <= 16'd0;
+                        // Debug: show track change detected
+                        if (settle_counter > 16'd100) begin
+                            $display("WOZ_SETTLE: Physical track changed %0d -> %0d, resetting settle counter",
+                                     last_physical_track, track_id[7:1]);
+                        end
+                    end else if (settle_counter < SETTLE_THRESHOLD) begin
+                        // Physical track stable but not yet settled
+                        settle_counter <= settle_counter + 1'd1;
+                    end
+
+                    // Check for Track Change - only proceed if settled
                     if (IS_35_INCH) begin
                         // 3.5" DUAL-SIDE LOADING:
                         // When physical track changes (track_id[7:1]), load BOTH sides.
@@ -550,7 +578,11 @@ module woz_floppy_controller #(
                         side1_cached = (current_track_id_side1 == {requested_physical, 1'b1});
                         both_sides_cached = side0_cached && side1_cached;
 
-                        if (!both_sides_cached) begin
+                        // Only start loading if track is not cached AND head has settled
+                        // This prevents thrashing during fast seeks (boot)
+                        if (!both_sides_cached && (settle_counter >= SETTLE_THRESHOLD)) begin
+                            $display("WOZ_SETTLE: Settled after %0d cycles, starting load for physical track %0d",
+                                     settle_counter, requested_physical);
                             // Physical track change - need to load both sides
                             target_physical_track <= requested_physical;
                             loading_second_side <= 1'b0;
@@ -588,8 +620,10 @@ module woz_floppy_controller #(
                         // else: both sides cached, SEL toggle just uses mux - no action needed
                     end else begin
                         // 5.25" SINGLE-SIDED:
-                        // Only one side, simpler logic
-                        if (track_id != current_track_id_side0) begin
+                        // Only one side, simpler logic. Also use settling time.
+                        if ((track_id != current_track_id_side0) && (settle_counter >= SETTLE_THRESHOLD)) begin
+                            $display("WOZ_SETTLE: 5.25\" settled after %0d cycles, starting load for track %0d",
+                                     settle_counter, track_id);
                             pending_track_id <= track_id;
                             load_side <= 1'b0;
                             loading_second_side <= 1'b0;  // Not used for 5.25" but keep clean
@@ -688,12 +722,11 @@ module woz_floppy_controller #(
                                  if (IS_35_INCH && !loading_second_side) begin
                                      // First check if physical track changed
                                      if (track_id[7:1] != target_physical_track) begin
-                                         // Physical track changed - start fresh
-                                         target_physical_track <= track_id[7:1];
-                                         pending_track_id <= track_id;
-                                         load_side <= track_id[0];
-                                         blocks_processed <= 0;
-                                         $display("WOZ_CTRL: Physical track moved during empty track: %0d -> %0d, restarting",
+                                         // Physical track changed - go to IDLE for settling
+                                         state <= S_IDLE;
+                                         busy <= 0;
+                                         settle_counter <= 16'd0;
+                                         $display("WOZ_CTRL: Physical track moved during empty track: %0d -> %0d, waiting for settle",
                                                   target_physical_track, track_id[7:1]);
                                      end else begin
                                          loading_second_side <= 1'b1;
@@ -821,12 +854,18 @@ module woz_floppy_controller #(
                     // reads after settle time. bit_count returning 0 for non-cached tracks
                     // is fine during the seek phase.
                     //
-                    // (The old abort logic is commented out below for reference)
-                    // if (IS_35_INCH && (track_id[7:1] != target_physical_track) && (track_id != pending_track_id)) begin
-                    //     $display("WOZ_CTRL: Track change during load (pending=%0d target_phys=%0d -> req=%0d), aborting load",
-                    //              pending_track_id, target_physical_track, track_id);
-                    //     ...
-                    // end
+                    // Detect physical track changes during load and abort to settling
+                    // This prevents wasting time loading the wrong track during fast seeks
+                    if (IS_35_INCH && (track_id[7:1] != target_physical_track)) begin
+                        $display("WOZ_CTRL: Physical track change during load (%0d -> %0d), aborting to settle",
+                                 target_physical_track, track_id[7:1]);
+                        state <= S_IDLE;
+                        busy <= 0;
+                        settle_counter <= 16'd0;
+                        sd_rd <= 1'b0;
+                        transfer_active <= 1'b0;
+                        request_issued <= 1'b0;
+                    end
                     // If only the side bit changes while loading the same physical track:
                     // ONLY restart if the requested side is NOT already cached.
                     // The ROM frequently toggles SEL to read status; if the requested side
@@ -896,14 +935,12 @@ module woz_floppy_controller #(
                             if (IS_35_INCH && !loading_second_side) begin
                                 // First check if physical track changed during first side load
                                 if (track_id[7:1] != target_physical_track) begin
-                                    // Physical track changed - start fresh load for new track
-                                    target_physical_track <= track_id[7:1];
-                                    pending_track_id <= track_id;
-                                    load_side <= track_id[0];
-                                    // DON'T set loading_second_side - we're starting fresh
-                                    state <= S_SEEK_LOOKUP;
-                                    blocks_processed <= 0;
-                                    $display("WOZ_CTRL: Physical track moved during first side: %0d -> %0d, restarting",
+                                    // Physical track changed - go to IDLE to let settling logic decide
+                                    // This prevents thrashing during fast seeks
+                                    state <= S_IDLE;
+                                    busy <= 0;
+                                    settle_counter <= 16'd0;  // Reset settle counter for new track
+                                    $display("WOZ_CTRL: Physical track moved during first side: %0d -> %0d, waiting for settle",
                                              target_physical_track, track_id[7:1]);
                                 end else begin
                                     // First side done for correct track, now load the opposite side
@@ -923,14 +960,12 @@ module woz_floppy_controller #(
                                 // Check if physical track changed during load
                                 // This can happen if the drive head stepped while we were loading
                                 if (IS_35_INCH && (track_id[7:1] != target_physical_track)) begin
-                                    // Physical track changed during load - immediately start new load
-                                    target_physical_track <= track_id[7:1];
-                                    pending_track_id <= track_id;
-                                    load_side <= track_id[0];
-                                    state <= S_SEEK_LOOKUP;
-                                    blocks_processed <= 0;
-                                    busy <= 1'b1;
-                                    $display("WOZ_CTRL: Physical track moved during load: %0d -> %0d, reloading",
+                                    // Physical track changed during load - go to IDLE for settling
+                                    // This prevents thrashing during fast seeks
+                                    state <= S_IDLE;
+                                    busy <= 0;
+                                    settle_counter <= 16'd0;  // Reset settle counter for new track
+                                    $display("WOZ_CTRL: Physical track moved during load: %0d -> %0d, waiting for settle",
                                              target_physical_track, track_id[7:1]);
                                 end else begin
                                     // No change, normal completion
