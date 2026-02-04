@@ -184,6 +184,8 @@ module ncr5380
 		end else begin
 			if (!mr[`MR_DMA_MODE]) begin
 				dma_en <= 0;
+			end else if (!bsr_pmatch) begin
+				dma_en <= 0;
 			end else if (reg_wr && (bus_rs == `WREG_DMAS)) begin
 				dma_en <= 1;
 			end else if (reg_wr && (bus_rs == `WREG_IDMAR)) begin
