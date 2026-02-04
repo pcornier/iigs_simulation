@@ -2607,7 +2607,7 @@ wire ready_out;
     // Apple II SCSI Card
     scsicard #(.DEVS(SCSI_DEVS)) scsicard(
         .CLK_14M(CLK_14M),
-        .phi0(phi0),
+        .ph2_en(ph2_en),
         .IO_SELECT(io_select[7]),
         .DEVICE_SELECT(device_select[7]),
         .C800_SELECT(c800_select[7]),

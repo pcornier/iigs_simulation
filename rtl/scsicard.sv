@@ -21,7 +21,7 @@ module scsicard
   #( parameter DEVS = 1 )
    (
      input	       CLK_14M,
-     input	       phi0,
+     input	       ph2_en,
      input	       IO_SELECT,
      input	       DEVICE_SELECT,
      input	       C800_SELECT,
@@ -94,7 +94,7 @@ module scsicard
       ncr_dack <= 1'b0;
       dma_select <= 1'b0;
 
-      if (ncr_select && phi0) begin: ncr_debug
+      if (ncr_select && ph2_en) begin: ncr_debug
 	 if (RD) $display("[:sl7:scsi] Read ncr register %0x = %x", A[2:0], D_OUT);
 	 else $display("[:sl7:scsi] Write ncr register 0%x = %x", A[2:0], D_IN);
       end: ncr_debug
@@ -102,18 +102,20 @@ module scsicard
       if (cardreg_select) begin: cardregs
          if (RD) begin: cardreg_read
             case (A[2:0])
-              3'h0: if (ph2_en) begin: dma_read
+              3'h0: begin: dma_read
                  //$display("[:sl7:scsi] DMA read %x", ncr_dout);
                  cardreg_dout <= ncr_dout;
-                 ncr_dack <= 1'b1;
-                 dma_select <= 1'b1;
+                 if (ph2_en) begin
+                    ncr_dack <= 1'b1;
+                    dma_select <= 1'b1;
+                 end
               end: dma_read
               3'h1: cardreg_dout <= 8'h80; // SCSI ID; 'h80 = 7
               3'h6: cardreg_dout <= {ncr_dreq, 7'h00};
               default: cardreg_dout <= 8'hFF;
             endcase;
          end: cardreg_read
-         else if (~RD && phi0) begin: cardreg_write
+         else if (~RD && ph2_en) begin: cardreg_write
             case (A[2:0])
               3'h0: begin: dma_write
                  $display("[:sl7:scsi] DMA write %x", D_IN);
