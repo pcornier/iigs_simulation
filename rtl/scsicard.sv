@@ -102,8 +102,8 @@ module scsicard
       if (cardreg_select) begin: cardregs
          if (RD) begin: cardreg_read
             case (A[2:0])
-              3'h0: begin: dma_read
-                 $display("[:sl7:scsi] DMA read %x", ncr_dout);
+              3'h0: if (ph2_en) begin: dma_read
+                 //$display("[:sl7:scsi] DMA read %x", ncr_dout);
                  cardreg_dout <= ncr_dout;
                  ncr_dack <= 1'b1;
                  dma_select <= 1'b1;
@@ -125,7 +125,6 @@ module scsicard
                  bank_reg <= D_IN;
               end
               3'h3: begin
-                 $display("[", D_IN);
                  ncr_reset <= 1'b1;
                  gs_dma_mode <= 1'b0;
               end

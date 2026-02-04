@@ -1935,7 +1935,7 @@ begin
    end
    if (slot_ce && addr >= 'hc800 && addr < 'hcfff && c800_slot != 3'b0 && ~CXROM && ~inhibit_cxxx)
    begin
-	  if (phi0) $display("c800_select addr[10:8] %x din %x HDD_DO %x addr %x RD %x",addr[10:8],din,HDD_DO,addr,we);
+	  //if (phi0) $display("c800_select addr[10:8] %x din %x HDD_DO %x addr %x RD %x",addr[10:8],din,HDD_DO,addr,we);
           c800_select[c800_slot]=1'b1;
   end
    if (slot_ce && addr == 'hcfff && ~CXROM && ~inhibit_cxxx)
