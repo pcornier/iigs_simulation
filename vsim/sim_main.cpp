@@ -1546,7 +1546,7 @@ int verilate() {
                             unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                             unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                             // Trigger on FF:407D (LDA sectfnd instruction, right before CMP)
-                            if (pbr_now == 0xFF && pc_now == 0x407D && vpa && sector_cmp_debug_count < 50) {
+                            if (pbr_now == 0xFF && pc_now == 0x407D && vpa && sector_cmp_debug_count < 200) {
                                 sector_cmp_debug_count++;
                                 unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
                                 // Read memory values from bank E1 (slow RAM) where the driver stores them
@@ -1569,6 +1569,59 @@ int verilate() {
                                        trkfnd, sidefnd, sectfnd, sectinfo_0, sectinfo_1);
                                 printf("  Expected: cyl=%02X sector=%02X side=%02X\n",
                                        cyl, sector, side);
+                            }
+                        }
+
+                        // ReadData error detection: trap at FF:4DBF (READERR - SEC/RTS)
+                        // This fires when ReadData fails for any reason
+                        {
+                            static int readdata_err_count = 0;
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            // Trap at READERR (FF:4DBF = SEC before RTS)
+                            if (pbr_now == 0xFF && pc_now == 0x4DBF && vpa && readdata_err_count < 30) {
+                                readdata_err_count++;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                const int bank_e1_offset = 0x10000;
+                                uint8_t error2   = slowram[bank_e1_offset + 0x0F44];
+                                uint8_t sectfnd  = slowram[bank_e1_offset + 0x0F33];
+                                uint8_t retry    = slowram[bank_e1_offset + 0x0F45];
+                                uint8_t readret  = slowram[bank_e1_offset + 0x0F37];
+                                printf("WOZ_READDATA_ERR #%d: error2=%02X sectfnd=%02X retry=%02X readret=%02X\n",
+                                       readdata_err_count, error2, sectfnd, retry, readret);
+                            }
+                            // Also trap specific error types:
+                            // FF:4DB3 = DCSUMERR (data checksum error, code 0x10)
+                            if (pbr_now == 0xFF && pc_now == 0x4DB3 && vpa && readdata_err_count < 30) {
+                                printf("WOZ_READDATA: DATA CHECKSUM ERROR\n");
+                            }
+                            // FF:4DB7 = DBSERR (data bitslip error, code 0x08)
+                            if (pbr_now == 0xFF && pc_now == 0x4DB7 && vpa && readdata_err_count < 30) {
+                                printf("WOZ_READDATA: DATA BITSLIP ERROR\n");
+                            }
+                            // FF:4D0D = RDERR (sector mismatch in data field / timeout)
+                            if (pbr_now == 0xFF && pc_now == 0x4D0D && vpa && readdata_err_count < 30) {
+                                printf("WOZ_READDATA: SECTOR MISMATCH/TIMEOUT in data field\n");
+                            }
+                            // FF:402D = TRYMORE (retry entry point after any read failure)
+                            if (pbr_now == 0xFF && pc_now == 0x402D && vpa && readdata_err_count < 100) {
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                const int bank_e1_offset = 0x10000;
+                                uint8_t error2  = slowram[bank_e1_offset + 0x0F44];
+                                uint8_t retry   = slowram[bank_e1_offset + 0x0F45];
+                                uint8_t readret = slowram[bank_e1_offset + 0x0F37];
+                                uint8_t seekret = slowram[bank_e1_offset + 0x0F35];
+                                printf("WOZ_TRYMORE #%d: error2=%02X retry=%02X readret=%02X seekret=%02X\n",
+                                       readdata_err_count, error2, retry, readret, seekret);
+                            }
+                            // FF:4CD9 = ReadData entry point
+                            if (pbr_now == 0xFF && pc_now == 0x4CD9 && vpa && readdata_err_count < 100) {
+                                printf("WOZ_READDATA_ENTRY\n");
+                            }
+                            // FF:408E = BCS trymore (after ReadData returns)
+                            if (pbr_now == 0xFF && pc_now == 0x408E && vpa && readdata_err_count < 100) {
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                printf("WOZ_READDATA_RETURN: P=%02X carry=%d\n", p, p & 1);
                             }
                         }
 

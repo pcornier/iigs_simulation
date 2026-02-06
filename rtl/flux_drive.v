@@ -189,6 +189,7 @@ module flux_drive (
     reg         disk_switched;
     reg         prev_disk_mounted;
     reg         prev_drive_ready;  // For detecting drive_ready rising edge
+    reg         prev_is_flux_track; // For detecting IS_FLUX_TRACK 0->1 transitions
 
     // Motor sense signal - for sense register 0x2 (MAME m_mon equivalent)
     // This follows the Sony command state, NOT the IWM motor bit
@@ -840,6 +841,7 @@ module flux_drive (
             rotation_complete <= 1'b0;
             prev_motor_for_position <= 1'b0;
             prev_drive_ready <= 1'b0;
+            prev_is_flux_track <= 1'b0;
             prev_track_bit_count <= 32'd0;
             // Flux timing playback state
             flux_phase_accum <= 32'd0;
@@ -902,12 +904,14 @@ module flux_drive (
                          DRIVE_ID, bit_timer, bit_cell_cycles, BRAM_ADDR, bit_position);
 `endif
             end
-            // FLUX MODE: When a new track loads while spinning, we need to reset flux playback
-            // state to start reading from the new track's flux data. Unlike bit-stream mode where
-            // we preserve position to avoid mid-rotation jumps, flux mode needs fresh data because
-            // the flux bytes represent a different track entirely.
-            // We do NOT reset bit_position (to maintain angular position), only flux_byte_addr.
-            if (TRACK_LOAD_COMPLETE && motor_spinning && IS_FLUX_TRACK) begin
+            // When a new track loads while spinning, ALWAYS reset flux playback state.
+            // This is needed for mixed-format WOZ disks (e.g., AppleWorks) where one side
+            // is bitstream and the other is flux. TRACK_LOAD_COMPLETE fires once after both
+            // sides finish loading. IS_FLUX_TRACK depends on stable_side at that moment,
+            // so it may reflect the bitstream side and miss the flux side's new data.
+            // Resetting flux state unconditionally is safe: for all-bitstream tracks,
+            // flux state is unused (only accessed when IS_FLUX_TRACK=1).
+            if (TRACK_LOAD_COMPLETE && motor_spinning) begin
                 flux_phase_accum <= 32'd0;
                 flux_byte_counter <= 8'd0;
                 flux_byte_addr <= 16'd0;
@@ -917,16 +921,10 @@ module flux_drive (
                 next_byte_valid <= 1'b0;
                 bram_first_read_pending <= 1'b1;  // Wait for BRAM to load new track data
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE while spinning (FLUX) - resetting flux_byte_addr to 0 (was %0d) pos=%0d",
-                         DRIVE_ID, flux_byte_addr, bit_position);
+                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE while spinning - resetting flux state (was flux_addr=%0d) is_flux=%0d pos=%0d",
+                         DRIVE_ID, flux_byte_addr, IS_FLUX_TRACK, bit_position);
 `endif
             end
-`ifdef SIMULATION
-            else if (TRACK_LOAD_COMPLETE && motor_spinning) begin
-                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE ignored while spinning (non-flux) pos=%0d",
-                         DRIVE_ID, bit_position);
-            end
-`endif
 
             // Reset bit_position when drive becomes ready (after spinup completes)
             // This ensures the decoder starts at a known position when the state machine activates.
@@ -1006,6 +1004,8 @@ module flux_drive (
 `endif
             end
             prev_track_bit_count <= TRACK_BIT_COUNT;
+
+            prev_is_flux_track <= IS_FLUX_TRACK;
 
 `ifdef SIMULATION
             // Log first 16 bytes after a side transition to verify data

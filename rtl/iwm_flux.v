@@ -282,8 +282,11 @@ module iwm_flux (
     // Data-ready gating: avoid returning stale bytes after they've been read.
     // SmartPort mode keeps m_data valid even after reads to match firmware expectations.
     wire       smartport_mode_local = (!SW_MODE[3]) && SW_MODE[1];
-    // Match MAME: data register returns m_data as-is; reads do not clear it.
-    wire       data_ready = m_data[7];
+    // Gate data_ready with m_data_read: after CPU reads a byte, report not-ready
+    // until the next byte completes (which clears m_data_read). This prevents
+    // duplicate reads in the ROM's BPL polling loop that broke D5 AA 96 prologues.
+    // SmartPort mode bypasses this gate to match firmware expectations.
+    wire       data_ready = m_data[7] && (!m_data_read || smartport_mode_local);
     wire [7:0] effective_data = data_ready ? m_data : 8'h00;
     // If a byte completes during an active data read, treat it as consumed.
     // FIX: Only consume if the latched byte was NOT from a mid-cycle byte completion.
