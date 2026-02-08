@@ -16,7 +16,6 @@ set_global_assignment -name VERILOG_FILE rtl/syncram.v
 set_global_assignment -name VERILOG_FILE rtl/sound.v
 set_global_assignment -name VERILOG_FILE rtl/clock_divider.v
 set_global_assignment -name VERILOG_FILE rtl/iwm.v
-set_global_assignment -name VERILOG_FILE rtl/hdd.v
 set_global_assignment -name VERILOG_FILE rtl/iwm_controller.v
 set_global_assignment -name VERILOG_FILE rtl/iwm_core_ref.v
 set_global_assignment -name VERILOG_FILE rtl/paddle_timer.v
@@ -25,6 +24,10 @@ set_global_assignment -name VERILOG_FILE rtl/scc_iigs_wrapper.v
 set_global_assignment -name VERILOG_FILE rtl/scc8530.v
 set_global_assignment -name VERILOG_FILE rtl/uart/rxuart.v
 set_global_assignment -name VERILOG_FILE rtl/uart/txuart.v
+set_global_assignment -name VERILOG_FILE rtl/ram.v
+set_global_assignment -name VERILOG_FILE rtl/scsi.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ncr5380.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/scsicard.sv
 #set_global_assignment -name SYSTEMVERILOG_FILE rtl/bram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/floppy_track.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv

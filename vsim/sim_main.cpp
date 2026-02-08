@@ -1160,16 +1160,16 @@ int verilate() {
                     if (vda && we) {
                         // Memory write - add MVN debug for Language Card area
                         if ((bank >= 0xFC || bank == 0x00) && addr16 >= 0xBF00) {
-							debug_mvn_area = true;
-							printf("TIMING DEBUG MVN WRITE: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DOUT=%02X\n", 
-								   vda, we, bank, addr16, dout);
-							printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n", 
-								   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR, 
-								   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
-							printf("  LC_WE=%d RDROM=%d LCRAM2=%d (should enable write-through)\n",
-								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE,
-								   VERTOPINTERN->emu__DOT__iigs__DOT__RDROM,
-								   VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2);
+							// debug_mvn_area = true;
+							// printf("TIMING DEBUG MVN WRITE: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DOUT=%02X\n", 
+							// 	   vda, we, bank, addr16, dout);
+							// printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n", 
+							// 	   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR, 
+							// 	   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
+							// printf("  LC_WE=%d RDROM=%d LCRAM2=%d (should enable write-through)\n",
+							// 	   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE,
+							// 	   VERTOPINTERN->emu__DOT__iigs__DOT__RDROM,
+							// 	   VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2);
 						}
 						
                         // Actual mapping sampling from hardware: use address bus and ROM selects
@@ -1248,8 +1248,8 @@ int verilate() {
 						
 						if (debug_mvn_area) {
 							debug_mvn_area = false;
-							printf("TIMING DEBUG MVN WRITE COMPLETE: Data %02X written to Bank %02X Addr %04X\n", 
-								   dout, bank, addr16);
+							//printf("TIMING DEBUG MVN WRITE COMPLETE: Data %02X written to Bank %02X Addr %04X\n", 
+							//	   dout, bank, addr16);
 						}
                     } else if (vda && !we) {
                         // Memory read - add timing debug for $BF00

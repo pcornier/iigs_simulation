@@ -364,8 +364,10 @@ always @(posedge clk) begin
 		phase <= PHASE_IDLE;
 	end else begin
 		if(phase == PHASE_IDLE) begin
-			if(sel && din[ID] && mounted)  // own id on bus during selection?
+			if(sel && din[ID] && mounted) begin  // own id on bus during selection?
 				phase <= PHASE_CMD_IN;
+				$display("%m: PHASE_IDLE => PHASE_CMD_IN");
+                        end
 		end
 
 		else if(phase == PHASE_CMD_IN) begin
@@ -380,37 +382,61 @@ always @(posedge clk) begin
 					// continue according to command
 
 					// these commands return data
-					if(cmd_read || cmd_inquiry || cmd_read_capacity || cmd_mode_sense || cmd_read_buffer) phase <= PHASE_DATA_OUT;
+					if(cmd_read || cmd_inquiry || cmd_read_capacity || cmd_mode_sense || cmd_read_buffer) begin
+						phase <= PHASE_DATA_OUT;
+						$display("%m: PHASE_CMD_IN => PHASE_DATA_OUT");
+					end
 					// these commands receive dataa
-					else if(cmd_write || cmd_mode_select || cmd_write_buffer) phase <= PHASE_DATA_IN;
+					else if(cmd_write || cmd_mode_select || cmd_write_buffer) begin
+						phase <= PHASE_DATA_IN;
+						$display("%m: PHASE_CMD_IN => PHASE_DATA_IN");
+					end
 					// and all other valid commands are just "ok"
-					else phase <= PHASE_STATUS_OUT;
+					else begin
+						phase <= PHASE_STATUS_OUT;
+						$display("%m: PHASE_CMD_IN => PHASE_DATA_IN");
+					end
 				end else begin
 					// no, report failure
 					status <= `STATUS_CHECK_CONDITION;
 					phase <= PHASE_STATUS_OUT;
+					$display ("%m: STATUS_CHECK_CONDITION");
 				end
 			end
 		end
 
 		else if(phase == PHASE_DATA_OUT) begin
-			if(data_complete) phase <= PHASE_STATUS_OUT;
+			if(data_complete) begin
+			        phase <= PHASE_STATUS_OUT;
+			        $display("%m: PHASE_DATA_OUT => PHASE_STATUS_OUT");
+			end
 		end
 
 		else if(phase == PHASE_DATA_IN) begin
-			if(data_complete) phase <= PHASE_STATUS_OUT;
+			if(data_complete) begin
+				phase <= PHASE_STATUS_OUT;
+				$display("%m: PHASE_DATA_IN => PHASE_STATUS_OUT");
+			end
 		end
 
 		else if(phase == PHASE_STATUS_OUT) begin
-			if(status_sent) phase <= PHASE_MESSAGE_OUT;
+			if(status_sent) begin
+			    phase <= PHASE_MESSAGE_OUT;
+			    $display("%m: PHASE_DATA_OUT => PHASE_STATUS_OUT");
+			end
 		end
 
 		else if(phase == PHASE_MESSAGE_OUT) begin
-			if(message_sent) phase <= PHASE_IDLE;
+		        if(message_sent) begin
+                                phase <= PHASE_IDLE;
+			        $display("%m: PHASE_MESSAGE_OUT => PHASE_IDLE");
+                        end
 		end
 
-		else
+		else begin
 			phase <= PHASE_IDLE;  // should never happen
+			$display("%m: default PHASE_IDLE; should never happen");
+		end
 	end
 end
 

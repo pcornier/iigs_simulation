@@ -455,7 +455,7 @@ module iigs
     fastram_ce_int = 0;
     slowram_ce_int = 0;
 
-    if (IO) begin
+    if (IO | EXTERNAL_IO | (|io_select) | (|device_select) | (|c800_select)) begin
       // I/O space - no RAM access
       fastram_ce_int = 0;
       slowram_ce_int = 0;

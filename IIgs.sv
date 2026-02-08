@@ -319,6 +319,29 @@ wire phi2;
 wire phi0;
 wire clk_7M;
 
+// SCSI/SD signals
+localparam SCSI_DEVS = 2;
+
+wire [31:0] scsi_sd_lba[SCSI_DEVS];
+wire [SCSI_DEVS-1:0] scsi_sd_rd;
+wire [SCSI_DEVS-1:0] scsi_sd_wr;
+wire [SCSI_DEVS-1:0] scsi_sd_ack;
+wire [SCSI_DEVS-1:0] scsi_img_mounted;
+wire [7:0] scsi_sd_buff_din[SCSI_DEVS];
+
+assign sd_lba[0] = scsi_sd_lba[0];
+assign sd_lba[1] = scsi_sd_lba[1];
+assign sd_rd[0]  = scsi_sd_rd[0];
+assign sd_rd[1]  = scsi_sd_rd[1];
+assign sd_wr[0]  = scsi_sd_wr[0];
+assign sd_wr[1]  = scsi_sd_wr[1];
+assign scsi_sd_ack[0]  = sd_ack[0];
+assign scsi_sd_ack[1]  = sd_ack[1];
+assign scsi_img_mounted[0]  = img_mounted[0];
+assign scsi_img_mounted[1]  = img_mounted[1];
+assign sd_buff_din[0]  = scsi_sd_buff_din[0];
+assign sd_buff_din[1]  = scsi_sd_buff_din[1];
+
 iigs iigs (
 	.reset(reset),
 	.cold_reset(cold_reset),
@@ -342,15 +365,15 @@ iigs iigs (
 	.AUDIO_L(AUDIO_L),
 	.AUDIO_R(AUDIO_R),
         // SCSI control
-        .sd_lba(sd_lba[0:1]),
-        .sd_rd(sd_rd[0:1]),
-        .sd_wr(sd_wr[0:1]),
-        .sd_ack(sd_ack[0:1]),
-        .img_mounted(img_mounted),
+        .sd_lba(scsi_sd_lba),
+        .sd_rd(scsi_sd_rd),
+        .sd_wr(scsi_sd_wr),
+        .sd_ack(scsi_sd_ack),
+        .img_mounted(scsi_img_mounted),
         .img_size(img_size),
         .sd_buff_addr(sd_buff_addr),
         .sd_buff_dout(sd_buff_dout),
-        .sd_buff_din(sd_buff_din[0:1]),
+        .sd_buff_din(scsi_sd_buff_din),
         .sd_buff_wr(sd_buff_wr),
 
 	//-- track buffer interface for disk 1
