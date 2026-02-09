@@ -1912,6 +1912,17 @@ wire [7:0] rom1_dout, rom2_dout, romc_dout, romd_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 
+// Handle state for the SCSI card's $C800-CFFF
+always @(posedge CLK_14M) if (ph2_en) begin
+   if (io_select[7])
+     c800_slot = 7;
+   if (slot_ce && addr == 'hcfff && ~CXROM && ~inhibit_cxxx)
+   begin
+      //if (phi0) $display("slot c800 deactivated addr[10:8] %x din %x HDD_DO %x addr %x RD %x",addr[10:8],din,HDD_DO,addr,we);
+      c800_slot = 3'b0;
+   end
+end
+
 always @(*)
 begin
    device_select=8'h0;
@@ -1926,7 +1937,6 @@ begin
    begin
           if (phi0) $display("io_select addr[10:8] %x din %x HDD_DO %x addr %x RD %x SLTROMSEL %x",addr[10:8],din,HDD_DO,addr,we, SLTROMSEL);
           io_select[addr[10:8]]=1'b1;
-          c800_slot = addr[10:8];
    end
    else begin
       if (addr == 16'hc74f)
@@ -1937,11 +1947,6 @@ begin
    begin
 	  //if (phi0) $display("c800_select addr[10:8] %x din %x HDD_DO %x addr %x RD %x",addr[10:8],din,HDD_DO,addr,we);
           c800_select[c800_slot]=1'b1;
-  end
-   if (slot_ce && addr == 'hcfff && ~CXROM && ~inhibit_cxxx)
-   begin
-	  if (phi0) $display("slot c800 deactivated addr[10:8] %x din %x HDD_DO %x addr %x RD %x",addr[10:8],din,HDD_DO,addr,we);
-          c800_slot = 3'b0;
   end
 end
 `ifdef NOTDEFINED
