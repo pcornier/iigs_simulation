@@ -142,7 +142,7 @@ module ncr5380
 	wire [7:0] cur_data = out_en ? dout : din;
 
 	/* Logic for "asserting the bus" simplified */
-	wire       out_en = icr[`ICR_A_DATA] | mr[`MR_ARB];
+	wire       out_en = (icr[`ICR_A_DATA] & ~scsi_io) | mr[`MR_ARB];
 
 	/* ICR read wires */
 	wire [7:0] icr_read = { icr[`ICR_A_RST],
