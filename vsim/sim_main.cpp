@@ -47,11 +47,16 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <map>
 #include <cstring>
 #include <algorithm>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "sim/stb_image_write.h"
+
+// Global flag for kernel trace activation (set by APPLEDISK trap)
+// 0=inactive, 1=active (tracing), 2=armed (waiting for driver return to activate)
+static int g_ktrace_active = 0;
 
 #ifndef WIN32
 #include <SDL_opengl.h>
@@ -1156,7 +1161,89 @@ int verilate() {
 					// The issue is likely that CPU A_OUT shows logical address (Bank 00)
 					// but memory controller redirects to physical address (Bank 01)
 					
-                    // Track memory accesses 
+                    // CURCYL WATCHPOINT: Catch ANY write to E1:0F3A and dump the PC
+                    // The CPU's A_OUT is the raw (untranslated) 24-bit address
+                    {
+                        unsigned long cpu_a_out = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
+                        if (vda && we && cpu_a_out == 0xE10F3A) {
+                            static int curcyl_wp_count = 0;
+                            if (curcyl_wp_count < 200) {
+                                unsigned char pbr_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short pc_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char dbr_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                unsigned char ir_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                                // Also dump WOZ controller state
+                                uint8_t woz_ready = VERTOPINTERN->emu__DOT__woz_ctrl_ready;
+                                uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
+                                uint8_t woz_state = VERTOPINTERN->emu__DOT__woz_ctrl__DOT__state;
+                                uint8_t ct_side0 = VERTOPINTERN->emu__DOT__woz_ctrl__DOT__current_track_id_side0;
+                                uint8_t ct_side1 = VERTOPINTERN->emu__DOT__woz_ctrl__DOT__current_track_id_side1;
+                                printf("CURCYL_WATCHPOINT #%d: WRITE to E1:0F3A data=%02X PC=%02X:%04X DBR=%02X IR=%02X "
+                                       "woz_rdy=%d track=%d state=%d ct_s0=%d ct_s1=%d t=%llu\n",
+                                       curcyl_wp_count, dout, pbr_wp, pc_wp, dbr_wp, ir_wp,
+                                       woz_ready, woz_track, woz_state, ct_side0, ct_side1, (unsigned long long)main_time);
+                                curcyl_wp_count++;
+                            }
+                        }
+                    }
+
+                    // PARM BLOCK ACCESS WATCHPOINT: Trace ALL accesses (read/write) to
+                    // address range $E160-$E180 during P16 dispatch to see which bank
+                    // the dispatcher uses for parm block reads
+                    {
+                        static bool parm_access_armed = false;
+                        static int parm_access_count = 0;
+                        static int parm_access_cycles = 0;
+                        static bool parm_access_done = false;
+                        // Arm when we see P16 entry at E1:00A8 (bus shows bank 01 due to mapping)
+                        unsigned char pbr_arm = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        if (!parm_access_done && vpa && pbr_arm == 0xE1 && addr16 == 0x00A8) {
+                            parm_access_armed = true;
+                            parm_access_cycles = 0;
+                            printf("PARM_ACCESS: Armed at E1:00A8 frame=%d\n", video.count_frame);
+                        }
+                        if (parm_access_armed) {
+                            parm_access_cycles++;
+                            // Log any access to $E160-$E180 range
+                            if (vda && addr16 >= 0xE160 && addr16 <= 0xE180) {
+                                unsigned char pbr_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short pc_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char dbr_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                unsigned char fastram_ce_pa = VERTOPINTERN->emu__DOT__iigs__DOT__fastram_ce_int;
+                                unsigned char slowram_ce_pa = VERTOPINTERN->emu__DOT__iigs__DOT__slowram_ce_int;
+                                unsigned char ir_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                                parm_access_count++;
+                                printf("PARM_ACCESS #%d: %s bank=%02X addr=%04X data=%02X "
+                                       "fastram_ce=%d slowram_ce=%d PBR:PC=%02X:%04X DBR=%02X IR=%02X cycle=%d\n",
+                                       parm_access_count,
+                                       we ? "WRITE" : "READ ",
+                                       bank, addr16, we ? dout : din,
+                                       fastram_ce_pa, slowram_ce_pa,
+                                       pbr_pa, pc_pa, dbr_pa, ir_pa, parm_access_cycles);
+                            }
+                            // Also log DBR changes (PHB/PLB instructions)
+                            if (vpa && parm_access_count < 200) {
+                                unsigned char dbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                static unsigned char last_dbr = 0xFF;
+                                if (dbr_now != last_dbr) {
+                                    unsigned char pbr_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                    unsigned short pc_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                    printf("PARM_ACCESS DBR_CHANGE: %02X -> %02X at PBR:PC=%02X:%04X cycle=%d\n",
+                                           last_dbr, dbr_now, pbr_pa, pc_pa, parm_access_cycles);
+                                    last_dbr = dbr_now;
+                                }
+                            }
+                            // Disarm after 20000 cycles or if we've seen enough
+                            if (parm_access_cycles >= 20000 || parm_access_count >= 50) {
+                                parm_access_armed = false;
+                                parm_access_done = true;
+                                printf("PARM_ACCESS: Done after %d cycles, %d accesses\n",
+                                       parm_access_cycles, parm_access_count);
+                            }
+                        }
+                    }
+
+                    // Track memory accesses
                     if (vda && we) {
                         // Memory write - add MVN debug for Language Card area
                         if ((bank >= 0xFC || bank == 0x00) && addr16 >= 0xBF00) {
@@ -1539,6 +1626,594 @@ int verilate() {
                             }
                         }
 
+                        // Bank 02 code integrity check + GS/OS kernel dump
+                        {
+                            static bool code_integrity_done = false;
+                            if (!code_integrity_done && video.count_frame == 870 && vpa) {
+                                code_integrity_done = true;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                printf("CODE_INTEGRITY at frame=%d:\n", video.count_frame);
+                                // Bank 02 at 27F0
+                                printf("  vsim  02:27F0: ");
+                                for (int i = 0; i < 16; i++) printf("%02X ", fastram[0x020000 + 0x27F0 + i]);
+                                printf("\n  MAME  02:27F2: 97 84 A0 17 00 B9 BE 13 97 88 88 10 F8\n");
+                                // Bank 02 at 4150
+                                printf("  vsim  02:4150: ");
+                                for (int i = 0; i < 16; i++) printf("%02X ", fastram[0x020000 + 0x4150 + i]);
+                                printf("\n  MAME  02:414F: A0 26 00 B7 04 99 AE 13 88 88 10 F7\n");
+                                // GS/OS kernel at 00:9E00
+                                printf("  vsim  00:9E00: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", fastram[0x9E00 + i]);
+                                printf("\n");
+                                // GS/OS kernel at 00:D4C0
+                                printf("  vsim  00:D4C0: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", fastram[0xD4C0 + i]);
+                                printf("\n");
+                            }
+                        }
+
+                        // Kernel trace: triggered by APPLEDISK counter (uses g_ktrace_active flag)
+                        // The APPLEDISK trap sets g_ktrace_active=true after call #220
+                        // We capture ALL VPA instructions (not just kernel banks) until 3000 entries
+                        {
+                            static int ktrace_count = 0;
+                            static bool ktrace_done = false;
+                            unsigned short pc_kt = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_kt = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (vpa && g_ktrace_active == 1 && !ktrace_done && ktrace_count < 3000) {
+                                // Log ALL instructions to see complete loop
+                                uint16_t a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                printf("KTRACE %4d: %02X:%04X A=%04X P=%02X\n",
+                                       ktrace_count, pbr_kt, pc_kt, a_reg, p_reg);
+                                ktrace_count++;
+                                if (ktrace_count >= 3000) {
+                                    ktrace_done = true;
+                                    g_ktrace_active = false;
+                                }
+                            }
+                        }
+
+                        // GS/OS call tracer: E1:00A8 (ProDOS 16) and E1:00B0 (GS/OS class 0)
+                        {
+                            static int gsos_call_count = 0;
+                            unsigned short pc_gs = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_gs = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (vpa && pbr_gs == 0xE1 && (pc_gs == 0x00A8 || pc_gs == 0x00B0) && gsos_call_count < 500) {
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                uint16_t sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                uint8_t ret_pcl = fastram[sp + 1];
+                                uint8_t ret_pch = fastram[sp + 2];
+                                uint8_t ret_pbr = fastram[sp + 3];
+                                uint32_t ret_addr = (ret_pch << 8) | ret_pcl;
+                                uint16_t callnum = 0;
+                                uint16_t parmptr = 0;
+                                const char* class_name;
+                                if (pc_gs == 0x00A8) {
+                                    // P16 class 1: inline parameters after JSL
+                                    class_name = "P16";
+                                    if (ret_pbr < 0x80) {
+                                        uint32_t base = ((uint32_t)ret_pbr << 16) + ret_addr + 1;
+                                        callnum = fastram[base] | (fastram[base+1] << 8);
+                                        parmptr = fastram[base+2] | (fastram[base+3] << 8);
+                                    } else if (ret_pbr == 0xE0 || ret_pbr == 0xE1) {
+                                        uint32_t base = ((uint32_t)(ret_pbr & 1) << 16) + ret_addr + 1;
+                                        callnum = slowram[base] | (slowram[base+1] << 8);
+                                        parmptr = slowram[base+2] | (slowram[base+3] << 8);
+                                    }
+                                } else {
+                                    // GS/OS class 0: stack-based parameters
+                                    // Stack: SP+1,2,3=JSL ret; SP+4,5=callnum; SP+6,7=parmptr
+                                    class_name = "GS/OS";
+                                    callnum = fastram[sp + 4] | (fastram[sp + 5] << 8);
+                                    parmptr = fastram[sp + 6] | (fastram[sp + 7] << 8);
+                                }
+                                // For P16 calls, also read parm bank byte and dump full inline + parm block
+                                uint8_t parm_bank = 0;
+                                if (pc_gs == 0x00A8) {
+                                    if (ret_pbr < 0x80) {
+                                        uint32_t base = ((uint32_t)ret_pbr << 16) + ret_addr + 1;
+                                        parm_bank = fastram[base + 4];
+                                    } else if (ret_pbr == 0xE0 || ret_pbr == 0xE1) {
+                                        uint32_t base = ((uint32_t)(ret_pbr & 1) << 16) + ret_addr + 1;
+                                        parm_bank = slowram[base + 4];
+                                    }
+                                }
+                                uint8_t dbr_gs = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                printf("GSOS_CALL #%d: %s $%04X parm=%02X:%04X from %02X:%04X DBR=%02X frame=%d\n",
+                                       gsos_call_count, class_name, callnum, parm_bank, parmptr, ret_pbr, ret_addr+1, dbr_gs, video.count_frame);
+                                // Dump parm block contents from both fast and slow RAM
+                                if (pc_gs == 0x00A8 && callnum == 0x2010) {
+                                    uint32_t parm_off_slow = ((uint32_t)(parm_bank & 1) << 16) | parmptr;
+                                    printf("  GET_DEV_NUM parm block (slow %02X:%04X): ", parm_bank, parmptr);
+                                    for (int i = 0; i < 16; i++) printf("%02X ", slowram[parm_off_slow + i]);
+                                    printf("\n  GET_DEV_NUM parm block (fast 00:%04X): ", parmptr);
+                                    for (int i = 0; i < 16; i++) printf("%02X ", fastram[parmptr + i]);
+                                    printf("\n  Inline bytes at %02X:%04X: ", ret_pbr, (uint16_t)(ret_addr+1));
+                                    if (ret_pbr == 0xE0 || ret_pbr == 0xE1) {
+                                        uint32_t base = ((uint32_t)(ret_pbr & 1) << 16) + ret_addr + 1;
+                                        for (int i = 0; i < 8; i++) printf("%02X ", slowram[base + i]);
+                                    } else if (ret_pbr < 0x80) {
+                                        uint32_t base = ((uint32_t)ret_pbr << 16) + ret_addr + 1;
+                                        for (int i = 0; i < 8; i++) printf("%02X ", fastram[base + i]);
+                                    }
+                                    printf("\n");
+                                }
+                                // DIAGNOSTIC: At P16 entry, dump the entry code and dispatcher code
+                                // to understand how the dispatcher accesses bank E0 parm blocks
+                                if (pc_gs == 0x00A8 && gsos_call_count < 10) {
+                                    // Dump P16 entry code at E1:00A0-00CF (slow RAM bank E1)
+                                    printf("  P16_ENTRY E1:00A0: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", slowram[0x100A0 + i]);
+                                    printf("\n");
+                                    // Dump P16 dispatch and handler code areas
+                                    printf("  P16_DISP 00:9E00: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0x9E00 + i]);
+                                    printf("\n  P16_DISP 00:9E30: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0x9E30 + i]);
+                                    printf("\n  P16_DISP 00:D4C0: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0xD4C0 + i]);
+                                    printf("\n  P16_DISP 00:D4F0: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0xD4F0 + i]);
+                                    printf("\n  P16_DISP 00:D520: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0xD520 + i]);
+                                    printf("\n  P16_HANDLER 00:D6E0: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0xD6E0 + i]);
+                                    printf("\n  P16_HANDLER 00:D700: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0xD700 + i]);
+                                    printf("\n  P16_HANDLER 00:D820: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0xD820 + i]);
+                                    printf("\n  P16_HANDLER 00:D840: ");
+                                    for (int i = 0; i < 48; i++) printf("%02X ", fastram[0xD840 + i]);
+                                    printf("\n");
+                                }
+                                gsos_call_count++;
+                            }
+                        }
+
+                        // GS/OS return value trap - check carry/A after P16 calls return
+                        // GET_PREFIX returns to E0:E672, GET_DEV_NUM returns to E0:EA93
+                        {
+                            static int gsos_ret_count = 0;
+                            // Check both address bus bank AND PBR for E0
+                            unsigned char gsos_pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if ((bank == 0xE0 || bank == 0x00) && vpa && gsos_ret_count < 20) {
+                                // P16 inline params = 6 bytes (2 callnum + 4 parmptr)
+                                // GET_PREFIX returns to E66E+6=E674, GET_DEV_NUM to EA8F+6=EA95
+                                if (addr16 == 0xE674 || addr16 == 0xEA95) {
+                                    gsos_ret_count++;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                    unsigned short y = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                    printf("GSOS_RETURN #%d: at %02X:%04X (PBR=%02X) A=%04X X=%04X Y=%04X P=%02X carry=%d frame=%d\n",
+                                           gsos_ret_count, bank, addr16, gsos_pbr, a, x, y, p,
+                                           (p & 1), video.count_frame);
+                                    // Dump the next few instructions
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    printf("  CODE: ");
+                                    for (int i = 0; i < 32; i++) printf("%02X ", slowram[addr16 + i]);
+                                    printf("\n");
+                                }
+                            }
+                        }
+
+                        // Dense PC trace after frame 760: log every instruction in E0:E600-EFFF
+                        {
+                            static int e0trace_count = 0;
+                            static int e0trace_last_frame = 0;
+                            if (bank == 0xE0 && addr16 >= 0xE600 && addr16 < 0xF000
+                                && vpa && video.count_frame >= 760 && e0trace_count < 600) {
+                                if (e0trace_last_frame != video.count_frame) {
+                                    e0trace_last_frame = video.count_frame;
+                                    printf("--- frame %d ---\n", video.count_frame);
+                                }
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                printf("E0TRACE[%d]: E0:%04X A=%04X P=%02X c=%d\n",
+                                       e0trace_count, addr16, a, p, (p & 1));
+                                e0trace_count++;
+                            }
+                        }
+
+                        // Trap ANY execution near EA93-EA96 regardless of bank
+                        {
+                            static int ea95_count = 0;
+                            if (addr16 >= 0xEA93 && addr16 <= 0xEA96 && vpa && ea95_count < 10 && video.count_frame >= 760) {
+                                ea95_count++;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned char pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                printf("EA9x_TRAP #%d: bank=%02X PBR=%02X addr=%04X A=%04X SP=%04X P=%02X carry=%d frame=%d\n",
+                                       ea95_count, bank, pbr, addr16, a, sp, p, (p & 1), video.count_frame);
+                            }
+                        }
+                        // Trap SP return to BCEF after GET_DEV_NUM (entry SP was BCEF)
+                        {
+                            static bool sp_armed = false;
+                            static bool sp_done = false;
+                            static int sp_trap_count = 0;
+                            unsigned short sp_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                            if (!sp_done && bank == 0xE0 && addr16 == 0xEA8B && vpa) {
+                                sp_armed = true; // arm after GET_DEV_NUM JSL
+                            }
+                            // Only fire when SP returns to exactly BCEF (caller's stack restored)
+                            // and we're past the initial JSL at EA8B
+                            if (sp_armed && sp_now == 0xBCEF && addr16 != 0xEA8B && addr16 != 0xEA8C
+                                && addr16 != 0xEA8D && addr16 != 0xEA8E && vpa && sp_trap_count < 5) {
+                                sp_trap_count++;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned char pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                printf("SP_RETURN #%d: bank=%02X PBR=%02X addr=%04X A=%04X SP=%04X P=%02X carry=%d frame=%d\n",
+                                       sp_trap_count, bank, pbr, addr16, a, sp_now, p, (p & 1), video.count_frame);
+                                if (sp_trap_count >= 5) { sp_armed = false; sp_done = true; }
+                            }
+                        }
+
+                        // Full instruction trace triggered by GET_DEV_NUM call
+                        // Captures ALL banks for 500 instructions after EA8B is hit
+                        {
+                            static int fulltrace_count = 0;
+                            static bool fulltrace_armed = false;
+                            static bool fulltrace_done = false;
+                            // Arm when we see the GET_DEV_NUM JSL at E0:EA8B
+                            if (!fulltrace_done && bank == 0xE0 && addr16 == 0xEA8B && vpa) {
+                                fulltrace_armed = true;
+                                printf("FULLTRACE: Armed at E0:EA8B frame=%d\n", video.count_frame);
+                            }
+                            if (fulltrace_armed && vpa && fulltrace_count < 2000) {
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                unsigned short y = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                unsigned char dbr_ft = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                unsigned char ir_ft = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                                // Log with DBR and IR (opcode) for all instructions
+                                if (fulltrace_count < 200) {
+                                    printf("FULLTRACE[%d]: %02X:%04X A=%04X X=%04X Y=%04X SP=%04X DBR=%02X IR=%02X P=%02X c=%d\n",
+                                           fulltrace_count, bank, addr16, a, x, y, sp, dbr_ft, ir_ft, p, (p & 1));
+                                } else {
+                                    printf("FULLTRACE[%d]: %02X:%04X A=%04X SP=%04X DBR=%02X P=%02X c=%d\n",
+                                           fulltrace_count, bank, addr16, a, sp, dbr_ft, p, (p & 1));
+                                }
+                                fulltrace_count++;
+                                if (fulltrace_count >= 2000) {
+                                    fulltrace_armed = false;
+                                    fulltrace_done = true;
+                                    // Dump parm block state at end of trace
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    printf("FULLTRACE END: PC=%02X:%04X SP=%04X frame=%d\n",
+                                           bank, addr16, sp, video.count_frame);
+                                    printf("  Parm block (slow E0:E168): ");
+                                    for (int i = 0; i < 24; i++) printf("%02X ", slowram[0xE168 + i]);
+                                    printf("\n  Parm block (fast 00:E168): ");
+                                    for (int i = 0; i < 24; i++) printf("%02X ", fastram[0xE168 + i]);
+                                    printf("\n  E0:E0D8=%02X%02X E0:E098=%02X%02X\n",
+                                           slowram[0xE0D9], slowram[0xE0D8], slowram[0xE099], slowram[0xE098]);
+                                }
+                            }
+                        }
+
+                        // Parm block watchpoint: detect ANY changes to E0:E168-E17F
+                        // and 00:E168-E17F (fast RAM shadow) during GET_DEV_NUM processing
+                        {
+                            static uint8_t prev_parm_slow[24] = {};
+                            static uint8_t prev_parm_fast[24] = {};
+                            static bool parm_wp_init = false;
+                            static int parm_wp_count = 0;
+                            if (video.count_frame >= 760 && video.count_frame <= 800 && parm_wp_count < 50) {
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                if (!parm_wp_init) {
+                                    parm_wp_init = true;
+                                    for (int i = 0; i < 24; i++) {
+                                        prev_parm_slow[i] = slowram[0xE168 + i];
+                                        prev_parm_fast[i] = fastram[0xE168 + i];
+                                    }
+                                }
+                                // Check slow RAM changes
+                                for (int i = 0; i < 24; i++) {
+                                    if (slowram[0xE168 + i] != prev_parm_slow[i] && parm_wp_count < 50) {
+                                        parm_wp_count++;
+                                        unsigned short pc = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                        unsigned char pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                        printf("PARM_WP_SLOW #%d: E0:%04X [%02X->%02X] at PBR:PC=%02X:%04X bank=%02X frame=%d\n",
+                                               parm_wp_count, 0xE168 + i,
+                                               prev_parm_slow[i], slowram[0xE168 + i],
+                                               pbr, pc, bank, video.count_frame);
+                                        prev_parm_slow[i] = slowram[0xE168 + i];
+                                    }
+                                }
+                                // Check fast RAM changes
+                                for (int i = 0; i < 24; i++) {
+                                    if (fastram[0xE168 + i] != prev_parm_fast[i] && parm_wp_count < 50) {
+                                        parm_wp_count++;
+                                        unsigned short pc = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                        unsigned char pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                        printf("PARM_WP_FAST #%d: 00:%04X [%02X->%02X] at PBR:PC=%02X:%04X bank=%02X frame=%d\n",
+                                               parm_wp_count, 0xE168 + i,
+                                               prev_parm_fast[i], fastram[0xE168 + i],
+                                               pbr, pc, bank, video.count_frame);
+                                        prev_parm_fast[i] = fastram[0xE168 + i];
+                                    }
+                                }
+                            }
+                        }
+
+                        // Bank execution tracker - detect when CPU reaches app/GS/OS banks
+                        {
+                            static bool bank_seen[256] = {};
+                            unsigned short pc_now_bk = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now_bk = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (vpa && !bank_seen[pbr_now_bk] && pbr_now_bk != 0x00 && pbr_now_bk != 0x01
+                                && pbr_now_bk != 0xFE && pbr_now_bk != 0xFF && pbr_now_bk != 0xE0 && pbr_now_bk != 0xE1
+                                && pbr_now_bk != 0xFC && pbr_now_bk != 0xFD) {
+                                bank_seen[pbr_now_bk] = true;
+                                printf("BANK_FIRST_EXEC: bank %02X at PC=%04X frame=%d\n",
+                                       pbr_now_bk, pc_now_bk, video.count_frame);
+                            }
+                        }
+
+                        // Dump GS/OS loop code regions at start of stuck phase
+                        {
+                            static bool dumped_hotspots = false;
+                            if (video.count_frame == 800 && vpa && !dumped_hotspots) {
+                                dumped_hotspots = true;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                printf("GSOS_STARTUP_DUMP at frame=%d:\n", video.count_frame);
+                                // GS/OS startup code at E0:E800-E840
+                                printf("  E0:E800: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE800 + i]);
+                                printf("\n  E0:E840: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE840 + i]);
+                                printf("\n");
+                                // GET_PREFIX caller at E0:E660-E6A0
+                                printf("  E0:E660: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE660 + i]);
+                                printf("\n  E0:E6A0: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE6A0 + i]);
+                                printf("\n");
+                                // GET_DEV_NUM caller at E0:EA80-EAC0
+                                printf("  E0:EA80: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xEA80 + i]);
+                                printf("\n  E0:EAC0: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xEAC0 + i]);
+                                printf("\n");
+                                // VCR area (E0:E0E6+) and device tables
+                                printf("  E0:E0E0: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE0E0 + i]);
+                                printf("\n  E0:E120: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE120 + i]);
+                                printf("\n  E0:E160: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE160 + i]);
+                                printf("\n");
+                                // Startup file info - prefix path
+                                printf("  E0:E130: ");
+                                for (int i = 0; i < 48; i++) printf("%02X ", slowram[0xE130 + i]);
+                                printf("\n");
+                                // DevNum parms area (E0:E16A)
+                                printf("  E0:E168: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", slowram[0xE168 + i]);
+                                printf("\n");
+                                // GS/OS status/error area (E0:E090-E0E0)
+                                printf("  E0:E090: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE090 + i]);
+                                printf("\n  E0:E0D0: ");
+                                for (int i = 0; i < 16; i++) printf("%02X ", slowram[0xE0D0 + i]);
+                                printf("\n");
+                                // E0:E870-E8A0 (startup continuation code with $E0D8 flag check)
+                                printf("  E0:E860: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE860 + i]);
+                                printf("\n  E0:E8A0: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE8A0 + i]);
+                                printf("\n");
+                                // Bank 00 fast RAM - P16 dispatcher area (partial)
+                                printf("  00:9E00: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", fastram[0x9E00 + i]);
+                                printf("\n");
+                                // Bank 00 fast RAM - GS/OS dispatch tables
+                                printf("  00:D4C0: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", fastram[0xD4C0 + i]);
+                                printf("\n  00:D680: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", fastram[0xD680 + i]);
+                                printf("\n");
+                                // GS/OS startup file paths
+                                // Check if there's a startup pathname
+                                printf("  E0:E1A0: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE1A0 + i]);
+                                printf("\n  E0:E1E0: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE1E0 + i]);
+                                printf("\n  E0:E220: ");
+                                for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xE220 + i]);
+                                printf("\n");
+                                // Compare fast RAM vs slow RAM in LC area ($D000-$FFFF)
+                                // On real hardware, bank 00 LC accesses may go to slow RAM
+                                int lc_match = 0, lc_differ = 0;
+                                for (int i = 0; i < 0x3000; i++) {
+                                    if (fastram[0xD000 + i] == slowram[0xD000 + i]) lc_match++;
+                                    else lc_differ++;
+                                }
+                                printf("  LC_COMPARE: fast vs slow D000-FFFF: match=%d differ=%d (%.1f%% match)\n",
+                                       lc_match, lc_differ, 100.0 * lc_match / (lc_match + lc_differ));
+                                // Sample specific areas
+                                printf("  FAST[D4C0]: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", fastram[0xD4C0 + i]);
+                                printf("\n  SLOW[D4C0]: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", slowram[0xD4C0 + i]);
+                                printf("\n  FAST[E16A]: ");
+                                for (int i = 0; i < 16; i++) printf("%02X ", fastram[0xE16A + i]);
+                                printf("\n  SLOW[E16A]: ");
+                                for (int i = 0; i < 16; i++) printf("%02X ", slowram[0xE16A + i]);
+                                printf("\n  FAST[EA80]: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", fastram[0xEA80 + i]);
+                                printf("\n  SLOW[EA80]: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", slowram[0xEA80 + i]);
+                                printf("\n");
+                                // VCR[$08] - device online status
+                                uint16_t vcr08 = slowram[0xE0EE] | (slowram[0xE0EF] << 8);
+                                uint16_t vcr2E = slowram[0xE114] | (slowram[0xE115] << 8);
+                                uint16_t e0cc = slowram[0xE0CC] | (slowram[0xE0CD] << 8);
+                                uint16_t e098 = slowram[0xE098] | (slowram[0xE099] << 8);
+                                uint16_t e0d8 = slowram[0xE0D8] | (slowram[0xE0D9] << 8);
+                                printf("  KEY: VCR[$08]=%04X VCR[$2E]=%04X E0CC=%04X E098=%04X E0D8=%04X\n",
+                                       vcr08, vcr2E, e0cc, e098, e0d8);
+                                printf("\n");
+                            }
+                        }
+
+                        // Focused PC profiler: capture E0/E1/01/02 bank PCs during stuck phase
+                        // Also dump BFA5 opcode during execution
+                        {
+                            static bool pc_profile_done = false;
+                            static std::map<uint32_t, int> pc_counts;
+                            static bool bfa5_checked = false;
+                            unsigned short pc_s = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_s = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (vpa && video.count_frame >= 868 && video.count_frame <= 870 && !pc_profile_done) {
+                                uint32_t full_pc = ((uint32_t)pbr_s << 16) | pc_s;
+                                pc_counts[full_pc]++;
+                                // When BFA5 is first executed, dump the actual opcode
+                                if (!bfa5_checked && pbr_s == 0x00 && pc_s == 0xBFA5) {
+                                    bfa5_checked = true;
+                                    uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    uint8_t ir = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                                    printf("BFA5_OPCODE: IR=%02X fastram[BFA5]=%02X fastram[BFA6]=%02X fastram[BFA7]=%02X frame=%d\n",
+                                           ir, fastram[0xBFA5], fastram[0xBFA6], fastram[0xBFA7], video.count_frame);
+                                    // Dump 16 bytes for context
+                                    printf("  BFA0: ");
+                                    for (int i = 0; i < 16; i++) printf("%02X ", fastram[0xBFA0 + i]);
+                                    printf("\n");
+                                }
+                            }
+                            if (video.count_frame == 871 && !pc_profile_done) {
+                                pc_profile_done = true;
+                                // Filter and sort by bank
+                                printf("PC_PROFILE frames 868-870 (non-FF banks), sorted by count:\n");
+                                std::vector<std::pair<int, uint32_t>> sorted;
+                                for (auto& p : pc_counts) {
+                                    uint8_t bank = (p.first >> 16) & 0xFF;
+                                    if (bank != 0xFF) sorted.push_back({p.second, p.first});
+                                }
+                                std::sort(sorted.rbegin(), sorted.rend());
+                                for (int i = 0; i < 80 && i < (int)sorted.size(); i++) {
+                                    uint32_t addr = sorted[i].second;
+                                    printf("  %02X:%04X  count=%d\n", (addr >> 16) & 0xFF, addr & 0xFFFF, sorted[i].first);
+                                }
+                                // Also show FF bank top 20
+                                printf("PC_PROFILE frames 868-870 (FF bank only), top 20:\n");
+                                std::vector<std::pair<int, uint32_t>> ff_sorted;
+                                for (auto& p : pc_counts) {
+                                    uint8_t bank = (p.first >> 16) & 0xFF;
+                                    if (bank == 0xFF) ff_sorted.push_back({p.second, p.first});
+                                }
+                                std::sort(ff_sorted.rbegin(), ff_sorted.rend());
+                                for (int i = 0; i < 20 && i < (int)ff_sorted.size(); i++) {
+                                    uint32_t addr = ff_sorted[i].second;
+                                    printf("  %02X:%04X  count=%d\n", (addr >> 16) & 0xFF, addr & 0xFFFF, ff_sorted[i].first);
+                                }
+                            }
+                        }
+
+                        // Driver return trap: FF:3C40 (ALL_DONE RTS) - log return address
+                        {
+                            static int driver_ret_count = 0;
+                            unsigned short pc_now_dr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now_dr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (pbr_now_dr == 0xFF && pc_now_dr == 0x3C40 && vpa && driver_ret_count >= 170 && driver_ret_count < 250) {
+                                uint8_t* mainram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint16_t sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                // RTS pops 2 bytes (PCL, PCH), adds 1
+                                uint8_t ret_lo = mainram[sp + 1];
+                                uint8_t ret_hi = mainram[sp + 2];
+                                uint16_t ret_addr = ((ret_hi << 8) | ret_lo) + 1;
+                                // Also check PBR on stack for JSL/RTL (3 bytes deeper)
+                                uint8_t ret3_lo = mainram[sp + 3];
+                                uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                bool carry = p_reg & 0x01;
+                                printf("DRIVER_RET #%d: RTS to FF:%04X (carry=%d) SP=%04X frame=%d\n",
+                                       driver_ret_count, ret_addr, carry ? 1 : 0, sp, video.count_frame);
+                            }
+                            if (pbr_now_dr == 0xFF && pc_now_dr == 0x3C40 && vpa) {
+                                driver_ret_count++;
+                                // Activate kernel trace if armed
+                                if (g_ktrace_active == 2) {
+                                    g_ktrace_active = 1;
+                                    printf("KTRACE_ACTIVATED at driver return #%d frame=%d\n", driver_ret_count, video.count_frame);
+                                }
+                            }
+                        }
+
+                        // SmartPort AppleDisk call trap: FF:5D65 (JSR $3C00)
+                        {
+                            static int appledisk_call_count = 0;
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (pbr_now == 0xFF && pc_now == 0x5D65 && vpa && appledisk_call_count < 500) {
+                                appledisk_call_count++;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                // At this point, NONtoEXT may have already run (if non-extended cmd)
+                                // Extended format: $42-$44=buf, $45=cmdcode, $46=pcount,
+                                //   $47=unused, $48-$4B=block(32bit)
+                                // The cmdcode already has ext bit set (0x40) by regs_setup
+                                uint8_t cmdcode = fastram[0x45];
+                                uint8_t buf_lo = fastram[0x42];
+                                uint8_t buf_mid = fastram[0x43];
+                                uint8_t buf_hi = fastram[0x44];
+                                // Extended block number at $48-$4B
+                                uint32_t blocknum_ext = fastram[0x48] | (fastram[0x49] << 8) |
+                                                        (fastram[0x4A] << 16) | (fastram[0x4B] << 24);
+                                // Also show the NON-extended block at $49-$4A for comparison
+                                uint16_t blocknum_non = fastram[0x49] | (fastram[0x4A] << 8);
+                                printf("WOZ_APPLEDISK #%d: cmdcode=%02X ext_block=%08X non_block=%04X buf=%02X:%04X frame=%d zp42-4F=",
+                                       appledisk_call_count, cmdcode, blocknum_ext, blocknum_non,
+                                       buf_hi, (uint16_t)(buf_mid << 8 | buf_lo), video.count_frame);
+                                for (int i = 0x42; i <= 0x4F; i++) printf("%02X ", fastram[i]);
+                                printf("\n");
+                                // Log extra detail for STATUS commands (cmdcode=00 or 0x40)
+                                if (cmdcode == 0x00 || cmdcode == 0x40) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    printf("  *** STATUS COMMAND! E1:D594=%02X%02X dib_slist[E1:03E6]=%02X%02X\n",
+                                           slowram[0x1D595], slowram[0x1D594],
+                                           slowram[0x103E7], slowram[0x103E6]);
+                                    // Dump direct page area $20-$2F (drvr_dib_ptr, drvr_slist_ptr)
+                                    printf("  DP $20-$5F: ");
+                                    for (int i = 0x20; i <= 0x5F; i++) printf("%02X ", fastram[i]);
+                                    printf("\n");
+                                }
+                                // After call #220, prepare kernel trace (will activate at driver return)
+                                if (appledisk_call_count == 221) {
+                                    g_ktrace_active = 2; // 2 = armed, waiting for driver return
+                                    printf("  KTRACE_ARMED after APPLEDISK #%d\n", appledisk_call_count);
+                                }
+                                // During stuck phase, dump call stack to find who calls SmartPort directly
+                                if (appledisk_call_count >= 200 && appledisk_call_count <= 230) {
+                                    uint16_t sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                    printf("  STACK @SP=%04X: ", sp);
+                                    for (int i = 1; i <= 20; i++) printf("%02X ", fastram[(sp + i) & 0xFFFF]);
+                                    printf("\n");
+                                    // Decode JSR/JSL return addresses from stack
+                                    // SP+1,2 = JSR return (within FF bank)
+                                    uint16_t ret1 = fastram[(sp+1) & 0xFFFF] | (fastram[(sp+2) & 0xFFFF] << 8);
+                                    // SP+3,4,5 = JSL return (3 bytes: PCL, PCH, PBR)
+                                    uint16_t ret2_pc = fastram[(sp+3) & 0xFFFF] | (fastram[(sp+4) & 0xFFFF] << 8);
+                                    uint8_t ret2_pbr = fastram[(sp+5) & 0xFFFF];
+                                    uint16_t ret3_pc = fastram[(sp+6) & 0xFFFF] | (fastram[(sp+7) & 0xFFFF] << 8);
+                                    uint8_t ret3_pbr = fastram[(sp+8) & 0xFFFF];
+                                    uint16_t ret4_pc = fastram[(sp+9) & 0xFFFF] | (fastram[(sp+10) & 0xFFFF] << 8);
+                                    uint8_t ret4_pbr = fastram[(sp+11) & 0xFFFF];
+                                    printf("  CALLCHAIN: JSR->FF:%04X JSL->%02X:%04X JSL->%02X:%04X JSL->%02X:%04X\n",
+                                           ret1+1, ret2_pbr, ret2_pc+1, ret3_pbr, ret3_pc+1, ret4_pbr, ret4_pc+1);
+                                }
+                            }
+                        }
+
                         // WOZ sector comparison debug: trap at FF:407D (LDA sectfnd instruction)
                         // This shows what sector was found vs what sector is expected
                         {
@@ -1546,7 +2221,7 @@ int verilate() {
                             unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                             unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                             // Trigger on FF:407D (LDA sectfnd instruction, right before CMP)
-                            if (pbr_now == 0xFF && pc_now == 0x407D && vpa && sector_cmp_debug_count < 200) {
+                            if (pbr_now == 0xFF && pc_now == 0x407D && vpa && sector_cmp_debug_count < 0) {
                                 sector_cmp_debug_count++;
                                 unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
                                 // Read memory values from bank E1 (slow RAM) where the driver stores them
@@ -1579,7 +2254,7 @@ int verilate() {
                             unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                             unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                             // Trap at READERR (FF:4DBF = SEC before RTS)
-                            if (pbr_now == 0xFF && pc_now == 0x4DBF && vpa && readdata_err_count < 30) {
+                            if (pbr_now == 0xFF && pc_now == 0x4DBF && vpa && readdata_err_count < 300) {
                                 readdata_err_count++;
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
                                 const int bank_e1_offset = 0x10000;
@@ -1590,38 +2265,1302 @@ int verilate() {
                                 printf("WOZ_READDATA_ERR #%d: error2=%02X sectfnd=%02X retry=%02X readret=%02X\n",
                                        readdata_err_count, error2, sectfnd, retry, readret);
                             }
+                            // FF:3F74 = BASICSTAT: STA [cmdbuffl] - stores status byte to buffer
+                            {
+                                static int basicstat_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x3F74 && vpa && basicstat_count < 500) {
+                                    uint8_t a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A & 0xFF;
+                                    printf("WOZ_BASICSTAT #%d: status_byte=%02X (DSW=%d Online=%d WP=%d) frame=%d\n",
+                                           basicstat_count, a_reg, a_reg & 1, (a_reg >> 4) & 1, (a_reg >> 2) & 1,
+                                           video.count_frame);
+                                    basicstat_count++;
+                                }
+                            }
                             // Also trap specific error types:
                             // FF:4DB3 = DCSUMERR (data checksum error, code 0x10)
-                            if (pbr_now == 0xFF && pc_now == 0x4DB3 && vpa && readdata_err_count < 30) {
+                            if (pbr_now == 0xFF && pc_now == 0x4DB3 && vpa && readdata_err_count < 300) {
                                 printf("WOZ_READDATA: DATA CHECKSUM ERROR\n");
                             }
                             // FF:4DB7 = DBSERR (data bitslip error, code 0x08)
-                            if (pbr_now == 0xFF && pc_now == 0x4DB7 && vpa && readdata_err_count < 30) {
+                            if (pbr_now == 0xFF && pc_now == 0x4DB7 && vpa && readdata_err_count < 300) {
                                 printf("WOZ_READDATA: DATA BITSLIP ERROR\n");
                             }
                             // FF:4D0D = RDERR (sector mismatch in data field / timeout)
-                            if (pbr_now == 0xFF && pc_now == 0x4D0D && vpa && readdata_err_count < 30) {
+                            if (pbr_now == 0xFF && pc_now == 0x4D0D && vpa && readdata_err_count < 300) {
                                 printf("WOZ_READDATA: SECTOR MISMATCH/TIMEOUT in data field\n");
                             }
+                            // FF:408B = JSR ReadData (sector matched, about to read data)
+                            {
+                                static int readdata_call_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x408B && vpa && readdata_call_count < 2000) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                    uint8_t sector = slowram[bank_e1_offset + 0x0F2A];
+                                    uint8_t side = slowram[bank_e1_offset + 0x0F2B];
+                                    uint8_t sectfnd = slowram[bank_e1_offset + 0x0F33];
+                                    // Block number at DP+$48 (4 bytes)
+                                    uint8_t blk0 = slowram[bank_e1_offset + 0x0F48];
+                                    uint8_t blk1 = slowram[bank_e1_offset + 0x0F49];
+                                    uint8_t blk2 = slowram[bank_e1_offset + 0x0F4A];
+                                    uint8_t blk3 = slowram[bank_e1_offset + 0x0F4B];
+                                    // DRswtch at DP+$42 area
+                                    uint8_t drswtch = slowram[bank_e1_offset + 0x0F42];
+                                    // cmdbuffl at DP+$42 (3 bytes: low, high, bank)
+                                    uint8_t buf_lo = slowram[bank_e1_offset + 0x0F42];
+                                    uint8_t buf_hi = slowram[bank_e1_offset + 0x0F43];
+                                    uint8_t buf_bk = slowram[bank_e1_offset + 0x0F44];
+                                    uint32_t block_num = blk0 | (blk1 << 8) | (blk2 << 16) | (blk3 << 24);
+                                    // Get CPU's Direct Page register
+                                    uint16_t dp_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                    uint8_t dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                    // Read block and buffer from BOTH main RAM (bank 0) and slow RAM (bank E1)
+                                    // using DP-relative offsets
+                                    uint8_t* mainram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    // cmdblockl at DP+$48 in bank 0
+                                    uint16_t dp_blk_off = dp_reg + 0x48;
+                                    uint32_t dp_blk = mainram[dp_blk_off] | (mainram[dp_blk_off+1] << 8) |
+                                                      (mainram[dp_blk_off+2] << 16) | (mainram[dp_blk_off+3] << 24);
+                                    // cmdbuffl at DP+$42 in bank 0
+                                    uint16_t dp_buf_off = dp_reg + 0x42;
+                                    uint32_t dp_buf = mainram[dp_buf_off] | (mainram[dp_buf_off+1] << 8) |
+                                                      (mainram[dp_buf_off+2] << 16);
+                                    printf("WOZ_READDATA_CALL #%d: cyl=%02X sec=%02X side=%02X sectfnd=%02X DP=%04X DBR=%02X dp_blk=%d dp_buf=%02X:%04X\n",
+                                           readdata_call_count, cyl, sector, side, sectfnd,
+                                           dp_reg, dbr, dp_blk, (uint8_t)(dp_buf >> 16), (uint16_t)(dp_buf & 0xFFFF));
+                                    readdata_call_count++;
+                                }
+                            }
+                            // FF:408E = BCS trymore (ReadData result)
+                            {
+                                static int readdata_result_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x408E && vpa && readdata_result_count < 2000) {
+                                    uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    bool carry = p_reg & 0x01;
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t error2 = slowram[bank_e1_offset + 0x0F44];
+                                    // Read DP values for block number and buffer
+                                    uint8_t* mainram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    uint16_t dp_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                    uint16_t dp_buf_off = dp_reg + 0x42;
+                                    uint32_t buf_addr = mainram[dp_buf_off] | (mainram[dp_buf_off+1] << 8) |
+                                                        (mainram[dp_buf_off+2] << 16);
+                                    // Dump first 16 bytes from the user buffer (bank 0 fast RAM)
+                                    uint16_t buf_lo16 = buf_addr & 0xFFFF;
+                                    if (!carry && (readdata_result_count % 100 == 0)) {
+                                        printf("WOZ_READDATA_RESULT #%d: SUCCESS buf=%02X:%04X data=",
+                                               readdata_result_count, (uint8_t)(buf_addr>>16), buf_lo16);
+                                        for (int i = 0; i < 16; i++) {
+                                            printf("%02X ", mainram[buf_lo16 + i]);
+                                        }
+                                        printf("\n");
+                                    } else {
+                                        printf("WOZ_READDATA_RESULT #%d: %s error2=%02X\n",
+                                               readdata_result_count, carry ? "FAIL(C=1)" : "SUCCESS(C=0)", error2);
+                                    }
+                                    readdata_result_count++;
+                                }
+                            }
+                            // Error path classification - set reason before TRYMORE fires
+                            // FF:4048 = BPL trymore (rdaddr checksum/bitslip error)
+                            static const char* trymore_reason = "unknown";
+                            if (pbr_now == 0xFF && pc_now == 0x4048 && vpa) {
+                                uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                if (!(p_reg & 0x80)) trymore_reason = "RDADDR_CSBS";  // N=0 → BPL taken
+                            }
+                            // FF:404F = BNE trymore (rdaddr timeout, double retries)
+                            if (pbr_now == 0xFF && pc_now == 0x404F && vpa) {
+                                uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                if (!(p_reg & 0x02)) trymore_reason = "RDADDR_TIMEOUT";  // Z=0 → BNE taken
+                            }
+                            // FF:4071 = BRA oopseek (wrong cylinder → seek error → eventually trymore)
+                            if (pbr_now == 0xFF && pc_now == 0x4071 && vpa) {
+                                trymore_reason = "WRONG_CYL";
+                            }
+                            // FF:407B = BMI trymore (wrong side)
+                            if (pbr_now == 0xFF && pc_now == 0x407B && vpa) {
+                                uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                if (p_reg & 0x80) trymore_reason = "WRONG_SIDE";  // N=1 → BMI taken
+                            }
+                            // FF:4083 = BNE trymore (wrong sector)
+                            if (pbr_now == 0xFF && pc_now == 0x4083 && vpa) {
+                                uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                if (!(p_reg & 0x02)) trymore_reason = "WRONG_SECTOR";  // Z=0 → BNE taken
+                            }
+                            // FF:408E = BCS trymore (ReadData returned error)
+                            if (pbr_now == 0xFF && pc_now == 0x408E && vpa) {
+                                uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                if (p_reg & 0x01) trymore_reason = "READDATA_FAIL";  // C=1 → BCS taken
+                            }
                             // FF:402D = TRYMORE (retry entry point after any read failure)
-                            if (pbr_now == 0xFF && pc_now == 0x402D && vpa && readdata_err_count < 100) {
+                            if (pbr_now == 0xFF && pc_now == 0x402D && vpa && readdata_err_count < 500) {
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
                                 const int bank_e1_offset = 0x10000;
                                 uint8_t error2  = slowram[bank_e1_offset + 0x0F44];
                                 uint8_t retry   = slowram[bank_e1_offset + 0x0F45];
                                 uint8_t readret = slowram[bank_e1_offset + 0x0F37];
                                 uint8_t seekret = slowram[bank_e1_offset + 0x0F35];
-                                printf("WOZ_TRYMORE #%d: error2=%02X retry=%02X readret=%02X seekret=%02X\n",
-                                       readdata_err_count, error2, retry, readret, seekret);
+                                uint8_t cyl     = slowram[bank_e1_offset + 0x0F29];
+                                uint8_t sector  = slowram[bank_e1_offset + 0x0F2A];
+                                uint8_t side    = slowram[bank_e1_offset + 0x0F2B];
+                                uint8_t trkfnd  = slowram[bank_e1_offset + 0x0F34];
+                                uint8_t sidefnd = slowram[bank_e1_offset + 0x0F32];
+                                uint8_t sectfnd = slowram[bank_e1_offset + 0x0F33];
+                                uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
+                                uint8_t curcyl  = slowram[bank_e1_offset + 0x0F3A + drive_idx];
+                                // Decode cylinder the way ROM does: (sidefnd[0]<<6) | trkfnd[5:0]
+                                uint8_t decoded_cyl = ((sidefnd & 1) << 6) | (trkfnd & 0x3F);
+                                // Decode side comparison: (sidefnd>>1)<<3 then EOR side, check bit 7
+                                uint8_t side_check = ((sidefnd >> 1) << 3) ^ side;
+                                bool side_mismatch = (side_check & 0x80) != 0;
+                                printf("WOZ_TRYMORE #%d [%s]: want cyl=%02X sec=%02X side=%02X | found trk=%02X sec=%02X sidefnd=%02X | dcyl=%02X sideck=%02X(%s) | err2=%02X rdret=%02X curcyl=%02X\n",
+                                       readdata_err_count, trymore_reason,
+                                       cyl, sector, side, trkfnd, sectfnd, sidefnd,
+                                       decoded_cyl, side_check, side_mismatch ? "MISMATCH" : "ok",
+                                       error2, readret, curcyl);
+                                trymore_reason = "unknown";  // reset for next
+                            }
+                            // FF:4826 = SEEK entry point (JMP SeekHook at E1:0F87) - dump curcyl and target cyl
+                            // Note: FF:4021 does JSR $4826 (SEEK), cyl is already set before this call
+                            {
+                                static int seek_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x4826 && vpa && seek_count < 100) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28]; // drive variable
+                                    uint8_t curcyl = slowram[bank_e1_offset + 0x0F3A + drive_idx];
+                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                    uint8_t sector = slowram[bank_e1_offset + 0x0F2A];
+                                    uint8_t side = slowram[bank_e1_offset + 0x0F2B];
+                                    // SeekHook at E1:0F87 is a JML instruction (4 bytes: 5C ll hh bb)
+                                    uint8_t hook0 = slowram[bank_e1_offset + 0x0F87];
+                                    uint8_t hook1 = slowram[bank_e1_offset + 0x0F88];
+                                    uint8_t hook2 = slowram[bank_e1_offset + 0x0F89];
+                                    uint8_t hook3 = slowram[bank_e1_offset + 0x0F8A];
+                                    // Also dump head_phase from flux_drive
+                                    uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
+                                    uint32_t hphase = woz_track; // use WOZ_TRACK3 as proxy for head position
+                                    printf("WOZ_SEEK #%d: curcyl=%02X target_cyl=%02X sector=%02X side=%02X drive=%02X hook=%02X:%04X hphase=%d\n",
+                                           seek_count, curcyl, cyl, sector, side, drive_idx,
+                                           hook3, (hook2<<8)|hook1, hphase);
+                                    seek_count++;
+                                }
+                            }
+                            // FF:4855 = SEEKDONE - curcyl updated successfully
+                            {
+                                static int seekdone_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x4855 && vpa && seekdone_count < 100) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
+                                    uint8_t curcyl = slowram[bank_e1_offset + 0x0F3A + drive_idx];
+                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                    uint8_t dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                    uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
+                                    uint32_t hphase = woz_track; // use WOZ_TRACK3 as proxy for head position
+                                    printf("WOZ_SEEKDONE #%d: curcyl=%02X cyl=%02X hphase=%d DBR=%02X\n",
+                                           seekdone_count, curcyl, cyl, hphase, dbr);
+                                    seekdone_count++;
+                                }
+                            }
+                            // FF:485E = after STA curcyl,x - verify curcyl was written
+                            {
+                                static int seekpost_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x485E && vpa && seekpost_count < 100) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
+                                    uint8_t curcyl_new = slowram[bank_e1_offset + 0x0F3A + drive_idx];
+                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                    uint8_t dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                    printf("WOZ_SEEKPOST #%d: curcyl_now=%02X cyl=%02X DBR=%02X drive=%02X\n",
+                                           seekpost_count, curcyl_new, cyl, dbr, drive_idx);
+                                    seekpost_count++;
+                                }
+                            }
+                            // FF:48AA = STZ curcyl,x in recal - this zeros curcyl
+                            {
+                                static int recal_stz_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x48AA && vpa && recal_stz_count < 100) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
+                                    uint8_t curcyl_before = slowram[bank_e1_offset + 0x0F3A + drive_idx];
+                                    printf("WOZ_RECAL_STZ #%d: STZ curcyl,x at FF:48AA drive=%02X curcyl_before=%02X\n",
+                                           recal_stz_count, drive_idx, curcyl_before);
+                                    recal_stz_count++;
+                                }
+                            }
+                            // FF:4A91 = STA curcyl,x - resets to unknown ($FF)
+                            {
+                                static int unknown_stz_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x4A91 && vpa && unknown_stz_count < 100) {
+                                    printf("WOZ_CURCYL_RESET #%d: STA curcyl,x at FF:4A91 (reset to unknown)\n",
+                                           unknown_stz_count);
+                                    unknown_stz_count++;
+                                }
+                            }
+                            // FF:4866 = SEEKERR - seek failed
+                            {
+                                static int seekerr_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x4866 && vpa && seekerr_count < 100) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
+                                    uint8_t curcyl = slowram[bank_e1_offset + 0x0F3A + drive_idx];
+                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                    uint8_t error2 = slowram[bank_e1_offset + 0x0F44];
+                                    uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
+                                    uint32_t hphase = woz_track; // use WOZ_TRACK3 as proxy for head position
+                                    printf("WOZ_SEEKERR #%d: curcyl=%02X cyl=%02X error2=%02X hphase=%d\n",
+                                           seekerr_count, curcyl, cyl, error2, hphase);
+                                    seekerr_count++;
+                                }
+                            }
+                            // FF:4041 = GRABHEADR (JSR rdaddr) - dump WOZ state when address field reading starts
+                            {
+                                static int grabheadr_count = 0;
+                                static unsigned long long prev_grabheadr_time = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x4041 && vpa && grabheadr_count < 500) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                    uint8_t sector = slowram[bank_e1_offset + 0x0F2A];
+                                    uint8_t side = slowram[bank_e1_offset + 0x0F2B];
+                                    uint8_t sectfnd = slowram[bank_e1_offset + 0x0F33];
+                                    unsigned long long now = (unsigned long long)main_time;
+                                    unsigned long long delta = (prev_grabheadr_time > 0) ? (now - prev_grabheadr_time) : 0;
+                                    // Convert 14MHz ticks to microseconds: delta / 14
+                                    unsigned long long delta_us = delta / 14;
+                                    printf("WOZ_GRABHEADR #%d: want cyl=%02X sec=%02X side=%02X | last_found=%02X | dt=%llu us (%llu ticks)\n",
+                                           grabheadr_count, cyl, sector, side, sectfnd, delta_us, delta);
+                                    prev_grabheadr_time = now;
+                                    grabheadr_count++;
+                                }
+                            }
+                            // FF:4061 = @cmpCYL (CMP cyl) - dump A register which has decoded cylinder from address header
+                            {
+                                static int cmpcyl_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x4061 && vpa && cmpcyl_count < 500) {
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    const int bank_e1_offset = 0x10000;
+                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                    uint8_t trkfnd = slowram[bank_e1_offset + 0x0F34];
+                                    uint8_t sidefnd = slowram[bank_e1_offset + 0x0F32];
+                                    uint8_t sectfnd = slowram[bank_e1_offset + 0x0F33];
+                                    // A register contains the decoded cylinder
+                                    uint8_t a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A & 0xFF; // Low byte of A
+                                    printf("WOZ_CMPCYL #%d: A(decoded_cyl)=%02X target_cyl=%02X trkfnd=%02X sidefnd=%02X sectfnd=%02X\n",
+                                           cmpcyl_count, a_reg, cyl, trkfnd, sidefnd, sectfnd);
+                                    cmpcyl_count++;
+                                }
                             }
                             // FF:4CD9 = ReadData entry point
-                            if (pbr_now == 0xFF && pc_now == 0x4CD9 && vpa && readdata_err_count < 100) {
-                                printf("WOZ_READDATA_ENTRY\n");
+                            {
+                                static int readdata_entry_count = 0;
+                                if (pbr_now == 0xFF && pc_now == 0x4CD9 && vpa && readdata_entry_count < 300) {
+                                    readdata_entry_count++;
+                                    bool motor_act = VERTOPINTERN->emu__DOT__iigs__DOT__iwmc__DOT__iwm_active;
+                                    bool drive_on_v = VERTOPINTERN->emu__DOT__iigs__DOT__iwmc__DOT__drive_on;
+                                    printf("WOZ_READDATA_ENTRY #%d: motor_active=%d drive_on=%d frame=%d\n",
+                                           readdata_entry_count, motor_act, drive_on_v, video.count_frame);
+                                }
                             }
-                            // FF:408E = BCS trymore (after ReadData returns)
-                            if (pbr_now == 0xFF && pc_now == 0x408E && vpa && readdata_err_count < 100) {
+                            // IWM byte trace during ReadData data mark search (FF:4CF2-4CFD)
+                            // The ROM reads $C0EC at FF:4CF2 (LDA l6clr) and checks BPL at FF:4CF5
+                            // When bit7 is set, it compares with datamarks at FF:4CF7
+                            {
+                                static int dm_byte_count = 0;
+                                static bool dm_trace_active = false;
+                                static int dm_total_bytes = 0;
+                                static int dm_total_polls = 0;
+                                // Enhanced: track MOTOR_ACTIVE and values at each BPL iteration
+                                static uint8_t dm_bpl_values[60]; // A reg at each BPL
+                                static uint8_t dm_bpl_motor[60];  // MOTOR_ACTIVE at each BPL
+                                static int dm_bpl_count = 0;
+                                static int dm_motor_off_count = 0;
+                                static uint64_t dm_start_cycle = 0;
+                                static int dm_detail_log_count = 0;
+                                // Start trace when ReadData~GCR begins (FF:4CDD)
+                                if (pbr_now == 0xFF && pc_now == 0x4CDD && vpa) {
+                                    dm_trace_active = true;
+                                    dm_byte_count = 0;
+                                    dm_bpl_count = 0;
+                                    dm_motor_off_count = 0;
+                                    dm_start_cycle = main_time;
+                                }
+                                // Stop trace when ReadData returns (success at FF:4DB1 or error at FF:4DBF)
+                                if (pbr_now == 0xFF && (pc_now == 0x4DB1 || pc_now == 0x4DBF) && vpa) {
+                                    dm_trace_active = false;
+                                }
+                                // Track bytes that arrive (CMP instruction at FF:4CF7 means byte had bit7 set)
+                                if (dm_trace_active && pbr_now == 0xFF && pc_now == 0x4CFA && vpa) {
+                                    uint8_t a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A & 0xFF;
+                                    uint8_t x_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X & 0xFF;
+                                    uint8_t p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    bool z_flag = (p_reg >> 1) & 1;
+                                    if (dm_byte_count < 200) {
+                                        if (dm_byte_count == 0) printf("WOZ_DM_BYTES:");
+                                        printf(" %02X(x=%d%s)", a_reg, x_reg, z_flag ? ",Z" : "");
+                                        dm_byte_count++;
+                                        if (dm_byte_count % 20 == 0) printf("\nWOZ_DM_BYTES:");
+                                    }
+                                    dm_total_bytes++;
+                                }
+                                // Enhanced: At each BPL (FF:4CF5), capture A reg and MOTOR_ACTIVE
+                                if (dm_trace_active && pbr_now == 0xFF && pc_now == 0x4CF5 && vpa) {
+                                    uint8_t a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A & 0xFF;
+                                    bool motor_active = VERTOPINTERN->emu__DOT__iigs__DOT__iwmc__DOT__iwm_active;
+                                    if (dm_bpl_count < 60) {
+                                        dm_bpl_values[dm_bpl_count] = a_reg;
+                                        dm_bpl_motor[dm_bpl_count] = motor_active ? 1 : 0;
+                                    }
+                                    dm_bpl_count++;
+                                    if (!motor_active) dm_motor_off_count++;
+                                    dm_total_polls++;
+                                }
+                                // On timeout at FF:4CF0 (BEQ rderr), print DETAILED summary
+                                if (dm_trace_active && pbr_now == 0xFF && pc_now == 0x4CF0 && vpa) {
+                                    uint8_t y_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y & 0xFF;
+                                    static int dm_to_count = 0;
+                                    if (dm_to_count < 20) {
+                                        printf("\nWOZ_DM_TIMEOUT #%d: received %d bytes, %d BPL iters, %d motor_off, Y=%d, cycles=%llu\n",
+                                               dm_to_count, dm_byte_count, dm_bpl_count, dm_motor_off_count,
+                                               y_reg, (unsigned long long)(main_time - dm_start_cycle));
+                                        dm_to_count++;
+                                    }
+                                    // Print detailed BPL values for first 10 timeouts
+                                    if (dm_detail_log_count < 10 && y_reg == 0) {
+                                        printf("WOZ_DM_DETAIL #%d: BPL values (A,motor): ", dm_detail_log_count);
+                                        int n = dm_bpl_count < 60 ? dm_bpl_count : 60;
+                                        for (int i = 0; i < n; i++) {
+                                            printf("%02X/%d ", dm_bpl_values[i], dm_bpl_motor[i]);
+                                            if ((i+1) % 25 == 0 && i+1 < n) printf("\n  ");
+                                        }
+                                        printf("\n");
+                                        dm_detail_log_count++;
+                                    }
+                                    dm_byte_count = 0;
+                                    dm_total_polls = 0;
+                                    dm_bpl_count = 0;
+                                    dm_motor_off_count = 0;
+                                }
+                            }
+                            // ReadData error traps: identify which error type
+                            // FF:4D0D = RDERR (data mark timeout or sector mark mismatch)
+                            // FF:4DB3 = DCSUMERR (data checksum error, sets error2 |= 0x10)
+                            // FF:4DB7 = DBSERR (data bitslip error, sets error2 |= 0x08)
+                            // FF:4CF0 = data mark timeout (BEQ rderr, fires every DEY loop)
+                            {
+                                static int rderr_count = 0, dcsumerr_count = 0, dbserr_count = 0, dmto_count = 0;
+                                static int rda_count = 0;    // FF:4CFF = sector mark read (after data marks found)
+                                static int rdaaa_count = 0;  // Data reading loop entry
+                                static int rdsuccess_count = 0; // FF:4DB1 = ReadData success
+                                static int rde_count = 0;    // Data loop iterations
+                                if (pbr_now == 0xFF && vpa) {
+                                    if (pc_now == 0x4D0D && rderr_count < 50) {
+                                        printf("WOZ_RDERR #%d: data mark timeout/sector mismatch\n", rderr_count++);
+                                    }
+                                    if (pc_now == 0x4DB3 && dcsumerr_count < 50) {
+                                        printf("WOZ_DCSUMERR #%d: data checksum error\n", dcsumerr_count++);
+                                    }
+                                    if (pc_now == 0x4DB7 && dbserr_count < 50) {
+                                        printf("WOZ_DBSERR #%d: data bitslip error\n", dbserr_count++);
+                                    }
+                                    // FF:4CF0 = BEQ rderr - only log on ACTUAL timeout (Y register = 0)
+                                    if (pc_now == 0x4CF0) {
+                                        uint8_t y_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y & 0xFF;
+                                        if (y_reg == 0 && dmto_count < 50) {
+                                            printf("WOZ_DMTIMEOUT #%d: data mark search REAL timeout (Y=0)\n", dmto_count++);
+                                        }
+                                    }
+                                    // FF:4CFF = RDA: LDX $C0EC - sector mark read after finding D5-AA-96
+                                    // If we reach here, all 3 data marks were matched
+                                    if (pc_now == 0x4CFF && rda_count < 100) {
+                                        printf("WOZ_RDA #%d: data marks D5-AA-96 FOUND, reading sector mark\n", rda_count++);
+                                    }
+                                    // FF:4D10 = RDAAA area (after sector mark matched)
+                                    // Actually need exact address - let's check nearby: FF:4D0F is after JMP readerr (3 bytes from 4D0C)
+                                    // The BEQ rdaaa at ~4D0A branches forward past the JMP. rdaaa should be at 4D0F or 4D10.
+                                    // Use 4D0F-4D12 range to catch it
+                                    if ((pc_now >= 0x4D0F && pc_now <= 0x4D15) && rdaaa_count < 3) {
+                                        uint8_t y_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y & 0xFF;
+                                        uint8_t a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A & 0xFF;
+                                        printf("WOZ_RDAAA #%d: sector mark OK, entering data loop at PC=%04X Y=%02X A=%02X\n",
+                                               rdaaa_count++, pc_now, y_reg, a_reg);
+                                    }
+                                    // FF:4DB1 = ReadData success (CLC before RTS)
+                                    if (pc_now == 0x4DB1 && rdsuccess_count < 100) {
+                                        printf("WOZ_READDATA_SUCCESS #%d: sector read complete!\n", rdsuccess_count++);
+                                    }
+                                    // Track first few data loop iterations (RDE at FF:4D15 area)
+                                    // The BPL self-loop reads $C0EC: LDX $C0EC / BPL
+                                    // Log when ROM is stuck in BPL loop for too long
+                                }
+                            }
+                            // FF:4098 = SBSET (after MergeIt or DirectRead, data is in user buffer)
+                            if (pbr_now == 0xFF && pc_now == 0x4098 && vpa) {
+                                {
+                                    static int buf_dump_count = 0;
+                                    if (buf_dump_count < 300) {
+                                        buf_dump_count++;
+                                        uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                        uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                        const int bank_e1_offset = 0x10000;
+                                        unsigned short d_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                        unsigned char altzp = VERTOPINTERN->emu__DOT__iigs__DOT__ALTZP;
+                                        uint8_t shadow_reg = VERTOPINTERN->emu__DOT__iigs__DOT__shadow;
+                                        uint8_t ramrd = VERTOPINTERN->emu__DOT__iigs__DOT__RAMRD;
+                                        uint8_t ramwrt = VERTOPINTERN->emu__DOT__iigs__DOT__RAMWRT;
+                                        uint8_t store80 = VERTOPINTERN->emu__DOT__iigs__DOT__STORE80;
+                                        // cmdbuffl is at zero-page $42-$44 (3 bytes = 24-bit ptr)
+                                        // With D register, actual address is D+$42
+                                        // Zero page is in bank E1 if ALTZP=1, or bank 00/01
+                                        uint8_t* zp_base;
+                                        if (altzp) {
+                                            zp_base = slowram + bank_e1_offset; // Bank E1
+                                        } else {
+                                            zp_base = fastram; // Bank 00
+                                        }
+                                        uint16_t d_plus_42 = d_reg + 0x42;
+                                        uint8_t buf_lo  = zp_base[d_plus_42 & 0xFFFF];
+                                        uint8_t buf_mid = zp_base[(d_plus_42 + 1) & 0xFFFF];
+                                        uint8_t buf_hi  = zp_base[(d_plus_42 + 2) & 0xFFFF];
+                                        uint32_t buf_addr = buf_lo | (buf_mid << 8) | (buf_hi << 16);
+                                        uint8_t drswtch = slowram[bank_e1_offset + 0x0F42];
+                                        uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
+                                        uint8_t sector = slowram[bank_e1_offset + 0x0F2A];
+                                        uint8_t side = slowram[bank_e1_offset + 0x0F2B];
+                                        // Also read block number from E1:$48-$49
+                                        uint16_t blocknum = slowram[bank_e1_offset + 0x48] | (slowram[bank_e1_offset + 0x49] << 8);
+                                        printf("  BUF_DUMP #%d: cmdbuffl=%02X:%04X DRswtch=%02X shadow=%02X RAMRD=%d RAMWRT=%d blk=%04X cyl=%02X sec=%02X side=%02X\n",
+                                               buf_dump_count, buf_hi, (uint16_t)(buf_mid << 8 | buf_lo), drswtch, shadow_reg, ramrd, ramwrt, blocknum, cyl, sector, side);
+                                        // Read first 16 bytes from the buffer address
+                                        uint8_t bank = (buf_addr >> 16) & 0xFF;
+                                        uint16_t offset = buf_addr & 0xFFFF;
+                                        if (bank <= 0x01) {
+                                            // Show both bank 00 and bank 01 data
+                                            printf("  BANK00[0..15]: ");
+                                            for (int i = 0; i < 16; i++)
+                                                printf("%02X ", fastram[0x00000 + offset + i]);
+                                            printf("\n");
+                                            printf("  BANK01[0..15]: ");
+                                            for (int i = 0; i < 16; i++)
+                                                printf("%02X ", fastram[0x10000 + offset + i]);
+                                            printf("\n");
+                                        } else if (bank < 0x40) {
+                                            printf("  FAST[0..15]: ");
+                                            for (int i = 0; i < 16; i++)
+                                                printf("%02X ", fastram[(bank << 16) + offset + i]);
+                                            printf("\n");
+                                        } else {
+                                            printf("  (bank %02X not in fastram)\n", bank);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Trap at AEDE (RTL from GS/OS wrapper) - check buffer data
+                        {
+                            unsigned short pc_now_ae = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now_ae = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            static int aede_count2 = 0;
+                            if (pc_now_ae == 0xAEDE && pbr_now_ae == 0x00 && vpa && aede_count2 < 300) {
+                                aede_count2++;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                unsigned short a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned char p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                uint8_t shadow_reg = VERTOPINTERN->emu__DOT__iigs__DOT__shadow;
+                                // Get the RTL return address from stack
+                                uint8_t rtl_lo = fastram[(sp + 1) & 0xFFFF];
+                                uint8_t rtl_hi = fastram[(sp + 2) & 0xFFFF];
+                                uint8_t rtl_bank = fastram[(sp + 3) & 0xFFFF];
+                                // Show for all calls
+                                printf("WOZ_AEDE #%d: A=%04X carry=%d DBR=%02X SP=%04X shadow=%02X RTL=%02X:%04X\n",
+                                       aede_count2, a_reg, p_reg & 1, dbr, sp,
+                                       shadow_reg, rtl_bank, ((rtl_hi << 8) | rtl_lo) + 1);
+                                // Show buffer data
+                                if (aede_count2 >= 45 && aede_count2 <= 50) {
+                                    printf("  FAST[00:9A00]: ");
+                                    for (int i = 0; i < 16; i++) printf("%02X ", fastram[0x9A00 + i]);
+                                    printf("\n  SLOW[E0:9A00]: ");
+                                    for (int i = 0; i < 16; i++) printf("%02X ", slowram[0x9A00 + i]);
+                                    // Dump code at E0:F440-F520 (full function)
+                                    printf("\n  CODE E0:F440: ");
+                                    for (int i = 0; i < 224; i++) {
+                                        printf("%02X ", slowram[0xF440 + i]);
+                                        if (i % 32 == 31) printf("\n                ");
+                                    }
+                                    printf("\n");
+                                }
+                            }
+                        }
+
+                        // Trace $00A258 and $00B12B (post-read verification)
+                        {
+                            unsigned short pc_f4 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_f4 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                            // Trap at key points in E0:F4xx loop during stuck calls
+                            {
+                                static int f4loop_count = 0;
+                                // Trap at F4A9 (after successful read, before CACHE_ADD_BLK)
+                                if (pbr_f4 == 0xE0 && pc_f4 == 0xF4A9 && vpa && f4loop_count < 30) {
+                                    f4loop_count++;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    printf("WOZ_F4A9 #%d: A=%04X carry=%d (about to JSL CACHE_ADD_BLK)\n",
+                                           f4loop_count, a, p & 1);
+                                }
+                                // Trap at F4AD (after CACHE_ADD_BLK returns)
+                                static int f4ad_count = 0;
+                                if (pbr_f4 == 0xE0 && pc_f4 == 0xF4AD && vpa && f4ad_count < 30) {
+                                    f4ad_count++;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    printf("WOZ_F4AD #%d: A=%04X carry=%d (after CACHE_ADD_BLK, BCS F4B3?)\n",
+                                           f4ad_count, a, p & 1);
+                                }
+                                // Trap at F4AF (JSL $00B12B entry)
+                                static int f4af_count = 0;
+                                if (pbr_f4 == 0xE0 && pc_f4 == 0xF4AF && vpa && f4af_count < 30) {
+                                    f4af_count++;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    printf("WOZ_F4AF #%d: A=%04X carry=%d (about to JSL $00B12B)\n",
+                                           f4af_count, a, p & 1);
+                                }
+                                // Trap at F4B3 (BRA F48A - loop back)
+                                static int f4b3_count = 0;
+                                if (pbr_f4 == 0xE0 && pc_f4 == 0xF4B3 && vpa && f4b3_count < 30) {
+                                    f4b3_count++;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    printf("WOZ_F4B3 #%d: A=%04X carry=%d (BRA F48A loop)\n",
+                                           f4b3_count, a, p & 1);
+                                }
+                                // Trap at F496 (RTS - return from function)
+                                static int f496_count = 0;
+                                if (pbr_f4 == 0xE0 && pc_f4 == 0xF496 && vpa && f496_count < 30) {
+                                    f496_count++;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    printf("WOZ_F496 #%d: A=%04X carry=%d (RTS return)\n",
+                                           f496_count, a, p & 1);
+                                }
+                                // Trap at F49F (LDA $1A - path selection)
+                                static int f49f_count = 0;
+                                if (pbr_f4 == 0xE0 && pc_f4 == 0xF49F && vpa && f49f_count < 30) {
+                                    f49f_count++;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                    uint8_t dp1a = fastram[(d + 0x1A) & 0xFFFF];
+                                    printf("WOZ_F49F #%d: A=%04X carry=%d DP=$1A=%02X (path: %s)\n",
+                                           f49f_count, a, p & 1, dp1a,
+                                           dp1a == 0 ? "F497 (no verify)" : "F4A3 (with verify)");
+                                }
+                            }
+
+                            // Trap at F485 (JSR F5ED - disk switch check)
+                            {
+                                static int f485_count = 0;
+                                if (pbr_f4 == 0xE0 && pc_f4 == 0xF485 && vpa && f485_count < 20) {
+                                    f485_count++;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                    unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                    // Read the 24-bit pointer at DP+$20
+                                    uint8_t p20_lo = fastram[(d + 0x20) & 0xFFFF];
+                                    uint8_t p20_hi = fastram[(d + 0x21) & 0xFFFF];
+                                    uint8_t p20_bank = fastram[(d + 0x22) & 0xFFFF];
+                                    uint32_t ptr20 = (p20_bank << 16) | (p20_hi << 8) | p20_lo;
+                                    printf("WOZ_F485 #%d: A=%04X carry=%d D=%04X DBR=%02X [$20]=%02X:%04X\n",
+                                           f485_count, a, p & 1, d, dbr, p20_bank, (p20_hi << 8) | p20_lo);
+                                    // Dump data at [$20]+0, [$20]+8, [$20]+$2E
+                                    printf("  [$20]+00: ");
+                                    for (int i = 0; i < 16; i++) {
+                                        uint32_t addr = ptr20 + i;
+                                        uint8_t val = (addr >= 0xE00000 && addr < 0xE20000) ?
+                                            slowram[addr - 0xE00000] : fastram[addr & 0x3FFFF];
+                                        printf("%02X ", val);
+                                    }
+                                    printf("\n  [$20]+08: ");
+                                    {
+                                        uint32_t addr8 = ptr20 + 8;
+                                        uint8_t v8_lo = (addr8 >= 0xE00000 && addr8 < 0xE20000) ?
+                                            slowram[addr8 - 0xE00000] : fastram[addr8 & 0x3FFFF];
+                                        uint8_t v8_hi = ((addr8+1) >= 0xE00000 && (addr8+1) < 0xE20000) ?
+                                            slowram[(addr8+1) - 0xE00000] : fastram[(addr8+1) & 0x3FFFF];
+                                        printf("word=%04X (bit2=%d)\n", (v8_hi << 8) | v8_lo, ((v8_hi << 8) | v8_lo) >> 2 & 1);
+                                    }
+                                    printf("  [$20]+2E: ");
+                                    {
+                                        uint32_t addr2e = ptr20 + 0x2E;
+                                        uint8_t v2e_lo = (addr2e >= 0xE00000 && addr2e < 0xE20000) ?
+                                            slowram[addr2e - 0xE00000] : fastram[addr2e & 0x3FFFF];
+                                        uint8_t v2e_hi = ((addr2e+1) >= 0xE00000 && (addr2e+1) < 0xE20000) ?
+                                            slowram[(addr2e+1) - 0xE00000] : fastram[(addr2e+1) & 0x3FFFF];
+                                        printf("word=%04X", (v2e_hi << 8) | v2e_lo);
+                                    }
+                                    printf("  [$20]+42: ");
+                                    {
+                                        uint32_t addr42 = ptr20 + 0x42;
+                                        uint8_t v42_lo = (addr42 >= 0xE00000 && addr42 < 0xE20000) ?
+                                            slowram[addr42 - 0xE00000] : fastram[addr42 & 0x3FFFF];
+                                        uint8_t v42_hi = ((addr42+1) >= 0xE00000 && (addr42+1) < 0xE20000) ?
+                                            slowram[(addr42+1) - 0xE00000] : fastram[(addr42+1) & 0x3FFFF];
+                                        printf("word=%04X\n", (v42_hi << 8) | v42_lo);
+                                    }
+                                    // Dump code at F5ED
+                                    printf("  CODE E0:F5ED: ");
+                                    for (int i = 0; i < 64; i++) printf("%02X ", slowram[0xF5ED + i]);
+                                    printf("\n");
+                                }
+                            }
+
+                            // Trap at $00A258 (JML target from FC08)
+                            static int a258_count = 0;
+                            if (pbr_f4 == 0x00 && pc_f4 == 0xA258 && vpa && a258_count < 50) {
+                                a258_count++;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                if (a258_count >= 30 || a258_count <= 3) {
+                                    printf("WOZ_A258 #%d: A=%04X D=%04X DBR=%02X\n  CODE: ",
+                                           a258_count, a, d, dbr);
+                                    for (int i = 0; i < 64; i++) printf("%02X ", fastram[0xA258 + i]);
+                                    printf("\n");
+                                }
+                            }
+                            // Trap at $00B12B entry
+                            static int b12b_count = 0;
+                            if (pbr_f4 == 0x00 && pc_f4 == 0xB12B && vpa && b12b_count < 50) {
+                                b12b_count++;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
                                 unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
-                                printf("WOZ_READDATA_RETURN: P=%02X carry=%d\n", p, p & 1);
+                                unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                if (b12b_count >= 30 || b12b_count <= 3) {
+                                    printf("WOZ_B12B #%d: A=%04X carry=%d D=%04X DBR=%02X\n",
+                                           b12b_count, a, p & 1, d, dbr);
+                                }
+                            }
+                            // Trap at E0:F12B (caller of the block read function)
+                            static int f12b_count = 0;
+                            if (pc_f4 == 0xF12B && vpa && f12b_count < 80) {
+                                f12b_count++;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                // F12B is inside a JSL target. Get the RTL return address.
+                                // F12B code does stack frame teardown, then RTL at some point.
+                                // Let's dump the stack to find the return chain.
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                if (f12b_count >= 35) {
+                                    printf("WOZ_F12B #%d: PBR=%02X A=%04X carry=%d SP=%04X D=%04X DBR=%02X\n",
+                                           f12b_count, pbr_f4, a, p & 1, sp, d, dbr);
+                                    printf("  STACK: ");
+                                    for (int i = 1; i <= 24; i++) printf("%02X ", fastram[(sp + i) & 0xFFFF]);
+                                    printf("\n");
+                                    // Also dump DP vars to see what the caller set up
+                                    printf("  DP: ");
+                                    for (int i = 0; i < 32; i++) printf("%02X ", fastram[(d + i) & 0xFFFF]);
+                                    printf("\n");
+                                } else {
+                                    printf("WOZ_F12B #%d: PBR=%02X A=%04X carry=%d SP=%04X\n", f12b_count, pbr_f4, a, p & 1, sp);
+                                }
+                            }
+                        }
+
+                        // Watchpoint on E1:D594 (slow RAM) - source of disk-switched status
+                        {
+                            static uint16_t prev_d594 = 0xFFFF;
+                            static int d594_count = 0;
+                            uint8_t* slowram_d5 = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                            uint16_t cur_d594 = slowram_d5[0x1D594] | (slowram_d5[0x1D595] << 8);
+                            if (cur_d594 != prev_d594 && d594_count < 50) {
+                                d594_count++;
+                                unsigned short pc_d5 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_d5 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_d5 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp_d5 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                printf("WOZ_E1D594_CHANGE #%d: %04X -> %04X at PC=%02X:%04X A=%04X SP=%04X frame=%d\n",
+                                       d594_count, prev_d594, cur_d594, pbr_d5, pc_d5, a_d5, sp_d5, video.count_frame);
+                                prev_d594 = cur_d594;
+                            }
+                        }
+
+                        // Watchpoint on MAIN $07F8 (fastram offset $07F8) - SmartPort status byte
+                        // STATEREG $0C sets RDROM=1,LCRAM2=1 but RAMRD=0 (main bank 00)
+                        {
+                            static uint8_t prev_07f8 = 0xFF;
+                            static int w07f8_count = 0;
+                            uint8_t* fastram_07 = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t cur_07f8 = fastram_07[0x07F8];
+                            if (cur_07f8 != prev_07f8 && w07f8_count < 30) {
+                                w07f8_count++;
+                                unsigned short pc_07 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_07 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_07 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp_07 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                printf("WOZ_07F8_CHANGE #%d: %02X -> %02X at PC=%02X:%04X A=%04X SP=%04X frame=%d\n",
+                                       w07f8_count, prev_07f8, cur_07f8, pbr_07, pc_07, a_07, sp_07, video.count_frame);
+                                if ((cur_07f8 & 0x04) == 4) {
+                                    printf("  EJCTADR BIT SET! STACK: ");
+                                    for (int i = 1; i <= 24; i++) printf("%02X ", fastram_07[(sp_07 + i) & 0xFFFF]);
+                                    printf("\n  CODE at PC: ");
+                                    for (int i = -20; i < 32; i++) printf("%02X ", fastram_07[((pc_07 + i) & 0xFFFF)]);
+                                    printf("\n");
+                                    // Also dump $07E0-$0800
+                                    printf("  DATA 07E0-0800: ");
+                                    for (int i = 0; i < 32; i++) printf("%02X ", fastram_07[0x07E0 + i]);
+                                    printf("\n");
+                                }
+                                prev_07f8 = cur_07f8;
+                            }
+                        }
+
+                        // Watchpoint on $7758 - source of the STATUS byte that goes to E1:D594
+                        {
+                            static uint8_t prev_7758 = 0xFF;
+                            static int w7758_count = 0;
+                            uint8_t* fastram_7758 = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t cur_7758 = fastram_7758[0x7758];
+                            if (cur_7758 != prev_7758 && w7758_count < 30) {
+                                w7758_count++;
+                                unsigned short pc_7758 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_7758 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_7758 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp_7758 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                printf("WOZ_7758_CHANGE #%d: %02X -> %02X at PC=%02X:%04X A=%04X SP=%04X frame=%d\n",
+                                       w7758_count, prev_7758, cur_7758, pbr_7758, pc_7758, a_7758, sp_7758, video.count_frame);
+                                if ((cur_7758 & 0x01) == 1) {
+                                    printf("  DSW bit set! CODE at PC: ");
+                                    for (int i = -16; i < 32; i++) {
+                                        printf("%02X ", fastram_7758[((pc_7758 + i) & 0xFFFF)]);
+                                    }
+                                    printf("\n  STACK: ");
+                                    for (int i = 1; i <= 24; i++) printf("%02X ", fastram_7758[(sp_7758 + i) & 0xFFFF]);
+                                    printf("\n");
+                                    // Also dump the area around 7740-777F
+                                    printf("  DATA 7740-777F: ");
+                                    for (int i = 0; i < 64; i++) printf("%02X ", fastram_7758[0x7740 + i - 0x18]);
+                                    printf("\n");
+                                }
+                                prev_7758 = cur_7758;
+                            }
+                        }
+
+                        // Watchpoint on DP+$04 (at $BD04 in fastram) - raw STATUS result
+                        // This is XBA'd and stored to BD28. Catching when it first becomes 5.
+                        {
+                            static uint16_t prev_bd04 = 0xFFFF;
+                            static int bd04_count = 0;
+                            uint8_t* fastram_bd04 = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint16_t cur_bd04 = fastram_bd04[0xBD04] | (fastram_bd04[0xBD05] << 8);
+                            if (cur_bd04 != prev_bd04 && bd04_count < 30) {
+                                bd04_count++;
+                                unsigned short pc_bd04 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_bd04 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_bd04 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp_bd04 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                printf("WOZ_BD04_CHANGE #%d: %04X -> %04X at PC=%02X:%04X A=%04X SP=%04X frame=%d\n",
+                                       bd04_count, prev_bd04, cur_bd04, pbr_bd04, pc_bd04, a_bd04, sp_bd04, video.count_frame);
+                                if ((cur_bd04 & 0x0001) == 1) {
+                                    // Disk-switched bit is set - dump context
+                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                    printf("  STACK: ");
+                                    for (int i = 1; i <= 24; i++) printf("%02X ", fastram_bd04[(sp_bd04 + i) & 0xFFFF]);
+                                    printf("\n  BD00-BD4F: ");
+                                    for (int i = 0; i < 0x50; i++) printf("%02X ", fastram_bd04[0xBD00 + i]);
+                                    printf("\n");
+                                    // Dump code at PC-16 to PC+48
+                                    printf("  CODE at PC: ");
+                                    unsigned short abs_pc = pc_bd04;
+                                    uint8_t* code_bank = (pbr_bd04 == 0xE0 || pbr_bd04 == 0xE1) ? slowram : fastram_bd04;
+                                    unsigned short code_base = (pbr_bd04 == 0xE0 || pbr_bd04 == 0xE1) ? 0 : 0;
+                                    for (int i = -16; i < 48; i++) {
+                                        uint8_t b;
+                                        if (pbr_bd04 >= 0xE0 && pbr_bd04 <= 0xE1)
+                                            b = slowram[((abs_pc + i) & 0xFFFF)];
+                                        else
+                                            b = fastram_bd04[((abs_pc + i) & 0xFFFF)];
+                                        printf("%02X ", b);
+                                    }
+                                    printf("\n");
+                                }
+                                prev_bd04 = cur_bd04;
+                            }
+                        }
+
+                        // Watchpoint on DP+$28 (at $BD28 in fastram) - source of VCR[$2E] value
+                        {
+                            static uint16_t prev_bd28 = 0xFFFF;
+                            static int bd28_count = 0;
+                            uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint16_t cur_bd28 = fastram_wp[0xBD28] | (fastram_wp[0xBD29] << 8);
+                            if (cur_bd28 != prev_bd28 && bd28_count < 200) {
+                                bd28_count++;
+                                unsigned short pc_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                uint8_t hi = (cur_bd28 >> 8) & 0x07;
+                                printf("WOZ_BD28_CHANGE #%d: %04X -> %04X (hi&7=%d) at PC=%02X:%04X A=%04X frame=%d\n",
+                                       bd28_count, prev_bd28, cur_bd28, hi, pbr_wp, pc_wp, a_wp, video.count_frame);
+                                prev_bd28 = cur_bd28;
+                            }
+                        }
+
+                        // Trap at E0:E455 - where DP+$28 first gets set to $0500
+                        // Dump code context and registers to understand the routine
+                        {
+                            static int e455_count = 0;
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (pbr_now == 0xE0 && pc_now == 0xE455 && vpa && e455_count < 5) {
+                                e455_count++;
+                                unsigned short a_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short x_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                unsigned short y_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                unsigned short d_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned short sp_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned char dbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                unsigned char p_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                printf("WOZ_E455 #%d: A=%04X X=%04X Y=%04X D=%04X SP=%04X DBR=%02X P=%02X\n",
+                                       e455_count, a_now, x_now, y_now, d_now, sp_now, dbr_now, p_now);
+                                // Dump 128 bytes of code around E455 (E400-E47F)
+                                printf("  CODE E400-E47F: ");
+                                for (int i = 0; i < 128; i++) printf("%02X ", slowram[0xE400 + i]);
+                                printf("\n  CODE E480-E4FF: ");
+                                for (int i = 0; i < 128; i++) printf("%02X ", slowram[0xE480 + i]);
+                                printf("\n");
+                                // Dump stack (return addresses)
+                                printf("  STACK: ");
+                                for (int i = 1; i <= 32; i++) printf("%02X ", fastram[(sp_now + i) & 0xFFFF]);
+                                printf("\n");
+                                // Dump DP area (D+$00 to D+$4F)
+                                printf("  DP area: ");
+                                for (int i = 0; i < 0x50; i++) printf("%02X ", fastram[(d_now + i) & 0xFFFF]);
+                                printf("\n");
+                                // Dump E81F-E8FF (the JSR target that set DP+$04)
+                                printf("  CODE E800-E87F: ");
+                                for (int i = 0; i < 128; i++) printf("%02X ", slowram[0xE800 + i]);
+                                printf("\n  CODE E880-E8FF: ");
+                                for (int i = 0; i < 128; i++) printf("%02X ", slowram[0xE880 + i]);
+                                printf("\n");
+                                // Dump E0:E0E6+4C = E132 (potential dib_acc_flag location)
+                                printf("  SLOW[E100-E17F]: ");
+                                for (int i = 0; i < 128; i++) printf("%02X ", slowram[0xE100 + i]);
+                                printf("\n");
+                                // Also dump the STATUS handler area (AD3.5.cmds.asm status at ~E0:E963)
+                                printf("  CODE E940-E9BF: ");
+                                for (int i = 0; i < 128; i++) printf("%02X ", slowram[0xE940 + i]);
+                                printf("\n");
+                            }
+                        }
+
+                        // Watchpoint on VCR[$2E] at E0:E114 (slowram offset $E114)
+                        // Watch for writes to the disk-switched state field
+                        {
+                            static uint16_t prev_vcr2e = 0xFFFF;
+                            static int vcr2e_count = 0;
+                            uint8_t* slowram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                            uint16_t cur_vcr2e = slowram_wp[0xE114] | (slowram_wp[0xE115] << 8);
+                            if (cur_vcr2e != prev_vcr2e && vcr2e_count < 200) {
+                                vcr2e_count++;
+                                unsigned short pc_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short d_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned short sp_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                printf("WOZ_VCR2E_CHANGE #%d: %04X -> %04X at PC=%02X:%04X A=%04X D=%04X SP=%04X frame=%d\n",
+                                       vcr2e_count, prev_vcr2e, cur_vcr2e, pbr_wp, pc_wp, a_wp, d_wp, sp_wp, video.count_frame);
+                                // Dump code at the PC and surrounding area
+                                if (cur_vcr2e == 0x0005) {
+                                    printf("  CODE at PC-16: ");
+                                    for (int i = -16; i < 48; i++) printf("%02X ", slowram_wp[((pc_wp + i) & 0xFFFF)]);
+                                    printf("\n  STACK: ");
+                                    for (int i = 1; i <= 16; i++) printf("%02X ", fastram_wp[(sp_wp + i) & 0xFFFF]);
+                                    printf("\n");
+                                }
+                                prev_vcr2e = cur_vcr2e;
+                            }
+                        }
+                        // Also watch VCR[$42] at E0:E128 (E0E6+42)
+                        {
+                            static uint16_t prev_vcr42 = 0xFFFF;
+                            static int vcr42_count = 0;
+                            uint8_t* slowram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                            uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint16_t cur_vcr42 = slowram_wp[0xE128] | (slowram_wp[0xE129] << 8);
+                            if (cur_vcr42 != prev_vcr42 && vcr42_count < 200) {
+                                vcr42_count++;
+                                unsigned short pc_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned short d_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                printf("WOZ_VCR42_CHANGE #%d: %04X -> %04X at PC=%02X:%04X A=%04X D=%04X SP=%04X frame=%d\n",
+                                       vcr42_count, prev_vcr42, cur_vcr42, pbr_wp, pc_wp, a_wp, d_wp, sp_wp, video.count_frame);
+                                if (cur_vcr42 == 0x0001) {
+                                    printf("  CODE at PC-16: ");
+                                    for (int i = -16; i < 48; i++) printf("%02X ", fastram_wp[(pc_wp + i) & 0xFFFF]);
+                                    printf("\n  STACK: ");
+                                    for (int i = 1; i <= 16; i++) printf("%02X ", fastram_wp[(sp_wp + i) & 0xFFFF]);
+                                    printf("\n");
+                                }
+                                prev_vcr42 = cur_vcr42;
+                            }
+                        }
+
+                        // Detect ROM RESET entry (FA62 in bank FE or FF)
+                        // This fires on warm/cold restarts to understand reboot timing
+                        {
+                            static int reset_detect_count = 0;
+                            if (vpa && (bank == 0xFE || bank == 0xFF) && addr16 == 0xFA62 && reset_detect_count < 20) {
+                                reset_detect_count++;
+                                unsigned short a_rd = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp_rd = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned char p_rd = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                printf("ROM_RESET_ENTRY #%d: bank=%02X PC=FA62 A=%04X SP=%04X P=%02X frame=%d\n",
+                                       reset_detect_count, bank, a_rd, sp_rd, p_rd, video.count_frame);
+                            }
+                        }
+
+                        // Detect GS/OS STARTUP call ($E100A0) or similar restart entry
+                        {
+                            static int startup_detect_count = 0;
+                            if (vpa && bank == 0xE1 && addr16 == 0x00A0 && startup_detect_count < 20) {
+                                startup_detect_count++;
+                                unsigned short a_st = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short sp_st = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                printf("GSOS_STARTUP #%d: E1:00A0 A=%04X SP=%04X frame=%d\n",
+                                       startup_detect_count, a_st, sp_st, video.count_frame);
+                            }
+                        }
+
+                        // One-time DIB area dump at frame 500 (between E1:D594 store and VCR42 change)
+                        // Dumps E1:D540-D5B0 to see the DIB structure and verify dib_last_sts location
+                        {
+                            static bool dib_dumped = false;
+                            if (!dib_dumped && video.count_frame >= 500) {
+                                dib_dumped = true;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                printf("DIB_DUMP at frame=%d: E1:D540-D5AF (dib_1 area, dib_last_sts=dib_base+$50):\n", video.count_frame);
+                                for (int row = 0; row < 7; row++) {
+                                    int base = 0x1D540 + row * 16;
+                                    printf("  E1:%04X: ", 0xD540 + row * 16);
+                                    for (int i = 0; i < 16; i++) printf("%02X ", slowram[base + i]);
+                                    printf(" |");
+                                    for (int i = 0; i < 16; i++) {
+                                        uint8_t c = slowram[base + i];
+                                        printf("%c", (c >= 0x20 && c <= 0x7E) ? c : '.');
+                                    }
+                                    printf("|\n");
+                                }
+                                // Also show what's at offset +$50 from likely DIB bases
+                                printf("  Candidate dib_last_sts locations:\n");
+                                for (int dib_base_off = 0xD540; dib_base_off <= 0xD560; dib_base_off += 4) {
+                                    int sts_off = 0x10000 + dib_base_off + 0x50;
+                                    if (sts_off < 0x20000) {
+                                        printf("    base=E1:%04X -> dib_last_sts=E1:%04X = %02X%02X\n",
+                                               dib_base_off, dib_base_off + 0x50,
+                                               slowram[sts_off + 1], slowram[sts_off]);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Monitor E1:D540-D5E0 range for ANY byte changes (catch dib_last_sts writes)
+                        {
+                            static uint8_t prev_dib_area[0xA0];
+                            static bool dib_area_init = false;
+                            static int dib_area_change_count = 0;
+                            uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                            if (!dib_area_init) {
+                                memcpy(prev_dib_area, &slowram[0x1D540], 0xA0);
+                                dib_area_init = true;
+                            }
+                            if (dib_area_change_count < 100) {
+                                for (int i = 0; i < 0xA0; i++) {
+                                    if (slowram[0x1D540 + i] != prev_dib_area[i]) {
+                                        dib_area_change_count++;
+                                        unsigned short pc_da = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                        unsigned char pbr_da = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                        printf("DIB_AREA_CHANGE #%d: E1:%04X %02X->%02X at PC=%02X:%04X frame=%d\n",
+                                               dib_area_change_count, 0xD540 + i,
+                                               prev_dib_area[i], slowram[0x1D540 + i],
+                                               pbr_da, pc_da, video.count_frame);
+                                        prev_dib_area[i] = slowram[0x1D540 + i];
+                                        if (dib_area_change_count >= 100) break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // DIAGNOSTIC: Patch dib_last_sts (E1:D594) to correct value
+                        // after game corrupts it with MSLOT value ($C5).
+                        // The game writes $C5 to E1:D594 at frame 407, which GS/OS later
+                        // interprets as a disk-switch flag (bit 0 = 1). On real hardware,
+                        // the DIB is likely at a different address so this doesn't collide.
+                        {
+                            static bool d594_patched = false;
+                            uint8_t* slowram_af = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                            if (!d594_patched && video.count_frame >= 500) {
+                                uint8_t d594_val = slowram_af[0x1D594];
+                                if (d594_val == 0xC5) {
+                                    // Patch to $F8 = block device, write-allowed, read-allowed, online, not disk-switched
+                                    slowram_af[0x1D594] = 0xF8;
+                                    slowram_af[0x1D595] = 0x00;
+                                    d594_patched = true;
+                                    printf("DIB_LAST_STS_PATCH: E1:D594 %02X->F8 at frame=%d\n",
+                                           d594_val, video.count_frame);
+                                }
+                            }
+                        }
+
+                        // One-time GS/OS loop code dump: E0:F510-F5A0
+                        // Triggered at frame 780 (just before stuck loop starts at ~786)
+                        {
+                            static bool f5_dumped = false;
+                            if (!f5_dumped && video.count_frame >= 780) {
+                                f5_dumped = true;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                printf("GSOS_LOOP_DUMP at frame=%d: E0:F3E0-F700:\n", video.count_frame);
+                                for (int row = 0; row < 50; row++) {
+                                    int base = 0x0F3E0 + row * 16;
+                                    printf("  E0:%04X: ", 0xF3E0 + row * 16);
+                                    for (int i = 0; i < 16; i++) printf("%02X ", slowram[base + i]);
+                                    printf("\n");
+                                }
+                                // Also dump E0:E100-E160 (where VCR is) and E0:EF20-EF50 (where VCR[$2E] is set)
+                                printf("GSOS VCR area E0:E100-E160:\n");
+                                for (int row = 0; row < 6; row++) {
+                                    int base = 0x0E100 + row * 16;
+                                    printf("  E0:%04X: ", 0xE100 + row * 16);
+                                    for (int i = 0; i < 16; i++) printf("%02X ", slowram[base + i]);
+                                    printf("\n");
+                                }
+                                printf("GSOS EF20-EF50 area:\n");
+                                for (int row = 0; row < 3; row++) {
+                                    int base = 0x0EF20 + row * 16;
+                                    printf("  E0:%04X: ", 0xEF20 + row * 16);
+                                    for (int i = 0; i < 16; i++) printf("%02X ", slowram[base + i]);
+                                    printf("\n");
+                                }
+                            }
+                        }
+
+                        // Trap at E0:F571 - right after JSL $00ADB8 (SmartPort wrapper) returns
+                        {
+                            static int f571_count = 0;
+                            if (bank == 0xE0 && addr16 == 0xF571 && vpa && f571_count < 30) {
+                                f571_count++;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t aa00 = fastram[0xAA00];
+                                uint8_t aa01 = fastram[0xAA01];
+                                printf("GSOS_F571 #%d: carry=%d A=%04X $AA00=%02X %02X frame=%d\n",
+                                       f571_count, p & 1, a, aa00, aa01, video.count_frame);
+                            }
+                        }
+
+                        // Trap at F54A and F538 entries to log caller return address
+                        {
+                            static int f54a_count = 0;
+                            if (bank == 0xE0 && (addr16 == 0xF54A || addr16 == 0xF538) && vpa && f54a_count < 20) {
+                                f54a_count++;
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                // RTS return addr is at SP+1,SP+2 (lo,hi), RTS adds 1
+                                uint8_t ret_lo = fastram[(sp+1) & 0xFFFF];
+                                uint8_t ret_hi = fastram[(sp+2) & 0xFFFF];
+                                uint16_t ret_addr = (ret_hi << 8) | ret_lo;
+                                // Also check for JSL - ret addr at SP+1,2,3 (PCL,PCH,PBR)
+                                uint8_t ret_pbr = fastram[(sp+3) & 0xFFFF];
+                                printf("GSOS_F54A_ENTRY #%d: entry=%04X SP=%04X ret_JSR=E0:%04X ret_JSL=%02X:%04X frame=%d\n",
+                                       f54a_count, addr16, sp, ret_addr + 1, ret_pbr, ret_addr + 1, video.count_frame);
+                                // Dump caller code around the return address
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                uint16_t dump_start = (ret_addr + 1) & 0xFFF0;
+                                printf("  CALLER CODE E0:%04X: ", dump_start);
+                                for (int i = 0; i < 32; i++) printf("%02X ", slowram[0x0000 + dump_start + i]);
+                                printf("\n");
+                            }
+                        }
+
+                        // PC trace for GS/OS disk-switch handler (E0:F500-F700 range)
+                        // Logs every instruction executed during the FIRST iteration
+                        {
+                            static int pctrace_iter = 0;
+                            static int pctrace_count = 0;
+                            static bool pctrace_active = false;
+                            // Activate when we enter the F5xx handler for first time
+                            if (bank == 0xE0 && addr16 >= 0xF500 && addr16 < 0xF700 && vpa && video.count_frame >= 764) {
+                                if (!pctrace_active && pctrace_iter == 0) {
+                                    pctrace_active = true;
+                                    pctrace_iter = 1;
+                                    printf("PCTRACE: Starting iteration %d at E0:%04X frame=%d\n", pctrace_iter, addr16, video.count_frame);
+                                }
+                                if (pctrace_active && pctrace_count < 500) {
+                                    unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                    unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                    unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                    printf("PCTRACE[%d]: E0:%04X A=%04X X=%04X P=%02X\n", pctrace_count, addr16, a, x, p);
+                                    pctrace_count++;
+                                }
+                            }
+                            // Deactivate when we leave the E0:F5xx-F6xx range
+                            if (pctrace_active && bank != 0xE0 && vpa) {
+                                // Don't deactivate for JSR/JSL calls - only stop after many instructions outside range
+                            }
+                            // Stop after first full iteration (when we re-enter F5ED after leaving)
+                            if (pctrace_active && pctrace_count >= 400) {
+                                pctrace_active = false;
+                            }
+                        }
+
+                        // PC sampling: sample every ~100K cycles after frame 800
+                        // to identify where CPU is stuck
+                        {
+                            static unsigned long pc_sample_cycle = 0;
+                            static int pc_sample_count = 0;
+                            static std::map<uint32_t, int> pc_histogram;
+                            static int last_dump_frame = 0;
+                            if (video.count_frame >= 800 && vpa) {
+                                pc_sample_cycle++;
+                                if (pc_sample_cycle % 100000 == 0 && pc_sample_count < 10000) {
+                                    uint32_t full_pc = (bank << 16) | addr16;
+                                    pc_histogram[full_pc]++;
+                                    pc_sample_count++;
+                                }
+                                // Dump histogram every 200 frames
+                                if (video.count_frame >= 1000 && video.count_frame % 200 == 0
+                                    && video.count_frame != last_dump_frame && pc_sample_count > 0) {
+                                    last_dump_frame = video.count_frame;
+                                    printf("PC_HISTOGRAM at frame=%d (%d samples):\n", video.count_frame, pc_sample_count);
+                                    // Sort by count (descending)
+                                    std::vector<std::pair<uint32_t, int>> sorted_hist(pc_histogram.begin(), pc_histogram.end());
+                                    std::sort(sorted_hist.begin(), sorted_hist.end(),
+                                              [](const auto& a, const auto& b) { return a.second > b.second; });
+                                    int shown = 0;
+                                    for (auto& p : sorted_hist) {
+                                        if (shown >= 20) break;
+                                        printf("  %02X:%04X  count=%d (%.1f%%)\n",
+                                               (p.first >> 16) & 0xFF, p.first & 0xFFFF, p.second,
+                                               100.0 * p.second / pc_sample_count);
+                                        shown++;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Watchpoint on FAST RAM at 9A00 - detect writes
+                        {
+                            static uint16_t prev_9a00 = 0xFFFF;
+                            static int w9a_count = 0;
+                            static int w9a_armed = 0; // only arm after APPLEDISK fires enough times
+                            uint8_t* fastram_9a = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint16_t cur_9a00 = fastram_9a[0x9A00] | (fastram_9a[0x9A01] << 8);
+                            // Also check bytes 4-5 to detect content changes
+                            uint16_t cur_9a04 = fastram_9a[0x9A04] | (fastram_9a[0x9A05] << 8);
+                            static uint16_t prev_9a04 = 0xFFFF;
+                            if ((cur_9a00 != prev_9a00 || cur_9a04 != prev_9a04) && w9a_count < 100) {
+                                w9a_count++;
+                                unsigned short pc_9a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_9a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                unsigned short a_9a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                printf("WOZ_9A00_CHANGE #%d: [9A00]=%04X->%04X [9A04]=%04X->%04X at PC=%02X:%04X A=%04X\n",
+                                       w9a_count, prev_9a00, cur_9a00, prev_9a04, cur_9a04, pbr_9a, pc_9a, a_9a);
+                                printf("  FAST[9A00..9A1F]: ");
+                                for (int i = 0; i < 32; i++) printf("%02X ", fastram_9a[0x9A00 + i]);
+                                printf("\n");
+                                prev_9a00 = cur_9a00;
+                                prev_9a04 = cur_9a04;
+                            }
+                        }
+
+                        // SmartPort SonyRet RTL trap: FF:5EAA
+                        // This fires when the SmartPort dispatcher returns to the caller
+                        {
+                            static int sonyret_count = 0;
+                            unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                            unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                            if (pbr_now == 0xFF && pc_now == 0x5EAA && vpa && sonyret_count < 500) {
+                                sonyret_count++;
+                                unsigned char a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A & 0xFF;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                unsigned short y = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t shadow_reg = VERTOPINTERN->emu__DOT__iigs__DOT__shadow;
+                                uint8_t retry   = slowram[0x10000 + 0x0FB1]; // Retry
+                                // Get RTL return address from stack (SP+1 = low, SP+2 = high, SP+3 = bank)
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                uint8_t rtl_lo  = fastram[(sp + 1) & 0xFFFF];
+                                uint8_t rtl_hi  = fastram[(sp + 2) & 0xFFFF];
+                                uint8_t rtl_bank = fastram[(sp + 3) & 0xFFFF];
+                                uint32_t rtl_addr = ((rtl_bank << 16) | (rtl_hi << 8) | rtl_lo) + 1; // RTL adds 1
+                                printf("WOZ_SONYRET #%d: A=%02X carry=%d shadow=%02X retry=%02X RTL=%02X:%04X SP=%04X\n",
+                                       sonyret_count, a, p & 1, shadow_reg, retry,
+                                       (rtl_addr >> 16) & 0xFF, rtl_addr & 0xFFFF, sp);
+                                // Dump 16 bytes from stack (SP+1 onward)
+                                printf("  STACK: ");
+                                for (int i = 1; i <= 16; i++)
+                                    printf("%02X ", fastram[(sp + i) & 0xFFFF]);
+                                printf("\n");
+                                // Dump STATUS result buffers at $24DA and $AA00
+                                // STATUS calls use these buffers for the status byte
+                                if (sonyret_count >= 10 && sonyret_count <= 15) {
+                                    printf("  FAST[24DA..24E5]: ");
+                                    for (int i = 0; i < 12; i++) printf("%02X ", fastram[0x24DA + i]);
+                                    printf("\n");
+                                }
+                                if (sonyret_count >= 178 && sonyret_count <= 195) {
+                                    printf("  FAST[AA00..AA0B]: ");
+                                    for (int i = 0; i < 12; i++) printf("%02X ", fastram[0xAA00 + i]);
+                                    printf("\n");
+                                }
+                                // For stuck block 2 reads to 00:9A00, dump buffer data
+                                if (sonyret_count >= 220 && sonyret_count <= 230) {
+                                    printf("  FAST[9A00..9A0F]: ");
+                                    for (int i = 0; i < 16; i++)
+                                        printf("%02X ", fastram[0x9A00 + i]);
+                                    printf("\n  SLOW[9A00..9A0F]: ");
+                                    for (int i = 0; i < 16; i++)
+                                        printf("%02X ", slowram[0x9A00 + i]);
+                                    printf("\n");
+                                }
+                                // For the stuck loop, dump code at the caller address
+                                if (sonyret_count == 216 || sonyret_count == 1) {
+                                    // Decode RTS target: after RTL pop 3 bytes, PLA, PHP, PLP, PLB, PLA, PHA, PLA, RTS
+                                    // The RTS address is at offset +7 and +8 from the RTL return point on stack
+                                    uint8_t rts_pcl = fastram[(sp + 7) & 0xFFFF];
+                                    uint8_t rts_pch = fastram[(sp + 8) & 0xFFFF];
+                                    uint16_t rts_target = ((rts_pch << 8) | rts_pcl) + 1;
+                                    printf("  RTS_TARGET=%04X  CODE at target-16:\n  ", rts_target);
+                                    // Dump 256 bytes to cover branch targets like $AE97
+                                    for (int i = -16; i < 240; i++) {
+                                        printf("%02X ", fastram[(rts_target + i) & 0xFFFF]);
+                                        if ((i + 16) % 32 == 31) printf("\n  ");
+                                    }
+                                    printf("\n");
+                                }
                             }
                         }
 

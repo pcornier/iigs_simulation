@@ -162,6 +162,7 @@ wire        WOZ_TRACK3_STABLE_SIDE; // Stable side for data reads (captured when
 wire [7:0]  WOZ_TRACK3_BIT_DATA;  // Byte from track bit buffer
 wire [31:0] WOZ_TRACK3_BIT_COUNT; // Total bits in track
 wire        WOZ_TRACK3_READY;     // Track data valid for current WOZ_TRACK3
+wire        WOZ_TRACK3_DATA_VALID; // BRAM data valid for selected side (no state check)
 wire        WOZ_TRACK3_IS_FLUX;   // Track data is flux timing (not bitstream)
 wire [31:0] WOZ_TRACK3_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
 wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
@@ -244,6 +245,7 @@ iigs  iigs(
     .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
     .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
     .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
+    .WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
     .WOZ_TRACK3_LOAD_COMPLETE(woz_ctrl_track_load_complete),
     .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
     .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
@@ -650,7 +652,10 @@ woz_floppy_controller #(
     // FLUX track support (WOZ v3)
     .is_flux_track(WOZ_TRACK3_IS_FLUX),
     .flux_data_size(WOZ_TRACK3_FLUX_SIZE),
-    .flux_total_ticks(woz_ctrl_flux_total_ticks)
+    .flux_total_ticks(woz_ctrl_flux_total_ticks),
+
+    // Track data validity (independent of controller state)
+    .track_data_valid(WOZ_TRACK3_DATA_VALID)
 );
 
 // Connect WOZ controller outputs to IIgs inputs

@@ -44,6 +44,10 @@ always @(posedge clock_a) begin
     if(wren_a) begin
         ram[address_a] <= data_a;
         q_a      <= data_a;
+`ifdef SIMULATION
+        if (p == " e" && address_a == 17'h10F3A)
+            $display("DPRAM_CURCYL: addr=%05h data=%02h t=%0t", address_a, data_a, $time);
+`endif
     end else begin
         q_a      <= ram[address_a];
     end

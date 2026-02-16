@@ -42,6 +42,7 @@ module iwm_woz (
     input  [7:0]    WOZ_TRACK3_BIT_DATA,
     input  [31:0]   WOZ_TRACK3_BIT_COUNT,
     input           WOZ_TRACK3_READY,         // Track data valid for current WOZ_TRACK3
+    input           WOZ_TRACK3_DATA_VALID,    // BRAM data valid for selected side (no state check)
     input           WOZ_TRACK3_LOAD_COMPLETE,  // Pulses when track load finishes (reset bit_position)
     input           WOZ_TRACK3_IS_FLUX,        // Track data is flux timing (not bitstream)
     input  [31:0]   WOZ_TRACK3_FLUX_SIZE,      // Size in bytes of flux data (when IS_FLUX)
@@ -432,8 +433,17 @@ module iwm_woz (
     // Drive is active when the 3.5" motor is physically spinning and disk is present
     wire drive35_active = drive35_motor_spinning && DISK_READY[2];
 
-    // Keep track data available during loads; BRAM retains previous track until update completes.
-    wire drive35_track_loaded = (WOZ_TRACK3_BIT_COUNT > 0);
+    // Track data is only valid when the WOZ controller confirms the BRAM matches the
+    // requested track. During track loads, BRAM contains stale data from the previous track;
+    // reading it would produce valid-looking address headers for the wrong cylinder, causing
+    // the ROM to store incorrect curcyl values and generate soft seek errors.
+    //
+    // Use WOZ_TRACK3_DATA_VALID instead of WOZ_TRACK3_READY:
+    // - READY requires state == S_IDLE, which drops during dual-side loading
+    // - DATA_VALID only checks if current_track_id matches track_id (no state check)
+    // - This allows flux playback to continue while the OTHER side is being loaded
+    // - Stale data is still blocked because track IDs don't match during loading
+    wire drive35_track_loaded = WOZ_TRACK3_DATA_VALID;
 
     flux_drive drive35 (
         .IS_35_INCH(1'b1),
@@ -475,45 +485,50 @@ module iwm_woz (
     );
 
     // Stable side for data reads:
-    // MAME approach: Update side select immediately when $C031 (DISK35) is written
-    // while 35SEL is active. The ROM sets HDSEL (bit 7) to select the head before
-    // reading data. Unlike the previous approach that tried to detect phase=0100,
-    // this directly tracks DISK35[7] changes, matching MAME's behavior.
+    // Side select gated by IWM data register reads.
+    //
+    // The ROM's SDCLINES routine writes $C031 on every Sony command, toggling HDSEL
+    // (bit 7) as a side effect of the 4-bit command nibble encoding ({CA1,CA0,SEL,CA2}).
+    // Commands like step (SEL=0) clear HDSEL, while readyadr (SEL=1) sets it. These
+    // rapid toggles corrupt the flux data stream if applied immediately to the BRAM
+    // side select.
+    //
+    // Key insight from ROM analysis: RDMODE (called by RDADDR before each read attempt)
+    // is the LAST routine to set HDSEL before the data read loop begins. It calls
+    // READ_BIT with READ0ADR/READ1ADR, which calls SDCLINES to set HDSEL correctly
+    // for the intended side. Then the ROM enters the read loop via LDA $C0EC (Q6←0,
+    // Q7=0 = IWM data register read). Nothing toggles HDSEL between RDMODE and the
+    // first $C0EC access.
+    //
+    // Therefore: only update stable_side when the CPU reads the IWM data register
+    // ($C0EC, Q6←0, Q7=0). At that moment, HDSEL reflects the ROM's intended side.
+    // During command sequences (step, sense, etc.), the ROM never accesses $C0EC,
+    // so HDSEL toggles are harmlessly ignored.
     wire force_q7_data_read;
     reg stable_side_reg;
-    reg [2:0] side_reset_cnt;
-    reg prev_drive35_motor_spinning;
-    reg prev_diskreg_sel_for_side;
+
+    // Detect IWM data register reads: CPU accessing $C0EC (offset 0xC, Q6←0) while Q7=0
+    wire iwm_data_reg_read = cpu_access_edge && (bus_addr == 4'hC) && !q7 && is_35_inch;
+
     always @(posedge CLK_14M or posedge RESET) begin
         if (RESET) begin
             stable_side_reg <= 1'b0;
-            side_reset_cnt <= 3'd0;
-            prev_drive35_motor_spinning <= 1'b0;
-            prev_diskreg_sel_for_side <= 1'b0;
         end else if (!DISK_READY[2]) begin
             stable_side_reg <= 1'b0;
-            side_reset_cnt <= 3'd0;
-            prev_drive35_motor_spinning <= 1'b0;
-            prev_diskreg_sel_for_side <= 1'b0;
         end else begin
-            // MAME-style: Update head select immediately when HDSEL (DISK35[7]) changes
-            // while 3.5" mode is active. This matches MAME's apple2gs.cpp line 1952-1956.
-            if (is_35_inch && (diskreg_sel != prev_diskreg_sel_for_side)) begin
+            // Capture HDSEL only when the CPU reads the IWM data register.
+            // This precisely targets the moment the ROM expects data from
+            // the selected side, filtering all command-sequence HDSEL toggles.
+            if (iwm_data_reg_read && (stable_side_reg != diskreg_sel)) begin
                 stable_side_reg <= diskreg_sel;
-                side_reset_cnt <= 3'd4;
 `ifdef SIMULATION
-                $display("IWM_WOZ: HEAD_SELECT update (MAME-style) old=%0d new=%0d bitpos=%0d",
-                         prev_diskreg_sel_for_side, diskreg_sel, drive35_bit_position);
+                $display("IWM_WOZ: HEAD_SELECT update (data-read gated) old=%0d new=%0d bitpos=%0d",
+                         stable_side_reg, diskreg_sel, drive35_bit_position);
 `endif
-            end else if (side_reset_cnt != 0) begin
-                side_reset_cnt <= side_reset_cnt - 1'd1;
             end
-            prev_diskreg_sel_for_side <= diskreg_sel;
-            prev_drive35_motor_spinning <= drive35_motor_spinning;
         end
     end
     assign WOZ_TRACK3_STABLE_SIDE = stable_side_reg;
-    wire side_reset_active = (side_reset_cnt != 0);
 
     // WOZ_TRACK3: Use stable side for track selection to avoid SEL thrash.
     // The C++ path can apply its own register stage in sim.v to align with BeforeEval.
@@ -701,9 +716,14 @@ module iwm_woz (
     wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? drive35_sense : drive35_2_sense) :
                                           ((drive_sel == 0) ? drive525_sense : 1'b1);
 
-    // Sense gating: when no drive is enabled, the IWM sense input floats high.
-    wire sense_enabled = drive_on;
-    wire current_sense = sense_enabled ? drive_sense : 1'b1;
+    // Sense lines are always readable regardless of motor state (drive_on).
+    // On real hardware, Sony 3.5" drive status lines have separate power from
+    // the spindle motor.  The ROM's Enable_Sense / read_dsw_status routines
+    // query sense with motor off (RESTOREIWM turns motor off between calls).
+    // Gating sense on drive_on caused disk_switched sense 0xC to always return
+    // HIGH (=switched) when motor was off, trapping GS/OS in an infinite
+    // disk-switch validation loop (VCR[$2E]=5 never cleared).
+    wire current_sense = drive_sense;
 
     wire current_motor_spinning = flux_is_35_inch ? drive35_motor_spinning : drive525_motor_spinning;
 

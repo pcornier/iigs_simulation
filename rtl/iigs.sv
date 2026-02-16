@@ -112,6 +112,7 @@ module iigs
    input  [7:0]       WOZ_TRACK3_BIT_DATA,  // Byte from track bit buffer
    input  [31:0]      WOZ_TRACK3_BIT_COUNT, // Total bits in track
    input              WOZ_TRACK3_READY,     // Track data valid for current WOZ_TRACK3
+   input              WOZ_TRACK3_DATA_VALID, // BRAM data valid for selected side (no state check)
    input              WOZ_TRACK3_LOAD_COMPLETE, // Pulses when track load finishes (reset bit_position)
    input              WOZ_TRACK3_IS_FLUX,   // Track data is flux timing (not bitstream)
    input  [31:0]      WOZ_TRACK3_FLUX_SIZE, // Size in bytes of flux data (when IS_FLUX)
@@ -404,12 +405,9 @@ module iigs
         addr_bus = {bank_bef, 16'h0} + addr_bef;
       end
     end
-    // Banks $00/$01 Language Card space - ORIGINAL LOGIC (pre-9b14d75)
+    // Banks $00/$01 Language Card space - keep addresses in bank 00/01 space
+    // Shadow writes to E0/E1 slow RAM are handled in the memory controller
     // Translation when LCRAM2=1 (Bank 1 selected per documentation naming)
-    // FIX: Only apply translation for:
-    //   - LC RAM reads (RDROM=0)
-    //   - LC RAM writes (LC_WE=1 and we=1)
-    // Do NOT translate ROM reads (RDROM=1 and not writing) - those should read from ROM at actual address
     else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6] && (~RDROM || (LC_WE && we))) begin
       lcram2_sel = 1;
       if (aux && bank_bef == 8'h00) begin
@@ -490,7 +488,8 @@ module iigs
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
+          // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (txt1_shadow || txt2_shadow || shr_master_shadow || hgr1_shadow || hgr2_shadow) begin
@@ -513,11 +512,12 @@ module iigs
 `endif
           end
         end
-        
+
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough) begin
+          // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
+          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
           end else if (shr_master_shadow) begin
@@ -542,13 +542,16 @@ module iigs
               slowram_ce_int = 1;
             end
           end else begin
-            fastram_ce_int = 1;  // Normal Bank 01 RAM
+            fastram_ce_int = 1;  // Normal Bank 01 RAM (including LC area)
           end
         end
-        
+
         // Banks E0/E1: Shadow memory - always SLOWRAM
         8'hE0, 8'hE1: begin
           slowram_ce_int = 1;
+          if (we && addr_bef == 16'h0F3A)
+            $display("E0E1_CURCYL_WRITE: bank=%02x addr=%04x data=%02x addr_bus=%06x aux=%b cpu_addr=%06x",
+                     bank_bef, addr_bef, cpu_dout, addr_bus, aux, cpu_addr);
 `ifdef DEBUG_IO
           if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
             $display("SLOWRAM_DIRECT: bank%02x addr=%04x data=%02x we=%b slowram_addr=%05x bank[0]=%b addr_bus=%06x -> SLOWRAM",
@@ -635,6 +638,14 @@ module iigs
     if ((bank_bef == 8'hE1) && (addr_bef >= 16'h0190) && (addr_bef <= 16'h0193)) begin
       $display("CURSOR_POS_DEBUG: addr=E1:%04x we=%b data=%02x slowram_ce=%b slowram_we=%b slowram_dout=%02x",
                addr_bef, we, we ? cpu_dout : slowram_dout, slowram_ce, slowram_we, slowram_dout);
+    end
+
+    // Watchpoint: catch any write that ends up at slowram address 0x10F3A
+    if (slowram_we && slowram_ce) begin
+      if ({bank[0], addr} == 17'h10F3A) begin
+        $display("CURCYL_WRITE: bank_bef=%02x addr_bef=%04x data=%02x addr_bus=%06x bank=%02x addr=%04x aux=%b cpu_addr=%06x",
+                 bank_bef, addr_bef, cpu_dout, addr_bus, bank, addr, aux, cpu_addr);
+      end
     end
 
   end
@@ -2621,6 +2632,7 @@ wire ready_out;
       .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
       .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
       .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
+      .WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
       .WOZ_TRACK3_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
       .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
       .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),

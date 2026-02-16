@@ -41,7 +41,14 @@ module woz_floppy_controller #(
     // FLUX track support (WOZ v3)
     output wire       is_flux_track,        // Current track uses flux timing data (not bitstream)
     output wire [31:0] flux_data_size,      // Size in bytes of flux timing data (when is_flux_track=1)
-    output wire [31:0] flux_total_ticks     // Sum of FLUX bytes for timing normalization
+    output wire [31:0] flux_total_ticks,    // Sum of FLUX bytes for timing normalization
+
+    // Track data validity (independent of controller state)
+    // Unlike `ready` (which requires state == S_IDLE), this signal indicates that the BRAM
+    // data for the currently selected side matches the requested track. It stays high even
+    // while the controller is loading the OTHER side. This prevents flux playback from being
+    // suppressed during dual-side track loads.
+    output wire       track_data_valid
 );
 
     //=========================================================================
@@ -147,6 +154,14 @@ module woz_floppy_controller #(
     wire selected_track_match = (IS_35_INCH && stable_side) ? track_side1_match : track_side0_match;
     wire [31:0] selected_bit_count = (IS_35_INCH && stable_side) ? bit_count_side1 : bit_count_side0;
     wire is_loading = (state == S_SEEK_LOOKUP) || (state == S_READ_TRACK);
+
+    // track_data_valid: BRAM data for the selected side matches the requested track.
+    // Unlike `ready`, this does NOT require state == S_IDLE. It stays true when the
+    // controller is busy loading the other side, allowing flux playback to continue.
+    // Use track_id[0] (not stable_side) for side selection to avoid 1-cycle phase mismatch:
+    // track_id already encodes the side, so this stays in sync regardless of stable_side timing.
+    wire track_data_valid_match = (IS_35_INCH && track_id[0]) ? track_side1_match : track_side0_match;
+    assign track_data_valid = woz_valid && track_data_valid_match;
     // During loading, use the pending track's bit_count IF we're loading the stable_side.
     // If we're loading the other side, keep using selected_bit_count to avoid glitches.
     wire loading_matches_stable = (!IS_35_INCH) || (load_side == stable_side);

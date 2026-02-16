@@ -185,7 +185,8 @@ module flux_drive (
     // Internal motor state for 3.5" Sony drives (controlled by commands)
     reg         sony_motor_on;
     
-    // Disk switched flag (set on mount/reset, cleared by command)
+    // Disk change latch (MAME convention: 1=normal/acknowledged, 0=disk-was-changed)
+    // Sense returns !disk_switched, so 0→sense HIGH (changed), 1→sense LOW (normal)
     reg         disk_switched;
     reg         prev_disk_mounted;
     reg         prev_drive_ready;  // For detecting drive_ready rising edge
@@ -475,7 +476,7 @@ module flux_drive (
             // - `read_bit` returns C=1 when SENSE is high
             // - `Enable_Sense` sets drv_sts bit7 when SENSE is high (dsw true)
             // - `read_dsw_status` branches on BCC (SENSE low) as "no eject/dsw"
-            4'hC: sense_35 = disk_switched;
+            4'hC: sense_35 = ~disk_switched;  // Invert: disk_switched=1(normal)→sense LOW, =0(changed)→sense HIGH
             4'h9: sense_35 = 1'b1;                      // Default-high for unused reads
             4'hD: sense_35 = 1'b1;                      // Default-high for unused reads
             4'hE: sense_35 = ~drive_ready;              // Treat as /READY as well (safe)
@@ -497,10 +498,14 @@ module flux_drive (
 `ifdef SIMULATION
     // Debug: trace sense computation for 3.5" drive
     reg prev_sense_debug;
+    reg [15:0] sense_read_cnt;
     always @(posedge CLK_14M) begin
+        if (RESET) begin
+            sense_read_cnt <= 16'd0;
+        end
         if (IS_35_INCH && MOTOR_ON && (sense_35 != prev_sense_debug)) begin
-            $display("FLUX_DRIVE: sense=%0d status_reg=%h (sony_ctl=%01x SEL35=%0d phases=%04b) at_track0=%0d motor_spin=%0d mounted=%0d",
-                     sense_35, status_reg, sony_ctl, SEL35, PHASES, at_track0, motor_spinning, DISK_MOUNTED);
+            $display("FLUX_DRIVE: sense=%0d status_reg=%h (sony_ctl=%01x SEL35=%0d phases=%04b) at_track0=%0d motor_spin=%0d mounted=%0d disk_switched=%0d",
+                     sense_35, status_reg, sony_ctl, SEL35, PHASES, at_track0, motor_spinning, DISK_MOUNTED, disk_switched);
         end
         prev_sense_debug <= sense_35;
     end
@@ -525,7 +530,7 @@ module flux_drive (
             step_direction_slot <= 2'b00;  // Default: toward higher tracks (matches MAME m_dir=0)
             prev_lstrb <= 1'b0;            // No strobe active initially
             sony_motor_on <= 1'b0;         // Default: motor off
-            disk_switched <= 1'b1;         // Assume disk switched on reset
+            disk_switched <= 1'b1;  // Normal at reset; mount/unmount edge detection (below) handles real changes
             prev_disk_mounted <= 1'b0;
             step_busy_cnt <= 18'd0;
         end else begin
@@ -536,9 +541,28 @@ module flux_drive (
             // Do not forcibly clear the Sony motor command immediately when SEL35 deasserts,
             // or we can lose the spindle state across brief deselect windows and fail boot.
 
-            // Track disk insertion
+            // Track disk removal/insertion for disk-change latch
+            // MAME convention: disk_switched=1 is normal, =0 means "disk was changed"
+            // On disk removal: set to 0 (disk changed).
+            // On disk insertion (cold-start): set to 1 (normal).
+            //   MAME's device_start() sets m_dskchg = exists() ? 1 : 0, so a cold boot
+            //   with a disk present starts with m_dskchg=1 (normal).  In vsim the WOZ
+            //   file is loaded AFTER RESET, so DISK_MOUNTED transitions 0→1 after the
+            //   reset block has already set disk_switched=0.  Without this rising-edge
+            //   handler, Enable_Sense sees "disk switched" on the very first poll and
+            //   GS/OS enters an infinite disk-switch validation loop.
+            // The firmware clears the latch by setting it back to 1 via DskchgClear command.
+            if (!DISK_MOUNTED && prev_disk_mounted) begin
+                disk_switched <= 1'b0;  // MAME: call_unload() sets m_dskchg=0
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: disk_switched CLEAR by removal (disk changed)", DRIVE_ID);
+`endif
+            end
             if (DISK_MOUNTED && !prev_disk_mounted) begin
-                disk_switched <= 1'b1;
+                disk_switched <= 1'b1;  // MAME: device_start() m_dskchg=1 when exists()
+`ifdef SIMULATION
+                $display("FLUX_DRIVE[%0d]: disk_switched SET by insertion (cold-start normal)", DRIVE_ID);
+`endif
             end
             prev_disk_mounted <= DISK_MOUNTED;
 
@@ -632,7 +656,8 @@ module flux_drive (
 
                     4'hC: begin
                         // Disk-change clear (ROM uses DskchgClear via ReadBit/WriteBit)
-                        disk_switched <= 1'b0;
+                        // MAME: m_dskchg = 1 (acknowledged, no change)
+                        disk_switched <= 1'b1;
 `ifdef SIMULATION
                         $display("FLUX_DRIVE[%0d]: cmd disk change clear", DRIVE_ID);
 `endif
@@ -647,7 +672,8 @@ module flux_drive (
                 // SEL-bearing variants that use the same CA opcode but different SEL bit.
                 if (sony_ctl == 4'h3) begin
                     // Eject reset / disk-switched clear used during CONFIGURE (ejct_reset=3)
-                    disk_switched <= 1'b0;
+                    // MAME: m_dskchg = 1 (acknowledged)
+                    disk_switched <= 1'b1;
 `ifdef SIMULATION
                     $display("FLUX_DRIVE[%0d]: cmd eject reset (disk change clear)", DRIVE_ID);
 `endif

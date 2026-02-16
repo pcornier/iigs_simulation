@@ -41,6 +41,10 @@ always @(posedge clock_a) begin
     if(wren_a) begin
         mem[address_a] <= data_a;
         q_a      <= data_a;
+`ifdef SIMULATION
+        if (widthad_a == 17 && address_a == 17'h10F3A)
+            $display("BRAM_WATCHPOINT: write [%05h] <= %02h (curcyl[0])", address_a, data_a);
+`endif
     end else begin
         q_a      <= mem[address_a];
     end
