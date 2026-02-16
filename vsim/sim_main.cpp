@@ -1,5 +1,5 @@
 #include <verilated.h>
-#include <verilated_vcd_c.h>
+#include <verilated_fst_c.h>
 #include "Vemu.h"
 #include "Vemu__Syms.h"
 
@@ -263,9 +263,9 @@ static void vsim_trace_log(char phase, char type,
     fflush(g_vsim_trace_csv);
 }
 
-// VCD trace dump support
-VerilatedVcdC* tfp = NULL;
-int dump_vcd_after_frame = -1;
+// FST trace dump support
+VerilatedFstC* tfp = NULL;
+int dump_fst_after_frame = -1;
 
 vluint64_t main_time = 0;	// Current simulation time.
 double sc_time_stamp() {	// Called by $time in Verilog.
@@ -1099,7 +1099,7 @@ int verilate() {
 			}
 			top->eval();
 
-			if (tfp && video.count_frame >= dump_vcd_after_frame)
+			if (tfp && video.count_frame >= dump_fst_after_frame)
 				tfp->dump(main_time);
 
 			// Log 6502 instructions
@@ -2131,7 +2131,7 @@ void show_help() {
 	printf("  --floppy <filename>           Use specified floppy image (5.25\" NIB format, drive 1)\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
-	printf("  --dump-vcd-after <frame>      Start dumping vsim.vcd after a frame number\n");
+	printf("  --dump-fst-after <frame>      Start dumping vsim.fst after a frame number\n");
 	printf("  --send-keys <frame>:<keys>    Send keyboard input at specified frame\n");
 	printf("                                Can be specified multiple times\n");
 	printf("                                Use \\n for Enter, \\t for Tab, \\e for ESC,\n");
@@ -2340,9 +2340,9 @@ int main(int argc, char** argv, char** env) {
 			dump_csv_after_frame = std::stoi(argv[i + 1]);
 			printf("CSV trace enabled, will start dumping at frame %d\n", dump_csv_after_frame);
 			i++; // Skip the next argument since it's the frame number
-		} else if (strcmp(argv[i], "--dump-vcd-after") == 0 && i + 1 < argc) {
-			dump_vcd_after_frame = std::stoi(argv[i + 1]);
-			printf("Will start dumping VCD at frame %d\n", dump_vcd_after_frame);
+		} else if (strcmp(argv[i], "--dump-fst-after") == 0 && i + 1 < argc) {
+			dump_fst_after_frame = std::stoi(argv[i + 1]);
+			printf("Will start dumping FST at frame %d\n", dump_fst_after_frame);
 			i++; // Skip the next argument since it's the frame number
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
@@ -2481,11 +2481,11 @@ int main(int argc, char** argv, char** env) {
 	top = new Vemu();
 	Verilated::commandArgs(argc, argv);
 
-	if (dump_vcd_after_frame > -1) {
+	if (dump_fst_after_frame > -1) {
 		Verilated::traceEverOn(true);
-		tfp = new VerilatedVcdC;
+		tfp = new VerilatedFstC;
 		top->trace(tfp, 99);
-		tfp->open("vsim.vcd");
+		tfp->open("vsim.fst");
 	}
 
 	// parallel_clemens removed
