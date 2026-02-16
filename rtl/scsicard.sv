@@ -48,9 +48,12 @@ module scsicard
       dev_sel_d <= DEVICE_SELECT;
    end
 
+   logic ncr_iow;
    logic ncr_dack;
    logic ncr_dreq;
    logic ncr_reset;
+   logic [7:0] ncr_wdata_pre;
+   logic [7:0] ncr_wdata;
 
    logic [7:0] bank_reg;
 
@@ -90,6 +93,9 @@ module scsicard
  -----/\----- EXCLUDED -----/\----- */
 
    always @(posedge CLK_14M) begin
+      ncr_iow <= ~RD;
+      ncr_wdata_pre <= D_IN;
+      ncr_wdata <= ncr_wdata_pre;
       ncr_reset <= 1'b0;
       ncr_dack <= 1'b0;
       dma_select <= 1'b0;
@@ -165,10 +171,10 @@ module scsicard
       .bus_cs(ncr_select),
       .bus_rs(A[2:0]),
       .ior(RD),
-      .iow(~RD),
+      .iow(ncr_iow),
       .dack(ncr_dack),
       .dreq(ncr_dreq),
-      .wdata(D_IN),
+      .wdata(ncr_wdata),
       .rdata(ncr_dout),
 
       .img_mounted(img_mounted),
