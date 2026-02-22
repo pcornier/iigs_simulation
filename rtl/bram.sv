@@ -17,12 +17,7 @@ module bram #(
     input   wire                wren_b,
     input   wire    [widthad_a-1:0]  address_b,
     input   wire    [width_a-1:0]  data_b,
-    output  wire    [width_a-1:0]  q_b,
-
-    input wire byteena_a = 1'b1,
-    input wire byteena_b = 1'b1,
-    input wire enable_a = 1'b1,
-    input wire enable_b = 1'b1
+    output  wire    [width_a-1:0]  q_b
 );
 
     initial begin

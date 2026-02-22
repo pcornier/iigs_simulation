@@ -165,15 +165,13 @@ bram #(
     .address_a(ram_addr),
     .data_a(ram_din),
     .q_a(ram_dout),
-    .enable_a(1'b1),
-    
+
     // Port B unused
     .clock_b(CLK_14M),
     .wren_b(1'b0),
     .address_b(8'h00),
     .data_b(8'h00),
-    .q_b(),
-    .enable_b(1'b0)
+    .q_b()
 );
 
 // Apple IIe compatibility registers

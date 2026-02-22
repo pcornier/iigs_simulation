@@ -726,9 +726,11 @@ module iwm_flux (
                             if (dbg_waiting_first_flux) begin
                                 dbg_waiting_first_flux <= 1'b0;
                                 dbg_first_flux_win <= window_counter;
+`ifdef SIMULATION
                                 dbg_first_flux_cycle <= debug_cycle;
                                 $display("BYTE_OFFSET_FIRST_FLUX: window_counter=%0d pos=%0d cycle=%0d (flux #%0d since S_IDLE)",
                                          window_counter, DISK_BIT_POSITION, debug_cycle, dbg_flux_count_after_idle + 1);
+`endif
                             end
 `endif
 `ifdef BYTE_FRAME_DEBUG
@@ -980,17 +982,21 @@ module iwm_flux (
                                         dbg_byte_history[dbg_history_idx] <= shifted_rsh;
                                         dbg_history_idx <= dbg_history_idx + 1;
                                         // Log first 20 bytes after motor start
+`ifdef SIMULATION
                                         if (dbg_first_byte_count < 20) begin
                                             $display("BYTE_OFFSET: byte[%0d] = 0x%02X at pos=%0d cycle=%0d",
                                                      dbg_first_byte_count, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
                                         end
+`endif
                                         // Track first D5 (non-sync byte)
                                         if (shifted_rsh == 8'hD5) begin
                                             dbg_first_d5_found <= 1'b1;
                                             dbg_first_d5_position <= DISK_BIT_POSITION;
+`ifdef SIMULATION
                                             dbg_first_d5_cycle <= debug_cycle;
                                             $display("BYTE_OFFSET: *** FIRST D5 FOUND *** at byte[%0d] pos=%0d cycle=%0d",
                                                      dbg_first_byte_count, DISK_BIT_POSITION, debug_cycle);
+`endif
                                             $display("BYTE_OFFSET: Last 8 bytes before D5: %02X %02X %02X %02X %02X %02X %02X %02X",
                                                      dbg_byte_history[(dbg_history_idx-8)&4'hF],
                                                      dbg_byte_history[(dbg_history_idx-7)&4'hF],
@@ -1236,16 +1242,20 @@ module iwm_flux (
                                         dbg_first_byte_count <= dbg_first_byte_count + 1;
                                         dbg_byte_history[dbg_history_idx] <= shifted_rsh;
                                         dbg_history_idx <= dbg_history_idx + 1;
+`ifdef SIMULATION
                                         if (dbg_first_byte_count < 20) begin
                                             $display("BYTE_OFFSET: byte[%0d] = 0x%02X at pos=%0d cycle=%0d (E1)",
                                                      dbg_first_byte_count, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
                                         end
+`endif
                                         if (shifted_rsh == 8'hD5) begin
                                             dbg_first_d5_found <= 1'b1;
                                             dbg_first_d5_position <= DISK_BIT_POSITION;
+`ifdef SIMULATION
                                             dbg_first_d5_cycle <= debug_cycle;
                                             $display("BYTE_OFFSET: *** FIRST D5 FOUND (E1) *** at byte[%0d] pos=%0d cycle=%0d",
                                                      dbg_first_byte_count, DISK_BIT_POSITION, debug_cycle);
+`endif
                                         end
                                     end
 `endif
@@ -1752,6 +1762,10 @@ module iwm_flux (
     localparam SEC_DATA_READ  = 4'd9;  // Reading data field: 512 data bytes
     localparam SEC_DATA_CSUM  = 4'd10; // Reading data field: 4 checksum bytes
 
+    // Intermediate wires for GCR decode (Verilator can't bit-select function return directly)
+    wire [7:0] gcr_decoded_full = gcr_6_2_decode(byte_complete_data);
+    wire [5:0] gcr_decoded_6bit = gcr_decoded_full[5:0];
+
     reg [3:0]  sec_state;
     reg [7:0]  sec_track;         // Raw GCR byte
     reg [7:0]  sec_sector;        // Raw GCR byte
@@ -1864,29 +1878,29 @@ module iwm_flux (
 
                     SEC_ADDR_TRACK: begin
                         sec_track <= byte_complete_data;
-                        sec_decoded_track <= gcr_6_2_decode(byte_complete_data)[5:0];
-                        sec_running_xor <= gcr_6_2_decode(byte_complete_data)[5:0];  // Start running XOR
+                        sec_decoded_track <= gcr_decoded_6bit;
+                        sec_running_xor <= gcr_decoded_6bit;  // Start running XOR
                         sec_state <= SEC_ADDR_SEC;
                     end
 
                     SEC_ADDR_SEC: begin
                         sec_sector <= byte_complete_data;
-                        sec_decoded_sector <= gcr_6_2_decode(byte_complete_data)[5:0];
-                        sec_running_xor <= sec_running_xor ^ gcr_6_2_decode(byte_complete_data)[5:0];
+                        sec_decoded_sector <= gcr_decoded_6bit;
+                        sec_running_xor <= sec_running_xor ^ gcr_decoded_6bit;
                         sec_state <= SEC_ADDR_SIDE;
                     end
 
                     SEC_ADDR_SIDE: begin
                         sec_side <= byte_complete_data;
-                        sec_decoded_side <= gcr_6_2_decode(byte_complete_data)[5:0];
-                        sec_running_xor <= sec_running_xor ^ gcr_6_2_decode(byte_complete_data)[5:0];
+                        sec_decoded_side <= gcr_decoded_6bit;
+                        sec_running_xor <= sec_running_xor ^ gcr_decoded_6bit;
                         sec_state <= SEC_ADDR_FMT;
                     end
 
                     SEC_ADDR_FMT: begin
                         sec_format <= byte_complete_data;
-                        sec_decoded_format <= gcr_6_2_decode(byte_complete_data)[5:0];
-                        sec_running_xor <= sec_running_xor ^ gcr_6_2_decode(byte_complete_data)[5:0];
+                        sec_decoded_format <= gcr_decoded_6bit;
+                        sec_running_xor <= sec_running_xor ^ gcr_decoded_6bit;
                         sec_state <= SEC_ADDR_CSUM;
                     end
 
@@ -1894,7 +1908,7 @@ module iwm_flux (
 	                        sec_addr_csum <= byte_complete_data;
                         // ROM-style validation: XOR of all 5 decoded bytes must equal 0
                         // The checksum byte is chosen so that track^sector^side^format^checksum = 0
-	                        if ((sec_running_xor ^ gcr_6_2_decode(byte_complete_data)[5:0]) == 6'd0) begin
+	                        if ((sec_running_xor ^ gcr_decoded_6bit) == 6'd0) begin
 	                            sec_addr_ok_count <= sec_addr_ok_count + 1;
 	                            // Avoid logging every OK (too noisy); counts are enough.
 	                        end else begin
@@ -1903,7 +1917,7 @@ module iwm_flux (
 	                                sec_log_count <= sec_log_count + 1'd1;
 	                                $display("SECTOR: ADDR FAIL T=%0d S=%0d side=%02h fmt=%02h xor=%02h pos=%0d raw=%02h %02h %02h %02h %02h",
 	                                         sec_decoded_track, sec_decoded_sector, sec_decoded_side, sec_decoded_format,
-	                                         sec_running_xor ^ gcr_6_2_decode(byte_complete_data)[5:0],
+	                                         sec_running_xor ^ gcr_decoded_6bit,
 	                                         DISK_BIT_POSITION,
 	                                         sec_track, sec_sector, sec_side, sec_format, byte_complete_data);
 	                            end
