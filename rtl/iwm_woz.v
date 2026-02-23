@@ -420,6 +420,12 @@ module iwm_woz (
     wire [16:0] drive35_bit_position;
     wire [5:0]  drive35_bit_timer;      // Bit timer for IWM window sync
     wire [15:0] drive35_bram_addr;
+    // Internal state from drive35 for parent-level sense computation
+    wire        drive35_disk_switched;
+    wire        drive35_step_busy;
+    wire        drive35_step_dir;
+    wire        drive35_motor_on_sense;
+    wire        drive35_at_track0;
 
     // 3.5" drives must NOT use the 5.25" inertia-managed motor_spinning signal.
     // The IIgs ROM (Sony driver) can toggle DISK35 during command boundaries, and
@@ -466,6 +472,11 @@ module iwm_woz (
         .FLUX_TRANSITION(flux_transition_35),
         .WRITE_PROTECT(drive35_wp),
         .SENSE(drive35_sense),
+        .DISK_SWITCHED_OUT(drive35_disk_switched),
+        .STEP_BUSY_OUT(drive35_step_busy),
+        .STEP_DIR_OUT(drive35_step_dir),
+        .MOTOR_ON_SENSE_OUT(drive35_motor_on_sense),
+        .AT_TRACK0_OUT(drive35_at_track0),
         .MOTOR_SPINNING(drive35_motor_spinning),
         .DRIVE_READY(drive35_ready),
         .TRACK(drive35_track),
@@ -569,6 +580,11 @@ module iwm_woz (
     wire        drive35_2_sense;
     wire        drive35_2_motor_spinning;
     wire        drive35_2_ready;
+    wire        drive35_2_disk_switched;
+    wire        drive35_2_step_busy;
+    wire        drive35_2_step_dir;
+    wire        drive35_2_motor_on_sense;
+    wire        drive35_2_at_track0;
 
     flux_drive drive35_2 (
         .IS_35_INCH(1'b1),
@@ -591,6 +607,11 @@ module iwm_woz (
         .FLUX_TRANSITION(flux_transition_35_2),
         .WRITE_PROTECT(drive35_2_wp),
         .SENSE(drive35_2_sense),
+        .DISK_SWITCHED_OUT(drive35_2_disk_switched),
+        .STEP_BUSY_OUT(drive35_2_step_busy),
+        .STEP_DIR_OUT(drive35_2_step_dir),
+        .MOTOR_ON_SENSE_OUT(drive35_2_motor_on_sense),
+        .AT_TRACK0_OUT(drive35_2_at_track0),
         .MOTOR_SPINNING(drive35_2_motor_spinning),
         .DRIVE_READY(drive35_2_ready),
         .TRACK(),
@@ -650,6 +671,11 @@ module iwm_woz (
         .FLUX_TRANSITION(flux_transition_525),
         .WRITE_PROTECT(drive525_wp),
         .SENSE(drive525_sense),
+        .DISK_SWITCHED_OUT(),              // Not used for 5.25"
+        .STEP_BUSY_OUT(),
+        .STEP_DIR_OUT(),
+        .MOTOR_ON_SENSE_OUT(),
+        .AT_TRACK0_OUT(),
         .MOTOR_SPINNING(drive525_motor_spinning),
         .DRIVE_READY(drive525_ready),
         .TRACK(drive525_track_7bit),
@@ -712,18 +738,93 @@ module iwm_woz (
     //=========================================================================
     // Sense Mux - Select active drive's status sense
     //=========================================================================
-    // Select between Drive 1 and Drive 2 based on drive_sel.
-    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? drive35_sense : drive35_2_sense) :
+    // WORKAROUND: Verilator evaluation order issue causes the flux_drive
+    // submodule's SENSE output to use stale input values (LATCHED_SENSE_REG,
+    // IMMEDIATE_PHASES) when the parent computes combinational outputs.
+    // To fix this, we compute the 3.5" sense value DIRECTLY in iwm_woz using
+    // the parent's current signals and the drive's exposed internal state.
+
+    // Compute sense register index using parent's immediate_latched_sense_reg
+    wire [3:0] sense_status_reg = {immediate_latched_sense_reg[1],
+                                   immediate_latched_sense_reg[0],
+                                   diskreg_sel,
+                                   immediate_latched_sense_reg[2]};
+
+    // SmartPort /BSY workaround: When in SmartPort mode (mode[3]=0, mode[1]=1),
+    // the firmware polls the SENSE line for /BSY (device not busy). Since we don't
+    // emulate the SmartPort C-Bus device, we return sense=1 (not busy) for most
+    // status registers in SmartPort mode.
+    //
+    // EXCEPTION: ssr=$C (disk-switched) must ALWAYS return the actual drive state.
+    // The 3.5" disk driver checks disk-switched while mode may still be $07 from
+    // a preceding SmartPort block operation. On real hardware, the sense line is a
+    // direct electrical connection from the drive unaffected by IWM mode.
+    wire smartport_mode_sense = (!immediate_mode[3]) && immediate_mode[1];
+
+    // Compute 3.5" sense for drive35 using parent-level signals
+    reg drive35_computed_sense;
+    always @(*) begin
+        case (sense_status_reg)
+            4'h0: drive35_computed_sense = drive35_step_dir;
+            4'h1: drive35_computed_sense = drive35_step_dir;
+            4'h2: drive35_computed_sense = ~DISK_READY[2];         // ~DISK_MOUNTED
+            4'h4: drive35_computed_sense = smartport_mode_sense ? 1'b1 : drive35_step_busy;
+            4'h8: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_motor_on_sense;
+            4'hA: drive35_computed_sense = ~drive35_at_track0;
+            4'hB: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_ready;
+            4'hC: drive35_computed_sense = ~drive35_disk_switched;  // NEVER override
+            4'hE: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_ready;
+            default: drive35_computed_sense = 1'b1;
+        endcase
+    end
+
+    // Compute 3.5" sense for drive35_2 using parent-level signals
+    reg drive35_2_computed_sense;
+    always @(*) begin
+        case (sense_status_reg)
+            4'h0: drive35_2_computed_sense = drive35_2_step_dir;
+            4'h1: drive35_2_computed_sense = drive35_2_step_dir;
+            4'h2: drive35_2_computed_sense = 1'b1;                 // No disk mounted
+            4'h4: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : drive35_2_step_busy;
+            4'h8: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_motor_on_sense;
+            4'hA: drive35_2_computed_sense = ~drive35_2_at_track0;
+            4'hB: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_ready;
+            4'hC: drive35_2_computed_sense = ~drive35_2_disk_switched;  // NEVER override
+            4'hE: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_ready;
+            default: drive35_2_computed_sense = 1'b1;
+        endcase
+    end
+
+    // Select between drives and drive types
+    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? drive35_computed_sense : drive35_2_computed_sense) :
                                           ((drive_sel == 0) ? drive525_sense : 1'b1);
 
     // Sense lines are always readable regardless of motor state (drive_on).
     // On real hardware, Sony 3.5" drive status lines have separate power from
     // the spindle motor.  The ROM's Enable_Sense / read_dsw_status routines
     // query sense with motor off (RESTOREIWM turns motor off between calls).
-    // Gating sense on drive_on caused disk_switched sense 0xC to always return
-    // HIGH (=switched) when motor was off, trapping GS/OS in an infinite
-    // disk-switch validation loop (VCR[$2E]=5 never cleared).
     wire current_sense = drive_sense;
+
+    // WORKAROUND: Register the sense output to avoid Verilator evaluation order issues.
+    // Between posedges, combinational wires can be inconsistent due to Verilator's eval order.
+    // At posedge CLK_14M, all combinational logic settles correctly.
+    // By registering sense, we capture the correct value and hold it stable.
+    reg drive_sense_reg;
+    always @(posedge CLK_14M) begin
+        if (RESET)
+            drive_sense_reg <= 1'b1;
+        else begin
+`ifdef SIMULATION
+            if (drive_sense != drive_sense_reg)
+                $display("SENSE_REG_TRANS: %0d->%0d ssr=%h ilsr=%03b flux35=%0d ds=%0d dsw=%0d mode=%02h t=%0t",
+                         drive_sense_reg, drive_sense, sense_status_reg, immediate_latched_sense_reg,
+                         flux_is_35_inch, drive_sel, drive35_disk_switched, immediate_mode, $time);
+`endif
+            drive_sense_reg <= drive_sense;
+        end
+    end
+
+    wire current_sense_final = drive_sense_reg;
 
     wire current_motor_spinning = flux_is_35_inch ? drive35_motor_spinning : drive525_motor_spinning;
 
@@ -814,7 +915,7 @@ module iwm_woz (
         .DISK_READY(iwm_disk_ready),
         .DISK_MOUNTED(disk_mounted),
         .IS_35_INCH(flux_is_35_inch),
-        .SENSE_BIT(current_sense),
+        .SENSE_BIT(current_sense_final),
         .LATCHED_SENSE_REG(immediate_latched_sense_reg),  // Use immediate for same-cycle visibility
         .DISKREG_SEL(diskreg_sel),
         .DISK_BIT_POSITION(current_bit_position),

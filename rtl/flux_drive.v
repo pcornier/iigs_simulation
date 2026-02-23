@@ -49,6 +49,13 @@ module flux_drive (
     // Status sense output (computed per-drive)
     output wire        SENSE,           // Status sense line to IWM
 
+    // Internal state for parent-level sense computation (Verilator eval order workaround)
+    output wire        DISK_SWITCHED_OUT,    // disk_switched flag (1=normal, 0=switched)
+    output wire        STEP_BUSY_OUT,        // 1=stepping in progress
+    output wire        STEP_DIR_OUT,         // step direction readback
+    output wire        MOTOR_ON_SENSE_OUT,   // motor on for sense readback
+    output wire        AT_TRACK0_OUT,        // head at track 0
+
     // Status outputs
     output wire        MOTOR_SPINNING,  // Physical motor state (includes spindown)
     output wire        DRIVE_READY,     // Drive is ready (motor at speed after spinup)
@@ -494,6 +501,15 @@ module flux_drive (
     // The motor only affects data reading, not status queries
     // This is critical for ROM drive detection which queries status before turning motor on
     assign SENSE = IS_35_INCH ? sense_35 : DISK_WP;
+
+    // Expose internal state for parent-level sense computation
+    // (Verilator evaluation order workaround: submodule input ports may be stale
+    //  when combinational outputs are computed, so parent can compute sense directly)
+    assign DISK_SWITCHED_OUT = disk_switched;
+    assign STEP_BUSY_OUT     = step_busy;
+    assign STEP_DIR_OUT      = step_direction_immediate;
+    assign MOTOR_ON_SENSE_OUT = motor_on_sense;
+    assign AT_TRACK0_OUT     = at_track0;
 
 `ifdef SIMULATION
     // Debug: trace sense computation for 3.5" drive
