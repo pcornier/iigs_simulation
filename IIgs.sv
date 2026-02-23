@@ -379,6 +379,8 @@ iigs iigs (
 	.WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
 	.WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
 	.WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+	.WOZ_TRACK3_READY(WOZ_TRACK3_READY),
+	.WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
 	// 5.25" drive 1 (unused)
 	.WOZ_TRACK1(WOZ_TRACK1),
 	.WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
@@ -698,6 +700,8 @@ wire        WOZ_TRACK3_LOAD_COMPLETE;
 wire        WOZ_TRACK3_IS_FLUX;
 wire [31:0] WOZ_TRACK3_FLUX_SIZE;
 wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS;
+wire        WOZ_TRACK3_READY;
+wire        WOZ_TRACK3_DATA_VALID;
 
 // 5.25" drive 1 WOZ bit interface (unused)
 wire [5:0]  WOZ_TRACK1;
@@ -735,6 +739,7 @@ assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;
 assign WOZ_TRACK3_BIT_COUNT = woz_ctrl_bit_count;
 assign WOZ_TRACK3_LOAD_COMPLETE = woz_ctrl_track_load_complete;
 assign WOZ_TRACK3_FLUX_TOTAL_TICKS = woz_ctrl_flux_total_ticks;
+assign WOZ_TRACK3_READY = woz_ctrl_ready;
 assign WOZ_TRACK1_BIT_DATA = 8'd0;
 assign WOZ_TRACK1_BIT_COUNT = 32'd0;
 assign sd_buff_din[3] = 8'd0;
@@ -786,7 +791,10 @@ woz_floppy_controller #(
 	// FLUX track support (WOZ v3)
 	.is_flux_track(WOZ_TRACK3_IS_FLUX),
 	.flux_data_size(WOZ_TRACK3_FLUX_SIZE),
-	.flux_total_ticks(woz_ctrl_flux_total_ticks)
+	.flux_total_ticks(woz_ctrl_flux_total_ticks),
+
+	// Track data validity (independent of controller state)
+	.track_data_valid(WOZ_TRACK3_DATA_VALID)
 );
 
 
