@@ -519,7 +519,12 @@ module iwm_woz (
     reg stable_side_reg;
 
     // Detect IWM data register reads: CPU accessing $C0EC (offset 0xC, Q6←0) while Q7=0
-    wire iwm_data_reg_read = cpu_access_edge && (bus_addr == 4'hC) && !q7 && is_35_inch;
+    // CRITICAL: Use flux_is_35_inch (based on which motor is spinning) instead of
+    // is_35_inch (software register). The ROM temporarily clears DISK35 ($C031[6])
+    // during SmartPort dispatch, which zeroes is_35_inch even while the 3.5" drive
+    // is still spinning and being read. Using the motor-based detection ensures
+    // stable_side keeps updating when the firmware switches sides via HDSEL.
+    wire iwm_data_reg_read = cpu_access_edge && (bus_addr == 4'hC) && !q7 && flux_is_35_inch;
 
     always @(posedge CLK_14M or posedge RESET) begin
         if (RESET) begin
@@ -795,20 +800,42 @@ module iwm_woz (
         endcase
     end
 
-    // Select between drives and drive types
-    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? drive35_computed_sense : drive35_2_computed_sense) :
-                                          ((drive_sel == 0) ? drive525_sense : 1'b1);
+    // Select between drives and drive types based on DISK35 ($C031 bit 6).
+    //
+    // IMPORTANT: Use is_35_inch (DISK35 register), NOT flux_is_35_inch (motor-based).
+    // On real hardware, DISK35 controls the electrical path between the IWM and the
+    // drive connectors:
+    //   DISK35=1 → IWM connected to 3.5" Sony floppy → sense from Sony drive
+    //   DISK35=0 → IWM connected to 5.25"/SmartPort → sense from bus (HIGH if no device)
+    //
+    // The 3.5" driver sets DISK35=1 at entry (FF:46EF) and clears it on exit (FF:3C33).
+    // So during APPLEDISK operations (disk-switched checks etc.), DISK35=1 and Sony sense
+    // is correctly routed. After APPLEDISK returns, DISK35=0 and sense is 1 (HIGH), which
+    // is correct for the SmartPort bus enumeration (MorDevices/SendOnePack) that follows.
+    // Without this, ssr=$C during bus enumeration returns ~disk_switched=0 (LOW), which
+    // SendOnePack misinterprets as /BSY acknowledgment from a non-existent external device.
+    //
+    // Note: iwm_data_reg_read still uses flux_is_35_inch (motor-based) because data flow
+    // must continue even when DISK35 is briefly 0 during SmartPort dispatch transitions.
+    wire drive_sense = (is_35_inch) ? ((drive_sel == 0) ? drive35_computed_sense : drive35_2_computed_sense) :
+                                      ((drive_sel == 0) ? drive525_sense : 1'b1);
 
-    // Sense lines are always readable regardless of motor state (drive_on).
-    // On real hardware, Sony 3.5" drive status lines have separate power from
-    // the spindle motor.  The ROM's Enable_Sense / read_dsw_status routines
-    // query sense with motor off (RESTOREIWM turns motor off between calls).
     wire current_sense = drive_sense;
 
-    // WORKAROUND: Register the sense output to avoid Verilator evaluation order issues.
-    // Between posedges, combinational wires can be inconsistent due to Verilator's eval order.
-    // At posedge CLK_14M, all combinational logic settles correctly.
-    // By registering sense, we capture the correct value and hold it stable.
+    // Sense output: use COMBINATIONAL drive_sense for IWM status reads.
+    //
+    // Original approach registered sense to avoid Verilator eval-order issues.
+    // But that one-cycle delay breaks the ROM's same-cycle phase-set + status-read
+    // pattern for disk-switched checks (ssr=$C). The ROM writes $C0E1 to set phase0
+    // (changing ssr to $C) and simultaneously reads the status register. With the
+    // registered value, it gets the PREVIOUS ssr's sense (e.g., ssr=$8 in SmartPort
+    // mode returns sense=1), causing a false "disk changed" detection.
+    //
+    // The combinational value is safe because all inputs to the sense computation
+    // are either registered outputs from flux_drive (disk_switched, step_busy, etc.)
+    // or combinational values computed in the parent (immediate_latched_sense_reg).
+    // The original eval-order issue was about sense computed INSIDE flux_drive with
+    // stale inputs; computing it in the parent with registered outputs avoids that.
     reg drive_sense_reg;
     always @(posedge CLK_14M) begin
         if (RESET)
@@ -824,7 +851,13 @@ module iwm_woz (
         end
     end
 
-    wire current_sense_final = drive_sense_reg;
+    // Hybrid sense output: Use registered value normally (avoids Verilator eval-order
+    // issues that broke ArkanoidIIgs), but bypass to combinational when a phase access
+    // happens in the same cycle. The ROM's disk-switched check pattern writes a phase
+    // register and reads the status simultaneously - the registered value has a one-cycle
+    // delay that returns stale sense from the PREVIOUS ssr, causing false "disk changed".
+    wire sense_phase_updating = cpu_access_edge && (bus_addr[3:1] < 3'b100);
+    wire current_sense_final = sense_phase_updating ? drive_sense : drive_sense_reg;
 
     wire current_motor_spinning = flux_is_35_inch ? drive35_motor_spinning : drive525_motor_spinning;
 

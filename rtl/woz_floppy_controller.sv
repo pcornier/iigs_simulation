@@ -916,8 +916,8 @@ module woz_floppy_controller #(
                     // This prevents spurious falling edge detection on state entry
                     if (old_ack && !sd_ack && transfer_active) begin
                         // Block complete
-                        $display("WOZ_DMA: Block %0d complete for track %0d (lba=%0d)",
-                                 blocks_processed, pending_track_id, sd_lba);
+                        // $display("WOZ_DMA: Block %0d complete for track %0d (lba=%0d)",
+                        //          blocks_processed, pending_track_id, sd_lba);
                         blocks_processed <= blocks_processed + 1;
                         if (blocks_processed + 1 >= trk_block_count) begin
                             // Track load complete - store to appropriate RAM
@@ -1157,24 +1157,13 @@ module woz_floppy_controller #(
                              pending_flux_total_ticks <= pending_flux_total_ticks + sd_buff_dout;
                          end
                          // Debug: log first 4 bytes of first block for each track to verify data
-                         if (blocks_processed == 0 && sd_buff_addr < 9'd4) begin
-	                             $display("WOZ_DMA_FIRST4: track=%0d side=%0d addr=%0d data=%02X (ta=%0d oa=%0d ack=%0d lba=%0d)",
-	                                      pending_track_id, track_load_side, sd_buff_addr, sd_buff_dout,
-	                                      transfer_active, old_ack, sd_ack, sd_lba);
-	                         end
-                        // Debug: log first/last bytes of each block and bytes around problem areas
-                         if (sd_buff_addr == 9'd0 || sd_buff_addr == 9'd511 ||
-                             sd_buff_addr == 9'd1 || sd_buff_addr == 9'd510) begin
-	                             $display("WOZ_DMA_DBG: blk=%0d buf_addr=%0d track_addr=%0d data=%02X track=%0d side=%0d",
-                                      blocks_processed, sd_buff_addr,
-                                      {blocks_processed[6:0], sd_buff_addr},
-	                                      sd_buff_dout, pending_track_id, load_side);
-	                         end
-	                         // Debug block 16 (addresses 8192+) where we saw 0x69 issues
-                         if (blocks_processed == 16 && (sd_buff_addr >= 9'd40 && sd_buff_addr <= 9'd60)) begin
-                             $display("WOZ_DMA_BLK16: buf_addr=%0d track_addr=%0d data=%02X",
-                                      sd_buff_addr, {7'd16, sd_buff_addr}, sd_buff_dout);
-                         end
+                         // DMA debug output disabled for log clarity
+                         // if (blocks_processed == 0 && sd_buff_addr < 9'd4) begin
+	                         //     $display("WOZ_DMA_FIRST4: ...");
+	                         // end
+                         // if (sd_buff_addr == 9'd0 || ...) begin
+	                         //     $display("WOZ_DMA_DBG: ...");
+	                         // end
 	                     end
 	                end else begin // Writing RAM -> SD
                     if (state == S_SAVE_TRACK) begin
