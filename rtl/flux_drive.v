@@ -124,6 +124,10 @@ module flux_drive (
     // MAME spinup is ~0.5 seconds. At 2µs/bit (28 cycles at 14MHz):
     // 0.5 sec = 7,000,000 cycles / 28 cycles/bit = 250,000 bits
     // FIX8: Increased from 170,000 (0.33 sec) to 250,000 (0.5 sec) to match MAME
+    //
+    // For 5.25" drives, iwm_woz.v already handles 300ms motor inertia before
+    // MOTOR_ON goes high. Real Disk II has no /READY signal — data is available
+    // as soon as the motor reaches speed. 5.25" drives skip the spinup counter.
     parameter SPINUP_BIT_COUNT = 250000;
     reg [17:0]  spinup_bits;            // Count bits during spin-up
     reg         drive_ready;            // True when drive is spun up and ready
@@ -805,12 +809,24 @@ module flux_drive (
             // detection causes spurious rotation_complete signals.
             if (!prev_motor_spinning && motor_spinning && DISK_MOUNTED) begin
                 // Motor just turned ON with disk mounted - start spin-up
-                spinup_bits <= 18'd0;
-                drive_ready <= 1'b0;
-                spinup_timer <= bit_cell_cycles;
+                if (IS_35_INCH) begin
+                    // 3.5" Sony drives: need spinup counter (~0.5s) for drive_ready
+                    spinup_bits <= 18'd0;
+                    drive_ready <= 1'b0;
+                    spinup_timer <= bit_cell_cycles;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: Motor ON - starting spin-up (need %0d bits)", DRIVE_ID, SPINUP_BIT_COUNT);
+                    $display("FLUX_DRIVE[%0d]: Motor ON - starting spin-up (need %0d bits)", DRIVE_ID, SPINUP_BIT_COUNT);
 `endif
+                end else begin
+                    // 5.25" Disk II: no /READY signal in hardware. iwm_woz.v already
+                    // simulates 300ms motor inertia before MOTOR_ON goes high, so the
+                    // drive is at speed. Set drive_ready immediately.
+                    drive_ready <= 1'b1;
+                    spinup_bits <= SPINUP_BIT_COUNT;
+`ifdef SIMULATION
+                    $display("FLUX_DRIVE[%0d]: Motor ON - 5.25\" drive ready immediately (300ms inertia in iwm_woz)", DRIVE_ID);
+`endif
+                end
             end else if (!motor_spinning) begin
                 // Motor not spinning.
                 //

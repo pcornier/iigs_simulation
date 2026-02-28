@@ -88,23 +88,6 @@ module iigs
   input         HDD_RAM_WE,
 
 
-      // --- 5.25" floppy track interfaces (Drive 1/2) ---
-   output [5:0]       TRACK1,
-   output [12:0]      TRACK1_ADDR,
-   output [7:0]       TRACK1_DI,
-   input  [7:0]       TRACK1_DO,
-   output             TRACK1_WE,
-   input              TRACK1_BUSY,
-   output             FD_DISK_1,     // Drive 1 active (for track buffer coordination)
-
-   output [5:0]       TRACK2,
-   output [12:0]      TRACK2_ADDR,
-   output [7:0]       TRACK2_DI,
-   input  [7:0]       TRACK2_DO,
-   output             TRACK2_WE,
-   input              TRACK2_BUSY,
-   output             FD_DISK_2,     // Drive 2 active (for track buffer coordination)
-
    // --- WOZ bit interface for 3.5" drive 1 ---
    output [7:0]       WOZ_TRACK3,           // Track number being read
    output [15:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer (16-bit for FLUX tracks)
@@ -120,9 +103,13 @@ module iigs
 
    // --- WOZ bit interface for 5.25" drive 1 ---
    output [5:0]       WOZ_TRACK1,           // Track number being read
-   output [12:0]      WOZ_TRACK1_BIT_ADDR,  // Byte address in track bit buffer
+   output [15:0]      WOZ_TRACK1_BIT_ADDR,  // Byte address in track bit buffer (16-bit for FLUX)
    input  [7:0]       WOZ_TRACK1_BIT_DATA,  // Byte from track bit buffer
    input  [31:0]      WOZ_TRACK1_BIT_COUNT, // Total bits in track
+   input              WOZ_TRACK1_LOAD_COMPLETE, // Pulses when 5.25" track load finishes
+   input              WOZ_TRACK1_IS_FLUX,       // Track data is flux timing (not bitstream)
+   input  [31:0]      WOZ_TRACK1_FLUX_SIZE,     // Size in bytes of flux data
+   input  [31:0]      WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
 
    input [3:0]        DISK_READY,
    input              FLOPPY_WP,
@@ -844,7 +831,7 @@ module iigs
       INTCXROM<=1'b1;
       RDROM<=1'b1;
       LCRAM2<=1'b1;
-      LC_WE_PRE<=1'b0;
+      LC_WE_PRE<=1'b1;  // Per Apple IIgs HW ref: reset enables writing to LC RAM
 
       DISKREG<=0;
       SLTROMSEL<=0;
@@ -868,7 +855,7 @@ module iigs
       MONOCHROME<=0;
       RDROM<=1;
       LCRAM2<=1;  // Fix: Should be 1 to match STATEREG initialization (bit 1 = LCRAM2)
-      LC_WE<=0;
+      LC_WE<=1;  // Per Apple IIgs HW ref: "reset initializes for writing to the RAM"
       ROMBANK<=0;;
 `ifdef DEBUG_RESET
       $display("RESET_TRACE: All registers initialized, waiting for reset release");
@@ -1180,10 +1167,10 @@ module iigs
                 begin
                   if (phi2) begin
 `ifdef DEBUG_IO
-                    $display("LC_WR C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+                    $display("LC_WR C082/C086: RDROM=1 LCRAM2=1 LC_WE=0 (ROM read, no write)");
 `endif
                     RDROM <= 1'b1;
-                    LCRAM2 <= 1'b0;
+                    LCRAM2 <= 1'b1;  // FIX: bank 2 for $C080-$C087 range
                     LC_WE <= 1'b0;
                     LC_WE_PRE<=1'b0;
                   end
@@ -1558,10 +1545,10 @@ module iigs
                 begin
                   if (phi2) begin
 `ifdef DEBUG_IO
-                    $display("LC_RD C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+                    $display("LC_RD C082/C086: RDROM=1 LCRAM2=1 LC_WE=0 (ROM read, no write)");
 `endif
                     RDROM <= 1'b1;
-                    LCRAM2 <= 1'b0;
+                    LCRAM2 <= 1'b1;  // FIX: bank 2 for $C080-$C087 range
                     LC_WE <= 1'b0;
                     LC_WE_PRE<=1'b0;
                   end
@@ -1693,10 +1680,10 @@ module iigs
               LC_WE_PRE <= 1'b1;
             end
           end
-          12'h082, 12'h086: begin  // Read ROM, no write
+          12'h082, 12'h086: begin  // Read ROM, no write (bank 2)
             if (phi2) begin
               RDROM <= 1'b1;
-              LCRAM2 <= 1'b0;
+              LCRAM2 <= 1'b1;  // FIX: bank 2 for $C080-$C087 range
               LC_WE <= 1'b0;
               LC_WE_PRE <= 1'b0;
             end
@@ -2579,17 +2566,7 @@ wire ready_out;
           .strobe(iwm_strobe),
           .DISK35(DISK35)
           );
-  // Stub outputs for old nibble-based track interfaces
-  assign TRACK1 = 6'd0;
-  assign TRACK1_ADDR = 14'd0;
-  assign TRACK1_DI = 8'd0;
-  assign TRACK1_WE = 1'b0;
-  assign FD_DISK_1 = 1'b0;
-  assign TRACK2 = 6'd0;
-  assign TRACK2_ADDR = 14'd0;
-  assign TRACK2_DI = 8'd0;
-  assign TRACK2_WE = 1'b0;
-  assign FD_DISK_2 = 1'b0;
+  // Stub outputs for internal wires
   assign TRACK3 = 7'd0;
   assign TRACK3_ADDR = 14'd0;
   assign TRACK3_SIDE = 1'b0;
@@ -2642,21 +2619,14 @@ wire ready_out;
       .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
       .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
       .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
+      .WOZ_TRACK1_LOAD_COMPLETE(WOZ_TRACK1_LOAD_COMPLETE),
+      .WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
+      .WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
+      .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
       // Motor status for clock slowdown
       .FLOPPY_MOTOR_ON(floppy_motor_on)
   );
-  // Old nibble-based track interfaces are not used with flux-based IWM
-  // Tie to defaults since floppy_track modules in sim.v may still be instantiated
-  assign TRACK1 = 6'd0;
-  assign TRACK1_ADDR = 14'd0;
-  assign TRACK1_DI = 8'd0;
-  assign TRACK1_WE = 1'b0;
-  assign FD_DISK_1 = 1'b0;
-  assign TRACK2 = 6'd0;
-  assign TRACK2_ADDR = 14'd0;
-  assign TRACK2_DI = 8'd0;
-  assign TRACK2_WE = 1'b0;
-  assign FD_DISK_2 = 1'b0;
+  // Internal wires not used with flux-based IWM
   assign TRACK3 = 7'd0;
   assign TRACK3_ADDR = 14'd0;
   assign TRACK3_SIDE = 1'b0;

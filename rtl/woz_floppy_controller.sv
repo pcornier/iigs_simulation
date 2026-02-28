@@ -1,6 +1,7 @@
 
 module woz_floppy_controller #(
-    parameter IS_35_INCH = 0
+    parameter IS_35_INCH = 0,
+    parameter BRAM_ADDR_WIDTH = IS_35_INCH ? 16 : 15  // 64KB for 3.5", 32KB for 5.25" (supports FLUX tracks)
 ) (
     input             clk,
     input             reset,
@@ -48,7 +49,10 @@ module woz_floppy_controller #(
     // data for the currently selected side matches the requested track. It stays high even
     // while the controller is loading the OTHER side. This prevents flux playback from being
     // suppressed during dual-side track loads.
-    output wire       track_data_valid
+    output wire       track_data_valid,
+
+    // Disk type mismatch detection
+    output wire       disk_type_mismatch  // High when loaded WOZ disk_type doesn't match IS_35_INCH
 );
 
     //=========================================================================
@@ -98,8 +102,8 @@ module woz_floppy_controller #(
     reg         load_side;   // Which side is currently being DMA-loaded/saved (3.5" only)
     reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
-    // Dual port RAM for Track Data (Side 0) - 64KB per side (for WOZ FLUX tracks)
-    bram #(.width_a(8), .widthad_a(16)) track_ram_side0 (
+    // Dual port RAM for Track Data (Side 0) — used by both 3.5" and 5.25"
+    bram #(.width_a(8), .widthad_a(BRAM_ADDR_WIDTH)) track_ram_side0 (
         .clock_a(clk),
         .address_a(track_load_addr),
         .wren_a(track_load_we && (!IS_35_INCH || (track_load_side == 1'b0))),
@@ -113,20 +117,27 @@ module woz_floppy_controller #(
         .q_b(bit_data0)
     );
 
-    // Dual port RAM for Track Data (Side 1) - 64KB per side (for WOZ FLUX tracks)
-    bram #(.width_a(8), .widthad_a(16)) track_ram_side1 (
-        .clock_a(clk),
-        .address_a(track_load_addr),
-        .wren_a(track_load_we && (IS_35_INCH && (track_load_side == 1'b1))),
-        .data_a(track_load_data),
-        .q_a(track_ram_dout1),
+    // Dual port RAM for Track Data (Side 1) — 3.5" only (double-sided)
+    generate
+        if (IS_35_INCH) begin : gen_side1_ram
+            bram #(.width_a(8), .widthad_a(BRAM_ADDR_WIDTH)) track_ram_side1 (
+                .clock_a(clk),
+                .address_a(track_load_addr),
+                .wren_a(track_load_we && (track_load_side == 1'b1)),
+                .data_a(track_load_data),
+                .q_a(track_ram_dout1),
 
-        .clock_b(clk),
-        .address_b(bit_addr),
-        .wren_b(bit_we && (IS_35_INCH && (track_id[0] == 1'b1))),
-        .data_b(bit_data_in),
-        .q_b(bit_data1)
-    );
+                .clock_b(clk),
+                .address_b(bit_addr),
+                .wren_b(bit_we && (track_id[0] == 1'b1)),
+                .data_b(bit_data_in),
+                .q_b(bit_data1)
+            );
+        end else begin : gen_no_side1
+            assign track_ram_dout1 = 8'd0;
+            assign bit_data1 = 8'd0;
+        end
+    endgenerate
 
     // Use stable_side for data reads - this prevents SEL toggling during status reads
     // from causing the mux to return data from the wrong side
@@ -228,6 +239,9 @@ module woz_floppy_controller #(
 `else
     assign disk_mounted = img_mounted && !scan_failed;
 `endif
+
+    // Disk type mismatch: WOZ INFO disk_type 1=5.25", 2=3.5"
+    assign disk_type_mismatch = woz_valid && ((IS_35_INCH && info_disk_type == 8'd1) || (!IS_35_INCH && info_disk_type == 8'd2));
 
     // WOZ Parsing
     reg [10:0] meta_read_addr;
@@ -535,6 +549,9 @@ module woz_floppy_controller #(
 	                            state <= S_IDLE;
 	                            $display("WOZ_CTRL: Parsed INFO/TMAP/TRKS%s (ver=%0d type=%0d timing=%0d flux_block=%0d), entering IDLE",
 	                                     have_flux ? "/FLUX" : "", info_version, info_disk_type, info_bit_timing, info_flux_block);
+	                            if ((IS_35_INCH && info_disk_type == 8'd1) || (!IS_35_INCH && info_disk_type == 8'd2))
+	                                $display("WOZ_CTRL: WARNING: disk type mismatch! IS_35_INCH=%0d but WOZ disk_type=%0d (1=5.25\", 2=3.5\")",
+	                                         IS_35_INCH, info_disk_type);
 	                            pending_track_id <= track_id;
 	                            load_side <= track_id[0];
 	                        end else if (scan_blocks >= SCAN_BLOCK_LIMIT) begin

@@ -961,6 +961,13 @@ module iwm_flux (
                                     async_update_pending <= 1'b0;
                                     if (latch_mode) begin
                                         latch_hold_cnt <= 4'd8;
+                                    end else begin
+                                        // Sync mode: clear shift register after byte completion.
+                                        // Without this, the completed byte stays in m_rsh and
+                                        // the next shift immediately produces bit7=1, causing
+                                        // cascading false byte completions with wrong framing.
+                                        // Matches MAME's iwm.cpp behavior.
+                                        m_rsh <= 8'h00;
                                     end
 `ifdef SIMULATION
                                     if (byte_counter < 50) begin
@@ -1222,6 +1229,13 @@ module iwm_flux (
                                     async_update_pending <= 1'b0;
                                     if (latch_mode) begin
                                         latch_hold_cnt <= 4'd8;
+                                    end else begin
+                                        // Sync mode: clear shift register after byte completion.
+                                        // Without this, the completed byte stays in m_rsh and
+                                        // the next shift immediately produces bit7=1, causing
+                                        // cascading false byte completions with wrong framing.
+                                        // Matches MAME's iwm.cpp behavior.
+                                        m_rsh <= 8'h00;
                                     end
 `ifdef SIMULATION
                                     if (byte_counter < 50) begin
@@ -1563,7 +1577,12 @@ module iwm_flux (
     wire access_q7 = (ADDR[3:1] == 3'b111);
     wire immediate_q6 = access_q6 ? ADDR[0] : SW_Q6;
     wire immediate_q7 = access_q7 ? ADDR[0] : SW_Q7;
-    assign rd_is_data_reg = (immediate_q7 == 1'b0) && (immediate_q6 == 1'b0);
+    // For 5.25": Only IWM register reads (ADDR[3]=1, i.e. $C0E8-$C0EF) should
+    // acknowledge data bytes. Phase register reads ($C0E0-$C0E7, ADDR[3]=0)
+    // control the stepper motor and must NOT consume data from the shift register.
+    // For 3.5": Phase addresses are used for Sony drive commands and reads at
+    // Q6=0/Q7=0 must still return data, so don't gate on ADDR[3].
+    assign rd_is_data_reg = (IS_35_INCH || ADDR[3]) && (immediate_q7 == 1'b0) && (immediate_q6 == 1'b0);
 
     wire [7:0] data_out_data = effective_data;
 

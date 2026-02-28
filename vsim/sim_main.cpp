@@ -1161,31 +1161,6 @@ int verilate() {
 					// The issue is likely that CPU A_OUT shows logical address (Bank 00)
 					// but memory controller redirects to physical address (Bank 01)
 					
-                    // CURCYL WATCHPOINT: Catch ANY write to E1:0F3A and dump the PC
-                    // The CPU's A_OUT is the raw (untranslated) 24-bit address
-                    {
-                        unsigned long cpu_a_out = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A_OUT;
-                        if (vda && we && cpu_a_out == 0xE10F3A) {
-                            static int curcyl_wp_count = 0;
-                            if (curcyl_wp_count < 200) {
-                                unsigned char pbr_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                                unsigned short pc_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
-                                unsigned char dbr_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
-                                unsigned char ir_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
-                                // Also dump WOZ controller state
-                                uint8_t woz_ready = VERTOPINTERN->emu__DOT__woz_ctrl_ready;
-                                uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
-                                uint8_t woz_state = VERTOPINTERN->emu__DOT__woz_ctrl__DOT__state;
-                                uint8_t ct_side0 = VERTOPINTERN->emu__DOT__woz_ctrl__DOT__current_track_id_side0;
-                                uint8_t ct_side1 = VERTOPINTERN->emu__DOT__woz_ctrl__DOT__current_track_id_side1;
-                                printf("CURCYL_WATCHPOINT #%d: WRITE to E1:0F3A data=%02X PC=%02X:%04X DBR=%02X IR=%02X "
-                                       "woz_rdy=%d track=%d state=%d ct_s0=%d ct_s1=%d t=%llu\n",
-                                       curcyl_wp_count, dout, pbr_wp, pc_wp, dbr_wp, ir_wp,
-                                       woz_ready, woz_track, woz_state, ct_side0, ct_side1, (unsigned long long)main_time);
-                                curcyl_wp_count++;
-                            }
-                        }
-                    }
 
                     // PARM BLOCK ACCESS WATCHPOINT: Trace ALL accesses (read/write) to
                     // address range $E160-$E180 during P16 dispatch to see which bank
@@ -2421,64 +2396,6 @@ int verilate() {
                                        error2, readret, curcyl);
                                 trymore_reason = "unknown";  // reset for next
                             }
-                            // FF:4826 = SEEK entry point (JMP SeekHook at E1:0F87) - dump curcyl and target cyl
-                            // Note: FF:4021 does JSR $4826 (SEEK), cyl is already set before this call
-                            {
-                                static int seek_count = 0;
-                                if (pbr_now == 0xFF && pc_now == 0x4826 && vpa && seek_count < 100) {
-                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                    const int bank_e1_offset = 0x10000;
-                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28]; // drive variable
-                                    uint8_t curcyl = slowram[bank_e1_offset + 0x0F3A + drive_idx];
-                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
-                                    uint8_t sector = slowram[bank_e1_offset + 0x0F2A];
-                                    uint8_t side = slowram[bank_e1_offset + 0x0F2B];
-                                    // SeekHook at E1:0F87 is a JML instruction (4 bytes: 5C ll hh bb)
-                                    uint8_t hook0 = slowram[bank_e1_offset + 0x0F87];
-                                    uint8_t hook1 = slowram[bank_e1_offset + 0x0F88];
-                                    uint8_t hook2 = slowram[bank_e1_offset + 0x0F89];
-                                    uint8_t hook3 = slowram[bank_e1_offset + 0x0F8A];
-                                    // Also dump head_phase from flux_drive
-                                    uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
-                                    uint32_t hphase = woz_track; // use WOZ_TRACK3 as proxy for head position
-                                    printf("WOZ_SEEK #%d: curcyl=%02X target_cyl=%02X sector=%02X side=%02X drive=%02X hook=%02X:%04X hphase=%d\n",
-                                           seek_count, curcyl, cyl, sector, side, drive_idx,
-                                           hook3, (hook2<<8)|hook1, hphase);
-                                    seek_count++;
-                                }
-                            }
-                            // FF:4855 = SEEKDONE - curcyl updated successfully
-                            {
-                                static int seekdone_count = 0;
-                                if (pbr_now == 0xFF && pc_now == 0x4855 && vpa && seekdone_count < 100) {
-                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                    const int bank_e1_offset = 0x10000;
-                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
-                                    uint8_t curcyl = slowram[bank_e1_offset + 0x0F3A + drive_idx];
-                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
-                                    uint8_t dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
-                                    uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
-                                    uint32_t hphase = woz_track; // use WOZ_TRACK3 as proxy for head position
-                                    printf("WOZ_SEEKDONE #%d: curcyl=%02X cyl=%02X hphase=%d DBR=%02X\n",
-                                           seekdone_count, curcyl, cyl, hphase, dbr);
-                                    seekdone_count++;
-                                }
-                            }
-                            // FF:485E = after STA curcyl,x - verify curcyl was written
-                            {
-                                static int seekpost_count = 0;
-                                if (pbr_now == 0xFF && pc_now == 0x485E && vpa && seekpost_count < 100) {
-                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                    const int bank_e1_offset = 0x10000;
-                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
-                                    uint8_t curcyl_new = slowram[bank_e1_offset + 0x0F3A + drive_idx];
-                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
-                                    uint8_t dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
-                                    printf("WOZ_SEEKPOST #%d: curcyl_now=%02X cyl=%02X DBR=%02X drive=%02X\n",
-                                           seekpost_count, curcyl_new, cyl, dbr, drive_idx);
-                                    seekpost_count++;
-                                }
-                            }
                             // FF:48AA = STZ curcyl,x in recal - this zeros curcyl
                             {
                                 static int recal_stz_count = 0;
@@ -2499,23 +2416,6 @@ int verilate() {
                                     printf("WOZ_CURCYL_RESET #%d: STA curcyl,x at FF:4A91 (reset to unknown)\n",
                                            unknown_stz_count);
                                     unknown_stz_count++;
-                                }
-                            }
-                            // FF:4866 = SEEKERR - seek failed
-                            {
-                                static int seekerr_count = 0;
-                                if (pbr_now == 0xFF && pc_now == 0x4866 && vpa && seekerr_count < 100) {
-                                    uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                    const int bank_e1_offset = 0x10000;
-                                    uint8_t drive_idx = slowram[bank_e1_offset + 0x0F28];
-                                    uint8_t curcyl = slowram[bank_e1_offset + 0x0F3A + drive_idx];
-                                    uint8_t cyl = slowram[bank_e1_offset + 0x0F29];
-                                    uint8_t error2 = slowram[bank_e1_offset + 0x0F44];
-                                    uint8_t woz_track = VERTOPINTERN->emu__DOT__WOZ_TRACK3;
-                                    uint32_t hphase = woz_track; // use WOZ_TRACK3 as proxy for head position
-                                    printf("WOZ_SEEKERR #%d: curcyl=%02X cyl=%02X error2=%02X hphase=%d\n",
-                                           seekerr_count, curcyl, cyl, error2, hphase);
-                                    seekerr_count++;
                                 }
                             }
                             // FF:4041 = GRABHEADR (JSR rdaddr) - dump WOZ state when address field reading starts
@@ -3311,26 +3211,9 @@ int verilate() {
                             }
                         }
 
-                        // DIAGNOSTIC: Patch dib_last_sts (E1:D594) to correct value
-                        // after game corrupts it with MSLOT value ($C5).
-                        // The game writes $C5 to E1:D594 at frame 407, which GS/OS later
-                        // interprets as a disk-switch flag (bit 0 = 1). On real hardware,
-                        // the DIB is likely at a different address so this doesn't collide.
-                        {
-                            static bool d594_patched = false;
-                            uint8_t* slowram_af = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                            if (!d594_patched && video.count_frame >= 500) {
-                                uint8_t d594_val = slowram_af[0x1D594];
-                                if (d594_val == 0xC5) {
-                                    // Patch to $F8 = block device, write-allowed, read-allowed, online, not disk-switched
-                                    slowram_af[0x1D594] = 0xF8;
-                                    slowram_af[0x1D595] = 0x00;
-                                    d594_patched = true;
-                                    printf("DIB_LAST_STS_PATCH: E1:D594 %02X->F8 at frame=%d\n",
-                                           d594_val, video.count_frame);
-                                }
-                            }
-                        }
+                        // REMOVED: Debug patch that overwrote e1_mslot (E1:D594) from $C5 to $F8
+                        // at frame 500. This corrupted the boot slot number, causing GS/OS
+                        // device dispatch to use slot 0 instead of slot 5.
 
                         // One-time GS/OS loop code dump: E0:F510-F5A0
                         // Triggered at frame 780 (just before stuck loop starts at ~786)
@@ -3870,8 +3753,8 @@ bool memory_dump_mode = false;
 // ---------------------------
 std::string disk_image = "";   // HDD unit 0 (--disk)
 std::string disk_image2 = "";  // HDD unit 1 (--disk2)
-std::string floppy_image = "";  // Floppy disk image (NIB format, 5.25" 140K)
 std::string woz_image = "";  // WOZ disk image (flux-based)
+int woz_mount_index = -1;     // Auto-detected: 4=5.25", 5=3.5"
 
 // Key injection functionality
 // ---------------------------
@@ -4176,8 +4059,7 @@ void show_help() {
 	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
 	printf("  --disk <filename>             Use specified HDD image (slot 7 unit 0, no disk mounted by default)\n");
 	printf("  --disk2 <filename>            Use specified HDD image for slot 7 unit 1\n");
-	printf("  --floppy <filename>           Use specified floppy image (5.25\" NIB format, drive 1)\n");
-	printf("  --woz <filename>              Use specified WOZ disk image (flux-based floppy)\n");
+	printf("  --woz <filename>              Use specified WOZ disk image (auto-detects 5.25\" vs 3.5\")\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
 	printf("  --dump-vcd-after <frame>      Start dumping vsim.vcd after a frame number\n");
@@ -4412,14 +4294,44 @@ int main(int argc, char** argv, char** env) {
             disk_image2 = argv[i + 1];
             printf("Using HDD unit 1 image: %s\n", disk_image2.c_str());
             i++; // Skip the next argument since it's the filename
-        } else if (strcmp(argv[i], "--floppy") == 0 && i + 1 < argc) {
-            floppy_image = argv[i + 1];
-            printf("Using floppy image: %s (will mount to drive 1, 5.25\" 140K)\n", floppy_image.c_str());
-            i++; // Skip the next argument since it's the filename
         } else if (strcmp(argv[i], "--woz") == 0 && i + 1 < argc) {
             woz_image = argv[i + 1];
-            printf("Using WOZ disk image: %s\n", woz_image.c_str());
             i++;
+            // Auto-detect WOZ format by reading INFO chunk disk_type
+            {
+                FILE *f = fopen(woz_image.c_str(), "rb");
+                if (f) {
+                    unsigned char hdr[22];
+                    if (fread(hdr, 1, 22, f) == 22) {
+                        // Check WOZ signature (WOZ1 or WOZ2)
+                        if (hdr[0] == 'W' && hdr[1] == 'O' && hdr[2] == 'Z' &&
+                            (hdr[3] == '1' || hdr[3] == '2')) {
+                            // Byte 21 = disk_type in INFO chunk: 1=5.25", 2=3.5"
+                            unsigned char disk_type = hdr[21];
+                            if (disk_type == 1) {
+                                woz_mount_index = 4;
+                                printf("Detected 5.25\" WOZ image: %s (mounting to index 4)\n", woz_image.c_str());
+                            } else if (disk_type == 2) {
+                                woz_mount_index = 5;
+                                printf("Detected 3.5\" WOZ image: %s (mounting to index 5)\n", woz_image.c_str());
+                            } else {
+                                woz_mount_index = 5;
+                                printf("WARNING: Unknown WOZ disk_type %d in %s, defaulting to index 5 (3.5\")\n", disk_type, woz_image.c_str());
+                            }
+                        } else {
+                            printf("WARNING: %s does not have a valid WOZ header, defaulting to index 5\n", woz_image.c_str());
+                            woz_mount_index = 5;
+                        }
+                    } else {
+                        printf("WARNING: Could not read WOZ header from %s, defaulting to index 5\n", woz_image.c_str());
+                        woz_mount_index = 5;
+                    }
+                    fclose(f);
+                } else {
+                    printf("WARNING: Could not open %s for format detection\n", woz_image.c_str());
+                    woz_mount_index = 5;
+                }
+            }
         } else if (strcmp(argv[i], "--send-keys") == 0 && i + 1 < argc) {
             // Parse frame:keys format
             std::string arg = argv[i + 1];
@@ -4639,12 +4551,6 @@ int main(int argc, char** argv, char** env) {
         if (video.Initialise(windowTitle) == 1) { return 1; }
     }
 
-    // Mount floppy image to index 0 (5.25" drive 1) if specified via --floppy
-    if (!floppy_image.empty()) {
-        printf("Mounting floppy image: %s to index 0 (5.25\" drive 1)\n", floppy_image.c_str());
-        blockdevice.MountDisk(floppy_image.c_str(), 0);
-    }
-
     // Mount HDD images into slot 7 backend (only if specified via --disk/--disk2)
     if (!disk_image.empty()) {
         printf("Mounting disk image: %s to index 1 (HDD slot 7 unit 0)\n", disk_image.c_str());
@@ -4654,12 +4560,12 @@ int main(int argc, char** argv, char** env) {
         printf("Mounting disk image: %s to index 3 (HDD slot 7 unit 1)\n", disk_image2.c_str());
         blockdevice.MountDisk(disk_image2.c_str(), 3);
     }
-    if (!woz_image.empty()) {
-        printf("Mounting WOZ image: %s to index 5\n", woz_image.c_str());
-        blockdevice.MountDisk(woz_image.c_str(), 5);
+    if (!woz_image.empty() && woz_mount_index >= 0) {
+        printf("Mounting WOZ image: %s to index %d\n", woz_image.c_str(), woz_mount_index);
+        blockdevice.MountDisk(woz_image.c_str(), woz_mount_index);
     }
 
-    if (disk_image.empty() && disk_image2.empty() && floppy_image.empty() && woz_image.empty()) {
+    if (disk_image.empty() && disk_image2.empty() && woz_image.empty()) {
         printf("No disk images specified - booting without disk\n");
     }
 

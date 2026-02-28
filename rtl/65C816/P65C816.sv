@@ -306,7 +306,11 @@ module P65C816
       end
       else
       begin
-         if (IR == 8'hFB & P[8] == 1'b1 & MC.LOAD_P == 3'b101)
+         // XCE: Force SP high=$01, X/Y high=0 when involving emulation mode.
+         // P[0]=carry, P[8]=emulation BEFORE the swap. After XCE: new_E=old_C, new_C=old_E.
+         // Force when: entering emulation (P[0]=1), OR leaving emulation (P[8]=1, SP was
+         // constrained to 0x01xx). Only skip when both=0 (native with C=0, stays native).
+         if (IR == 8'hFB & (P[0] == 1'b1 | P[8] == 1'b1) & MC.LOAD_P == 3'b101)
          begin
             X[15:8] <= 8'h00;
             Y[15:8] <= 8'h00;

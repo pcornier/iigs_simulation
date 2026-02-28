@@ -50,9 +50,13 @@ module iwm_woz (
 
     // WOZ Track bit interface for 5.25" drive 1
     output [5:0]    WOZ_TRACK1,
-    output [12:0]   WOZ_TRACK1_BIT_ADDR,
+    output [15:0]   WOZ_TRACK1_BIT_ADDR,
     input  [7:0]    WOZ_TRACK1_BIT_DATA,
     input  [31:0]   WOZ_TRACK1_BIT_COUNT,
+    input           WOZ_TRACK1_LOAD_COMPLETE,  // Pulses when 5.25" track load finishes
+    input           WOZ_TRACK1_IS_FLUX,        // Track data is flux timing (not bitstream)
+    input  [31:0]   WOZ_TRACK1_FLUX_SIZE,      // Size in bytes of flux data
+    input  [31:0]   WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
 
     // Motor status for clock slowdown
     output          FLOPPY_MOTOR_ON
@@ -648,7 +652,7 @@ module iwm_woz (
     wire [5:0]  drive525_track = drive525_track_7bit[5:0];
     wire [16:0] drive525_bit_position;
     wire [5:0]  drive525_bit_timer;     // Bit timer for IWM window sync
-    wire [13:0] drive525_bram_addr;
+    wire [15:0] drive525_bram_addr;
 
     // Drive is active when motor is spinning, 5.25" mode, and disk ready
     wire drive525_active = motor_spinning && !is_35_inch && DISK_READY[0];
@@ -688,19 +692,19 @@ module iwm_woz (
         .BIT_TIMER_OUT(drive525_bit_timer),
         .TRACK_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
         .TRACK_LOADED(drive525_track_loaded),
-        .TRACK_LOAD_COMPLETE(1'b0),  // TODO: Add 5.25" track load signal when needed
+        .TRACK_LOAD_COMPLETE(WOZ_TRACK1_LOAD_COMPLETE),
         .BRAM_ADDR(drive525_bram_addr),
         .BRAM_DATA(WOZ_TRACK1_BIT_DATA),
-        .IS_FLUX_TRACK(1'b0),        // TODO: Add 5.25" flux support when needed
-        .FLUX_DATA_SIZE(32'd0),
-        .FLUX_TOTAL_TICKS(32'd0),
+        .IS_FLUX_TRACK(WOZ_TRACK1_IS_FLUX),
+        .FLUX_DATA_SIZE(WOZ_TRACK1_FLUX_SIZE),
+        .FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
         .SD_TRACK_ACK(1'b0)
     );
 
     assign WOZ_TRACK1 = drive525_track;
-    assign WOZ_TRACK1_BIT_ADDR = drive525_bram_addr[12:0];
+    assign WOZ_TRACK1_BIT_ADDR = drive525_bram_addr;
 
     //=========================================================================
     // Flux Mux - Select active drive's flux transitions
