@@ -163,10 +163,10 @@ void SimBlockDevice::BeforeEval(int cycles)
         }
         bytecnt = 0;
         *sd_buff_addr = 0;
-        // WOZ drive (index 5) uses minimal ack_delay for instant track loading
+        // WOZ drives (index 4=5.25", index 5=3.5") use minimal ack_delay for instant track loading
         // This simulates having all track data pre-cached in memory
         // Using 2 cycles minimum to allow the protocol handshake to work
-        ack_delay = (i == 5) ? 2 : 1200;
+        ack_delay = (i == 4 || i == 5) ? 2 : 1200;
       }
     }
 

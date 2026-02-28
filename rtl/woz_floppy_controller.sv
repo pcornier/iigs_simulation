@@ -291,6 +291,13 @@ module woz_floppy_controller #(
     reg [15:0] scan_skip_target;   // Target block to skip to (0 = no skip pending)
     reg        scan_skip_active;   // Skip is in progress
     reg        scan_skip_discard;  // Discard remaining bytes in current block after skip
+
+    // WOZ v1 support: v1 TRKS contains raw track data inline (35 × 6656 bytes),
+    // not the v2 metadata table. We compute track locations directly.
+    reg        is_woz_v1;              // WOZ v1 format flag
+    reg [15:0] trks_base_block;        // File block number where TRKS data starts
+    reg [8:0]  trks_byte_offset;       // Byte offset within that block
+    reg [15:0] v1_bit_count;           // Captured bit count during v1 DMA (from track bytes 6648-6649)
     
     // Current Track Info
     reg [15:0] trk_start_block;
@@ -386,6 +393,10 @@ module woz_floppy_controller #(
                 flux_size_side0 <= 32'd0;
                 flux_size_side1 <= 32'd0;
                 scan_failed <= 1'b0;
+                is_woz_v1 <= 1'b0;
+                trks_base_block <= 16'd0;
+                trks_byte_offset <= 9'd0;
+                v1_bit_count <= 16'd0;
 	        end else begin
 
             // Default signals
@@ -461,6 +472,10 @@ module woz_floppy_controller #(
 	                flux_size_side0 <= 32'd0;
 	                flux_size_side1 <= 32'd0;
 	                scan_failed <= 1'b0;
+	                is_woz_v1 <= 1'b0;
+	                trks_base_block <= 16'd0;
+	                trks_byte_offset <= 9'd0;
+	                v1_bit_count <= 16'd0;
 	            end
 	            // Unmount: drop validity immediately.
 	            if (!img_mounted && prev_mounted) begin
@@ -774,6 +789,19 @@ module woz_floppy_controller #(
                                      busy <= 0;
                                      loading_second_side <= 1'b0;
                                  end
+	                             end else if (is_woz_v1) begin
+	                                 // WOZ v1: compute track parameters directly from file position.
+	                                 // Each v1 TRKS entry is 6656 bytes = 13 × 512 blocks.
+	                                 // Entry N starts at: trks_base_block + N * 13 (+ trks_byte_offset within block)
+	                                 $display("WOZ_CTRL: V1 Track %0d maps to TRKS entry %0d", pending_track_id, trks_index);
+	                                 trk_start_block <= trks_base_block
+	                                     + ({8'd0, trks_index} << 3)
+	                                     + ({8'd0, trks_index} << 2)
+	                                     + {8'd0, trks_index};  // trks_index * 13
+	                                 trk_block_count <= (trks_byte_offset != 9'd0) ? 16'd14 : 16'd13;
+	                                 trk_bit_count <= 32'd51200;  // Placeholder; real value captured during DMA
+	                                 v1_bit_count <= 16'd0;
+	                                 blocks_processed <= 19;  // Skip to "done reading" step
 	                             end else begin
 	                                 $display("WOZ_CTRL: Track %0d maps to TRKS entry %0d (bitstream)", pending_track_id, trks_index);
 	                                 // Start reading TRK entry (StartBlock, BlockCount, BitCount)
@@ -942,22 +970,23 @@ module woz_floppy_controller #(
 
                             if (IS_35_INCH && pending_track_id[0]) begin
                                 current_track_id_side1 <= pending_track_id;
-                                bit_count_side1 <= trk_bit_count;
+                                bit_count_side1 <= is_woz_v1 ? {16'd0, v1_bit_count} : trk_bit_count;
                                 is_flux_side1 <= pending_is_flux;
                                 flux_size_side1 <= pending_is_flux ? trk_bit_count : 32'd0;
                                 flux_total_ticks_side1 <= pending_is_flux ? pending_flux_total_ticks : 32'd0;
                                 $display("WOZ_CTRL: Stored track %0d to side1 RAM, %s=%0d is_flux=%0d",
                                          pending_track_id, pending_is_flux ? "flux_bytes" : "bit_count",
-                                         trk_bit_count, pending_is_flux);
+                                         is_woz_v1 ? {16'd0, v1_bit_count} : trk_bit_count, pending_is_flux);
                             end else begin
                                 current_track_id_side0 <= pending_track_id;
-                                bit_count_side0 <= trk_bit_count;
+                                bit_count_side0 <= is_woz_v1 ? {16'd0, v1_bit_count} : trk_bit_count;
                                 is_flux_side0 <= pending_is_flux;
                                 flux_size_side0 <= pending_is_flux ? trk_bit_count : 32'd0;
                                 flux_total_ticks_side0 <= pending_is_flux ? pending_flux_total_ticks : 32'd0;
-                                $display("WOZ_CTRL: Stored track %0d to side0 RAM, %s=%0d is_flux=%0d",
+                                $display("WOZ_CTRL: Stored track %0d to side0 RAM, %s=%0d is_flux=%0d%s",
                                          pending_track_id, pending_is_flux ? "flux_bytes" : "bit_count",
-                                         trk_bit_count, pending_is_flux);
+                                         is_woz_v1 ? {16'd0, v1_bit_count} : trk_bit_count, pending_is_flux,
+                                         is_woz_v1 ? " (v1)" : "");
                             end
                             if (pending_is_flux) begin
                                 $display("WOZ_CTRL: Flux ticks sum=%0d", pending_flux_total_ticks);
@@ -1087,6 +1116,7 @@ module woz_floppy_controller #(
 	                                     if (chunk_index == 32'd0) begin
 	                                         info_version <= b;
 	                                         have_info <= 1'b1;
+	                                         is_woz_v1 <= (b == 8'd1);
 	                                     end
 	                                     if (chunk_index == 32'd1) info_disk_type <= b;
 	                                     // WOZ2: bit_timing byte is at offset 39 within INFO chunk:
@@ -1127,11 +1157,26 @@ module woz_floppy_controller #(
 	                                         if (chunk_index == 32'd159) have_tmap <= 1'b1;
 	                                     end
 	                                 end else if (chunk_id == "TRKS") begin
-	                                     if (chunk_index < 32'd1280) begin
-	                                         meta_addr <= META_TRKS_BASE + chunk_index[10:0];
-	                                         meta_din <= b;
-	                                         meta_we <= 1'b1;
-	                                         if (chunk_index == 32'd1279) have_trks <= 1'b1;
+	                                     if (is_woz_v1) begin
+	                                         // WOZ v1: TRKS contains raw track data inline (35 × 6656 bytes).
+	                                         // Record the file position and mark done immediately.
+	                                         // We compute track locations arithmetically in S_SEEK_LOOKUP.
+	                                         if (chunk_index == 32'd0) begin
+	                                             trks_base_block <= scan_blocks;
+	                                             trks_byte_offset <= sd_buff_addr[8:0];
+	                                             have_trks <= 1'b1;
+	                                             $display("WOZ_CTRL: V1 TRKS data at file block %0d offset %0d (size=%0d)",
+	                                                      scan_blocks, sd_buff_addr, chunk_left);
+	                                         end
+	                                         // Don't store v1 track data as metadata
+	                                     end else begin
+	                                         // WOZ v2+: First 1280 bytes are 160 × 8-byte metadata entries
+	                                         if (chunk_index < 32'd1280) begin
+	                                             meta_addr <= META_TRKS_BASE + chunk_index[10:0];
+	                                             meta_din <= b;
+	                                             meta_we <= 1'b1;
+	                                             if (chunk_index == 32'd1279) have_trks <= 1'b1;
+	                                         end
 	                                     end
 	                                 end
 
@@ -1161,26 +1206,37 @@ module woz_floppy_controller #(
 	                             end
 	                         end
                      end else if (state == S_READ_TRACK && (transfer_active || (!old_ack && sd_ack))) begin
-                         // Track RAM Address: (blocks_processed * 512) + sd_buff_addr
-                         // blocks_processed is 16-bit, sd_buff_addr is 9-bit
-                         // Write when transfer_active is set (normal case) OR when sd_ack just rose
-                         // (first byte of our request). The rising edge check catches byte 0 before
-                         // transfer_active is set. We won't get false positives from previous transfers
-                         // because old_ack is set to sd_ack when entering S_READ_TRACK.
-                         track_load_addr <= {blocks_processed[6:0], sd_buff_addr};
-                         track_load_data <= sd_buff_dout;
-                         track_load_we <= 1;
-                         if (pending_is_flux) begin
-                             pending_flux_total_ticks <= pending_flux_total_ticks + sd_buff_dout;
+                         if (is_woz_v1) begin
+                             // WOZ v1: Track data starts at trks_byte_offset within the first block.
+                             // Adjust BRAM write address so track data starts at BRAM[0].
+                             // Also capture bit_count from track entry bytes 6648-6649.
+                             reg [15:0] v1_raw_addr;
+                             reg [15:0] v1_track_byte;
+                             v1_raw_addr = {blocks_processed[6:0], sd_buff_addr};
+                             v1_track_byte = v1_raw_addr - {7'd0, trks_byte_offset};
+
+                             // Only write bytes that are part of the track entry (0..6655)
+                             if (v1_raw_addr >= {7'd0, trks_byte_offset} &&
+                                 v1_track_byte < 16'd6656) begin
+                                 track_load_addr <= v1_track_byte;
+                                 track_load_data <= sd_buff_dout;
+                                 track_load_we <= 1;
+                             end
+
+                             // Capture bit count from v1 track entry (16-bit LE at bytes 6648-6649)
+                             if (v1_raw_addr == ({7'd0, trks_byte_offset} + 16'd6648))
+                                 v1_bit_count[7:0] <= sd_buff_dout;
+                             if (v1_raw_addr == ({7'd0, trks_byte_offset} + 16'd6649))
+                                 v1_bit_count[15:8] <= sd_buff_dout;
+                         end else begin
+                             // WOZ v2+: Direct BRAM mapping
+                             track_load_addr <= {blocks_processed[6:0], sd_buff_addr};
+                             track_load_data <= sd_buff_dout;
+                             track_load_we <= 1;
+                             if (pending_is_flux) begin
+                                 pending_flux_total_ticks <= pending_flux_total_ticks + sd_buff_dout;
+                             end
                          end
-                         // Debug: log first 4 bytes of first block for each track to verify data
-                         // DMA debug output disabled for log clarity
-                         // if (blocks_processed == 0 && sd_buff_addr < 9'd4) begin
-	                         //     $display("WOZ_DMA_FIRST4: ...");
-	                         // end
-                         // if (sd_buff_addr == 9'd0 || ...) begin
-	                         //     $display("WOZ_DMA_DBG: ...");
-	                         // end
 	                     end
 	                end else begin // Writing RAM -> SD
                     if (state == S_SAVE_TRACK) begin
