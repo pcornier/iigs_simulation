@@ -201,8 +201,8 @@ localparam CONF_STR = {
 	"-;",
 	"S0,HDVPO ;",
 	"S1,HDVPO ;",
-	"S2,WOZ;",
-	"S3,WOZ;",
+	"S2,WOZ,WOZ 3.5;",
+	"S3,WOZ,WOZ 5.25;",
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
 	"-;",
@@ -354,20 +354,6 @@ iigs iigs (
 	.HDD_RAM_DI(sd_buff_dout),
 	.HDD_RAM_DO(hdd_ram_do),
 	.HDD_RAM_WE(sd_buff_wr & hdd_ack),
-	//-- track buffer interface for disk 1
-	.TRACK1(TRACK1),
-	.TRACK1_ADDR(TRACK1_RAM_ADDR),
-	.TRACK1_DO(TRACK1_RAM_DO),
-	.TRACK1_DI(TRACK1_RAM_DI),
-	.TRACK1_WE(TRACK1_RAM_WE),
-	.TRACK1_BUSY(TRACK1_RAM_BUSY),
-	//-- track buffer interface for disk 2
-	.TRACK2(TRACK2),
-	.TRACK2_ADDR(TRACK2_RAM_ADDR),
-	.TRACK2_DO(TRACK2_RAM_DO),
-	.TRACK2_DI(TRACK2_RAM_DI),
-	.TRACK2_WE(TRACK2_RAM_WE),
-	.TRACK2_BUSY(TRACK2_RAM_BUSY),
 	//-- WOZ bit interfaces for flux-based IWM
 	// 3.5" drive 1
 	.WOZ_TRACK3(WOZ_TRACK3),
@@ -381,11 +367,15 @@ iigs iigs (
 	.WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
 	.WOZ_TRACK3_READY(WOZ_TRACK3_READY),
 	.WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
-	// 5.25" drive 1 (unused)
+	// 5.25" drive 1
 	.WOZ_TRACK1(WOZ_TRACK1),
 	.WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
 	.WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
 	.WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
+	.WOZ_TRACK1_LOAD_COMPLETE(WOZ_TRACK1_LOAD_COMPLETE),
+	.WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
+	.WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
+	.WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
 	// Disk ready to IWM (all 4 drives)
 	.DISK_READY(DISK_READY),
 	.fastram_address(fastram_address),
@@ -587,7 +577,7 @@ reg hdd_active_unit = 1'b0;
 assign sd_lba[0] = {16'b0, hdd_sector};  // Unit 0
 assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 1
 assign sd_lba[2] = woz_sd_lba;
-assign sd_lba[3] = 32'd0;
+assign sd_lba[3] = woz_sd_525_lba;
 
 // Route sd_rd/sd_wr to the correct bit based on active unit
 reg  sd_rd_hd;
@@ -666,23 +656,9 @@ always @(*) begin
 	sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b1);
 	sd_rd[2] = woz_sd_rd;
 	sd_wr[2] = woz_sd_wr;
+	sd_rd[3] = woz_sd_525_rd;
+	sd_wr[3] = woz_sd_525_wr;
 end
-
-
-    wire TRACK1_RAM_BUSY;
-wire [12:0] TRACK1_RAM_ADDR;
-wire [7:0] TRACK1_RAM_DI;
-wire [7:0] TRACK1_RAM_DO;
-wire TRACK1_RAM_WE;
-wire [5:0] TRACK1;
-
-wire TRACK2_RAM_BUSY;
-wire [12:0] TRACK2_RAM_ADDR;
-wire [7:0] TRACK2_RAM_DI;
-wire [7:0] TRACK2_RAM_DO;
-wire TRACK2_RAM_WE;
-wire [5:0] TRACK2;
-
 
 
 
@@ -703,11 +679,15 @@ wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS;
 wire        WOZ_TRACK3_READY;
 wire        WOZ_TRACK3_DATA_VALID;
 
-// 5.25" drive 1 WOZ bit interface (unused)
+// 5.25" drive 1 WOZ bit interface
 wire [5:0]  WOZ_TRACK1;
-wire [12:0] WOZ_TRACK1_BIT_ADDR;
+wire [15:0] WOZ_TRACK1_BIT_ADDR;  // 16-bit for FLUX tracks
 wire [7:0]  WOZ_TRACK1_BIT_DATA;
 wire [31:0] WOZ_TRACK1_BIT_COUNT;
+wire        WOZ_TRACK1_LOAD_COMPLETE;
+wire        WOZ_TRACK1_IS_FLUX;
+wire [31:0] WOZ_TRACK1_FLUX_SIZE;
+wire [31:0] WOZ_TRACK1_FLUX_TOTAL_TICKS;
 
 wire [3:0] DISK_READY;
 
@@ -723,9 +703,26 @@ wire [31:0] woz_sd_lba;
 wire        woz_sd_rd;
 wire        woz_sd_wr;
 
+// 5.25" WOZ controller outputs
+wire        woz_ctrl_525_ready;
+wire        woz_ctrl_525_disk_mounted;
+wire        woz_ctrl_525_busy;
+wire [31:0] woz_ctrl_525_bit_count;
+wire [7:0]  woz_ctrl_525_bit_data;
+wire        woz_ctrl_525_track_load_complete;
+wire        woz_ctrl_525_is_flux;
+wire [31:0] woz_ctrl_525_flux_size;
+wire [31:0] woz_ctrl_525_flux_total_ticks;
+wire [31:0] woz_sd_525_lba;
+wire        woz_sd_525_rd;
+wire        woz_sd_525_wr;
+
 reg         img_mounted2_d = 0;
 reg         woz_ctrl_mount = 0;
 reg         woz3_stable_side_reg;
+
+reg         img_mounted3_d = 0;
+reg         woz_ctrl_525_mount = 0;
 
 always @(posedge clk_sys) begin
 	img_mounted2_d <= img_mounted[2];
@@ -733,6 +730,11 @@ always @(posedge clk_sys) begin
 		woz_ctrl_mount <= (img_size != 0);
 	end
 	woz3_stable_side_reg <= WOZ_TRACK3_STABLE_SIDE;
+
+	img_mounted3_d <= img_mounted[3];
+	if (~img_mounted3_d & img_mounted[3]) begin
+		woz_ctrl_525_mount <= (img_size != 0);
+	end
 end
 
 assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;
@@ -740,11 +742,14 @@ assign WOZ_TRACK3_BIT_COUNT = woz_ctrl_bit_count;
 assign WOZ_TRACK3_LOAD_COMPLETE = woz_ctrl_track_load_complete;
 assign WOZ_TRACK3_FLUX_TOTAL_TICKS = woz_ctrl_flux_total_ticks;
 assign WOZ_TRACK3_READY = woz_ctrl_ready;
-assign WOZ_TRACK1_BIT_DATA = 8'd0;
-assign WOZ_TRACK1_BIT_COUNT = 32'd0;
-assign sd_buff_din[3] = 8'd0;
+assign WOZ_TRACK1_BIT_DATA = woz_ctrl_525_bit_data;
+assign WOZ_TRACK1_BIT_COUNT = woz_ctrl_525_bit_count;
+assign WOZ_TRACK1_LOAD_COMPLETE = woz_ctrl_525_track_load_complete;
+assign WOZ_TRACK1_IS_FLUX = woz_ctrl_525_is_flux;
+assign WOZ_TRACK1_FLUX_SIZE = woz_ctrl_525_flux_size;
+assign WOZ_TRACK1_FLUX_TOTAL_TICKS = woz_ctrl_525_flux_total_ticks;
 
-assign DISK_READY[0] = 1'b0;
+assign DISK_READY[0] = woz_ctrl_525_disk_mounted;
 assign DISK_READY[1] = 1'b0;
 assign DISK_READY[2] = woz_ctrl_disk_mounted;
 assign DISK_READY[3] = 1'b0;
@@ -794,9 +799,64 @@ woz_floppy_controller #(
 	.flux_total_ticks(woz_ctrl_flux_total_ticks),
 
 	// Track data validity (independent of controller state)
-	.track_data_valid(WOZ_TRACK3_DATA_VALID)
+	.track_data_valid(WOZ_TRACK3_DATA_VALID),
+
+	// Disk type mismatch
+	.disk_type_mismatch()
 );
 
+// =========================================================================
+// 5.25" WOZ Floppy Controller (SD index 3)
+// =========================================================================
+woz_floppy_controller #(
+	.IS_35_INCH(0)
+) woz_ctrl_525 (
+	.clk(clk_sys),
+	.reset(reset),
 
+	// SD Block Device Interface (index 3)
+	.sd_lba(woz_sd_525_lba),
+	.sd_rd(woz_sd_525_rd),
+	.sd_wr(woz_sd_525_wr),
+	.sd_ack(sd_ack[3]),
+	.sd_buff_addr(sd_buff_addr),
+	.sd_buff_dout(sd_buff_dout),
+	.sd_buff_din(sd_buff_din[3]),
+	.sd_buff_wr(sd_buff_wr),
+
+	// Disk Status
+	.img_mounted(woz_ctrl_525_mount),
+	.img_readonly(img_readonly),
+	.img_size(img_size),
+
+	// Drive Interface
+	.track_id({WOZ_TRACK1[5:0], 2'b00}),  // Full track * 4 = quarter-track TMAP index
+	.ready(woz_ctrl_525_ready),
+	.disk_mounted(woz_ctrl_525_disk_mounted),
+	.busy(woz_ctrl_525_busy),
+	.active(1'b0),
+
+	// Bitstream Interface
+	.bit_count(woz_ctrl_525_bit_count),
+	.bit_addr(WOZ_TRACK1_BIT_ADDR),
+	.stable_side(1'b0),                    // 5.25" is single-sided
+	.bit_data(woz_ctrl_525_bit_data),
+	.bit_data_in(8'h00),
+	.bit_we(1'b0),
+
+	// Track load notification
+	.track_load_complete(woz_ctrl_525_track_load_complete),
+
+	// FLUX track support
+	.is_flux_track(woz_ctrl_525_is_flux),
+	.flux_data_size(woz_ctrl_525_flux_size),
+	.flux_total_ticks(woz_ctrl_525_flux_total_ticks),
+
+	// Track data validity
+	.track_data_valid(),
+
+	// Disk type mismatch
+	.disk_type_mismatch()
+);
 
 endmodule
