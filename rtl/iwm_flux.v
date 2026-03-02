@@ -1617,6 +1617,7 @@ module iwm_flux (
     // Debug: log register reads (only on CEN/PH2 to log once per CPU access)
     reg [31:0] debug_win_count;
     always @(posedge CLK_14M) begin
+`ifdef DEBUG_IWM_VERBOSE
             if (RD && CEN) begin
             case ({immediate_q7, immediate_q6})
                 2'b00: $display("IWM_FLUX: READ DATA @%01h -> %02h cycle=%0d pos=%0d (active=%0d spin=%0d rsh=%02h data=%02h bc=%0d dr=%0d q6=%0d q7=%0d async_pending=%0d)",
@@ -1649,6 +1650,7 @@ module iwm_flux (
                          MOTOR_SPINNING, rd_is_data_reg);
             end
         end
+`endif
 
         // Periodic statistics - every 10M cycles (~0.7 seconds)
         if (debug_cycle[23:0] == 24'h0 && debug_cycle > 0 && MOTOR_ACTIVE) begin

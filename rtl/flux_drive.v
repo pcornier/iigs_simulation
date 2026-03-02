@@ -173,6 +173,11 @@ module flux_drive (
     reg         flux_waiting_bram;      // Waiting for BRAM read latency
     reg         flux_is_continuation;   // Current byte was 0xFF (no transition, timing only)
 
+    // Weak-bit randomization: LFSR for pseudo-random flux timing in 0xFF gaps.
+    // Real analog hardware produces noise during gaps with no flux transitions.
+    // Copy protection (e.g., Arkanoid IIgs) relies on this randomness.
+    reg [15:0]  lfsr;
+
     // Step direction tracking (MAME's m_dir equivalent)
     // Sony 3.5" drives use a command interface:
     //   - phases[3] = strobe (rising edge triggers command)
@@ -379,7 +384,8 @@ module flux_drive (
     wire        drive_ready_rising = drive_ready && !prev_drive_ready && (TRACK_BIT_COUNT > 0);
     wire        motor_restart_ready = motor_spinning && !prev_motor_for_position && drive_ready && (TRACK_BIT_COUNT > 0);
     wire        track_load_reset = TRACK_LOAD_COMPLETE && !motor_spinning;
-    wire        skip_position_advance = track_load_reset || drive_ready_rising || motor_restart_ready;
+    wire        track_load_spinning = TRACK_LOAD_COMPLETE && motor_spinning;
+    wire        skip_position_advance = track_load_reset || track_load_spinning || drive_ready_rising || motor_restart_ready;
 
     //=========================================================================
     // Output Assignments
@@ -910,6 +916,8 @@ module flux_drive (
             flux_is_continuation <= 1'b0;
             next_flux_byte <= 8'd0;
             next_byte_valid <= 1'b0;
+
+            lfsr <= 16'hACE1;               // Non-zero seed for LFSR
             bram_first_read_pending <= 1'b1;  // Wait for registered BRAM on startup
             flux_startup_delay <= 6'd0;
 `ifdef SIMULATION
@@ -922,6 +930,11 @@ module flux_drive (
             FLUX_TRANSITION <= 1'b0;
             SD_TRACK_STROBE <= 1'b0;
             rotation_complete <= 1'b0;
+
+            // Advance LFSR every clock cycle for weak-bit randomization.
+            // Free-running ensures different state each disk revolution.
+            // Taps at bits 16,14,13,11 (maximal-length 16-bit LFSR).
+            lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
 
             // Count down startup delay (if active)
             // This ensures bit_position advances before first FLUX_TRANSITION
@@ -969,7 +982,19 @@ module flux_drive (
             // so it may reflect the bitstream side and miss the flux side's new data.
             // Resetting flux state unconditionally is safe: for all-bitstream tracks,
             // flux state is unused (only accessed when IS_FLUX_TRACK=1).
+            //
+            // CRITICAL: bit_position must also be reset to 0 here. While TRACK_LOADED=0
+            // (waiting for BRAM to load), bit_position was FROZEN (not advancing), so it
+            // does NOT represent the true angular head position - it is stale. Resetting
+            // it to 0 ensures flux_byte_addr (also reset to 0) and bit_position are in
+            // sync: both start at the beginning of the newly loaded track data.
             if (TRACK_LOAD_COMPLETE && motor_spinning) begin
+                bit_position <= 17'd0;
+                bit_timer <= bit_cell_base;
+                bit_half_timer <= bit_half_base;
+                bit_cell_cycles_reg <= bit_cell_base;
+                bit_cell_frac <= 10'd0;
+                bit_half_frac <= 10'd0;
                 flux_phase_accum <= 32'd0;
                 flux_byte_counter <= 8'd0;
                 flux_byte_addr <= 16'd0;
@@ -1129,9 +1154,15 @@ module flux_drive (
                         
                         if (flux_byte_pending) begin
                             // This was the initial load (first byte)
-                            flux_byte_counter <= BRAM_DATA;
+                            // Weak-bit: replace 0xFF with random transition
+                            if (BRAM_DATA == 8'hFF) begin
+                                flux_byte_counter <= {2'b00, lfsr[4:0]} + 8'd16;
+                                flux_is_continuation <= 1'b0;
+                            end else begin
+                                flux_byte_counter <= BRAM_DATA;
+                                flux_is_continuation <= 1'b0;
+                            end
                             flux_byte_pending <= 1'b0;
-                            flux_is_continuation <= (BRAM_DATA == 8'hFF);
                         end else begin
                             // This was a prefetch
                             next_flux_byte <= BRAM_DATA;
@@ -1187,10 +1218,22 @@ module flux_drive (
 `endif
                                 end
                                 
-                                // Load next byte from prefetch buffer
+                                // Load next byte from prefetch buffer.
+                                // Weak-bit emulation: 0xFF continuation bytes represent gaps
+                                // with no reliable flux transitions. Real analog hardware
+                                // produces noise during these gaps. Replace ALL 0xFF bytes
+                                // with random transitions to emulate this noise. Normal GCR
+                                // data never produces 0xFF timing bytes (max ~49 ticks).
                                 if (next_byte_valid) begin
-                                    flux_byte_counter <= next_flux_byte;
-                                    flux_is_continuation <= (next_flux_byte == 8'hFF);
+                                    if (next_flux_byte == 8'hFF) begin
+                                        // Continuation byte = unreliable flux area.
+                                        // Inject random transition (16-47 ticks, ~2-6us)
+                                        flux_byte_counter <= {2'b00, lfsr[4:0]} + 8'd16;
+                                        flux_is_continuation <= 1'b0;
+                                    end else begin
+                                        flux_byte_counter <= next_flux_byte;
+                                        flux_is_continuation <= 1'b0;
+                                    end
                                     next_byte_valid <= 1'b0;
                                     // Trigger immediate fetch for NEXT byte if the loaded one is small
                                     if (next_flux_byte <= 8'd3) begin
