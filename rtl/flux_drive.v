@@ -178,6 +178,21 @@ module flux_drive (
     // Copy protection (e.g., Arkanoid IIgs) relies on this randomness.
     reg [15:0]  lfsr;
 
+    // MC3470 head window for bitstream mode weak-bit emulation (WOZ 2.1 spec).
+    // The MC3470 read amplifier has ~1 bit-cell latency through its filter chain.
+    // We model this with a 4-bit shift window: output is bit 1 (previous bit),
+    // not bit 0 (current bit). When all 4 low bits are zero, the MC3470 would
+    // amplify background noise — output random "fake" bits instead.
+    // Normal GCR data has max 2 consecutive zeros, so this only triggers on
+    // intentional weak-bit areas (copy protection).
+    reg [3:0]   head_window;
+
+    // Registered weak-bit counter: counts consecutive zero source bits.
+    // When >= 4, we're in a weak-bit area. Updated at bit boundaries.
+    reg [7:0]   zero_run_count;
+    // Registered fake-bit decision (computed at bit boundary, used at mid-cell)
+    reg         weak_bit_active;
+
     // Step direction tracking (MAME's m_dir equivalent)
     // Sony 3.5" drives use a command interface:
     //   - phases[3] = strobe (rising edge triggers command)
@@ -352,6 +367,8 @@ module flux_drive (
     // already advanced so bit_shift reflects the correct bit in the new byte. The look-ahead
     // addressing ensures BRAM_DATA is the correct byte by that time.
     wire        current_bit = (BRAM_DATA >> bit_shift) & 1'b1;
+
+    // (Weak-bit detection uses registered zero_run_count / weak_bit_active instead of wires)
 
     // Look-ahead logic for byte boundary crossing
     // When at bit_shift=0 (last bit of byte) and bit_timer is about to expire,
@@ -918,6 +935,9 @@ module flux_drive (
             next_byte_valid <= 1'b0;
 
             lfsr <= 16'hACE1;               // Non-zero seed for LFSR
+            head_window <= 4'hF;            // Init non-zero (not in fake area)
+            zero_run_count <= 8'd0;
+            weak_bit_active <= 1'b0;
             bram_first_read_pending <= 1'b1;  // Wait for registered BRAM on startup
             flux_startup_delay <= 6'd0;
 `ifdef SIMULATION
@@ -969,6 +989,9 @@ module flux_drive (
                 flux_waiting_bram <= 1'b0;
                 flux_is_continuation <= 1'b0;
                 next_byte_valid <= 1'b0;
+                head_window <= 4'hF;      // Reset MC3470 window for new track
+                zero_run_count <= 8'd0;
+                weak_bit_active <= 1'b0;
 `ifdef SIMULATION
                 $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d) is_flux=%0d", DRIVE_ID, bit_position, IS_FLUX_TRACK);
                 $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE bram_wait=1 bit_timer=%0d cell=%0d addr=%0d pos=%0d",
@@ -1315,12 +1338,15 @@ module flux_drive (
                         // Generate flux near mid-cell using the current cell timing.
                         // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready).
                         // Do not suppress the first bit-cell; that drops a bit and shifts byte alignment.
-                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
+                        // weak_bit_active injects random flux in weak-bit areas (4+ consecutive zeros).
+                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) &&
+                            (current_bit || (weak_bit_active && !current_bit && lfsr[3:0] < 4'd5)) &&
+                            drive_ready) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                             if (flux_count_debug < 50) begin
-                                $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d",
-                                         DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer);
+                                $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d weak=%0d",
+                                         DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer, weak_bit_active);
                             end
                             if (effective_bit_position < 100) begin
                                 $display("FLUX_DRIVE[%0d]: Flux transition at bit %0d (eff=%0d, byte %04h, shift %0d)",
@@ -1338,6 +1364,20 @@ module flux_drive (
                         if (bit_timer == 6'd1 && !skip_position_advance) begin
                         // End of bit cell - advance to next bit
                         load_bit_timers();
+                        // Update MC3470 head window: shift in source bit
+                        head_window <= {head_window[2:0], current_bit};
+
+                        // Update weak-bit zero run counter and active flag
+                        if (current_bit) begin
+                            zero_run_count <= 8'd0;
+                            weak_bit_active <= 1'b0;
+                        end else begin
+                            if (zero_run_count < 8'd255)
+                                zero_run_count <= zero_run_count + 8'd1;
+                            // Activate after 4+ consecutive zeros
+                            if (zero_run_count >= 8'd3)
+                                weak_bit_active <= 1'b1;
+                        end
 
                         // Advance bit position with wraparound
                         // Use effective_bit_position for wrap check to handle side toggles correctly.
@@ -1349,6 +1389,11 @@ module flux_drive (
                                 bit_position <= 17'd0;
                                 // Signal that one full rotation has completed
                                 rotation_complete <= 1'b1;
+                                // Reset MC3470 window at track wrap to prevent
+                                // false triggers from zeros spanning the wrap point
+                                head_window <= 4'hF;
+                                zero_run_count <= 8'd0;
+                                weak_bit_active <= 1'b0;
                             end else begin
                                 bit_position <= bit_position + 1'd1;
                             end
