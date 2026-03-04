@@ -46,7 +46,8 @@ TIMING_DISK = timing_race_test.2mg
         scc_rxenable scc_exact scc_repro scc_postloop scc_fifo_test adb_device_enum \
         adb_rom_test09 adb_rom_checksum selftest01 selftest02 selftest03 \
         selftest04 selftest05 selftest06 selftest07 selftest08 selftest09 \
-        selftest0a selftest0b selftest0c time download-merlin download-cp2 download-tools
+        selftest0a selftest0b selftest0c time download-merlin download-cp2 download-tools \
+        floppy_rw_test
 
 # ============================================================================
 # Merlin32 Download Target
@@ -937,3 +938,43 @@ gsqmmu_test.2mg: GSQMMU.SYSTEM
 	$(CP2) add gsqmmu_test.2mg "GSQMMU.SYSTEM"
 	$(CP2) sa gsqmmu_test.2mg type=SYS "GSQMMU.SYSTEM"
 	@echo "GSQuared MMU test disk ready: gsqmmu_test.2mg"
+
+# ============================================================================
+# Floppy Read/Write Test
+# ============================================================================
+# Creates:
+#   - floppy_rw_test.2mg: HDD boot disk with the test program
+#   - floppy_rw_525.woz:  Blank formatted 5.25" ProDOS floppy (WOZ v2)
+#   - floppy_rw_35.woz:   Blank formatted 3.5" ProDOS floppy (WOZ v2)
+#
+# Usage in MAME:
+#   5.25" test: mame apple2gs -hard1 floppy_rw_test.2mg -flop3 floppy_rw_525.woz
+#   3.5" test:  mame apple2gs -hard1 floppy_rw_test.2mg -flop1 floppy_rw_35.woz
+#   Both:       mame apple2gs -hard1 floppy_rw_test.2mg -flop1 floppy_rw_35.woz -flop3 floppy_rw_525.woz
+#
+# Usage in vsim:
+#   (5.25" WOZ not yet write-capable; 3.5" WOZ via --woz)
+#
+floppy_rw_test: FLPTEST.SYSTEM floppy_rw_test.2mg floppy_rw_525.woz floppy_rw_35.woz
+
+FLPTEST.SYSTEM: FLOPPY_RW_TEST.S
+	$(ASM) -V $(MERLIN_DIR)/Library/ $<
+
+floppy_rw_test.2mg: FLPTEST.SYSTEM
+	@echo "Creating floppy R/W test boot disk..."
+	@cp blank.2mg floppy_rw_test.2mg 2>/dev/null || echo "Note: blank.2mg not found"
+	$(CP2) rm floppy_rw_test.2mg "BASIC.SYSTEM" 2>/dev/null || true
+	$(CP2) rm floppy_rw_test.2mg "FLPTEST.SYSTEM" 2>/dev/null || true
+	$(CP2) add floppy_rw_test.2mg "FLPTEST.SYSTEM"
+	$(CP2) sa floppy_rw_test.2mg type=SYS "FLPTEST.SYSTEM"
+	@echo "Floppy R/W test boot disk ready: floppy_rw_test.2mg"
+
+floppy_rw_525.woz:
+	@echo "Creating blank 5.25\" WOZ floppy (140K ProDOS)..."
+	$(CP2) cdi floppy_rw_525.woz 140k prodos
+	@echo "5.25\" WOZ floppy ready: floppy_rw_525.woz"
+
+floppy_rw_35.woz:
+	@echo "Creating blank 3.5\" WOZ floppy (800K ProDOS)..."
+	$(CP2) cdi floppy_rw_35.woz 800k prodos
+	@echo "3.5\" WOZ floppy ready: floppy_rw_35.woz"

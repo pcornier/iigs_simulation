@@ -58,6 +58,14 @@ module iwm_woz (
     input  [31:0]   WOZ_TRACK1_FLUX_SIZE,      // Size in bytes of flux data
     input  [31:0]   WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
 
+    // Write signals for 3.5" controller
+    output [7:0]    WOZ_TRACK3_BIT_DATA_IN,  // Write byte to BRAM
+    output          WOZ_TRACK3_BIT_WE,       // Write enable
+
+    // Write signals for 5.25" controller
+    output [7:0]    WOZ_TRACK1_BIT_DATA_IN,  // Write byte to BRAM
+    output          WOZ_TRACK1_BIT_WE,       // Write enable
+
     // Motor status for clock slowdown
     output          FLOPPY_MOTOR_ON
 );
@@ -364,7 +372,14 @@ module iwm_woz (
     reg        motor_spinning;
     reg [23:0] motor_counter;
     reg        motor_spinup_done;
-    localparam SPINUP_TIME  = 24'd4200000;   // ~300ms at 14MHz (5.25" only)
+    // Spinup time: On real hardware, the motor takes ~300ms to reach full speed,
+    // but the Disk II controller starts reading data before full speed. In our
+    // simulation, flux_drive produces correct-rate data regardless of motor speed,
+    // so we only need a minimal delay to filter out accidental glitches. Using a
+    // short spinup time ensures the motor is spinning during brief SmartPort probe
+    // periods (when booting from HDD with a 5.25" floppy present). The 1-second
+    // spindown (SPINDOWN_TIME) provides realistic inertia between operations.
+    localparam SPINUP_TIME  = 24'd1000;      // ~71µs at 14MHz (minimal for probe periods)
     localparam SPINDOWN_TIME = 24'd14000000;  // ~1 second at 14MHz
 
     always @(posedge CLK_14M or posedge RESET) begin
@@ -374,33 +389,29 @@ module iwm_woz (
             motor_spinup_done <= 1'b0;
         end else begin
             if (drive_on) begin
-                if (!is_35_inch) begin 
-                    // 5.25" drives: Spinup delay
-                    if (!motor_spinup_done) begin
-                        if (motor_counter >= SPINUP_TIME) begin
-                            motor_spinning <= 1'b1;
-                            motor_spinup_done <= 1'b1;
-                            motor_counter <= SPINDOWN_TIME;
-`ifdef SIMULATION
-                            $display("IWM_WOZ: Motor spinup complete, motor_spinning=1");
-`endif
-                        end else begin
-                            motor_counter <= motor_counter + 1'd1;
-                        end
-                    end else begin
-                        // Already spun up, keep counter at spindown time
+                // Motor ON ($C0E9): The motor control pin on the 19-pin disk
+                // connector always reflects drive_on, regardless of DISK35.
+                // On real hardware, the 5.25" drive motor spins whenever $C0E9
+                // is active, even when DISK35=1 (3.5" bus selected). DISK35 only
+                // controls which bus the IWM reads from, not which motor spins.
+                if (!motor_spinup_done) begin
+                    if (motor_counter >= SPINUP_TIME) begin
                         motor_spinning <= 1'b1;
+                        motor_spinup_done <= 1'b1;
                         motor_counter <= SPINDOWN_TIME;
+`ifdef SIMULATION
+                        $display("IWM_WOZ: Motor spinup complete, motor_spinning=1");
+`endif
+                    end else begin
+                        motor_counter <= motor_counter + 1'd1;
                     end
                 end else begin
-                    // For 3.5", we don't manage inertia here anymore.
-                    // But we keep motor_spinning=0 to avoid confusing the 5.25" logic
-                    // if we switch drive types on the fly (unlikely but safe).
-                    // Actually, if we switch to 3.5", flux_drive ignores this signal.
-                    motor_spinning <= 1'b0; 
+                    // Already spun up, keep counter at spindown time
+                    motor_spinning <= 1'b1;
+                    motor_counter <= SPINDOWN_TIME;
                 end
             end else begin
-                // Motor off command - reset spinup state, start spindown
+                // Motor off - spindown with physical inertia (~1 second)
                 motor_spinup_done <= 1'b0;
                 if (motor_counter > 0) begin
                     motor_counter <= motor_counter - 1'd1;
@@ -430,6 +441,9 @@ module iwm_woz (
     wire        drive35_step_dir;
     wire        drive35_motor_on_sense;
     wire        drive35_at_track0;
+    // Write outputs from drive35
+    wire [7:0]  drive35_write_byte;
+    wire        drive35_write_we;
 
     // 3.5" drives must NOT use the 5.25" inertia-managed motor_spinning signal.
     // The IIgs ROM (Sony driver) can toggle DISK35 during command boundaries, and
@@ -471,7 +485,7 @@ module iwm_woz (
         .DRIVE_SELECT(drive_sel),       // Pass drive selection for per-slot direction tracking
         .DRIVE_SLOT(1'b0),              // This drive is slot 0 (drive 1 - internal drive)
         .DISK_MOUNTED(DISK_READY[2]),
-        .DISK_WP(1'b1),
+        .DISK_WP(1'b0),                 // Writable (write protect from WOZ INFO chunk can be wired here later)
         .DOUBLE_SIDED(1'b1),
         .FLUX_TRANSITION(flux_transition_35),
         .WRITE_PROTECT(drive35_wp),
@@ -494,9 +508,18 @@ module iwm_woz (
         .IS_FLUX_TRACK(WOZ_TRACK3_IS_FLUX),
         .FLUX_DATA_SIZE(WOZ_TRACK3_FLUX_SIZE),
         .FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+        .WRITE_BIT(flux_write_bit),
+        .WRITE_STROBE(flux_write_strobe),
+        .WRITE_MODE(flux_write_mode),
+        .WRITE_BYTE_OUT(drive35_write_byte),
+        .WRITE_WE_OUT(drive35_write_we),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
-        .SD_TRACK_ACK(1'b0)
+        .SD_TRACK_ACK(1'b0),
+        .CHUNK_RELOAD_REQ(),
+        .CHUNK_NEEDED(),
+        .CHUNK_LOADED(2'b00),
+        .CHUNK_LOADING(1'b0)
     );
 
     // Stable side for data reads:
@@ -634,9 +657,18 @@ module iwm_woz (
         .IS_FLUX_TRACK(1'b0),
         .FLUX_DATA_SIZE(32'd0),
         .FLUX_TOTAL_TICKS(32'd0),
+        .WRITE_BIT(1'b0),
+        .WRITE_STROBE(1'b0),
+        .WRITE_MODE(1'b0),
+        .WRITE_BYTE_OUT(),
+        .WRITE_WE_OUT(),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
-        .SD_TRACK_ACK(1'b0)
+        .SD_TRACK_ACK(1'b0),
+        .CHUNK_RELOAD_REQ(),
+        .CHUNK_NEEDED(),
+        .CHUNK_LOADED(2'b00),
+        .CHUNK_LOADING(1'b0)
     );
 
     //=========================================================================
@@ -653,6 +685,9 @@ module iwm_woz (
     wire [16:0] drive525_bit_position;
     wire [5:0]  drive525_bit_timer;     // Bit timer for IWM window sync
     wire [15:0] drive525_bram_addr;
+    // Write outputs from drive525
+    wire [7:0]  drive525_write_byte;
+    wire        drive525_write_we;
 
     // Drive is active when motor is spinning, 5.25" mode, and disk ready
     wire drive525_active = motor_spinning && !is_35_inch && DISK_READY[0];
@@ -675,7 +710,7 @@ module iwm_woz (
         .DRIVE_SELECT(drive_sel),       // Pass drive selection
         .DRIVE_SLOT(1'b0),              // 5.25" doesn't use per-slot direction (IS_35_INCH=0)
         .DISK_MOUNTED(DISK_READY[0]),
-        .DISK_WP(1'b1),
+        .DISK_WP(!DISK_READY[0]),        // Writable when disk present, WP when empty (prevents boot interference)
         .DOUBLE_SIDED(1'b0),
         .FLUX_TRANSITION(flux_transition_525),
         .WRITE_PROTECT(drive525_wp),
@@ -698,13 +733,28 @@ module iwm_woz (
         .IS_FLUX_TRACK(WOZ_TRACK1_IS_FLUX),
         .FLUX_DATA_SIZE(WOZ_TRACK1_FLUX_SIZE),
         .FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+        .WRITE_BIT(flux_write_bit),
+        .WRITE_STROBE(flux_write_strobe),
+        .WRITE_MODE(flux_write_mode),
+        .WRITE_BYTE_OUT(drive525_write_byte),
+        .WRITE_WE_OUT(drive525_write_we),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
-        .SD_TRACK_ACK(1'b0)
+        .SD_TRACK_ACK(1'b0),
+        .CHUNK_RELOAD_REQ(),
+        .CHUNK_NEEDED(),
+        .CHUNK_LOADED(2'b00),
+        .CHUNK_LOADING(1'b0)
     );
 
     assign WOZ_TRACK1 = drive525_track;
     assign WOZ_TRACK1_BIT_ADDR = drive525_bram_addr;
+
+    // Route write outputs to module ports
+    assign WOZ_TRACK3_BIT_DATA_IN = drive35_write_byte;
+    assign WOZ_TRACK3_BIT_WE = drive35_write_we;
+    assign WOZ_TRACK1_BIT_DATA_IN = drive525_write_byte;
+    assign WOZ_TRACK1_BIT_WE = drive525_write_we;
 
     //=========================================================================
     // Flux Mux - Select active drive's flux transitions
@@ -714,8 +764,12 @@ module iwm_woz (
     // CRITICAL: Must use flux_is_35_inch (based on spinning motor) not is_35_inch (software register)!
     // When 3.5" drive is spinning but ROM temporarily accesses slot 5 mode, we must still
     // read flux from the 3.5" drive.
+    // When SmartPort mode is active (DISK35=0, async IWM mode), suppress 5.25" flux
+    // transitions so the SmartPort protocol sees an idle bus (no floppy data interference).
+    // On real hardware, the SmartPort bus and 5.25" floppy are on separate physical connectors.
     wire flux_transition = (flux_is_35_inch) ? ((drive_sel == 0) ? flux_transition_35 : flux_transition_35_2) :
-                                              ((drive_sel == 0) ? flux_transition_525 : 1'b0);
+                                              (smartport_mode_sense ? 1'b0 :
+                                               ((drive_sel == 0) ? flux_transition_525 : 1'b0));
 
     // Track which drive type's flux we're actually using (for window timing)
     // CRITICAL: Window timing must match the SPINNING drive, not software DISK35 register!
@@ -728,6 +782,11 @@ module iwm_woz (
 
     wire drive_active = flux_is_35_inch ? drive35_active : drive525_active;
     wire current_wp = flux_is_35_inch ? drive35_wp : drive525_wp;
+
+    // Write signals from iwm_flux
+    wire       flux_write_bit;
+    wire       flux_write_strobe;
+    wire       flux_write_mode;
 
     // Any disk spinning - used for IWM MOTOR_SPINNING independent of is_35_inch
     wire any_disk_spinning = drive35_motor_spinning || drive35_2_motor_spinning || drive525_motor_spinning;
@@ -771,15 +830,20 @@ module iwm_woz (
     wire smartport_mode_sense = (!immediate_mode[3]) && immediate_mode[1];
 
     // Compute 3.5" sense for drive35 using parent-level signals
+    // IMPORTANT: ALL ssr values that can return 0 from default drive state must have
+    // smartport_mode_sense overrides. Otherwise, the ROM's SmartPort bus enumeration
+    // (MORDEVICES/SendOnePack) misinterprets sense=0 as device responses, creating
+    // phantom SmartPort entries. On real hardware, SmartPort /BSY is pulled HIGH
+    // (no device) when no SmartPort device is on the bus.
     reg drive35_computed_sense;
     always @(*) begin
         case (sense_status_reg)
-            4'h0: drive35_computed_sense = drive35_step_dir;
-            4'h1: drive35_computed_sense = drive35_step_dir;
+            4'h0: drive35_computed_sense = smartport_mode_sense ? 1'b1 : drive35_step_dir;
+            4'h1: drive35_computed_sense = smartport_mode_sense ? 1'b1 : drive35_step_dir;
             4'h2: drive35_computed_sense = ~DISK_READY[2];         // ~DISK_MOUNTED
             4'h4: drive35_computed_sense = smartport_mode_sense ? 1'b1 : drive35_step_busy;
             4'h8: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_motor_on_sense;
-            4'hA: drive35_computed_sense = ~drive35_at_track0;
+            4'hA: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_at_track0;
             4'hB: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_ready;
             4'hC: drive35_computed_sense = ~drive35_disk_switched;  // NEVER override
             4'hE: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_ready;
@@ -791,12 +855,12 @@ module iwm_woz (
     reg drive35_2_computed_sense;
     always @(*) begin
         case (sense_status_reg)
-            4'h0: drive35_2_computed_sense = drive35_2_step_dir;
-            4'h1: drive35_2_computed_sense = drive35_2_step_dir;
+            4'h0: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : drive35_2_step_dir;
+            4'h1: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : drive35_2_step_dir;
             4'h2: drive35_2_computed_sense = 1'b1;                 // No disk mounted
             4'h4: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : drive35_2_step_busy;
             4'h8: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_motor_on_sense;
-            4'hA: drive35_2_computed_sense = ~drive35_2_at_track0;
+            4'hA: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_at_track0;
             4'hB: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_ready;
             4'hC: drive35_2_computed_sense = ~drive35_2_disk_switched;  // NEVER override
             4'hE: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_ready;
@@ -804,25 +868,42 @@ module iwm_woz (
         endcase
     end
 
-    // Select between drives and drive types based on DISK35 ($C031 bit 6).
+    // Select between drives and drive types for sense routing.
     //
-    // IMPORTANT: Use is_35_inch (DISK35 register), NOT flux_is_35_inch (motor-based).
-    // On real hardware, DISK35 controls the electrical path between the IWM and the
-    // drive connectors:
-    //   DISK35=1 → IWM connected to 3.5" Sony floppy → sense from Sony drive
-    //   DISK35=0 → IWM connected to 5.25"/SmartPort → sense from bus (HIGH if no device)
+    // Use flux_is_35_inch (motor-based) to match how data routing already works.
+    // The IIgs ROM does NOT clear DISK35 ($C031 bit 6) for Disk II (5.25") I/O —
+    // it only sets the IWM mode register to $00. But DISK35 stays at 1 (3.5" mode).
+    // If we used is_35_inch (DISK35 register), sense would return 3.5" drive values
+    // during 5.25" operations, causing false write-protect detection.
     //
-    // The 3.5" driver sets DISK35=1 at entry (FF:46EF) and clears it on exit (FF:3C33).
-    // So during APPLEDISK operations (disk-switched checks etc.), DISK35=1 and Sony sense
-    // is correctly routed. After APPLEDISK returns, DISK35=0 and sense is 1 (HIGH), which
-    // is correct for the SmartPort bus enumeration (MorDevices/SendOnePack) that follows.
-    // Without this, ssr=$C during bus enumeration returns ~disk_switched=0 (LOW), which
-    // SendOnePack misinterprets as /BSY acknowledgment from a non-existent external device.
+    // flux_is_35_inch selects based on which motor is actually spinning:
+    //   3.5" motor spinning → sense from 3.5" Sony drive
+    //   5.25" motor spinning → sense from Disk II drive
+    //   No motor spinning → falls back to is_35_inch (DISK35 register)
     //
-    // Note: iwm_data_reg_read still uses flux_is_35_inch (motor-based) because data flow
-    // must continue even when DISK35 is briefly 0 during SmartPort dispatch transitions.
-    wire drive_sense = (is_35_inch) ? ((drive_sel == 0) ? drive35_computed_sense : drive35_2_computed_sense) :
-                                      ((drive_sel == 0) ? drive525_sense : 1'b1);
+    // The fallback to is_35_inch when no motor is spinning preserves correct behavior
+    // for SmartPort bus enumeration (MORDEVICES/SendOnePack) where DISK35=0 and
+    // smartport_mode_sense=1 returns sense=1 (bus idle / not busy).
+    //
+    // When no 3.5" drive is present but a 5.25" IS, simulate a "virtual" empty 3.5"
+    // drive so the ROM's AppleDisk init succeeds and the Disk II (5.25") is enumerated.
+    // On real IIgs hardware, 5.25" drives are daisy-chained AFTER a 3.5" drive:
+    //   IWM → [3.5" drive] → [Disk II adapter] → [5.25" drive]
+    // The ROM counts the 3.5" drive first (DoDSony), then detects the Disk II as unit 1.
+    // Without a 3.5" drive responding, the ROM sets NumDevices=0 and ProDOS has no
+    // slot 5 entries. With the virtual drive, AppleDisk init sees drive state values
+    // (step_dir, at_track0, etc.) and counts it, giving NumDevices=1 (the Disk II).
+    //
+    // SmartPort phantom devices are prevented by the smartport_mode_sense overrides
+    // in drive35_computed_sense (all ssr values return 1 during SmartPort mode).
+    //
+    // When NO disks are present at all, force sense=1 (bus idle/no device).
+    wire virtual_35_drive = DISK_READY[0] && !DISK_READY[2];  // 5.25" present, no 3.5"
+
+    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? ((DISK_READY[2] || virtual_35_drive) ? drive35_computed_sense : 1'b1) :
+                                                               (DISK_READY[3] ? drive35_2_computed_sense : 1'b1)) :
+                                           (smartport_mode_sense ? 1'b1 :
+                                            ((drive_sel == 0) ? drive525_sense : 1'b1));
 
     wire current_sense = drive_sense;
 
@@ -957,7 +1038,9 @@ module iwm_woz (
         .DISKREG_SEL(diskreg_sel),
         .DISK_BIT_POSITION(current_bit_position),
         .FLUX_BIT_TIMER(current_bit_timer),
-        .FLUX_WRITE(),
+        .FLUX_WRITE(flux_write_bit),
+        .FLUX_WRITE_STROBE(flux_write_strobe),
+        .FLUX_WRITE_MODE(flux_write_mode),
         .DEBUG_RSH(),
         .DEBUG_STATE()
     );

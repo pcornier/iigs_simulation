@@ -87,8 +87,10 @@ module iwm_flux (
     // Bit-cell timing from flux_drive for window synchronization
     input  wire [5:0]  FLUX_BIT_TIMER,    // Current bit timer value from flux_drive
 
-    // Write output (future use)
-    output wire        FLUX_WRITE,      // Pulse when writing flux transition
+    // Write outputs
+    output reg         FLUX_WRITE,        // Bit value from write shift register MSB
+    output reg         FLUX_WRITE_STROBE, // 1-cycle pulse at each write bit cell
+    output wire        FLUX_WRITE_MODE,   // 1 = write mode active (m_rw_mode)
 
     // Debug
     output wire [7:0]  DEBUG_RSH,       // Read shift register (for debug)
@@ -123,6 +125,9 @@ module iwm_flux (
     // Without this, WHD can remain 0xFF and hang at FF:57B7 (LDA $C08C,X; AND #$40; BNE).
     reg [9:0]  write_underrun_cnt;
     localparam [9:0] WRITE_UNDERRUN_DELAY_7M = 10'd64; // ~9µs at 7MHz
+    // Write shift register state tracking
+    reg [2:0]  write_bit_count;     // Bits shifted out this byte (0-7)
+    reg [31:0] write_data_gen;      // m_data_gen snapshot at last byte load
     reg [31:0] async_tick_14m;      // 14MHz tick counter for async timing
     reg [31:0] last_sync_14m;       // Last bit-cell sync tick (approx m_last_sync)
     reg [31:0] async_update_deadline;
@@ -432,6 +437,10 @@ module iwm_flux (
             access_data_valid  <= 1'b0;
             access_gen_latched <= 32'd0;
             write_underrun_cnt <= 10'd0;
+            write_bit_count    <= 3'd0;
+            write_data_gen     <= 32'd0;
+            FLUX_WRITE         <= 1'b0;
+            FLUX_WRITE_STROBE  <= 1'b0;
             clear_rsh_pending   <= 1'b0;
             latch_hold_cnt <= 4'd0;
             sync_run_count <= 4'd0;
@@ -537,6 +546,8 @@ module iwm_flux (
                 m_data_next_valid <= 1'b0;
                 m_rw_mode <= 1'b0;
                 rw_state <= S_IDLE;
+                FLUX_WRITE <= 1'b0;
+                FLUX_WRITE_STROBE <= 1'b0;
 `ifdef SIMULATION
                 $display("IWM_FLUX: Switching to READ mode, m_data <= 0x00");
 `endif
@@ -544,10 +555,22 @@ module iwm_flux (
                 m_rw_mode <= 1'b1;
                 m_whd <= m_whd | 8'h40;
                 write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
+                // Initialize write state - S_IDLE will wait for CPU data write before shifting
+                rw_state <= S_IDLE;
+                write_bit_count <= 3'd0;
+                write_data_gen <= m_data_gen;  // Match current gen so S_IDLE waits for new CPU write
+                FLUX_WRITE <= 1'b0;
+                FLUX_WRITE_STROBE <= 1'b0;
+`ifdef SIMULATION
+                $display("IWM_FLUX: Entering WRITE mode cycle=%0d mode=%02h async=%0d data_gen=%0d",
+                         debug_cycle, SW_MODE, is_async, m_data_gen);
+`endif
             end else if (!MOTOR_ACTIVE && m_motor_was_on) begin
                 // Motor command off - but only reset state if motor actually stopped
                 m_whd <= m_whd & 8'hBF;
                 m_rw_mode <= 1'b0;
+                FLUX_WRITE <= 1'b0;
+                FLUX_WRITE_STROBE <= 1'b0;
                 // Don't reset state if motor is still spinning - bytes may still be decoding
                 if (!MOTOR_SPINNING) begin
                     rw_state <= S_IDLE;
@@ -672,6 +695,19 @@ module iwm_flux (
             if (motor_decode_ok) begin
                 case (rw_state)
                     S_IDLE: begin
+                        if (m_rw_mode && (m_data_gen != write_data_gen)) begin
+                            // Write mode: CPU has written new data - load m_wsh and start shifting
+                            m_wsh <= m_data;
+                            write_data_gen <= m_data_gen;
+                            write_bit_count <= 3'd0;
+                            FLUX_WRITE_STROBE <= 1'b0;
+                            rw_state <= SW_WINDOW_MIDDLE;
+                            load_half_window();
+`ifdef SIMULATION
+                            $display("IWM_FLUX: START_WRITE cycle=%0d m_data=%02h mode=%02h gen=%0d",
+                                     debug_cycle, m_data, SW_MODE, m_data_gen);
+`endif
+                        end else if (!m_rw_mode) begin
                         // MAME COMPATIBILITY FIX: Always start with EDGE_0 and rsh=0x00
                         //
                         // MAME's S_IDLE unconditionally sets:
@@ -714,10 +750,16 @@ module iwm_flux (
                                  debug_cycle, (FLUX_BIT_TIMER > 6'd0 && FLUX_BIT_TIMER <= base_full_window) ? FLUX_BIT_TIMER : base_full_window,
                                  FLUX_BIT_TIMER, SW_MODE);
 `endif
+                        end
                     end
 
                     SR_WINDOW_EDGE_0: begin
-                        if (flux_now) begin
+                        // Write mode entered but state machine still in read state
+                        // (non-blocking assignment priority: line 559 rw_state<=S_IDLE
+                        // is overridden by read state machine assignments below).
+                        if (m_rw_mode) begin
+                            rw_state <= S_IDLE;
+                        end else if (flux_now) begin
                             rw_state <= SR_WINDOW_EDGE_1;
                             load_half_window();
                             flux_seen <= 1'b0;
@@ -1029,7 +1071,9 @@ module iwm_flux (
                     end
 
                     SR_WINDOW_EDGE_1: begin
-                        if (window_counter == 6'd1) begin
+                        if (m_rw_mode) begin
+                            rw_state <= S_IDLE;
+                        end else if (window_counter == 6'd1) begin
 `ifdef BYTE_FRAME_DEBUG
                             $display("IWM_FLUX: SHIFT bit=1 rsh=%02h->%02h state=EDGE_1 endw=%0d",
                                      m_rsh, {m_rsh[6:0], 1'b1}, window_counter);
@@ -1291,6 +1335,97 @@ module iwm_flux (
                         end
                     end
 
+                    SW_WINDOW_MIDDLE: begin
+                        // Write mode exited (Q7 cleared) but state machine still in write state
+                        // due to non-blocking assignment priority (line 548 rw_state<=S_IDLE is
+                        // overridden by state machine assignments later in same always block).
+                        // Force return to S_IDLE so read state machine can start.
+                        if (!m_rw_mode) begin
+                            rw_state <= S_IDLE;
+                            FLUX_WRITE_STROBE <= 1'b0;
+                            FLUX_WRITE <= 1'b0;
+                        end else if (window_counter == 6'd1) begin
+                            // Write mode: mid-window - shift out MSB at counter expiry
+                            FLUX_WRITE <= m_wsh[7];
+                            FLUX_WRITE_STROBE <= 1'b1;
+                            m_wsh <= {m_wsh[6:0], 1'b0};
+                            write_bit_count <= write_bit_count + 3'd1;
+                            rw_state <= SW_WINDOW_END;
+                            load_half_window();
+                        end else begin
+                            FLUX_WRITE_STROBE <= 1'b0;
+                            window_counter <= window_counter - 6'd1;
+                        end
+                    end
+
+                    SW_WINDOW_END: begin
+                        if (!m_rw_mode) begin
+                            rw_state <= S_IDLE;
+                            FLUX_WRITE_STROBE <= 1'b0;
+                            FLUX_WRITE <= 1'b0;
+                        end else if (window_counter == 6'd1) begin
+                            if (write_bit_count == 3'd0 && m_data_gen == write_data_gen) begin
+                                // Underrun: full byte shifted out but no new CPU data written.
+                                // MAME behavior: flag the underrun (clear WHD bit 6) but CONTINUE
+                                // writing. The IIgs RWTS write loop takes ~40 machine cycles per
+                                // byte at 1MHz, which is ~8µs slower than the 32µs IWM byte shift.
+                                // If we stop here, the entire write operation fails. Instead,
+                                // continue shifting m_wsh (which contains the last written byte)
+                                // and check again at the next byte boundary. If the CPU writes
+                                // new data before then, the write continues normally.
+                                m_whd <= m_whd & 8'hBF;  // Clear WHD bit6 (underrun flag)
+                                // Reload m_wsh from m_data for the next byte (in sync mode,
+                                // m_wsh was already set by direct CPU write; in async mode,
+                                // reload from the data buffer)
+                                if (is_async)
+                                    m_wsh <= m_data;
+                                rw_state <= SW_WINDOW_MIDDLE;
+                                load_half_window();
+                                FLUX_WRITE_STROBE <= 1'b0;
+`ifdef SIMULATION
+                                $display("IWM_FLUX: WRITE_UNDERRUN cycle=%0d data_gen=%0d (continuing)",
+                                         debug_cycle, m_data_gen);
+`endif
+                            end else begin
+                                // Continue writing - update gen snapshot, load next half window
+                                write_data_gen <= m_data_gen;
+                                // In sync mode, m_wsh was loaded directly by CPU write.
+                                // In async mode, reload from data buffer at byte boundary.
+                                if (is_async)
+                                    m_wsh <= m_data;
+                                rw_state <= SW_WINDOW_MIDDLE;
+                                load_half_window();
+                                FLUX_WRITE_STROBE <= 1'b0;
+                            end
+                        end else begin
+                            FLUX_WRITE_STROBE <= 1'b0;
+                            window_counter <= window_counter - 6'd1;
+                        end
+                    end
+
+                    SW_UNDERRUN: begin
+                        if (!m_rw_mode) begin
+                            rw_state <= S_IDLE;
+                            FLUX_WRITE_STROBE <= 1'b0;
+                            FLUX_WRITE <= 1'b0;
+                        end else if (m_data_gen != write_data_gen) begin
+                            // CPU wrote new data while in underrun - restart shifting
+                            m_wsh <= m_data;
+                            write_data_gen <= m_data_gen;
+                            write_bit_count <= 3'd0;
+                            rw_state <= SW_WINDOW_MIDDLE;
+                            load_half_window();
+                            FLUX_WRITE_STROBE <= 1'b0;
+`ifdef SIMULATION
+                            $display("IWM_FLUX: WRITE_RESTART from underrun cycle=%0d data=%02h gen=%0d",
+                                     debug_cycle, m_data, m_data_gen);
+`endif
+                        end else begin
+                            FLUX_WRITE_STROBE <= 1'b0;
+                            FLUX_WRITE <= 1'b0;
+                        end
+                    end
+
                     default: begin
                         rw_state <= S_IDLE;
                     end
@@ -1312,6 +1447,8 @@ module iwm_flux (
                 flux_seen <= 1'b0;
                 async_update_pending <= 1'b0;
                 latch_hold_cnt <= 4'd0;
+                FLUX_WRITE <= 1'b0;
+                FLUX_WRITE_STROBE <= 1'b0;
                 sync_run_count <= 4'd0;
                 sync_resync_done <= 1'b0;
             end
@@ -1347,6 +1484,15 @@ module iwm_flux (
                 if (SW_MODE[0]) begin
                     m_whd <= m_whd & 8'h7f;
                 end
+                // Sync-mode: direct-to-wsh (MAME iwm.cpp:377)
+                // In sync mode, CPU writes go directly into the shift register
+                if (!is_async && m_rw_mode)
+                    m_wsh <= DATA_IN;
+`ifdef SIMULATION
+                if (m_rw_mode)
+                    $display("IWM_FLUX: DATA_WRITE cycle=%0d data=%02h gen=%0d mode=%02h async=%0d rw=%0d",
+                             debug_cycle, DATA_IN, m_data_gen + 1, SW_MODE, is_async, m_rw_mode);
+`endif
             end
 
             // Start of a CPU read cycle (PHI2-high). Track what the CPU will see.
@@ -1608,7 +1754,7 @@ module iwm_flux (
 
     // Drive live data so reads can observe bytes that complete mid-PHI2.
     assign DATA_OUT     = data_out_mux;
-    assign FLUX_WRITE   = 1'b0;  // TODO: implement write support
+    assign FLUX_WRITE_MODE = m_rw_mode;
     assign DEBUG_RSH    = m_rsh;
     assign DEBUG_STATE  = rw_state;
     assign DEBUG_BYTE_VALID = new_byte_dbg;

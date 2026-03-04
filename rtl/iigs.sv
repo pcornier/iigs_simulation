@@ -100,6 +100,8 @@ module iigs
    input              WOZ_TRACK3_IS_FLUX,   // Track data is flux timing (not bitstream)
    input  [31:0]      WOZ_TRACK3_FLUX_SIZE, // Size in bytes of flux data (when IS_FLUX)
    input  [31:0]      WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+   output [7:0]       WOZ_TRACK3_BIT_DATA_IN, // Write byte to BRAM
+   output             WOZ_TRACK3_BIT_WE,      // Write enable
 
    // --- WOZ bit interface for 5.25" drive 1 ---
    output [5:0]       WOZ_TRACK1,           // Track number being read
@@ -110,6 +112,8 @@ module iigs
    input              WOZ_TRACK1_IS_FLUX,       // Track data is flux timing (not bitstream)
    input  [31:0]      WOZ_TRACK1_FLUX_SIZE,     // Size in bytes of flux data
    input  [31:0]      WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+   output [7:0]       WOZ_TRACK1_BIT_DATA_IN,   // Write byte to BRAM
+   output             WOZ_TRACK1_BIT_WE,        // Write enable
 
    input [3:0]        DISK_READY,
    input              FLOPPY_WP,
@@ -2580,6 +2584,10 @@ wire ready_out;
   assign WOZ_TRACK3_STABLE_SIDE = 1'b0;
   assign WOZ_TRACK1 = 6'd0;
   assign WOZ_TRACK1_BIT_ADDR = 13'd0;
+  assign WOZ_TRACK3_BIT_DATA_IN = 8'd0;
+  assign WOZ_TRACK3_BIT_WE = 1'b0;
+  assign WOZ_TRACK1_BIT_DATA_IN = 8'd0;
+  assign WOZ_TRACK1_BIT_WE = 1'b0;
   `else
   // Hardware-accurate IWM with WOZ/flux-based disk interface
   iwm_woz iwmc (
@@ -2614,6 +2622,8 @@ wire ready_out;
       .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
       .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
       .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+      .WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
+      .WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
       // WOZ bit interface for 5.25" drive 1
       .WOZ_TRACK1(WOZ_TRACK1),
       .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
@@ -2623,6 +2633,8 @@ wire ready_out;
       .WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
       .WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
       .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+      .WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
+      .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
       // Motor status for clock slowdown
       .FLOPPY_MOTOR_ON(floppy_motor_on)
   );

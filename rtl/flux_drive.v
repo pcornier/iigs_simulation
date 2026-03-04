@@ -83,6 +83,15 @@ module flux_drive (
     output reg         SD_TRACK_STROBE, // Request new track load
     input  wire        SD_TRACK_ACK,    // Track load complete
 
+    // Write interface from IWM
+    input  wire        WRITE_BIT,          // Bit value from IWM write shift register
+    input  wire        WRITE_STROBE,       // 1-cycle pulse per write bit cell
+    input  wire        WRITE_MODE,         // 1 = suppress flux reads, accept writes
+
+    // Write outputs to BRAM (via woz_floppy_controller port B)
+    output reg  [7:0]  WRITE_BYTE_OUT,     // Modified byte data
+    output reg         WRITE_WE_OUT,       // Write enable (1-cycle pulse)
+
     // Chunk-based streaming support for large flux tracks (>16KB)
     // When flux tracks exceed BRAM size, we reload 16KB chunks on demand
     output wire        CHUNK_RELOAD_REQ,   // Request next 16KB chunk load
@@ -151,6 +160,7 @@ module flux_drive (
 
     // Flux generation state
     reg         prev_flux;              // Previous flux state for edge detection
+
 
     // BRAM first-read wait - wait 1 cycle for registered BRAM data after position reset
     // After bit_position resets (track load, drive_ready), wait 1 cycle for BRAM data
@@ -392,9 +402,10 @@ module flux_drive (
     assign BIT_TIMER_OUT = bit_timer;           // Export for IWM window synchronization
 
     // BRAM address: flux mode uses full flux_byte_addr (16 bits for 64KB BRAM)
-    // Bitstream mode uses byte_index with look-ahead
+    // Bitstream mode uses byte_index with look-ahead (disabled during writes)
     assign BRAM_ADDR = IS_FLUX_TRACK ? flux_byte_addr :
-                       (need_prefetch ? prefetch_byte_index : byte_index);
+                       (WRITE_MODE ? byte_index :
+                       (need_prefetch ? prefetch_byte_index : byte_index));
     assign WRITE_PROTECT = DISK_WP;
 
     //=========================================================================
@@ -530,6 +541,38 @@ module flux_drive (
         prev_sense_debug <= sense_35;
     end
 `endif
+
+    //=========================================================================
+    // Write Logic - Read-Modify-Write to BRAM
+    //=========================================================================
+    // When IWM is in write mode, each WRITE_STROBE pulse sets/clears one bit
+    // at the current bit_position in the track BRAM. A 1-cycle delay accounts
+    // for BRAM read latency (address at cycle N → data valid at cycle N+1).
+    reg write_strobe_d1;  // Delayed strobe (1 cycle for BRAM read latency)
+    reg write_bit_d1;     // Delayed bit value
+
+    always @(posedge CLK_14M or posedge RESET) begin
+        if (RESET) begin
+            write_strobe_d1 <= 1'b0;
+            write_bit_d1    <= 1'b0;
+            WRITE_BYTE_OUT  <= 8'h00;
+            WRITE_WE_OUT    <= 1'b0;
+        end else begin
+            write_strobe_d1 <= WRITE_STROBE && WRITE_MODE && !WRITE_PROTECT && TRACK_LOADED;
+            write_bit_d1    <= WRITE_BIT;
+
+            if (write_strobe_d1) begin
+                // Read-modify-write: BRAM_DATA is valid (1 cycle after address set)
+                if (write_bit_d1)
+                    WRITE_BYTE_OUT <= BRAM_DATA | (8'd1 << bit_shift);
+                else
+                    WRITE_BYTE_OUT <= BRAM_DATA & ~(8'd1 << bit_shift);
+                WRITE_WE_OUT <= 1'b1;
+            end else begin
+                WRITE_WE_OUT <= 1'b0;
+            end
+        end
+    end
 
     //=========================================================================
     // Head Stepper Motor Logic
@@ -1171,7 +1214,7 @@ module flux_drive (
                         end else if (flux_byte_counter <= 8'd1) begin
                             // Counter expired - generate transition if not a continuation byte.
                             // Do NOT suppress the first bit-cell here; that drops a bit and shifts byte alignment.
-                            if (!flux_is_continuation && drive_ready) begin
+                            if (!flux_is_continuation && drive_ready && !WRITE_MODE) begin
                                 FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                                     if (flux_count_debug < 110) begin
@@ -1272,7 +1315,7 @@ module flux_drive (
                         // Generate flux near mid-cell using the current cell timing.
                         // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready).
                         // Do not suppress the first bit-cell; that drops a bit and shifts byte alignment.
-                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready) begin
+                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready && !WRITE_MODE) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                             if (flux_count_debug < 50) begin
