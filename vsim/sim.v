@@ -464,18 +464,29 @@ wire [31:0] woz_ctrl_flux_total_ticks;
 
 // Mount detection for WOZ controller (index 5)
 reg         img_mounted5_d = 0;
-reg         woz_ctrl_mount = 0;          
+reg         woz_ctrl_mount = 0;
+reg         woz_ctrl_remount_pending = 0;
 reg         woz_ctrl_change = 0;
-        
+
 always @(posedge clk_sys) begin
     img_mounted5_d <= img_mounted[5];
     // Detect rising edge of img_mounted[5]
     if (~img_mounted5_d & img_mounted[5]) begin
-        woz_ctrl_mount  <= (img_size != 0);
+        if (woz_ctrl_mount) begin
+            // Already mounted: force unmount first, then remount next cycle
+            woz_ctrl_mount <= 0;
+            woz_ctrl_remount_pending <= (img_size != 0);
+        end else begin
+            woz_ctrl_mount  <= (img_size != 0);
+        end
         woz_ctrl_change <= ~woz_ctrl_change;
 `ifdef SIMULATION
-        $display("WOZ_CTRL: Mount detected for index 5 (size=%0d)", img_size);
-`endif 
+        $display("WOZ_CTRL: Mount detected for index 5 (size=%0d, remount=%0d)", img_size, woz_ctrl_mount);
+`endif
+    end else if (woz_ctrl_remount_pending) begin
+        // One cycle after unmount: complete the remount
+        woz_ctrl_mount <= 1;
+        woz_ctrl_remount_pending <= 0;
     end
 end
 
@@ -558,14 +569,23 @@ wire        woz_525_type_mismatch;
 // Mount detection for 5.25" WOZ controller (index 4)
 reg         img_mounted4_d = 0;
 reg         woz_ctrl_525_mount = 0;
+reg         woz_ctrl_525_remount_pending = 0;
 
 always @(posedge clk_sys) begin
     img_mounted4_d <= img_mounted[4];
     if (~img_mounted4_d & img_mounted[4]) begin
-        woz_ctrl_525_mount <= (img_size != 0);
+        if (woz_ctrl_525_mount) begin
+            woz_ctrl_525_mount <= 0;
+            woz_ctrl_525_remount_pending <= (img_size != 0);
+        end else begin
+            woz_ctrl_525_mount <= (img_size != 0);
+        end
 `ifdef SIMULATION
-        $display("WOZ_CTRL_525: Mount detected for index 4 (size=%0d)", img_size);
+        $display("WOZ_CTRL_525: Mount detected for index 4 (size=%0d, remount=%0d)", img_size, woz_ctrl_525_mount);
 `endif
+    end else if (woz_ctrl_525_remount_pending) begin
+        woz_ctrl_525_mount <= 1;
+        woz_ctrl_525_remount_pending <= 0;
     end
 end
 

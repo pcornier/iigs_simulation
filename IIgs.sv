@@ -719,21 +719,41 @@ wire        woz_sd_525_wr;
 
 reg         img_mounted2_d = 0;
 reg         woz_ctrl_mount = 0;
+reg         woz_ctrl_remount_pending = 0;
 reg         woz3_stable_side_reg;
 
 reg         img_mounted3_d = 0;
 reg         woz_ctrl_525_mount = 0;
+reg         woz_ctrl_525_remount_pending = 0;
 
 always @(posedge clk_sys) begin
 	img_mounted2_d <= img_mounted[2];
 	if (~img_mounted2_d & img_mounted[2]) begin
-		woz_ctrl_mount <= (img_size != 0);
+		if (woz_ctrl_mount) begin
+			// Already mounted: force unmount first, then remount next cycle
+			woz_ctrl_mount <= 0;
+			woz_ctrl_remount_pending <= (img_size != 0);
+		end else begin
+			woz_ctrl_mount <= (img_size != 0);
+		end
+	end else if (woz_ctrl_remount_pending) begin
+		// One cycle after unmount: complete the remount
+		woz_ctrl_mount <= 1;
+		woz_ctrl_remount_pending <= 0;
 	end
 	woz3_stable_side_reg <= WOZ_TRACK3_STABLE_SIDE;
 
 	img_mounted3_d <= img_mounted[3];
 	if (~img_mounted3_d & img_mounted[3]) begin
-		woz_ctrl_525_mount <= (img_size != 0);
+		if (woz_ctrl_525_mount) begin
+			woz_ctrl_525_mount <= 0;
+			woz_ctrl_525_remount_pending <= (img_size != 0);
+		end else begin
+			woz_ctrl_525_mount <= (img_size != 0);
+		end
+	end else if (woz_ctrl_525_remount_pending) begin
+		woz_ctrl_525_mount <= 1;
+		woz_ctrl_525_remount_pending <= 0;
 	end
 end
 

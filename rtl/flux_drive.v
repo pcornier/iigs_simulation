@@ -220,6 +220,7 @@ module flux_drive (
     // Sense returns !disk_switched, so 0→sense HIGH (changed), 1→sense LOW (normal)
     reg         disk_switched;
     reg         prev_disk_mounted;
+    reg         first_mount_done;  // Distinguishes cold-start mount from hot swap
     reg         prev_drive_ready;  // For detecting drive_ready rising edge
     reg         prev_is_flux_track; // For detecting IS_FLUX_TRACK 0->1 transitions
 
@@ -575,6 +576,7 @@ module flux_drive (
             sony_motor_on <= 1'b0;         // Default: motor off
             disk_switched <= 1'b1;  // Normal at reset; mount/unmount edge detection (below) handles real changes
             prev_disk_mounted <= 1'b0;
+            first_mount_done <= 1'b0;
             step_busy_cnt <= 18'd0;
         end else begin
             if (step_busy_cnt != 18'd0)
@@ -586,15 +588,18 @@ module flux_drive (
 
             // Track disk removal/insertion for disk-change latch
             // MAME convention: disk_switched=1 is normal, =0 means "disk was changed"
-            // On disk removal: set to 0 (disk changed).
-            // On disk insertion (cold-start): set to 1 (normal).
+            // The firmware clears the latch back to 1 via DskchgClear command (sony_ctl 4'h3).
+            //
+            // On removal: set to 0 (disk changed). MAME: call_unload() sets m_dskchg=0.
+            // On cold-start insertion (first mount after reset): set to 1 (normal).
             //   MAME's device_start() sets m_dskchg = exists() ? 1 : 0, so a cold boot
-            //   with a disk present starts with m_dskchg=1 (normal).  In vsim the WOZ
-            //   file is loaded AFTER RESET, so DISK_MOUNTED transitions 0→1 after the
-            //   reset block has already set disk_switched=0.  Without this rising-edge
-            //   handler, Enable_Sense sees "disk switched" on the very first poll and
-            //   GS/OS enters an infinite disk-switch validation loop.
-            // The firmware clears the latch by setting it back to 1 via DskchgClear command.
+            //   with a disk present starts with m_dskchg=1 (normal). The WOZ file is
+            //   loaded AFTER RESET, so DISK_MOUNTED transitions 0→1 after reset has
+            //   already set disk_switched=1. We keep it at 1 for this first mount.
+            // On hot swap (subsequent mounts): leave disk_switched at 0 (changed).
+            //   MAME's call_load() does NOT reset m_dskchg. The ROM must detect the
+            //   change and clear it via DskchgClear. If we auto-set to 1 here, the ROM
+            //   never sees the disk was swapped and won't re-validate.
             if (!DISK_MOUNTED && prev_disk_mounted) begin
                 disk_switched <= 1'b0;  // MAME: call_unload() sets m_dskchg=0
 `ifdef SIMULATION
@@ -602,9 +607,17 @@ module flux_drive (
 `endif
             end
             if (DISK_MOUNTED && !prev_disk_mounted) begin
-                disk_switched <= 1'b1;  // MAME: device_start() m_dskchg=1 when exists()
+                if (!first_mount_done) begin
+                    // Cold-start: disk_switched stays 1 (set by reset), mark first mount done
+                    first_mount_done <= 1'b1;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: disk_switched SET by insertion (cold-start normal)", DRIVE_ID);
+                    $display("FLUX_DRIVE[%0d]: first mount after reset (cold-start, disk_switched stays %0d)", DRIVE_ID, disk_switched);
+`endif
+                end
+`ifdef SIMULATION
+                else begin
+                    $display("FLUX_DRIVE[%0d]: hot swap insertion (disk_switched stays %0d, ROM must clear via DskchgClear)", DRIVE_ID, disk_switched);
+                end
 `endif
             end
             prev_disk_mounted <= DISK_MOUNTED;
