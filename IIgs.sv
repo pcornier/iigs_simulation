@@ -367,6 +367,8 @@ iigs iigs (
 	.WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
 	.WOZ_TRACK3_READY(WOZ_TRACK3_READY),
 	.WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
+	.WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
+	.WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
 	// 5.25" drive 1
 	.WOZ_TRACK1(WOZ_TRACK1),
 	.WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
@@ -376,8 +378,12 @@ iigs iigs (
 	.WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
 	.WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
 	.WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+	.WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
+	.WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
 	// Disk ready to IWM (all 4 drives)
 	.DISK_READY(DISK_READY),
+	// Floppy motor status
+	.floppy_motor_on(floppy_motor_on),
 	.fastram_address(fastram_address),
 	.fastram_datatoram(fastram_datatoram),
 	.fastram_datafromram(fastram_datafromram),
@@ -678,6 +684,8 @@ wire [31:0] WOZ_TRACK3_FLUX_SIZE;
 wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS;
 wire        WOZ_TRACK3_READY;
 wire        WOZ_TRACK3_DATA_VALID;
+wire [7:0]  WOZ_TRACK3_BIT_DATA_IN;  // Write byte from IWM to BRAM
+wire        WOZ_TRACK3_BIT_WE;       // Write enable from IWM
 
 // 5.25" drive 1 WOZ bit interface
 wire [5:0]  WOZ_TRACK1;
@@ -688,6 +696,11 @@ wire        WOZ_TRACK1_LOAD_COMPLETE;
 wire        WOZ_TRACK1_IS_FLUX;
 wire [31:0] WOZ_TRACK1_FLUX_SIZE;
 wire [31:0] WOZ_TRACK1_FLUX_TOTAL_TICKS;
+wire [7:0]  WOZ_TRACK1_BIT_DATA_IN;  // Write byte from IWM to BRAM
+wire        WOZ_TRACK1_BIT_WE;       // Write enable from IWM
+
+// Floppy motor state (for dirty track flush on motor-off)
+wire        floppy_motor_on;
 
 wire [3:0] DISK_READY;
 
@@ -780,15 +793,15 @@ woz_floppy_controller #(
 	.ready(woz_ctrl_ready),
 	.disk_mounted(woz_ctrl_disk_mounted),
 	.busy(woz_ctrl_busy),
-	.active(1'b0),
+	.active(floppy_motor_on),
 
 	// Bitstream Interface
 	.bit_count(woz_ctrl_bit_count),
 	.bit_addr(WOZ_TRACK3_BIT_ADDR),
 	.stable_side(woz3_stable_side_reg),
 	.bit_data(woz_ctrl_bit_data),
-	.bit_data_in(8'h00),
-	.bit_we(1'b0),
+	.bit_data_in(WOZ_TRACK3_BIT_DATA_IN),
+	.bit_we(WOZ_TRACK3_BIT_WE),
 
 	// Track load notification
 	.track_load_complete(woz_ctrl_track_load_complete),
@@ -834,15 +847,15 @@ woz_floppy_controller #(
 	.ready(woz_ctrl_525_ready),
 	.disk_mounted(woz_ctrl_525_disk_mounted),
 	.busy(woz_ctrl_525_busy),
-	.active(1'b0),
+	.active(floppy_motor_on),
 
 	// Bitstream Interface
 	.bit_count(woz_ctrl_525_bit_count),
 	.bit_addr(WOZ_TRACK1_BIT_ADDR),
 	.stable_side(1'b0),                    // 5.25" is single-sided
 	.bit_data(woz_ctrl_525_bit_data),
-	.bit_data_in(8'h00),
-	.bit_we(1'b0),
+	.bit_data_in(WOZ_TRACK1_BIT_DATA_IN),
+	.bit_we(WOZ_TRACK1_BIT_WE),
 
 	// Track load notification
 	.track_load_complete(woz_ctrl_525_track_load_complete),

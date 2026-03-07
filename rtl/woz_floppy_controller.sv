@@ -13,7 +13,7 @@ module woz_floppy_controller #(
     input             sd_ack,
     input      [8:0]  sd_buff_addr,
     input      [7:0]  sd_buff_dout,
-    output     logic [7:0]  sd_buff_din,
+    output     [7:0]  sd_buff_din,
     input             sd_buff_wr,
 
     // Disk Status
@@ -102,10 +102,36 @@ module woz_floppy_controller #(
     reg         load_side;   // Which side is currently being DMA-loaded/saved (3.5" only)
     reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
+    // Combinational BRAM address for save mode (removes 1 pipeline stage for correct timing)
+    // During S_SAVE_TRACK, sd_buff_addr drives BRAM directly so data appears with 1-cycle
+    // latency (BRAM internal), matching MiSTer framework's expectation.
+    wire [BRAM_ADDR_WIDTH-1:0] save_bram_addr = {blocks_processed[6:0], sd_buff_addr};
+    wire saving_active = (state == S_SAVE_TRACK);
+    wire [BRAM_ADDR_WIDTH-1:0] bram_addr_a = saving_active ? save_bram_addr[BRAM_ADDR_WIDTH-1:0] : track_load_addr;
+
+    // sd_buff_din: combinational during saves (1-cycle BRAM latency only),
+    // registered for all other modes (scan/idle)
+    reg  [7:0]  sd_buff_din_reg;
+    wire [7:0]  save_din = (IS_35_INCH && save_side) ? track_ram_dout1 : track_ram_dout0;
+    assign sd_buff_din = saving_active ? save_din : sd_buff_din_reg;
+
+    // Per-side dirty flags (track which side was modified by IWM writes)
+    reg         dirty_side0;
+    reg         dirty_side1;
+    // Per-side track location metadata (for correct save-back to WOZ file)
+    reg  [15:0] trk_start_block_side0;
+    reg  [15:0] trk_start_block_side1;
+    reg  [15:0] trk_block_count_side0;
+    reg  [15:0] trk_block_count_side1;
+    // Save state tracking
+    reg         save_side;          // Which side is currently being saved
+    reg         saving_second_side; // Need to save the other side after current save
+    reg         save_is_flush;      // Save triggered by motor-off (return to IDLE, not SEEK)
+
     // Dual port RAM for Track Data (Side 0) — used by both 3.5" and 5.25"
     bram #(.width_a(8), .widthad_a(BRAM_ADDR_WIDTH)) track_ram_side0 (
         .clock_a(clk),
-        .address_a(track_load_addr),
+        .address_a(bram_addr_a),
         .wren_a(track_load_we && (!IS_35_INCH || (track_load_side == 1'b0))),
         .data_a(track_load_data),
         .q_a(track_ram_dout0),
@@ -122,7 +148,7 @@ module woz_floppy_controller #(
         if (IS_35_INCH) begin : gen_side1_ram
             bram #(.width_a(8), .widthad_a(BRAM_ADDR_WIDTH)) track_ram_side1 (
                 .clock_a(clk),
-                .address_a(track_load_addr),
+                .address_a(bram_addr_a),
                 .wren_a(track_load_we && (track_load_side == 1'b1)),
                 .data_a(track_load_data),
                 .q_a(track_ram_dout1),
@@ -205,7 +231,6 @@ module woz_floppy_controller #(
     reg [7:0] current_track_id_side0;
     reg [7:0] current_track_id_side1;
     reg [7:0] pending_track_id;
-    reg       dirty;
     reg       woz_valid;
     reg       old_ack;
 
@@ -227,6 +252,9 @@ module woz_floppy_controller #(
     reg [31:0] flux_total_ticks_side0;
     reg [31:0] flux_total_ticks_side1;
     reg [31:0] pending_flux_total_ticks;
+
+    // Motor-off save trigger: flush dirty tracks when motor spins down
+    reg         prev_active;
 
     // Debug
     reg [7:0] last_debug_track_id;
@@ -348,12 +376,21 @@ module woz_floppy_controller #(
 	            prev_mounted <= 0;
 	            sd_rd <= 0;
 	            sd_wr <= 0;
-	            dirty <= 0;
+	            dirty_side0 <= 0;
+	            dirty_side1 <= 0;
             current_track_id_side0 <= 8'hFF;
             current_track_id_side1 <= 8'hFF;
 	            pending_track_id <= 8'h00;
 	            load_side <= 1'b0;
 	            track_load_side <= 1'b0;
+            save_side <= 1'b0;
+            saving_second_side <= 1'b0;
+            save_is_flush <= 1'b0;
+            prev_active <= 1'b0;
+            trk_start_block_side0 <= 16'd0;
+            trk_start_block_side1 <= 16'd0;
+            trk_block_count_side0 <= 16'd0;
+            trk_block_count_side1 <= 16'd0;
             old_ack <= 1'b0;
             transfer_active <= 1'b0;
             request_issued <= 1'b0;
@@ -368,7 +405,7 @@ module woz_floppy_controller #(
             pending_flux_total_ticks <= 32'd0;
             track_load_complete <= 1'b0;
 	            // bit_count is now a wire (combinational mux), no reset needed
-	            sd_buff_din <= 8'h00;
+	            sd_buff_din_reg <= 8'h00;
 	            have_info <= 1'b0;
 	            have_tmap <= 1'b0;
 	            have_trks <= 1'b0;
@@ -408,7 +445,7 @@ module woz_floppy_controller #(
             // deassert during the transfer to avoid re-triggering when the transfer ends.
             sd_rd <= 1'b0;
             sd_wr <= 1'b0;
-            sd_buff_din <= 8'h00;
+            sd_buff_din_reg <= 8'h00;
 
             // bit_count is now combinational (assigned above), no registered assignment needed
 
@@ -435,7 +472,8 @@ module woz_floppy_controller #(
 	                ready <= 0;
 	                busy <= 1;
 	                woz_valid <= 0;
-	                dirty <= 0;
+	                dirty_side0 <= 0;
+	                dirty_side1 <= 0;
 	                current_track_id_side0 <= 8'hFF;
 	                current_track_id_side1 <= 8'hFF;
                 bit_count_side0 <= 32'd0;
@@ -503,8 +541,13 @@ module woz_floppy_controller #(
 	            end
 	            prev_mounted <= img_mounted;
             
-            // Set dirty flag on bit writes
-            if (bit_we) dirty <= 1;
+            // Set per-side dirty flag on bit writes
+            if (bit_we) begin
+                if (IS_35_INCH && track_id[0])
+                    dirty_side1 <= 1;
+                else
+                    dirty_side0 <= 1;
+            end
             
             // State Machine
             case (state)
@@ -585,6 +628,32 @@ module woz_floppy_controller #(
                 S_IDLE: begin
                     busy <= 0;
 
+                    // Motor-off save trigger: flush dirty tracks when motor spins down
+                    prev_active <= active;
+                    if (prev_active && !active && (dirty_side0 || dirty_side1) && woz_valid) begin
+                        state <= S_SAVE_TRACK;
+                        busy <= 1;
+                        blocks_processed <= 0;
+                        old_ack <= sd_ack;
+                        transfer_active <= 1'b0;
+                        request_issued <= 1'b0;
+                        if (dirty_side0) begin
+                            save_side <= 1'b0;
+                            saving_second_side <= (IS_35_INCH != 0) & dirty_side1;
+                            sd_lba <= {16'b0, trk_start_block_side0};
+                            trk_block_count <= trk_block_count_side0;
+                        end else begin
+                            save_side <= 1'b1;
+                            saving_second_side <= 1'b0;
+                            sd_lba <= {16'b0, trk_start_block_side1};
+                            trk_block_count <= trk_block_count_side1;
+                        end
+                        sd_wr <= 1;
+                        save_is_flush <= 1'b1;
+                        $display("WOZ_CTRL: Motor off, flushing dirty tracks (s0=%0d s1=%0d)",
+                                 dirty_side0, dirty_side1);
+                    end
+
                     // Settling time: track how long PHYSICAL track has been stable
                     // Use track_id[7:1] for 3.5" (physical track without side bit)
                     // SEL toggles (side bit) should NOT reset settling
@@ -649,15 +718,28 @@ module woz_floppy_controller #(
                             $display("WOZ_CTRL: Physical track change: %0d -> %0d (loading both sides)",
                                      cached_physical_s0, requested_physical);
 
-                            // If dirty, save first (writes not used in current sim, but keep behavior)
-                            if (dirty && woz_valid) begin
+                            // If any side is dirty, save before seeking
+                            if ((dirty_side0 || dirty_side1) && woz_valid) begin
                                 state <= S_SAVE_TRACK;
                                 busy <= 1;
-                                sd_lba <= {16'b0, trk_start_block};
                                 blocks_processed <= 0;
                                 old_ack <= sd_ack;  // Prevent spurious falling edge detection
+                                // Save side 0 first if dirty, else side 1
+                                if (dirty_side0) begin
+                                    save_side <= 1'b0;
+                                    saving_second_side <= dirty_side1;  // Also save side 1 after
+                                    sd_lba <= {16'b0, trk_start_block_side0};
+                                    trk_block_count <= trk_block_count_side0;
+                                end else begin
+                                    save_side <= 1'b1;
+                                    saving_second_side <= 1'b0;
+                                    sd_lba <= {16'b0, trk_start_block_side1};
+                                    trk_block_count <= trk_block_count_side1;
+                                end
                                 sd_wr <= 1;
-                                $display("WOZ_CTRL: Track dirty, saving before seek");
+                                save_is_flush <= 1'b0;
+                                $display("WOZ_CTRL: Track dirty (s0=%0d s1=%0d), saving before seek",
+                                         dirty_side0, dirty_side1);
                             end else begin
                                 state <= S_SEEK_LOOKUP;
                                 busy <= 1;
@@ -676,14 +758,18 @@ module woz_floppy_controller #(
                             loading_second_side <= 1'b0;  // Not used for 5.25" but keep clean
                             $display("WOZ_CTRL: Seek request: %0d -> %0d", current_track_id_side0, track_id);
 
-                            // If dirty, save first
-                            if (dirty && woz_valid) begin
+                            // If dirty, save first (5.25" is single-sided, only side 0)
+                            if (dirty_side0 && woz_valid) begin
                                 state <= S_SAVE_TRACK;
                                 busy <= 1;
-                                sd_lba <= {16'b0, trk_start_block};
+                                save_side <= 1'b0;
+                                saving_second_side <= 1'b0;
+                                sd_lba <= {16'b0, trk_start_block_side0};
+                                trk_block_count <= trk_block_count_side0;
                                 blocks_processed <= 0;
                                 old_ack <= sd_ack;  // Prevent spurious falling edge detection
                                 sd_wr <= 1;
+                                save_is_flush <= 1'b0;
                                 $display("WOZ_CTRL: Track %0d is dirty, saving before seek", current_track_id_side0);
                             end else begin
                                 state <= S_SEEK_LOOKUP;
@@ -763,7 +849,11 @@ module woz_floppy_controller #(
                                      flux_size_side0 <= 32'd0;
                                      flux_total_ticks_side0 <= 32'd0;
                                  end
-                                 dirty <= 0;
+                                 // Clear dirty for the side being loaded (empty track replaces it)
+                                 if (IS_35_INCH && pending_track_id[0])
+                                     dirty_side1 <= 0;
+                                 else
+                                     dirty_side0 <= 0;
 
                                  // 3.5" DUAL-SIDE: Even for empty tracks, need to check/load side 1
                                  if (IS_35_INCH && !loading_second_side) begin
@@ -974,6 +1064,9 @@ module woz_floppy_controller #(
                                 is_flux_side1 <= pending_is_flux;
                                 flux_size_side1 <= pending_is_flux ? trk_bit_count : 32'd0;
                                 flux_total_ticks_side1 <= pending_is_flux ? pending_flux_total_ticks : 32'd0;
+                                // Store per-side track location for save-back
+                                trk_start_block_side1 <= trk_start_block;
+                                trk_block_count_side1 <= trk_block_count;
                                 $display("WOZ_CTRL: Stored track %0d to side1 RAM, %s=%0d is_flux=%0d",
                                          pending_track_id, pending_is_flux ? "flux_bytes" : "bit_count",
                                          is_woz_v1 ? {16'd0, v1_bit_count} : trk_bit_count, pending_is_flux);
@@ -983,6 +1076,9 @@ module woz_floppy_controller #(
                                 is_flux_side0 <= pending_is_flux;
                                 flux_size_side0 <= pending_is_flux ? trk_bit_count : 32'd0;
                                 flux_total_ticks_side0 <= pending_is_flux ? pending_flux_total_ticks : 32'd0;
+                                // Store per-side track location for save-back
+                                trk_start_block_side0 <= trk_start_block;
+                                trk_block_count_side0 <= trk_block_count;
                                 $display("WOZ_CTRL: Stored track %0d to side0 RAM, %s=%0d is_flux=%0d%s",
                                          pending_track_id, pending_is_flux ? "flux_bytes" : "bit_count",
                                          is_woz_v1 ? {16'd0, v1_bit_count} : trk_bit_count, pending_is_flux,
@@ -1039,14 +1135,18 @@ module woz_floppy_controller #(
                                     end
                                 end
                             end
-                            dirty <= 0;
+                            // Clear dirty for the side just loaded (fresh data from disk)
+                            if (IS_35_INCH && pending_track_id[0])
+                                dirty_side1 <= 0;
+                            else
+                                dirty_side0 <= 0;
                         end else begin
                             // Next block
                             sd_lba <= sd_lba + 1;
                         end
                     end
                 end
-                
+
                 S_SAVE_TRACK: begin
                     // Assert sd_wr while waiting for ack, but NOT when completing a transfer
                     if (!sd_ack && !(old_ack && transfer_active)) begin
@@ -1057,11 +1157,38 @@ module woz_floppy_controller #(
                         // Block saved
                         blocks_processed <= blocks_processed + 1;
                         if (blocks_processed + 1 >= trk_block_count) begin
-                            // Done saving
-                            dirty <= 0;
-                            // Proceed to Seek the NEW track
-                            state <= S_SEEK_LOOKUP; 
-                            blocks_processed <= 0; // Reset for lookup
+                            // Done saving this side
+                            if (save_side)
+                                dirty_side1 <= 0;
+                            else
+                                dirty_side0 <= 0;
+
+                            // Check if other side also needs saving
+                            if (saving_second_side) begin
+                                saving_second_side <= 1'b0;
+                                save_side <= 1'b1;  // Second save is always side 1
+                                sd_lba <= {16'b0, trk_start_block_side1};
+                                trk_block_count <= trk_block_count_side1;
+                                blocks_processed <= 0;
+                                old_ack <= sd_ack;
+                                transfer_active <= 1'b0;
+                                request_issued <= 1'b0;
+                                sd_wr <= 1;
+                                $display("WOZ_CTRL: Side 0 saved, now saving side 1");
+                            end else begin
+                                // All dirty sides saved
+                                if (save_is_flush) begin
+                                    // Motor-off flush: return to idle (no pending seek)
+                                    state <= S_IDLE;
+                                    busy <= 0;
+                                    save_is_flush <= 1'b0;
+                                    $display("WOZ_CTRL: Motor-off flush complete");
+                                end else begin
+                                    // Save before seek: proceed to load new track
+                                    state <= S_SEEK_LOOKUP;
+                                    blocks_processed <= 0;
+                                end
+                            end
                         end else begin
                             // Next block
                             sd_lba <= sd_lba + 1;
@@ -1238,16 +1365,8 @@ module woz_floppy_controller #(
                              end
                          end
 	                     end
-	                end else begin // Writing RAM -> SD
-                    if (state == S_SAVE_TRACK) begin
-                         track_load_addr <= {blocks_processed[6:0], sd_buff_addr}; 
-                         if (IS_35_INCH && load_side) begin
-                             sd_buff_din <= track_ram_dout1;
-                         end else begin
-                             sd_buff_din <= track_ram_dout0;
-                         end
-                    end
-                end
+	                end
+	                // Writing RAM -> SD: handled combinationally via bram_addr_a and save_din
             end
         end
     end

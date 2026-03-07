@@ -123,6 +123,9 @@ module iigs
     output        UART_RTS,
     input         UART_CTS,
 
+   // Floppy motor status (for dirty track flush on motor-off)
+   output             floppy_motor_on,
+
    // Keyboard-triggered reset outputs
    output        keyboard_reset,      // Ctrl+F11 was pressed - trigger warm reset
    output        keyboard_cold_reset  // Ctrl+OpenApple+F11 was pressed - trigger cold reset
@@ -241,7 +244,7 @@ module iigs
   logic [7:0]         SPKR;
   logic               speaker_state;  // Apple II speaker toggle state
   logic [7:0]         DISK35;
-  logic               floppy_motor_on;  // From IWM for clock slowdown
+  // floppy_motor_on is now a module output (for clock slowdown + dirty track flush)
   logic [7:0]         C02BVAL;
 
   logic [7:0]         VGCINT; //23

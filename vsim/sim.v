@@ -242,6 +242,9 @@ iigs  iigs(
         .keyboard_reset(keyboard_reset),
         .keyboard_cold_reset(keyboard_cold_reset),
 
+        // Floppy motor status (for dirty track flush on motor-off)
+        .floppy_motor_on(floppy_motor_on),
+
         // Audio outputs
         .AUDIO_L(AUDIO_L),
         .AUDIO_R(AUDIO_R),
@@ -461,8 +464,8 @@ assign sd_wr[2] = 1'b0;
 assign sd_buff_din[2] = 8'h00;
 
 
-// FD_DISK_3 is always 0 (no active save trigger for 3.5" WOZ in sim)
-wire FD_DISK_3 = 1'b0;
+// Floppy motor state from IWM (for dirty track flush on motor-off)
+wire floppy_motor_on;
 
 // 3.5" WOZ controller outputs
 wire        woz_ctrl_disk_mounted;
@@ -517,7 +520,7 @@ woz_floppy_controller #(
     .ready(woz_ctrl_ready),
     .disk_mounted(woz_ctrl_disk_mounted),
     .busy(woz_ctrl_busy),
-    .active(FD_DISK_3),
+    .active(floppy_motor_on),
 
     // Bitstream Interface - use same bit_addr as C++ path
     // Use REGISTERED stable_side to match C++ timing.
@@ -605,7 +608,7 @@ woz_floppy_controller #(
     .ready(),                          // Not connected (5.25" uses DISK_READY[0])
     .disk_mounted(woz_ctrl_525_disk_mounted),
     .busy(woz_ctrl_525_busy),
-    .active(1'b0),                     // No save triggers for now
+    .active(floppy_motor_on),
 
     // Bitstream Interface
     .bit_count(woz_ctrl_525_bit_count),
