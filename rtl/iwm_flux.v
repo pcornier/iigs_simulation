@@ -553,7 +553,7 @@ module iwm_flux (
 `endif
             end else if (MOTOR_ACTIVE && SW_Q7_MODE && !m_rw_mode) begin
                 m_rw_mode <= 1'b1;
-                m_whd <= m_whd | 8'h40;
+                m_whd <= m_whd | 8'hC0;  // Set bit 7 (ready for data) + bit 6 (no underrun)
                 write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                 // Initialize write state - S_IDLE will wait for CPU data write before shifting
                 rw_state <= S_IDLE;
@@ -699,6 +699,7 @@ module iwm_flux (
                             // Write mode: CPU has written new data - load m_wsh and start shifting
                             m_wsh <= m_data;
                             write_data_gen <= m_data_gen;
+                            m_whd <= m_whd | 8'h80;  // Byte consumed, signal ready for next
                             write_bit_count <= 3'd0;
                             FLUX_WRITE_STROBE <= 1'b0;
                             rw_state <= SW_WINDOW_MIDDLE;
@@ -1389,6 +1390,7 @@ module iwm_flux (
                             end else begin
                                 // Continue writing - update gen snapshot, load next half window
                                 write_data_gen <= m_data_gen;
+                                m_whd <= m_whd | 8'h80;  // Byte consumed, signal ready for next (MAME: SW_WINDOW_LOAD)
                                 // In sync mode, m_wsh was loaded directly by CPU write.
                                 // In async mode, reload from data buffer at byte boundary.
                                 if (is_async)

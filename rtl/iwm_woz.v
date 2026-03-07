@@ -989,12 +989,16 @@ module iwm_woz (
     // The SmartPort driver intentionally reads $C0EC as the WHD/handshake register
     // (Q7=1,Q6=0) using `ASL $C08C,X` polling. Forcing Q7 low there breaks the
     // handshake loop and the ROM will hang in `smartdrvr.asm` at FF:56CD.
+    // Also do NOT apply during write mode: the CPU polls the handshake register
+    // (Q7=1,Q6=0) at $C0EC for "write buffer ready" (bit 7). Forcing Q7 low
+    // turns it into a data register read ($00, bit 7=0), causing an infinite loop.
     wire smartport_mode = (!immediate_mode[3]) && immediate_mode[1];
     assign force_q7_data_read = bus_rd && (bus_addr == 4'hC) &&
                               selected_disk_present &&
                               selected_track_cached &&
                               drive_on &&
-                              !smartport_mode;
+                              !smartport_mode &&
+                              !flux_write_mode;
     // Use immediate Q7 so iwm_flux sees same-cycle Q7 changes on $C0EE/$C0EF accesses.
     wire q7_for_flux = force_q7_data_read ? 1'b0 : immediate_q7;
     // Use latched Q7 for read/write mode transitions so forced data reads
