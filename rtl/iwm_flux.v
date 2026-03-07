@@ -316,6 +316,9 @@ module iwm_flux (
     wire       rd_ack_take = rd_latched_valid && rd_data_latched[7] &&
                              (rd_ack_match_old || rd_ack_match_new);
 
+    reg [7:0]  prolog_last1;  // Most recent completed byte (for prolog detection)
+    reg [7:0]  prolog_last2;  // Second most recent completed byte
+
 `ifdef SIMULATION
     reg [31:0] debug_cycle;
     reg [31:0] byte_counter;  // Sequential byte counter for comparison with MAME
@@ -325,8 +328,6 @@ module iwm_flux (
     reg [31:0] m_data_change_count;  // Count of m_data changes
     reg [7:0]  flux_edge_log_count;
     reg [15:0] dbg_bp_count;
-    reg [7:0]  prolog_last1;  // Most recent completed byte (for prolog detection)
-    reg [7:0]  prolog_last2;  // Second most recent completed byte
     reg        hdr_trace_active;
     reg [15:0] hdr_trace_shifts_left;
     reg [7:0]  hdr_trace_count;
@@ -441,6 +442,8 @@ module iwm_flux (
             trace_read_log_cnt <= 16'd0;
 `endif
             prev_byte_completing_dbg <= 1'b0;
+            prolog_last1 <= 8'h00;
+            prolog_last2 <= 8'h00;
 `ifdef SIMULATION
             debug_cycle    <= 32'd0;
             byte_counter   <= 32'd0;
@@ -450,8 +453,6 @@ module iwm_flux (
             m_data_change_count <= 32'd0;
             flux_edge_log_count <= 8'd0;
             dbg_bp_count <= 16'd0;
-            prolog_last1 <= 8'h00;
-            prolog_last2 <= 8'h00;
             hdr_trace_active <= 1'b0;
             hdr_trace_shifts_left <= 16'd0;
             hdr_trace_count <= 8'd0;
