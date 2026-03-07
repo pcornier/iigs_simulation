@@ -438,12 +438,8 @@ module iwm_controller(
             _devsel_n <= 1'b1;
             devsel_cnt <= 2'd0;
         end else begin
-            // Latch on any DEVICE_SELECT in simulation; gate with 7M in synthesis
-            if (DEVICE_SELECT
-`ifndef SIMULATION
-                && CLK_7M_EN 
-`endif
-            ) begin
+            // Latch on any DEVICE_SELECT assertion (same timing for FPGA and simulation)
+            if (DEVICE_SELECT) begin
                 iwm_addr_latched <= A[3:0];
                 devsel_cnt <= 2'd2;
             end else if (devsel_cnt != 0) begin
