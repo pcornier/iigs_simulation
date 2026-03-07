@@ -782,6 +782,27 @@ module iwm_flux (
 `ifdef BYTE_FRAME_DEBUG
                                 $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d", shifted_rsh, DISK_BIT_POSITION);
 `endif
+                                    // Prologue detection and window resync (active on both FPGA and simulation)
+                                    if (prolog_last2 == 8'hD5 && prolog_last1 == 8'hAA) begin
+                                        if (shifted_rsh == 8'h96 && use_fractional_window) begin
+                                            // Resync window at address prologue to align byte boundaries
+                                            window_counter <= base_full_window;
+                                            full_window_frac <= 10'd0;
+                                            half_window_frac <= 10'd0;
+                                            sync_run_count <= 4'd0;
+                                            sync_resync_done <= 1'b0;
+                                        end
+                                        if (shifted_rsh == 8'hAD && use_fractional_window) begin
+                                            // Resync window at data prologue to align byte boundaries
+                                            window_counter <= base_full_window;
+                                            full_window_frac <= 10'd0;
+                                            half_window_frac <= 10'd0;
+                                            sync_run_count <= 4'd0;
+                                            sync_resync_done <= 1'b0;
+                                        end
+                                    end
+                                    prolog_last2 <= prolog_last1;
+                                    prolog_last1 <= shifted_rsh;
 `ifdef SIMULATION
                                     if (prolog_last1 == 8'hD5 && shifted_rsh != 8'hAA) begin
                                         $display("IWM_PROLOG_BAD: d5 %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
@@ -794,17 +815,8 @@ module iwm_flux (
                                                      shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
                                                      rw_state, immediate_q6, immediate_q7, debug_cycle);
                                             if (shifted_rsh == 8'h96) begin
-                                                // Resync window at address prologue to align byte boundaries
-                                                if (use_fractional_window) begin
-                                                    // Align to a full bit-cell at the prologue boundary.
-                                                    window_counter <= base_full_window;
-                                                    full_window_frac <= 10'd0;
-                                                    half_window_frac <= 10'd0;
-                                                    sync_run_count <= 4'd0;
-                                                    sync_resync_done <= 1'b0;
-                                                    $display("IWM_RESYNC_ADDR_PROLOG: pos=%0d flux_timer=%0d",
-                                                             DISK_BIT_POSITION, FLUX_BIT_TIMER);
-                                                end
+                                                $display("IWM_RESYNC_ADDR_PROLOG: pos=%0d flux_timer=%0d",
+                                                         DISK_BIT_POSITION, FLUX_BIT_TIMER);
                                             end
                                             if (shifted_rsh == 8'hAD) begin
                                                 data_trace_active <= 1'b1;
@@ -817,17 +829,8 @@ module iwm_flux (
                                                     $display("CPU_FORCE_TRACE_ARM: pos=%0d cycle=%0d",
                                                              DISK_BIT_POSITION, debug_cycle);
                                                 end
-                                                // Resync window at data prologue to align byte boundaries
-                                                if (use_fractional_window) begin
-                                                    // Align to a full bit-cell at the prologue boundary.
-                                                    window_counter <= base_full_window;
-                                                    full_window_frac <= 10'd0;
-                                                    half_window_frac <= 10'd0;
-                                                    sync_run_count <= 4'd0;
-                                                    sync_resync_done <= 1'b0;
-                                                    $display("IWM_RESYNC_PROLOG: pos=%0d flux_timer=%0d",
-                                                             DISK_BIT_POSITION, FLUX_BIT_TIMER);
-                                                end
+                                                $display("IWM_RESYNC_PROLOG: pos=%0d flux_timer=%0d",
+                                                         DISK_BIT_POSITION, FLUX_BIT_TIMER);
                                             end
                                         end else begin
                                             $display("IWM_PROLOG_MISS: d5 aa %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
@@ -1062,6 +1065,27 @@ module iwm_flux (
 `ifdef BYTE_FRAME_DEBUG
                                 $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d", shifted_rsh, DISK_BIT_POSITION);
 `endif
+                                    // Prologue detection and window resync (active on both FPGA and simulation)
+                                    if (prolog_last2 == 8'hD5 && prolog_last1 == 8'hAA) begin
+                                        if (shifted_rsh == 8'h96 && use_fractional_window) begin
+                                            // Resync window at address prologue to align byte boundaries
+                                            window_counter <= base_full_window;
+                                            full_window_frac <= 10'd0;
+                                            half_window_frac <= 10'd0;
+                                            sync_run_count <= 4'd0;
+                                            sync_resync_done <= 1'b0;
+                                        end
+                                        if (shifted_rsh == 8'hAD && use_fractional_window) begin
+                                            // Resync window at data prologue to align byte boundaries
+                                            window_counter <= base_full_window;
+                                            full_window_frac <= 10'd0;
+                                            half_window_frac <= 10'd0;
+                                            sync_run_count <= 4'd0;
+                                            sync_resync_done <= 1'b0;
+                                        end
+                                    end
+                                    prolog_last2 <= prolog_last1;
+                                    prolog_last1 <= shifted_rsh;
 `ifdef SIMULATION
                                     if (prolog_last1 == 8'hD5 && shifted_rsh != 8'hAA) begin
                                         $display("IWM_PROLOG_BAD: d5 %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
@@ -1074,17 +1098,8 @@ module iwm_flux (
                                                      shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
                                                      rw_state, immediate_q6, immediate_q7, debug_cycle);
                                             if (shifted_rsh == 8'h96) begin
-                                                // Resync window at address prologue to align byte boundaries
-                                                if (use_fractional_window) begin
-                                                    // Align to a full bit-cell at the prologue boundary.
-                                                    window_counter <= base_full_window;
-                                                    full_window_frac <= 10'd0;
-                                                    half_window_frac <= 10'd0;
-                                                    sync_run_count <= 4'd0;
-                                                    sync_resync_done <= 1'b0;
-                                                    $display("IWM_RESYNC_ADDR_PROLOG: pos=%0d flux_timer=%0d",
-                                                             DISK_BIT_POSITION, FLUX_BIT_TIMER);
-                                                end
+                                                $display("IWM_RESYNC_ADDR_PROLOG: pos=%0d flux_timer=%0d",
+                                                         DISK_BIT_POSITION, FLUX_BIT_TIMER);
                                             end
                                             if (shifted_rsh == 8'hAD) begin
                                                 data_trace_active <= 1'b1;
@@ -1097,17 +1112,8 @@ module iwm_flux (
                                                     $display("CPU_FORCE_TRACE_ARM: pos=%0d cycle=%0d",
                                                              DISK_BIT_POSITION, debug_cycle);
                                                 end
-                                                // Resync window at data prologue to align byte boundaries
-                                                if (use_fractional_window) begin
-                                                    // Align to a full bit-cell at the prologue boundary.
-                                                    window_counter <= base_full_window;
-                                                    full_window_frac <= 10'd0;
-                                                    half_window_frac <= 10'd0;
-                                                    sync_run_count <= 4'd0;
-                                                    sync_resync_done <= 1'b0;
-                                                    $display("IWM_RESYNC_PROLOG: pos=%0d flux_timer=%0d",
-                                                             DISK_BIT_POSITION, FLUX_BIT_TIMER);
-                                                end
+                                                $display("IWM_RESYNC_PROLOG: pos=%0d flux_timer=%0d",
+                                                         DISK_BIT_POSITION, FLUX_BIT_TIMER);
                                             end
                                         end else begin
                                             $display("IWM_PROLOG_MISS: d5 aa %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
