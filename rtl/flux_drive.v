@@ -551,15 +551,29 @@ module flux_drive (
     reg write_strobe_d1;  // Delayed strobe (1 cycle for BRAM read latency)
     reg write_bit_d1;     // Delayed bit value
 
+    reg [31:0] write_count;  // Debug counter for writes
     always @(posedge CLK_14M or posedge RESET) begin
         if (RESET) begin
             write_strobe_d1 <= 1'b0;
             write_bit_d1    <= 1'b0;
             WRITE_BYTE_OUT  <= 8'h00;
             WRITE_WE_OUT    <= 1'b0;
+            write_count     <= 32'd0;
         end else begin
             write_strobe_d1 <= WRITE_STROBE && WRITE_MODE && !WRITE_PROTECT && TRACK_LOADED;
             write_bit_d1    <= WRITE_BIT;
+
+`ifdef SIMULATION
+            // Debug: log when write conditions are partially met
+            if (WRITE_STROBE && !write_strobe_d1) begin
+                if (!WRITE_MODE)
+                    $display("FLUX_WRITE_DBG[%0d]: STROBE but WRITE_MODE=0", DRIVE_ID);
+                else if (WRITE_PROTECT)
+                    $display("FLUX_WRITE_DBG[%0d]: STROBE but WRITE_PROTECT=1", DRIVE_ID);
+                else if (!TRACK_LOADED)
+                    $display("FLUX_WRITE_DBG[%0d]: STROBE but TRACK_LOADED=0", DRIVE_ID);
+            end
+`endif
 
             if (write_strobe_d1) begin
                 // Read-modify-write: BRAM_DATA is valid (1 cycle after address set)
@@ -568,6 +582,13 @@ module flux_drive (
                 else
                     WRITE_BYTE_OUT <= BRAM_DATA & ~(8'd1 << bit_shift);
                 WRITE_WE_OUT <= 1'b1;
+                write_count <= write_count + 1;
+`ifdef SIMULATION
+                if (write_count < 64)
+                    $display("FLUX_WRITE[%0d]: #%0d pos=%0d addr=%04X bit=%0d shift=%0d bram_in=%02X bram_out=%02X",
+                             DRIVE_ID, write_count, bit_position, BRAM_ADDR, write_bit_d1, bit_shift,
+                             BRAM_DATA, write_bit_d1 ? (BRAM_DATA | (8'd1 << bit_shift)) : (BRAM_DATA & ~(8'd1 << bit_shift)));
+`endif
             end else begin
                 WRITE_WE_OUT <= 1'b0;
             end
@@ -607,13 +628,14 @@ module flux_drive (
             // Track disk removal/insertion for disk-change latch
             // MAME convention: disk_switched=1 is normal, =0 means "disk was changed"
             // On disk removal: set to 0 (disk changed).
-            // On disk insertion (cold-start): set to 1 (normal).
+            // On insertion: only set to 1 for the FIRST mount after reset (cold-boot).
             //   MAME's device_start() sets m_dskchg = exists() ? 1 : 0, so a cold boot
             //   with a disk present starts with m_dskchg=1 (normal).  In vsim the WOZ
             //   file is loaded AFTER RESET, so DISK_MOUNTED transitions 0→1 after the
-            //   reset block has already set disk_switched=0.  Without this rising-edge
-            //   handler, Enable_Sense sees "disk switched" on the very first poll and
-            //   GS/OS enters an infinite disk-switch validation loop.
+            //   reset block has already set disk_switched=1.  The first mount keeps it
+            //   at 1 so GS/OS doesn't see a spurious disk-change on boot.
+            //   Runtime hot-inserts leave disk_switched=0 (from removal) so GS/OS
+            //   detects the media change via /DISKCHANGE sense and discovers the new disk.
             // The firmware clears the latch by setting it back to 1 via DskchgClear command.
             if (!DISK_MOUNTED && prev_disk_mounted) begin
                 disk_switched <= 1'b0;  // MAME: call_unload() sets m_dskchg=0
@@ -622,9 +644,12 @@ module flux_drive (
 `endif
             end
             if (DISK_MOUNTED && !prev_disk_mounted) begin
-                disk_switched <= 1'b1;  // MAME: device_start() m_dskchg=1 when exists()
+                // Any insertion: set disk_switched=0 ("media changed") so GS/OS detects it.
+                // The firmware clears this via DskchgClear after acknowledging the disk.
+                // For cold-boot mounts, the ROM's initial IWM probe handles the transition.
+                disk_switched <= 1'b0;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: disk_switched SET by insertion (cold-start normal)", DRIVE_ID);
+                $display("FLUX_DRIVE[%0d]: disk_switched CLEAR by insertion (media changed)", DRIVE_ID);
 `endif
             end
             prev_disk_mounted <= DISK_MOUNTED;

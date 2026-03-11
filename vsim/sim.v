@@ -476,19 +476,45 @@ wire        woz_ctrl_track_load_complete;  // Pulses when track load finishes
 wire [31:0] woz_ctrl_flux_total_ticks;
 
 // Mount detection for WOZ controller (index 5)
+// On disk swap (mount while already mounted), create a 1-cycle glitch:
+//   woz_ctrl_mount goes 1→0 for 1 cycle, then back to 1 on the next cycle.
+//   This gives the controller a falling+rising edge to trigger a rescan,
+//   matching MiSTer behavior where a single mount pulse with new size arrives.
 reg         img_mounted5_d = 0;
-reg         woz_ctrl_mount = 0;          
+reg         woz_ctrl_mount = 0;
 reg         woz_ctrl_change = 0;
-        
+reg         woz_ctrl_glitch = 0;  // 1-cycle flag to restore mount after glitch
+
 always @(posedge clk_sys) begin
     img_mounted5_d <= img_mounted[5];
+
+    // Second phase of glitch: restore mount to 1
+    if (woz_ctrl_glitch) begin
+        woz_ctrl_mount  <= 1'b1;
+        woz_ctrl_glitch <= 1'b0;
+`ifdef SIMULATION
+        $display("WOZ_CTRL: Glitch restore - woz_ctrl_mount back to 1 (disk swap complete)");
+`endif
+    end
+
     // Detect rising edge of img_mounted[5]
     if (~img_mounted5_d & img_mounted[5]) begin
-        woz_ctrl_mount  <= (img_size != 0);
-        woz_ctrl_change <= ~woz_ctrl_change;
+        if (woz_ctrl_mount && (img_size != 0)) begin
+            // Disk swap: already mounted, new disk arriving
+            // Drive mount to 0 this cycle; glitch flag restores it next cycle
+            woz_ctrl_mount  <= 1'b0;
+            woz_ctrl_glitch <= 1'b1;
 `ifdef SIMULATION
-        $display("WOZ_CTRL: Mount detected for index 5 (size=%0d)", img_size);
-`endif 
+            $display("WOZ_CTRL: Disk swap detected for index 5 (size=%0d) - glitching mount", img_size);
+`endif
+        end else begin
+            // Fresh mount or eject
+            woz_ctrl_mount  <= (img_size != 0);
+`ifdef SIMULATION
+            $display("WOZ_CTRL: Mount detected for index 5 (size=%0d)", img_size);
+`endif
+        end
+        woz_ctrl_change <= ~woz_ctrl_change;
     end
 end
 
@@ -569,16 +595,35 @@ wire [31:0] woz_ctrl_525_flux_total_ticks;
 wire        woz_525_type_mismatch;
 
 // Mount detection for 5.25" WOZ controller (index 4)
+// Same glitch mechanism as 3.5" - see comments above
 reg         img_mounted4_d = 0;
 reg         woz_ctrl_525_mount = 0;
+reg         woz_ctrl_525_glitch = 0;
 
 always @(posedge clk_sys) begin
     img_mounted4_d <= img_mounted[4];
-    if (~img_mounted4_d & img_mounted[4]) begin
-        woz_ctrl_525_mount <= (img_size != 0);
+
+    if (woz_ctrl_525_glitch) begin
+        woz_ctrl_525_mount  <= 1'b1;
+        woz_ctrl_525_glitch <= 1'b0;
 `ifdef SIMULATION
-        $display("WOZ_CTRL_525: Mount detected for index 4 (size=%0d)", img_size);
+        $display("WOZ_CTRL_525: Glitch restore - mount back to 1 (disk swap complete)");
 `endif
+    end
+
+    if (~img_mounted4_d & img_mounted[4]) begin
+        if (woz_ctrl_525_mount && (img_size != 0)) begin
+            woz_ctrl_525_mount  <= 1'b0;
+            woz_ctrl_525_glitch <= 1'b1;
+`ifdef SIMULATION
+            $display("WOZ_CTRL_525: Disk swap detected for index 4 (size=%0d) - glitching mount", img_size);
+`endif
+        end else begin
+            woz_ctrl_525_mount <= (img_size != 0);
+`ifdef SIMULATION
+            $display("WOZ_CTRL_525: Mount detected for index 4 (size=%0d)", img_size);
+`endif
+        end
     end
 end
 

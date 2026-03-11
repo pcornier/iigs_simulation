@@ -3756,6 +3756,38 @@ std::string disk_image2 = "";  // HDD unit 1 (--disk2)
 std::string woz_image = "";  // WOZ disk image (flux-based)
 int woz_mount_index = -1;     // Auto-detected: 4=5.25", 5=3.5"
 
+// Returns 4 for 5.25", 5 for 3.5", -1 on error
+static int detectWozType(const char* filepath) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) {
+        printf("WARNING: Could not open %s for format detection\n", filepath);
+        return -1;
+    }
+    unsigned char hdr[22];
+    int result = -1;
+    if (fread(hdr, 1, 22, f) == 22) {
+        if (hdr[0] == 'W' && hdr[1] == 'O' && hdr[2] == 'Z' &&
+            (hdr[3] == '1' || hdr[3] == '2')) {
+            unsigned char disk_type = hdr[21];
+            if (disk_type == 1) {
+                result = 4;
+                printf("Detected 5.25\" WOZ image: %s\n", filepath);
+            } else if (disk_type == 2) {
+                result = 5;
+                printf("Detected 3.5\" WOZ image: %s\n", filepath);
+            } else {
+                printf("WARNING: Unknown WOZ disk_type %d in %s\n", disk_type, filepath);
+            }
+        } else {
+            printf("WARNING: %s does not have a valid WOZ header\n", filepath);
+        }
+    } else {
+        printf("WARNING: Could not read WOZ header from %s\n", filepath);
+    }
+    fclose(f);
+    return result;
+}
+
 // Key injection functionality
 // ---------------------------
 struct KeyInjection {
@@ -4297,41 +4329,8 @@ int main(int argc, char** argv, char** env) {
         } else if (strcmp(argv[i], "--woz") == 0 && i + 1 < argc) {
             woz_image = argv[i + 1];
             i++;
-            // Auto-detect WOZ format by reading INFO chunk disk_type
-            {
-                FILE *f = fopen(woz_image.c_str(), "rb");
-                if (f) {
-                    unsigned char hdr[22];
-                    if (fread(hdr, 1, 22, f) == 22) {
-                        // Check WOZ signature (WOZ1 or WOZ2)
-                        if (hdr[0] == 'W' && hdr[1] == 'O' && hdr[2] == 'Z' &&
-                            (hdr[3] == '1' || hdr[3] == '2')) {
-                            // Byte 21 = disk_type in INFO chunk: 1=5.25", 2=3.5"
-                            unsigned char disk_type = hdr[21];
-                            if (disk_type == 1) {
-                                woz_mount_index = 4;
-                                printf("Detected 5.25\" WOZ image: %s (mounting to index 4)\n", woz_image.c_str());
-                            } else if (disk_type == 2) {
-                                woz_mount_index = 5;
-                                printf("Detected 3.5\" WOZ image: %s (mounting to index 5)\n", woz_image.c_str());
-                            } else {
-                                woz_mount_index = 5;
-                                printf("WARNING: Unknown WOZ disk_type %d in %s, defaulting to index 5 (3.5\")\n", disk_type, woz_image.c_str());
-                            }
-                        } else {
-                            printf("WARNING: %s does not have a valid WOZ header, defaulting to index 5\n", woz_image.c_str());
-                            woz_mount_index = 5;
-                        }
-                    } else {
-                        printf("WARNING: Could not read WOZ header from %s, defaulting to index 5\n", woz_image.c_str());
-                        woz_mount_index = 5;
-                    }
-                    fclose(f);
-                } else {
-                    printf("WARNING: Could not open %s for format detection\n", woz_image.c_str());
-                    woz_mount_index = 5;
-                }
-            }
+            woz_mount_index = detectWozType(woz_image.c_str());
+            if (woz_mount_index < 0) woz_mount_index = 5;  // Default to 3.5"
         } else if (strcmp(argv[i], "--send-keys") == 0 && i + 1 < argc) {
             // Parse frame:keys format
             std::string arg = argv[i + 1];
@@ -4810,6 +4809,38 @@ int main(int argc, char** argv, char** env) {
 			ImGui::EndTooltip();
 		}
 
+		// Floppy drives
+		ImGui::Separator();
+		ImGui::Text("Floppy Drives:");
+
+		// 3.5" WOZ drive (index 5)
+		ImGui::Text("3.5\":"); ImGui::SameLine();
+		if (blockdevice.IsMounted(5)) {
+			ImGui::Text("%s", blockdevice.disk_name[5].c_str()); ImGui::SameLine();
+			if (ImGui::Button("Eject 3.5\"")) blockdevice.EjectDisk(5);
+			ImGui::SameLine();
+			if (ImGui::Button("Swap 3.5\""))
+				ImGuiFileDialog::Instance()->OpenDialog("MountWOZ35", "Select WOZ Image", ".woz", ".");
+		} else {
+			ImGui::Text("(empty)"); ImGui::SameLine();
+			if (ImGui::Button("Mount 3.5\""))
+				ImGuiFileDialog::Instance()->OpenDialog("MountWOZ35", "Select WOZ Image", ".woz", ".");
+		}
+
+		// 5.25" WOZ drive (index 4)
+		ImGui::Text("5.25\":"); ImGui::SameLine();
+		if (blockdevice.IsMounted(4)) {
+			ImGui::Text("%s", blockdevice.disk_name[4].c_str()); ImGui::SameLine();
+			if (ImGui::Button("Eject 5.25\"")) blockdevice.EjectDisk(4);
+			ImGui::SameLine();
+			if (ImGui::Button("Swap 5.25\""))
+				ImGuiFileDialog::Instance()->OpenDialog("MountWOZ525", "Select WOZ Image", ".woz", ".");
+		} else {
+			ImGui::Text("(empty)"); ImGui::SameLine();
+			if (ImGui::Button("Mount 5.25\""))
+				ImGuiFileDialog::Instance()->OpenDialog("MountWOZ525", "Select WOZ Image", ".woz", ".");
+		}
+
 		ImGui::End();
 
 		// Debug log window
@@ -5008,6 +5039,33 @@ int main(int argc, char** argv, char** env) {
 			ImGuiFileDialog::Instance()->Close();
 		}
 
+		// File dialog for 3.5" WOZ mount
+		if (ImGuiFileDialog::Instance()->Display("MountWOZ35")) {
+			if (ImGuiFileDialog::Instance()->IsOk()) {
+				std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+				int wozType = detectWozType(path.c_str());
+				if (wozType == 5 || wozType == -1) {
+					blockdevice.MountDisk(path, 5);
+				} else {
+					printf("WARNING: Selected a 5.25\" WOZ for 3.5\" slot\n");
+				}
+			}
+			ImGuiFileDialog::Instance()->Close();
+		}
+
+		// File dialog for 5.25" WOZ mount
+		if (ImGuiFileDialog::Instance()->Display("MountWOZ525")) {
+			if (ImGuiFileDialog::Instance()->IsOk()) {
+				std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+				int wozType = detectWozType(path.c_str());
+				if (wozType == 4 || wozType == -1) {
+					blockdevice.MountDisk(path, 4);
+				} else {
+					printf("WARNING: Selected a 3.5\" WOZ for 5.25\" slot\n");
+				}
+			}
+			ImGuiFileDialog::Instance()->Close();
+		}
 
 #ifndef DISABLE_AUDIO
 

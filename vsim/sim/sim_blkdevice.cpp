@@ -36,25 +36,58 @@ QData* img_size=NULL;
 
 
 void SimBlockDevice::MountDisk( std::string file, int index) {
+	bool was_mounted = disk[index].is_open();
+	// Close existing disk if already mounted
+	if (was_mounted) {
+		printf("BLKDEV: Closing existing disk %d before re-mount\n", index);
+		disk[index].close();
+	}
 	disk[index].open(file.c_str(), std::ios::out | std::ios::in | std::ios::binary | std::ios::ate);
         if (disk[index]) {
-           // we shouldn't do the actual mount here..
-           disk_size[index]= disk[index].tellg();
+           long int new_size = disk[index].tellg();
            disk[index].seekg(0);
-           mountQueue[index]=1;
-           printf("BLKDEV: disk %d inserted (%s) size=%ld bytes\n", index, file.c_str(), disk_size[index]);
+           // Store basename for UI display
+           std::string basename = file;
+           size_t slash = file.find_last_of("/\\");
+           if (slash != std::string::npos)
+               basename = file.substr(slash + 1);
+           disk_name[index] = basename;
+           printf("BLKDEV: disk %d inserted (%s) size=%ld bytes\n", index, file.c_str(), new_size);
            if (index == 0) {
                // NIB floppy format check: 232960 = 35 tracks × 6656 bytes/track
-               if (disk_size[index] == 232960) {
+               if (new_size == 232960) {
                    printf("BLKDEV: Detected 5.25\" NIB format (35 tracks × 6656 bytes)\n");
                } else {
-                   printf("BLKDEV: WARNING - Floppy size %ld doesn't match expected NIB size 232960\n", disk_size[index]);
+                   printf("BLKDEV: WARNING - Floppy size %ld doesn't match expected NIB size 232960\n", new_size);
                }
            }
+           // MiSTer behavior: single mount pulse with new size, whether fresh or swap
+           // For swap, Verilog side handles the rescan via 1-cycle glitch on woz_ctrl_mount
+           disk_size[index] = new_size;
+           mountQueue[index] = 1;
+           header_size[index] = 0;
+           if (was_mounted)
+               printf("BLKDEV: Disk swap for drive %d (single pulse, size=%ld)\n", index, new_size);
+           else
+               printf("BLKDEV: Fresh mount for drive %d (size=%ld)\n", index, new_size);
         }else {
 		fprintf(stderr,"BLKDEV ERROR: Failed to open: %s\n",file.c_str());
 	}
 
+}
+
+void SimBlockDevice::EjectDisk(int index) {
+	if (disk[index].is_open()) {
+		disk[index].close();
+	}
+	disk_size[index] = 0;
+	mountQueue[index] = 1;  // Triggers mount pulse with size=0, Verilog sees unmount
+	disk_name[index].clear();
+	printf("BLKDEV: disk %d ejected\n", index);
+}
+
+bool SimBlockDevice::IsMounted(int index) {
+	return disk[index].is_open();
 }
 
 
@@ -136,7 +169,6 @@ void SimBlockDevice::BeforeEval(int cycles)
            // Verilog side latches state on rising edge (WOZ) or level (HDD), so pulse is sufficient
            printf("BLKDEV: Mount flag cleared for drive %d\n", i);
         bitclear(*img_mounted,i) ;
-        //*img_size = 0;
     } else { if (!reading && !writing && ack_delay>0) ack_delay--; }
 
     // start reading when sd_rd pulses high
