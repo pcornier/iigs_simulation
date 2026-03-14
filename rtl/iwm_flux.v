@@ -667,16 +667,17 @@ module iwm_flux (
             end
 
             if (CLK_7M_EN) begin
-                // Minimal MAME-like write underrun: if we entered write mode (Q7=1) but no data writes
-                // occur (we don't implement writes yet), clear WHD bit6 after a short delay so ROM
-                // polling loops can proceed.
-                if (m_rw_mode && m_whd[6]) begin
+                // Write underrun timer: clears WHD bit 6 if write mode is entered
+                // but no data is written. Once the write state machine is actively
+                // shifting (rw_state != S_IDLE), bit 6 is managed by the state
+                // machine's underrun detection at SW_WINDOW_END, so disable the timer.
+                if (m_rw_mode && m_whd[6] && rw_state == S_IDLE) begin
                     if (write_underrun_cnt != 10'd0) begin
                         write_underrun_cnt <= write_underrun_cnt - 10'd1;
                     end else begin
                         m_whd <= m_whd & 8'hBF;
                     end
-                end else begin
+                end else if (!m_rw_mode) begin
                     write_underrun_cnt <= 10'd0;
                 end
             end
@@ -699,7 +700,8 @@ module iwm_flux (
                             // Write mode: CPU has written new data - load m_wsh and start shifting
                             m_wsh <= m_data;
                             write_data_gen <= m_data_gen;
-                            m_whd <= m_whd | 8'h80;  // Byte consumed, signal ready for next
+                            m_whd <= m_whd | 8'hC0;  // Byte consumed + no underrun (bits 7,6)
+                            write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                             write_bit_count <= 3'd0;
                             FLUX_WRITE_STROBE <= 1'b0;
                             rw_state <= SW_WINDOW_MIDDLE;
@@ -1387,14 +1389,23 @@ module iwm_flux (
                                 $display("IWM_FLUX: WRITE_UNDERRUN cycle=%0d data_gen=%0d (continuing)",
                                          debug_cycle, m_data_gen);
 `endif
-                            end else begin
-                                // Continue writing - update gen snapshot, load next half window
+                            end else if (write_bit_count == 3'd0) begin
+                                // Byte boundary with new CPU data available:
+                                // consume the byte and signal ready for next.
+                                // (MAME: SW_WINDOW_LOAD non-underrun path)
                                 write_data_gen <= m_data_gen;
-                                m_whd <= m_whd | 8'h80;  // Byte consumed, signal ready for next (MAME: SW_WINDOW_LOAD)
+                                m_whd <= m_whd | 8'hC0;  // Byte consumed + no underrun (bits 7,6)
+                                write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                                 // In sync mode, m_wsh was loaded directly by CPU write.
                                 // In async mode, reload from data buffer at byte boundary.
                                 if (is_async)
                                     m_wsh <= m_data;
+                                rw_state <= SW_WINDOW_MIDDLE;
+                                load_half_window();
+                                FLUX_WRITE_STROBE <= 1'b0;
+                            end else begin
+                                // Mid-byte: just advance to next bit-cell,
+                                // don't touch write_data_gen/m_whd/m_wsh.
                                 rw_state <= SW_WINDOW_MIDDLE;
                                 load_half_window();
                                 FLUX_WRITE_STROBE <= 1'b0;

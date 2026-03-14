@@ -1,13 +1,17 @@
 # WOZ Write Support - Progress & Session Notes
 
-## Current Status: 5.25" PASSING, 3.5" GS/OS HANDSHAKE FIX APPLIED (needs manual verification)
+## Current Status: Bug #6 fixed (two sub-fixes), Bug #7 fix pending test
 
 **Branch:** `woz-write-support` (pushed to GitHub)
 
 ### Test Results
 - **5.25" WOZ floppy R/W test: 06/06 ALL TESTS PASSED**
 - **3.5" ProDOS test: FAILS** (SmartPort protocol not supported for WOZ drives — see below)
-- **3.5" GS/OS direct IWM write: FIX APPLIED** (needs manual verification — see GS/OS Lockup Bug below)
+- **3.5" GS/OS format: Bug #5 FIXED, Bug #6 FIXED (two sub-fixes), Bug #7 pending test**
+  - Bug #5: write_data_gen premature advancement → 3661 underruns → fixed
+  - Bug #6a: m_whd bit 6 not re-set during active write → DONETRK check fails
+  - Bug #6b: underrun timer clears bit 6 even during active shifting → DONETRK still fails
+  - After Bug #6b fix: needs re-test
 - **All 7 HDD regression tests: PASS**
 
 ---
@@ -110,6 +114,78 @@ case SW_WINDOW_LOAD:
 2. S_IDLE START_WRITE: add `m_whd <= m_whd | 8'h80` when consuming first byte
 3. SW_WINDOW_END non-underrun path: add `m_whd <= m_whd | 8'h80` when consuming byte at boundary
 
+### Bug #5: SW_WINDOW_END Updates write_data_gen at Every Bit (3.5" GS/OS Format — FIXED)
+
+**Symptom:** GS/OS 3.5" format operation fails with error $027. Log shows 1 START_WRITE but 3661 WRITE_UNDERRUN events. The CPU IS writing data (data_gen increments between underruns), but the write state machine keeps detecting underruns at every byte boundary.
+
+**Root cause:** In `iwm_flux.v` SW_WINDOW_END state, the `else` branch (line 1390) was a catch-all that handled both mid-byte bit transitions (`write_bit_count != 0`) and actual byte boundaries (`write_bit_count == 0` with new data). The branch unconditionally executed:
+```verilog
+write_data_gen <= m_data_gen;   // "consume" the CPU byte
+m_whd <= m_whd | 8'h80;         // signal "ready for next"
+if (is_async) m_wsh <= m_data;  // reload shift register
+```
+
+This ran 7 times per byte (at every mid-byte SW_WINDOW_END), prematurely advancing `write_data_gen` to match `m_data_gen`. When the actual byte boundary arrived (`write_bit_count == 0`), `m_data_gen == write_data_gen` was always true → spurious underrun.
+
+The mid-byte `m_wsh <= m_data` also corrupted the shift register partway through shifting out a byte, and the repeated `m_whd |= 0x80` signals misleadingly told the CPU it was ready for more data.
+
+**Fix:** Split the `else` into two cases in `iwm_flux.v`:
+1. `write_bit_count == 0` (byte boundary with new data): update `write_data_gen`, `m_whd`, `m_wsh`
+2. `write_bit_count != 0` (mid-byte): just advance to next bit-cell without touching any state
+
+**How we found it:** The log showed `data_gen` incrementing between underruns (CPU was writing), yet every byte boundary check found matching gen values. Tracing the code revealed the `else` branch consumed the gen counter at every bit-cell, not just byte boundaries.
+
+### Bug #6: Write Handshake Bit 6 Not Maintained During Active Write (3.5" GS/OS Format — FIXED, two sub-fixes)
+
+**Symptom:** After Bug #5 fix, GS/OS format writes a full track (10,537 DATA_WRITEs, 84,355 BRAM writes, 0 underruns) but still fails with error $27. The ROM's DONETRK routine checks write handshake bit 6 and finds it cleared.
+
+**Root cause:** Two related issues with the write handshake register (`m_whd`) bit 6 ("no underrun has occurred"):
+
+#### Sub-fix A: Byte consume only sets bit 7, not bit 6
+
+At `S_IDLE` START_WRITE (line 702) and `SW_WINDOW_END` byte consume (line 1395), the code did `m_whd <= m_whd | 8'h80` — setting only bit 7. Bit 6 was set once on write mode entry (`8'hC0`) but never re-asserted during active writing.
+
+**Fix:** Changed `8'h80` to `8'hC0` at both locations, and added `write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M` to reload the underrun timer.
+
+#### Sub-fix B: Underrun timer fires during active write shifting
+
+The write underrun timer (`write_underrun_cnt`, 64 7MHz cycles ≈ 9µs) runs whenever `m_rw_mode && m_whd[6]`. It was designed as a fallback for "write mode entered but no data written" (the original comment says "we don't implement writes yet"). But it runs continuously — even while the write shift register is actively shifting bits. Since a single byte takes ~16µs (8 bits × 28 14MHz cycles ÷ 2) and the timer fires at 9µs, bit 6 gets cleared mid-byte.
+
+Even with sub-fix A reloading the timer at byte boundaries, the timer fires between the last sector's final byte and the DONETRK check — a gap much larger than 9µs due to checksum computation, sync bytes, etc.
+
+**Fix:** Added `rw_state == S_IDLE` condition to the timer:
+```verilog
+if (m_rw_mode && m_whd[6] && rw_state == S_IDLE) begin
+```
+This way the timer only runs before the first byte is written (handling the "write mode entered but no data" case). Once the state machine is actively shifting (`rw_state != S_IDLE`), bit 6 is managed exclusively by the state machine's underrun detection at `SW_WINDOW_END` (line 1368-1377), which correctly clears bit 6 only on actual byte-level underrun.
+
+Also changed `else` to `else if (!m_rw_mode)` for the timer reset, so the counter isn't spuriously reset to 0 while writing.
+
+**ROM DONETRK logic** (from `ad35driver_subroutines.asm`):
+```
+DONETRK:
+  FF:4272  BIT $C0EC    ; Read handshake: V = bit 6 ("no underrun")
+  FF:4275  PHP          ; Save V
+  @100:
+  FF:4276  BIT $C0EC    ; Wait for underrun (V=0)
+  FF:4279  BVS @100     ; Loop while V=1 (still writing)
+  FF:427B  LDA $C0EE    ; Switch to read mode
+  FF:427E  LDA $C0EC    ; Read data register
+  FF:4281  PLP          ; Restore V from first BIT
+  FF:4282  SEC          ; Assume error
+  FF:4283  LDA #$34     ; "write underrun error for debug"
+  FF:4285  BVC WTRKERR  ; If V was 0 at FF:4272 → error (premature underrun)
+  FF:4287  LDA #$00     ; V was 1 → success
+  FF:4289  CLC
+```
+
+The ROM expects:
+1. First `BIT $C0EC`: bit 6=1 (V=1, write still active, no underrun)
+2. Poll loop: waits until bit 6=0 (V=0, underrun = last byte drained)
+3. If first check had V=0: premature underrun → error $34 → escalates to error $27
+
+**How we found it:** The DONETRK `BIT $C0EC` at FF:4272 returned `$3F` (bit 6=0, V=0) in both the pre-fix and post-sub-fix-A logs. Tracing the underrun timer at lines 669-682 showed it fires at 64 7MHz cycles regardless of active shifting.
+
 ---
 
 ## 3.5" ProDOS Write Failure (NOT a write path bug)
@@ -168,6 +244,20 @@ The ProDOS test (`FLOPPY_RW_TEST.S`) fails for 3.5" drives with error $27 (I/O e
 - Our code had no equivalent — m_whd bit 7 was never restored after being cleared
 - Fix: set bit 7 at write mode entry (`|= 0xC0`), at START_WRITE, and at byte boundary consumption
 
+### Phase 6: GS/OS 3.5" format — write_data_gen premature advancement (Bug #5)
+- Format log: 10,537 DATA_WRITEs, 3,661 WRITE_UNDERRUNs, 84,355 BRAM writes
+- CPU writing data (data_gen incrementing) but underruns at every byte boundary
+- Traced: `else` catch-all in SW_WINDOW_END ran at every bit, not just byte boundaries
+- Fix: split into `write_bit_count == 0` (byte boundary) vs else (mid-byte)
+- After fix: 0 underruns, full track written
+
+### Phase 7: GS/OS 3.5" format — DONETRK handshake bit 6 failure (Bug #6)
+- After Bug #5 fix: 0 underruns, 10,537 data writes, but format still returns error $27
+- ROM's DONETRK at FF:4272 reads handshake = $3F (bit 6=0, V=0) → write underrun error $34
+- **Sub-fix A:** Byte consume used `m_whd |= 0x80` (bit 7 only), not `0xC0` (bits 7+6). Fixed.
+- **Sub-fix B (after second failed test):** Underrun timer at lines 669-682 clears bit 6 after 64 7MHz cycles, even during active shifting. Timer fires mid-byte and between ROM instructions during the write loop. Fixed by adding `rw_state == S_IDLE` guard so timer only runs before first byte.
+- After both sub-fixes: handshake returns $FF/$BF during write (bit 6 set). Pending test.
+
 ---
 
 ## Test Commands
@@ -186,7 +276,15 @@ cd vsim
 ```
 Expected: 00/06 FAILURES (SmartPort $C3 response not implemented)
 
-### 3.5" GS/OS write test (MANUAL — fix applied, needs verification)
+### 3.5" GS/OS format test (Bug #6 fixed, pending verification)
+```bash
+cd vsim
+./obj_dir/Vemu --woz blank.woz --disk gsos.hdv
+```
+Steps: Boot GS/OS → it detects blank floppy → prompts to format → should succeed
+Expected: Format completes, writes all 80 tracks (160 sides), no error $27
+
+### 3.5" GS/OS write test (MANUAL — needs verification)
 ```bash
 cd vsim
 ./obj_dir/Vemu --woz TEST.woz --disk gsos.hdv
@@ -223,6 +321,16 @@ grep "FLUX_WR" output.log          # (requires adding debug back to flux_drive.v
 
 # Count write underruns (should be 0 in normal operation, thousands = stuck)
 grep -c "WRITE_UNDERRUN" output.log
+
+# Check DONETRK handshake bit 6 (should be $FF or $7F for success)
+grep "FF:4272" output.log          # DONETRK first BIT check
+
+# Count write mode entries by type
+grep -c "mode=0f" output.log       # Direct IWM (3.5" GS/OS format)
+grep -c "mode=07" output.log       # SmartPort (boot/ProDOS)
+
+# Trace drive ready state
+grep -a "Drive ready\|motor_spinning\|Motor ON\|Motor OFF" output.log
 ```
 
 ---
@@ -230,6 +338,7 @@ grep -c "WRITE_UNDERRUN" output.log
 ## Remaining Work
 
 ### Must Do
+- [ ] Test Bug #6 fix (format blank WOZ floppy in GS/OS)
 - [ ] Manually verify 3.5" GS/OS write fix (delete file from WOZ floppy in GS/OS)
 - [ ] Verify save persistence: after writes, seek to different track (triggers dirty-flag save-on-seek via `S_SAVE_TRACK`), then re-load WOZ file and confirm data persists
 
@@ -247,9 +356,15 @@ grep -c "WRITE_UNDERRUN" output.log
 
 ### Write Shift Register (iwm_flux.v)
 - **Sync mode** (mode=$00, 5.25" Disk II): CPU writes go directly to `m_wsh` via `if (!is_async && m_rw_mode) m_wsh <= DATA_IN;`
-- **Async mode** (mode=$0F, 3.5" drives): `m_wsh` loaded from `m_data` at byte boundaries
+- **Async mode** (mode=$0F, 3.5" drives): CPU writes go to `m_data`, loaded to `m_wsh` at byte boundaries
 - **Underrun behavior**: MAME-compatible — clear WHD bit 6 but CONTINUE writing (don't stop). The CPU timing budget is tight (~32µs per byte) and underruns are normal during self-sync gaps.
 - **Bit cell timing**: `base_half_window` = 28 (5.25") or 14 (3.5"), full window = 56 or 28 14MHz cycles
+
+### Write Handshake Register (m_whd) Bit Semantics
+- **Bit 7**: "ready for next byte" — set when write state machine consumes a byte, cleared when CPU writes new data
+- **Bit 6**: "no underrun" — set when entering write mode and at each byte consume, cleared ONLY on actual underrun (shift register empties at byte boundary with no new CPU data)
+- **Underrun timer**: Only active in S_IDLE state (before first byte written). Clears bit 6 after 64 7MHz cycles (~9µs) if no data arrives. Disabled during active shifting — state machine manages bit 6 exclusively.
+- **DONETRK check**: ROM reads bit 6 via `BIT $C0EC` (sets V from bit 6). V=1 means write was active (success). V=0 means premature underrun (error $34).
 
 ### BRAM Write Path (flux_drive.v)
 - 1-cycle delayed read-modify-write: `WRITE_STROBE` sets address, next cycle reads BRAM data and writes modified byte
@@ -272,3 +387,15 @@ grep -c "WRITE_UNDERRUN" output.log
 - **5.25" (mode=$00, sync):** CPU writes directly load `m_wsh`. `smartport_mode=0`. Data writes always bump `m_data_gen`.
 - **3.5" GS/OS (mode=$0F, async):** CPU writes go to `m_data`, loaded to `m_wsh` at byte boundaries. `smartport_mode=0` (bit 3=1). Direct IWM programming.
 - **3.5" SmartPort (mode=$07, async):** SmartPort command protocol. `smartport_mode=1` initially (bit 3=0, bit 1=1), but mode changes to $0F during data transfer. SmartPort device response ($C3) not implemented for WOZ drives.
+
+### ROM Format Flow (ad35driver_subroutines.asm)
+Key routines in `Bank FF/ad35driver_subroutines.asm`:
+- **FORMAT** (FF:4110): Main entry — calls WRITETRK for each track/side
+- **WRITETRK** (FF:4193): Calls initwtrk, WaitRdyTO, then the write loop
+- **WTNOWAIT** (FF:41C0): Sets up IWM write mode, writes sectors
+- **DONETRK** (FF:4272): Post-write handshake check (bit 6 = V flag)
+- **FMTERR** (FF:4189): Error handler — loads error $27, calls eject
+- **EJECT** (FF:48AE): Seeks to track 79, turns motor off, waits
+- **WaitRdyTO** (FF:4925): Polls /READY sense ($0B) for up to 1500ms
+- **ReadBit/WriteBit** (FF:497B/4985): Sony drive sense/command via LSTRB
+- **SDCLINES** (FF:498F): Sets CA0/CA1/CA2/SEL control lines for Sony commands
