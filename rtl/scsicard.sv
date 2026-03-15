@@ -100,10 +100,15 @@ module scsicard
       ncr_dack <= 1'b0;
       dma_select <= 1'b0;
 
-      if (ncr_select && ph2_en) begin: ncr_debug
-	 if (RD) $display("[:sl7:scsi] Read ncr register %0x = %x", A[2:0], D_OUT);
-	 else $display("[:sl7:scsi] Write ncr register 0%x = %x", A[2:0], D_IN);
-      end: ncr_debug
+//      if (ncr_select && ph2_en) begin: ncr_debug
+//	 if (RD) $display("[:sl7:scsi] Read ncr register %0x = %x", A[2:0], D_OUT);
+//	 else $display("[:sl7:scsi] Write ncr register 0%x = %x", A[2:0], D_IN);
+//      end: ncr_debug
+
+//      if (cardreg_select && ph2_en) begin: cardreg_debug
+//	 if (RD) $display("[:sl7:scsi] Read card register %0x = %x", A[3:0], D_OUT);
+//	 else $display("[:sl7:scsi] Write card register %0x = %x", A[3:0], D_IN);
+//      end: cardreg_debug
 
       if (cardreg_select) begin: cardregs
          if (RD) begin: cardreg_read
@@ -124,34 +129,35 @@ module scsicard
          else if (~RD && ph2_en) begin: cardreg_write
             case (A[2:0])
               3'h0: begin: dma_write
-                 $display("[:sl7:scsi] DMA write %x", D_IN);
+                 //$display("[:sl7:scsi] DMA write %x", D_IN);
                  ncr_dack <= 1'b1;
                  dma_select <= 1'b1;
               end: dma_write
               3'h2: begin
-                 $display("[:sl7:scsi] bank %x", D_IN);
+                 //$display("[:sl7:scsi] bank %x", D_IN);
                  bank_reg <= D_IN;
               end
               3'h3: begin
+                 //$display("%m: Reset NCR5380");
                  ncr_reset <= 1'b1;
                  gs_dma_mode <= 1'b0;
               end
               3'h4: gs_dma_mode <= 1'b1;
               3'h5: gs_dma_mode <= 1'b0;
-              default: $display("[:sl7:scsi] write nonexistent cardreg %x", A[2:0]);
+              default: //$display("[:sl7:scsi] write nonexistent cardreg %x", A[2:0]);
             endcase
          end: cardreg_write
       end: cardregs
 
       if (gs_dma_select) begin: gs_dma
          if (RD) begin: gs_dma_read
-            $display("[:sl7:scsi] GS DMA read %x", ncr_dout);
+            //$display("[:sl7:scsi] GS DMA read %x", ncr_dout);
             gs_dma_dout <= ncr_dout;
             ncr_dack <= 1'b1;
             dma_select <= 1'b1;
          end: gs_dma_read
          else begin: gs_dma_write
-            $display("[:sl7:scsi] GS DMA write %x", D_IN);
+            //$display("[:sl7:scsi] GS DMA write %x", D_IN);
             ncr_dack <= 1'b1;
             dma_select <= 1'b1;
          end: gs_dma_write

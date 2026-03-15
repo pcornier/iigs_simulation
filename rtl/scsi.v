@@ -396,14 +396,14 @@ always @(posedge clk) begin
 		if(phase == PHASE_IDLE) begin
 			if(sel && din[ID] && mounted) begin  // own id on bus during selection?
 				phase <= PHASE_CMD_IN;
-				$display("%m: PHASE_IDLE => PHASE_CMD_IN");
+				//$display("%m: PHASE_IDLE => PHASE_CMD_IN");
                         end
 		end
 
 		else if(phase == PHASE_CMD_IN) begin
 			// check if a full command is in the buffer
 			if(cmd_cpl) begin
-				$display("New command on target %d: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", ID, cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9]);
+				//$display("New command on target %d: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", ID, cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9]);
 				// is this a supported and valid command on an existing LUN?
 				if(cmd_ok && lun_ok) begin
 					// yes, continue
@@ -419,17 +419,17 @@ always @(posedge clk) begin
 					// these commands return data
 					if(cmd_read || cmd_inquiry || cmd_read_capacity || cmd_mode_sense || cmd_read_buffer || cmd_request_sense) begin
 						phase <= PHASE_DATA_OUT;
-						$display("%m: PHASE_CMD_IN => PHASE_DATA_OUT");
+						//$display("%m: PHASE_CMD_IN => PHASE_DATA_OUT");
 					end
 					// these commands receive dataa
 					else if(cmd_write || cmd_mode_select || cmd_write_buffer) begin
 						phase <= PHASE_DATA_IN;
-						$display("%m: PHASE_CMD_IN => PHASE_DATA_IN");
+						//$display("%m: PHASE_CMD_IN => PHASE_DATA_IN");
 					end
 					// and all other valid commands are just "ok"
 					else begin
 						phase <= PHASE_STATUS_OUT;
-						$display("%m: PHASE_CMD_IN => PHASE_DATA_IN");
+						//$display("%m: PHASE_CMD_IN => PHASE_STATUS_OUT");
 					end
 				end else begin
 					// no, report failure
@@ -443,7 +443,7 @@ always @(posedge clk) begin
 						s_asc <= S_ASC_ILLEGAL_CMD;
 					end
 					phase <= PHASE_STATUS_OUT;
-					$display ("%m: STATUS_CHECK_CONDITION");
+					//$display ("%m: STATUS_CHECK_CONDITION");
 				end
 			end
 		end
@@ -451,34 +451,34 @@ always @(posedge clk) begin
 		else if(phase == PHASE_DATA_OUT) begin
 			if(data_complete) begin
 			        phase <= PHASE_STATUS_OUT;
-			        $display("%m: PHASE_DATA_OUT => PHASE_STATUS_OUT");
+			        //$display("%m: PHASE_DATA_OUT => PHASE_STATUS_OUT");
 			end
 		end
 
 		else if(phase == PHASE_DATA_IN) begin
 			if(data_complete) begin
 				phase <= PHASE_STATUS_OUT;
-				$display("%m: PHASE_DATA_IN => PHASE_STATUS_OUT");
+				//$display("%m: PHASE_DATA_IN => PHASE_STATUS_OUT");
 			end
 		end
 
 		else if(phase == PHASE_STATUS_OUT) begin
 			if(status_sent) begin
 			    phase <= PHASE_MESSAGE_OUT;
-			    $display("%m: PHASE_DATA_OUT => PHASE_STATUS_OUT");
+			    //$display("%m: PHASE_STATUS_OUT => PHASE_MESSAGE_OUT");
 			end
 		end
 
 		else if(phase == PHASE_MESSAGE_OUT) begin
 		        if(message_sent) begin
                                 phase <= PHASE_IDLE;
-			        $display("%m: PHASE_MESSAGE_OUT => PHASE_IDLE");
+			        //$display("%m: PHASE_MESSAGE_OUT => PHASE_IDLE");
                         end
 		end
 
 		else begin
 			phase <= PHASE_IDLE;  // should never happen
-			$display("%m: default PHASE_IDLE; should never happen");
+			//$display("%m: default PHASE_IDLE; should never happen");
 		end
 	end
 end
