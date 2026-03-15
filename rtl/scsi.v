@@ -162,11 +162,12 @@ reg        mounted = 0;
 always @(posedge clk) begin
 	if (img_mounted) begin
 		if (|img_blocks) begin
-			capacity <= img_blocks;
+			capacity <= img_blocks - 1;
 			$display("Image mounted on target %d, size: %d", ID, img_blocks);
 			mounted <= 1;
-		end else
+		end else begin
 			mounted <= 0;
+		end
 	end
 end
 
