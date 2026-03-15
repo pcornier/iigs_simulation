@@ -132,6 +132,7 @@ wire [7:0] cmd_dout =
 		cmd_inquiry?inquiry_dout:
 		cmd_read_capacity?read_capacity_dout:
 		cmd_mode_sense?mode_sense_dout:
+		cmd_request_sense?request_sense_dout:
 		8'h00;
 
 // output of inquiry command, identify as "SEAGATE ST225N"
@@ -183,6 +184,13 @@ wire [7:0] mode_sense_dout =
 		(data_cnt == 32'd6 )?capacity[15:8]:
 		(data_cnt == 32'd7 )?capacity[7:0]:
 		(data_cnt == 32'd10 )?8'd2:
+		8'h00;
+
+wire [7:0] request_sense_dout =
+		(data_cnt == 32'd0 )?{1'b0, 7'h70}: // No information, fixed format, current data
+		(data_cnt == 32'd2 )?{4'b0, s_key}:
+		(data_cnt == 32'd7 )?8'd6:          // Additional sense length (n-7)
+		(data_cnt == 32'd12 )?s_asc:
 		8'h00;
 
 // buffer to store incoming commands
@@ -325,6 +333,7 @@ wire       cmd_mode_select = (op_code == 8'h15);
 wire       cmd_mode_sense = (op_code == 8'h1a);
 wire       cmd_test_unit_ready = (op_code == 8'h00);
 wire       cmd_read_capacity = (op_code == 8'h25);
+wire       cmd_request_sense = (op_code == 8'h03);
 wire       cmd_read_buffer = (op_code == 8'h3b);  // fake
 wire       cmd_write_buffer = (op_code == 8'h3c); // fake
 wire       cmd_verify6 = (op_code == 8'h13); // fake
@@ -333,7 +342,8 @@ wire       cmd_verify10 = (op_code == 8'h2f); // fake
 // valid command in buffer? TODO: check for valid command parameters
 wire  cmd_ok = cmd_read || cmd_write || cmd_inquiry || cmd_test_unit_ready ||
 		  cmd_read_capacity || cmd_mode_select || cmd_format || cmd_mode_sense ||
-		  cmd_read_buffer || cmd_write_buffer || cmd_verify6 || cmd_verify10;
+		  cmd_read_buffer || cmd_write_buffer || cmd_verify6 || cmd_verify10 ||
+		  cmd_request_sense;
 
 // latch parameters once command is complete
 reg [31:0] lba;
@@ -356,6 +366,25 @@ wire [31:0] lba10 = { cmd[2], cmd[3], cmd[4], cmd[5] };
 wire [8:0]  tlen6 = (cmd[4] == 0)?9'd256:{1'b0,cmd[4]};
 wire [15:0] tlen10 = { cmd[7], cmd[8] };
 
+// logical unit
+wire [2:0] lun = cmd1[7:5];
+wire lun_ok = (lun == 3'b000); // Only one LUN for now
+
+// sense data
+// SCSI Commands Reference Manual, 100293068, Rev. M June 2022; section 2.4.1.2
+// https://knowledge.seagate.com/files/staticfiles/support/docs/manual/Interface%20manuals/100293068m.pdf
+localparam S_KEY_NONE     = 4'h0;  // No error / no sense
+localparam S_KEY_NOTREADY = 4'h2;  // Not ready
+localparam S_KEY_ILLEGAL  = 4'h5;  // Illegal request
+
+localparam S_ASC_NOMEDIUM    = 8'h3A; // Medium not present
+localparam S_ASC_ILLEGAL_CMD = 8'h20; // Invalid/unsupported command
+localparam S_ASC_ILLEGAL_LUN = 8'h25; // Logical unit not supported
+
+// The ASCQ (Additional Sense Code Qualifier) byte is currently always 8'h00
+
+reg [3:0] s_key;
+reg [7:0] s_asc;
 
 // the 5380 changes phase in the falling edge, thus we monitor it
 // on the rising edge
@@ -374,15 +403,20 @@ always @(posedge clk) begin
 			// check if a full command is in the buffer
 			if(cmd_cpl) begin
 				$display("New command on target %d: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x", ID, cmd[0], cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6], cmd[7], cmd[8], cmd[9]);
-				// is this a supported and valid command?
-				if(cmd_ok) begin
+				// is this a supported and valid command on an existing LUN?
+				if(cmd_ok && lun_ok) begin
 					// yes, continue
 					status <= `STATUS_OK;
 
+					// preserve sense data for REQUEST SENSE, otherwise reset to ok
+					if (!cmd_request_sense) begin
+						s_key <= S_KEY_NONE;
+						s_asc <= 8'h00;
+					end
 					// continue according to command
 
 					// these commands return data
-					if(cmd_read || cmd_inquiry || cmd_read_capacity || cmd_mode_sense || cmd_read_buffer) begin
+					if(cmd_read || cmd_inquiry || cmd_read_capacity || cmd_mode_sense || cmd_read_buffer || cmd_request_sense) begin
 						phase <= PHASE_DATA_OUT;
 						$display("%m: PHASE_CMD_IN => PHASE_DATA_OUT");
 					end
@@ -399,6 +433,14 @@ always @(posedge clk) begin
 				end else begin
 					// no, report failure
 					status <= `STATUS_CHECK_CONDITION;
+					if (!lun_ok) begin
+						s_key <= S_KEY_ILLEGAL;
+						s_asc <= S_ASC_ILLEGAL_LUN;
+					end
+					else begin
+						s_key <= S_KEY_ILLEGAL;
+						s_asc <= S_ASC_ILLEGAL_CMD;
+					end
 					phase <= PHASE_STATUS_OUT;
 					$display ("%m: STATUS_CHECK_CONDITION");
 				end
