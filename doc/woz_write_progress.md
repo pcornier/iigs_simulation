@@ -1,17 +1,19 @@
 # WOZ Write Support - Progress & Session Notes
 
-## Current Status: Bug #6 fixed (two sub-fixes), Bug #7 fix pending test
+## Current Status: Bug #7 fixed (blank WOZ speed groups), pending test
 
 **Branch:** `woz-write-support` (pushed to GitHub)
 
 ### Test Results
 - **5.25" WOZ floppy R/W test: 06/06 ALL TESTS PASSED**
 - **3.5" ProDOS test: FAILS** (SmartPort protocol not supported for WOZ drives — see below)
-- **3.5" GS/OS format: Bug #5 FIXED, Bug #6 FIXED (two sub-fixes), Bug #7 pending test**
+- **3.5" GS/OS format: Bugs #5-#7 FIXED, pending test with new blank WOZ image**
   - Bug #5: write_data_gen premature advancement → 3661 underruns → fixed
-  - Bug #6a: m_whd bit 6 not re-set during active write → DONETRK check fails
-  - Bug #6b: underrun timer clears bit 6 even during active shifting → DONETRK still fails
-  - After Bug #6b fix: needs re-test
+  - Bug #6a: m_whd bit 6 not re-set during active write → DONETRK check fails → fixed
+  - Bug #6b: underrun timer clears bit 6 even during active shifting → DONETRK still fails → fixed
+  - Bug #6 result: DONETRK now passes, 10 tracks written successfully
+  - Bug #7: blank WOZ image has 51200 bits/track for ALL tracks, but Apple 3.5" needs
+    variable bit counts per speed group (75136 bits for outer tracks with 12 sectors) → fixed
 - **All 7 HDD regression tests: PASS**
 
 ---
@@ -185,6 +187,43 @@ The ROM expects:
 3. If first check had V=0: premature underrun → error $34 → escalates to error $27
 
 **How we found it:** The DONETRK `BIT $C0EC` at FF:4272 returned `$3F` (bit 6=0, V=0) in both the pre-fix and post-sub-fix-A logs. Tracing the underrun timer at lines 669-682 showed it fires at 64 7MHz cycles regardless of active shifting.
+
+### Bug #7: Blank WOZ Image Has Wrong Bit Count Per Track (3.5" GS/OS Format — FIXED)
+
+**Symptom:** After Bug #6 fix, DONETRK passes for all 10 tracks (write phase succeeds). But the VERIFY phase fails: GS/OS finds only 8 sectors per track instead of the expected 12 for track 0 (speed group 0). The verify finds duplicates and returns error $27.
+
+**Root cause:** The blank WOZ disk image (`tools/make_blank_woz.py`) used a fixed `BITS_PER_TRACK = 51200` for ALL 160 tracks. This is only correct for the innermost speed group (tracks 64-79, 8 sectors).
+
+Apple 3.5" drives use 5 speed groups with different motor RPMs. In the simulation, the rotation period = bit_count × 2µs (fixed bit cell time). Larger bit_count = slower rotation = more data capacity per track. The correct bit counts are:
+
+| Speed Group | Tracks | Sectors | RPM   | Bits/Track |
+|-------------|--------|---------|-------|------------|
+| 0           | 0-15   | 12      | ~394  | 75136      |
+| 1           | 16-31  | 11      | ~429  | 68896      |
+| 2           | 32-47  | 10      | ~472  | 62656      |
+| 3           | 48-63  | 9       | ~525  | 56416      |
+| 4           | 64-79  | 8       | ~590  | 51200      |
+
+With 51200 bits, track 0 only had room for ~8 sectors (8 × 6400 = 51200). The format wrote 12 sectors worth of data, but the last 4 wrapped around and overwrote the first 4. The verify then found only 8 unique sectors.
+
+**Fix:** Updated `tools/make_blank_woz.py` to use speed-group-dependent bit counts and block allocations. Each track group now gets the correct bit count. Also properly sets `largest_track` in the INFO chunk to the maximum blocks per track (19 for group 0).
+
+**How we found it:**
+1. Traced `IWM_PROLOG_OK` entries during verify — found 8 sectors at ~6360-bit spacing (51200/8 = 6400)
+2. Track 0 should have 12 sectors at ~4267-bit spacing (51200/12 would only be 4267 bits per sector — not enough room for sector data+headers)
+3. Calculated minimum bits needed: 12 sectors × ~6176 bits/sector = 74112 bits > 51200 available
+4. Confirmed `WOZ_CTRL: Stored track 0 to side0 RAM, bit_count=51200` in log
+5. After fix: `bit_count=75136` — enough for 12 sectors
+
+**Debug grep patterns:**
+```bash
+# Verify sector count during verify (should see 12 unique positions)
+grep "IWM_PROLOG_OK" format.log | awk -F'cycle=' '{if($2+0 >= START && $2+0 <= END) print}'
+# Check bit_count loaded by controller
+grep "Stored track" format.log
+# Check address mark spacing (should be ~6261 for 12 sectors in 75136 bits)
+grep "IWM_PROLOG_OK.*d5 aa 96" format.log
+```
 
 ---
 

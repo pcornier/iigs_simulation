@@ -505,7 +505,7 @@ module flux_drive (
             4'hF: sense_35 = 1'b1;
             4'h3: sense_35 = 1'b1;
             4'h5: sense_35 = 1'b1;
-            4'h6: sense_35 = DISK_WP;                  // WRPROT: 1=write-protected, 0=writable
+            4'h6: sense_35 = ~DISK_WP;                 // WRPROT sense: HIGH=writable, LOW=protected (ROM presets VSwrProt=1, EORs on sense HIGH)
             4'h7: sense_35 = 1'b1;
         endcase
         end
