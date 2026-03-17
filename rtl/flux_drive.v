@@ -183,6 +183,26 @@ module flux_drive (
     reg         flux_waiting_bram;      // Waiting for BRAM read latency
     reg         flux_is_continuation;   // Current byte was 0xFF (no transition, timing only)
 
+    // Weak-bit randomization: LFSR for pseudo-random flux timing in 0xFF gaps.
+    // Real analog hardware produces noise during gaps with no flux transitions.
+    // Copy protection (e.g., Arkanoid IIgs) relies on this randomness.
+    reg [15:0]  lfsr;
+
+    // MC3470 head window for bitstream mode weak-bit emulation (WOZ 2.1 spec).
+    // The MC3470 read amplifier has ~1 bit-cell latency through its filter chain.
+    // We model this with a 4-bit shift window: output is bit 1 (previous bit),
+    // not bit 0 (current bit). When all 4 low bits are zero, the MC3470 would
+    // amplify background noise — output random "fake" bits instead.
+    // Normal GCR data has max 2 consecutive zeros, so this only triggers on
+    // intentional weak-bit areas (copy protection).
+    reg [3:0]   head_window;
+
+    // Registered weak-bit counter: counts consecutive zero source bits.
+    // When >= 4, we're in a weak-bit area. Updated at bit boundaries.
+    reg [7:0]   zero_run_count;
+    // Registered fake-bit decision (computed at bit boundary, used at mid-cell)
+    reg         weak_bit_active;
+
     // Step direction tracking (MAME's m_dir equivalent)
     // Sony 3.5" drives use a command interface:
     //   - phases[3] = strobe (rising edge triggers command)
@@ -210,6 +230,7 @@ module flux_drive (
     // Sense returns !disk_switched, so 0→sense HIGH (changed), 1→sense LOW (normal)
     reg         disk_switched;
     reg         prev_disk_mounted;
+    reg         first_mount_done;  // Distinguishes cold-start mount from hot swap
     reg         prev_drive_ready;  // For detecting drive_ready rising edge
     reg         prev_is_flux_track; // For detecting IS_FLUX_TRACK 0->1 transitions
 
@@ -358,6 +379,8 @@ module flux_drive (
     // addressing ensures BRAM_DATA is the correct byte by that time.
     wire        current_bit = (BRAM_DATA >> bit_shift) & 1'b1;
 
+    // (Weak-bit detection uses registered zero_run_count / weak_bit_active instead of wires)
+
     // Look-ahead logic for byte boundary crossing
     // When at bit_shift=0 (last bit of byte) and bit_timer is about to expire,
     // we need to present the NEXT byte's address so BRAM_DATA is ready at the flux check.
@@ -389,7 +412,8 @@ module flux_drive (
     wire        drive_ready_rising = drive_ready && !prev_drive_ready && (TRACK_BIT_COUNT > 0);
     wire        motor_restart_ready = motor_spinning && !prev_motor_for_position && drive_ready && (TRACK_BIT_COUNT > 0);
     wire        track_load_reset = TRACK_LOAD_COMPLETE && !motor_spinning;
-    wire        skip_position_advance = track_load_reset || drive_ready_rising || motor_restart_ready;
+    wire        track_load_spinning = TRACK_LOAD_COMPLETE && motor_spinning;
+    wire        skip_position_advance = track_load_reset || track_load_spinning || drive_ready_rising || motor_restart_ready;
 
     //=========================================================================
     // Output Assignments
@@ -616,6 +640,7 @@ module flux_drive (
             sony_motor_on <= 1'b0;         // Default: motor off
             disk_switched <= 1'b1;  // Normal at reset; mount/unmount edge detection (below) handles real changes
             prev_disk_mounted <= 1'b0;
+            first_mount_done <= 1'b0;
             step_busy_cnt <= 18'd0;
         end else begin
             if (step_busy_cnt != 18'd0)
@@ -627,16 +652,18 @@ module flux_drive (
 
             // Track disk removal/insertion for disk-change latch
             // MAME convention: disk_switched=1 is normal, =0 means "disk was changed"
-            // On disk removal: set to 0 (disk changed).
-            // On insertion: only set to 1 for the FIRST mount after reset (cold-boot).
+            // The firmware clears the latch back to 1 via DskchgClear command (sony_ctl 4'h3).
+            //
+            // On removal: set to 0 (disk changed). MAME: call_unload() sets m_dskchg=0.
+            // On cold-start insertion (first mount after reset): set to 1 (normal).
             //   MAME's device_start() sets m_dskchg = exists() ? 1 : 0, so a cold boot
-            //   with a disk present starts with m_dskchg=1 (normal).  In vsim the WOZ
-            //   file is loaded AFTER RESET, so DISK_MOUNTED transitions 0→1 after the
-            //   reset block has already set disk_switched=1.  The first mount keeps it
-            //   at 1 so GS/OS doesn't see a spurious disk-change on boot.
-            //   Runtime hot-inserts leave disk_switched=0 (from removal) so GS/OS
-            //   detects the media change via /DISKCHANGE sense and discovers the new disk.
-            // The firmware clears the latch by setting it back to 1 via DskchgClear command.
+            //   with a disk present starts with m_dskchg=1 (normal). The WOZ file is
+            //   loaded AFTER RESET, so DISK_MOUNTED transitions 0→1 after reset has
+            //   already set disk_switched=1. We keep it at 1 for this first mount.
+            // On hot swap (subsequent mounts): leave disk_switched at 0 (changed).
+            //   MAME's call_load() does NOT reset m_dskchg. The ROM must detect the
+            //   change and clear it via DskchgClear. If we auto-set to 1 here, the ROM
+            //   never sees the disk was swapped and won't re-validate.
             if (!DISK_MOUNTED && prev_disk_mounted) begin
                 disk_switched <= 1'b0;  // MAME: call_unload() sets m_dskchg=0
 `ifdef SIMULATION
@@ -644,12 +671,17 @@ module flux_drive (
 `endif
             end
             if (DISK_MOUNTED && !prev_disk_mounted) begin
-                // Any insertion: set disk_switched=0 ("media changed") so GS/OS detects it.
-                // The firmware clears this via DskchgClear after acknowledging the disk.
-                // For cold-boot mounts, the ROM's initial IWM probe handles the transition.
-                disk_switched <= 1'b0;
+                if (!first_mount_done) begin
+                    // Cold-start: disk_switched stays 1 (set by reset), mark first mount done
+                    first_mount_done <= 1'b1;
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: disk_switched CLEAR by insertion (media changed)", DRIVE_ID);
+                    $display("FLUX_DRIVE[%0d]: first mount after reset (cold-start, disk_switched stays %0d)", DRIVE_ID, disk_switched);
+`endif
+                end
+`ifdef SIMULATION
+                else begin
+                    $display("FLUX_DRIVE[%0d]: hot swap insertion (disk_switched stays %0d, ROM must clear via DskchgClear)", DRIVE_ID, disk_switched);
+                end
 `endif
             end
             prev_disk_mounted <= DISK_MOUNTED;
@@ -978,6 +1010,11 @@ module flux_drive (
             flux_is_continuation <= 1'b0;
             next_flux_byte <= 8'd0;
             next_byte_valid <= 1'b0;
+
+            lfsr <= 16'hACE1;               // Non-zero seed for LFSR
+            head_window <= 4'hF;            // Init non-zero (not in fake area)
+            zero_run_count <= 8'd0;
+            weak_bit_active <= 1'b0;
             bram_first_read_pending <= 1'b1;  // Wait for registered BRAM on startup
             flux_startup_delay <= 6'd0;
 `ifdef SIMULATION
@@ -990,6 +1027,11 @@ module flux_drive (
             FLUX_TRANSITION <= 1'b0;
             SD_TRACK_STROBE <= 1'b0;
             rotation_complete <= 1'b0;
+
+            // Advance LFSR every clock cycle for weak-bit randomization.
+            // Free-running ensures different state each disk revolution.
+            // Taps at bits 16,14,13,11 (maximal-length 16-bit LFSR).
+            lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
 
             // Count down startup delay (if active)
             // This ensures bit_position advances before first FLUX_TRANSITION
@@ -1024,6 +1066,9 @@ module flux_drive (
                 flux_waiting_bram <= 1'b0;
                 flux_is_continuation <= 1'b0;
                 next_byte_valid <= 1'b0;
+                head_window <= 4'hF;      // Reset MC3470 window for new track
+                zero_run_count <= 8'd0;
+                weak_bit_active <= 1'b0;
 `ifdef SIMULATION
                 $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d) is_flux=%0d", DRIVE_ID, bit_position, IS_FLUX_TRACK);
                 $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE bram_wait=1 bit_timer=%0d cell=%0d addr=%0d pos=%0d",
@@ -1037,7 +1082,19 @@ module flux_drive (
             // so it may reflect the bitstream side and miss the flux side's new data.
             // Resetting flux state unconditionally is safe: for all-bitstream tracks,
             // flux state is unused (only accessed when IS_FLUX_TRACK=1).
+            //
+            // CRITICAL: bit_position must also be reset to 0 here. While TRACK_LOADED=0
+            // (waiting for BRAM to load), bit_position was FROZEN (not advancing), so it
+            // does NOT represent the true angular head position - it is stale. Resetting
+            // it to 0 ensures flux_byte_addr (also reset to 0) and bit_position are in
+            // sync: both start at the beginning of the newly loaded track data.
             if (TRACK_LOAD_COMPLETE && motor_spinning) begin
+                bit_position <= 17'd0;
+                bit_timer <= bit_cell_base;
+                bit_half_timer <= bit_half_base;
+                bit_cell_cycles_reg <= bit_cell_base;
+                bit_cell_frac <= 10'd0;
+                bit_half_frac <= 10'd0;
                 flux_phase_accum <= 32'd0;
                 flux_byte_counter <= 8'd0;
                 flux_byte_addr <= 16'd0;
@@ -1197,9 +1254,15 @@ module flux_drive (
                         
                         if (flux_byte_pending) begin
                             // This was the initial load (first byte)
-                            flux_byte_counter <= BRAM_DATA;
+                            // Weak-bit: replace 0xFF with random transition
+                            if (BRAM_DATA == 8'hFF) begin
+                                flux_byte_counter <= {2'b00, lfsr[4:0]} + 8'd16;
+                                flux_is_continuation <= 1'b0;
+                            end else begin
+                                flux_byte_counter <= BRAM_DATA;
+                                flux_is_continuation <= 1'b0;
+                            end
                             flux_byte_pending <= 1'b0;
-                            flux_is_continuation <= (BRAM_DATA == 8'hFF);
                         end else begin
                             // This was a prefetch
                             next_flux_byte <= BRAM_DATA;
@@ -1255,10 +1318,22 @@ module flux_drive (
 `endif
                                 end
                                 
-                                // Load next byte from prefetch buffer
+                                // Load next byte from prefetch buffer.
+                                // Weak-bit emulation: 0xFF continuation bytes represent gaps
+                                // with no reliable flux transitions. Real analog hardware
+                                // produces noise during these gaps. Replace ALL 0xFF bytes
+                                // with random transitions to emulate this noise. Normal GCR
+                                // data never produces 0xFF timing bytes (max ~49 ticks).
                                 if (next_byte_valid) begin
-                                    flux_byte_counter <= next_flux_byte;
-                                    flux_is_continuation <= (next_flux_byte == 8'hFF);
+                                    if (next_flux_byte == 8'hFF) begin
+                                        // Continuation byte = unreliable flux area.
+                                        // Inject random transition (16-47 ticks, ~2-6us)
+                                        flux_byte_counter <= {2'b00, lfsr[4:0]} + 8'd16;
+                                        flux_is_continuation <= 1'b0;
+                                    end else begin
+                                        flux_byte_counter <= next_flux_byte;
+                                        flux_is_continuation <= 1'b0;
+                                    end
                                     next_byte_valid <= 1'b0;
                                     // Trigger immediate fetch for NEXT byte if the loaded one is small
                                     if (next_flux_byte <= 8'd3) begin
@@ -1340,12 +1415,15 @@ module flux_drive (
                         // Generate flux near mid-cell using the current cell timing.
                         // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready).
                         // Do not suppress the first bit-cell; that drops a bit and shifts byte alignment.
-                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) && current_bit && drive_ready && !WRITE_MODE) begin
+                        // weak_bit_active injects random flux in weak-bit areas (4+ consecutive zeros).
+                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) &&
+                            (current_bit || (weak_bit_active && !current_bit && lfsr[3:0] < 4'd5)) &&
+                            drive_ready && !WRITE_MODE) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef SIMULATION
                             if (flux_count_debug < 50) begin
-                                $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d",
-                                         DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer);
+                                $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d weak=%0d",
+                                         DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer, weak_bit_active);
                             end
                             if (effective_bit_position < 100) begin
                                 $display("FLUX_DRIVE[%0d]: Flux transition at bit %0d (eff=%0d, byte %04h, shift %0d)",
@@ -1363,6 +1441,20 @@ module flux_drive (
                         if (bit_timer == 6'd1 && !skip_position_advance) begin
                         // End of bit cell - advance to next bit
                         load_bit_timers();
+                        // Update MC3470 head window: shift in source bit
+                        head_window <= {head_window[2:0], current_bit};
+
+                        // Update weak-bit zero run counter and active flag
+                        if (current_bit) begin
+                            zero_run_count <= 8'd0;
+                            weak_bit_active <= 1'b0;
+                        end else begin
+                            if (zero_run_count < 8'd255)
+                                zero_run_count <= zero_run_count + 8'd1;
+                            // Activate after 4+ consecutive zeros
+                            if (zero_run_count >= 8'd3)
+                                weak_bit_active <= 1'b1;
+                        end
 
                         // Advance bit position with wraparound
                         // Use effective_bit_position for wrap check to handle side toggles correctly.
@@ -1374,6 +1466,11 @@ module flux_drive (
                                 bit_position <= 17'd0;
                                 // Signal that one full rotation has completed
                                 rotation_complete <= 1'b1;
+                                // Reset MC3470 window at track wrap to prevent
+                                // false triggers from zeros spanning the wrap point
+                                head_window <= 4'hF;
+                                zero_run_count <= 8'd0;
+                                weak_bit_active <= 1'b0;
                             end else begin
                                 bit_position <= bit_position + 1'd1;
                             end

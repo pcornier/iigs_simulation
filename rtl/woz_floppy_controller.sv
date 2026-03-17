@@ -520,6 +520,8 @@ module woz_floppy_controller #(
 	                woz_valid <= 1'b0;
 	                ready <= 1'b0;
 	                busy <= 1'b0;
+	                dirty_side0 <= 1'b0;
+	                dirty_side1 <= 1'b0;
 	                current_track_id_side0 <= 8'hFF;
 	                current_track_id_side1 <= 8'hFF;
                 bit_count_side0 <= 32'd0;
