@@ -147,8 +147,10 @@ wire [31:0] WOZ_TRACK1_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normali
 // Write interfaces from IWM back to WOZ controllers
 wire [7:0]  WOZ_TRACK3_BIT_DATA_IN;  // Write byte for 3.5" BRAM
 wire        WOZ_TRACK3_BIT_WE;       // Write enable for 3.5"
+wire [15:0] WOZ_TRACK3_BIT_WR_ADDR;  // Write address for 3.5" (latched)
 wire [7:0]  WOZ_TRACK1_BIT_DATA_IN;  // Write byte for 5.25" BRAM
 wire        WOZ_TRACK1_BIT_WE;       // Write enable for 5.25"
+wire [15:0] WOZ_TRACK1_BIT_WR_ADDR;  // Write address for 5.25" (latched)
 
 // Register stable_side to match BRAM timing - prevents 1-cycle glitches on side change
 reg woz3_stable_side_reg;
@@ -203,6 +205,7 @@ iigs  iigs(
     .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
     .WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
     .WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
+    .WOZ_TRACK3_BIT_WR_ADDR(WOZ_TRACK3_BIT_WR_ADDR),
 
     // WOZ bit interface for 5.25" drive 1
     .WOZ_TRACK1(WOZ_TRACK1),
@@ -215,6 +218,7 @@ iigs  iigs(
     .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
     .WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
     .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
+    .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
 
         .fastram_address(fastram_address),
         .fastram_datatoram(fastram_datatoram),
@@ -244,6 +248,7 @@ iigs  iigs(
 
         // Floppy motor status (for dirty track flush on motor-off)
         .floppy_motor_on(floppy_motor_on),
+        .floppy35_motor_on(floppy35_motor_on),
 
         // Audio outputs
         .AUDIO_L(AUDIO_L),
@@ -466,6 +471,7 @@ assign sd_buff_din[2] = 8'h00;
 
 // Floppy motor state from IWM (for dirty track flush on motor-off)
 wire floppy_motor_on;
+wire floppy35_motor_on;
 
 // 3.5" WOZ controller outputs
 wire        woz_ctrl_disk_mounted;
@@ -536,7 +542,7 @@ woz_floppy_controller #(
     .ready(woz_ctrl_ready),
     .disk_mounted(woz_ctrl_disk_mounted),
     .busy(woz_ctrl_busy),
-    .active(floppy_motor_on),
+    .active(floppy35_motor_on),  // 3.5" motor state (from Sony drive logic, not 5.25" inertia)
 
     // Bitstream Interface - use same bit_addr as C++ path
     // Use REGISTERED stable_side to match C++ timing.
@@ -548,6 +554,7 @@ woz_floppy_controller #(
     .bit_data(woz_ctrl_bit_data),
     .bit_data_in(WOZ_TRACK3_BIT_DATA_IN),
     .bit_we(WOZ_TRACK3_BIT_WE),
+    .bit_wr_addr(WOZ_TRACK3_BIT_WR_ADDR),
     // Track load notification (for flux_drive to reset bit_position)
     .track_load_complete(woz_ctrl_track_load_complete),
 
@@ -643,6 +650,7 @@ woz_floppy_controller #(
     .bit_data(woz_ctrl_525_bit_data),
     .bit_data_in(WOZ_TRACK1_BIT_DATA_IN),
     .bit_we(WOZ_TRACK1_BIT_WE),
+    .bit_wr_addr(WOZ_TRACK1_BIT_WR_ADDR),
 
     // Track load notification
     .track_load_complete(woz_ctrl_525_track_load_complete),

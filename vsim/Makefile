@@ -92,6 +92,7 @@ V_SRC = \
 	$(RTL)/paddle_timer.v \
 	$(RTL)/iwm_woz.v \
 	$(RTL)/iwm_flux.v \
+	$(RTL)/smartport_dev.v \
 	$(RTL)/flux_drive.v \
 	$(RTL)/woz_track.sv \
 	$(RTL)/bram.sv \

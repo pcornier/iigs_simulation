@@ -92,6 +92,15 @@ module iwm_flux (
     output reg         FLUX_WRITE_STROBE, // 1-cycle pulse at each write bit cell
     output wire        FLUX_WRITE_MODE,   // 1 = write mode active (m_rw_mode)
 
+    // SmartPort device interface
+    output reg         SP_WR_STROBE,    // 1-cycle pulse: host wrote byte in SmartPort mode
+    output reg  [7:0]  SP_WR_DATA,      // The byte written
+    output reg         SP_RD_STROBE,    // 1-cycle pulse: host read data reg in SmartPort mode
+    input  wire        SP_RD_DATA_VALID,// Override data register with SP_RD_DATA
+    input  wire [7:0]  SP_RD_DATA,      // Data from SmartPort device
+    input  wire        SP_BSY,          // SmartPort device /BSY state
+    output wire        SP_REQ,          // CA1 (REQ) state for SmartPort device
+
     // Debug
     output wire [7:0]  DEBUG_RSH,       // Read shift register (for debug)
     output wire [2:0]  DEBUG_STATE,     // State machine state (for debug)
@@ -326,6 +335,7 @@ module iwm_flux (
 
 `ifdef SIMULATION
     reg [31:0] debug_cycle;
+    reg [31:0] sp_write_log_cnt;  // SmartPort write debug log counter
     reg [31:0] byte_counter;  // Sequential byte counter for comparison with MAME
     reg [31:0] bytes_read_counter;  // How many bytes CPU has read (valid reads with bit7=1)
     reg [31:0] bytes_lost_counter;  // How many bytes were cleared by async_update before CPU read
@@ -442,6 +452,12 @@ module iwm_flux (
             write_data_gen     <= 32'd0;
             FLUX_WRITE         <= 1'b0;
             FLUX_WRITE_STROBE  <= 1'b0;
+            SP_WR_STROBE       <= 1'b0;
+            SP_WR_DATA         <= 8'h00;
+            SP_RD_STROBE       <= 1'b0;
+`ifdef SIMULATION
+            sp_write_log_cnt   <= 32'd0;
+`endif
             clear_rsh_pending   <= 1'b0;
             latch_hold_cnt <= 4'd0;
             sync_run_count <= 4'd0;
@@ -1495,6 +1511,31 @@ module iwm_flux (
                 access_gen_latched <= m_data_gen;
             end
 
+            // SmartPort write capture: route data writes to SmartPort device
+            SP_WR_STROBE <= 1'b0; // Default: no strobe
+            SP_RD_STROBE <= 1'b0;
+`ifdef SIMULATION
+            // Debug: log ALL writes to Q6=1,Q7=1 when motor is active (both SP and non-SP)
+            if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE) begin
+                if (sp_write_log_cnt < 32'd200) begin
+                    $display("SP_WRITE_DBG: data=%02h smartport_mode=%0d mode=%02h motor_active=%0d is_35=%0d",
+                             DATA_IN, smartport_mode, SW_MODE, MOTOR_ACTIVE, IS_35_INCH);
+                    sp_write_log_cnt <= sp_write_log_cnt + 32'd1;
+                end
+            end
+`endif
+            if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE && smartport_mode) begin
+                SP_WR_STROBE <= 1'b1;
+                SP_WR_DATA <= DATA_IN;
+`ifdef SIMULATION
+                $display("SP_DEV_WR: data=%02h mode=%02h", DATA_IN, SW_MODE);
+`endif
+            end
+            // SmartPort read capture: detect data register reads in SmartPort mode
+            if (RD && CEN && !immediate_q7 && !immediate_q6 && MOTOR_ACTIVE && smartport_mode && SP_RD_DATA_VALID) begin
+                SP_RD_STROBE <= 1'b1;
+            end
+
             // MAME behavior: In active mode, a write to Q6=1,Q7=1 with odd offset is a DATA write
             // (used for write-mode shifting / SmartPort handshakes), not a mode register write.
             // iwm_woz.v gates mode writes on !iwm_active; handle the active case here.
@@ -1733,8 +1774,9 @@ module iwm_flux (
     wire smartport_mode = (!SW_MODE[3]) && SW_MODE[1];
 
     // Write handshake register (MAME: m_whd, initialized to 0xBF). In SmartPort mode,
-    // always report "ready" (bit7=1) so `ASL $C08C,X` polling loops can progress.
-    wire [7:0] handshake_reg = smartport_mode ? 8'h80 : m_whd;
+    // report "ready" (bit7=1) so `ASL $C08C,X` polling loops can progress.
+    // Bit 6: SP_BSY (0=idle/ready matches original 8'h80, 1=device busy)
+    wire [7:0] handshake_reg = smartport_mode ? {1'b1, SP_BSY, 6'b0} : m_whd;
 
     // Immediate Q6/Q7 values for current access
     // If current access is to Q6/Q7 switch, use ADDR[0] for that bit
@@ -1761,7 +1803,9 @@ module iwm_flux (
     reg [7:0] data_out_mux;
     always @(*) begin
         case ({immediate_q7, immediate_q6})
-            2'b00: data_out_mux = motor_data_ok ? data_out_data : 8'hFF;
+            // SmartPort: when device is sending a response, override data register
+            2'b00: data_out_mux = (smartport_mode && SP_RD_DATA_VALID) ? SP_RD_DATA :
+                                  (motor_data_ok ? data_out_data : 8'hFF);
             2'b01: data_out_mux = status_reg;
             2'b10: data_out_mux = handshake_reg;
             2'b11: data_out_mux = 8'hFF;
@@ -1778,6 +1822,9 @@ module iwm_flux (
     assign DEBUG_RSH    = m_rsh;
     assign DEBUG_STATE  = rw_state;
     assign DEBUG_BYTE_VALID = new_byte_dbg;
+
+    // SmartPort: REQ is CA1 (phases[1])
+    assign SP_REQ = SW_PHASES[1];
 
 `ifdef SIMULATION
     // Debug: log register reads (only on CEN/PH2 to log once per CPU access)

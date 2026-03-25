@@ -116,7 +116,8 @@ void SimBlockDevice::BeforeEval(int cycles)
          //printf("cycles %x reading %X : %X ack %x\n",cycles,*sd_buff_addr,*sd_buff_dout,*sd_ack );
       } else if(writing && *sd_buff_addr != bytecnt && (*sd_buff_addr< kBLKSZ)) {
       //} else if(writing && (bytecnt < kBLKSZ)) {
-  	//printf("writing disk %i at sd_buff_addr %x data %x ack %x\n",i,*sd_buff_addr,*sd_buff_din[i],*sd_ack);
+        if (i == 5 && bytecnt < 8)
+            printf("WOZ_SAVE_DMA[%d]: addr=%d bytecnt=%d data=%02X\n", i, *sd_buff_addr, bytecnt, *(sd_buff_din[i]));
         disk[i].put(*(sd_buff_din[i]));
         *sd_buff_addr = bytecnt;
       } else {
@@ -125,7 +126,10 @@ void SimBlockDevice::BeforeEval(int cycles)
 	  if (writing) {
 		  if (bytecnt>=kBLKSZ) {
 			  writing=0;
-			  //printf("writing stopped: bytecnt %x sd_buff_addr %x \n",bytecnt,*sd_buff_addr);
+			  if (i == 4 || i == 5) {
+			      printf("WOZ_DMA[%d]: Block write complete (bytecnt=%d)\n", i, bytecnt);
+			      disk[i].flush();  // Ensure data reaches disk (survives kill)
+			  }
 		  }
 		  if (bytecnt<kBLKSZ)
 		  	bytecnt++;
@@ -185,13 +189,22 @@ void SimBlockDevice::BeforeEval(int cycles)
 	}
 
         disk[i].clear();
-        disk[i].seekg((lba) * kBLKSZ + header_size[i]);
+        if (writing) {
+            disk[i].seekp((lba) * kBLKSZ + header_size[i]);
+        } else {
+            disk[i].seekg((lba) * kBLKSZ + header_size[i]);
+        }
         // Debug output for floppy (index 0) - show track calculation
         if (i == 0) {
             int track = lba / 13;  // 13 sectors per track
             int sector = lba % 13;
             printf("FLOPPY DMA: LBA=%d (track=%d sector=%d) seek=%06X reading=%d writing=%d\n",
                    lba, track, sector, (lba) * kBLKSZ + header_size[i], reading, writing);
+        }
+        if (i == 4 || i == 5) {
+            printf("WOZ_DMA[%d]: LBA=%d seek=0x%06lX %s\n",
+                   i, lba, (long)((lba) * kBLKSZ + header_size[i]),
+                   writing ? "WRITE" : "READ");
         }
         bytecnt = 0;
         *sd_buff_addr = 0;

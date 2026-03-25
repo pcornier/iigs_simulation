@@ -35,6 +35,7 @@ module woz_floppy_controller #(
     output     [7:0]  bit_data,      // Read data
     input      [7:0]  bit_data_in,   // Write data
     input             bit_we,        // Write enable (sets dirty)
+    input      [15:0] bit_wr_addr,   // Write address (latched, may differ from bit_addr)
 
     // Track load notification (for flux_drive to reset position)
     output reg        track_load_complete,  // Pulses high for 1 cycle when physical track finishes loading
@@ -118,6 +119,9 @@ module woz_floppy_controller #(
     // Per-side dirty flags (track which side was modified by IWM writes)
     reg         dirty_side0;
     reg         dirty_side1;
+`ifdef SIMULATION
+    reg [31:0]  bit_we_count;
+`endif
     // Per-side track location metadata (for correct save-back to WOZ file)
     reg  [15:0] trk_start_block_side0;
     reg  [15:0] trk_start_block_side1;
@@ -128,6 +132,12 @@ module woz_floppy_controller #(
     reg         saving_second_side; // Need to save the other side after current save
     reg         save_is_flush;      // Save triggered by motor-off (return to IDLE, not SEEK)
 
+    // BRAM port B address mux: use latched write address during writes, read address otherwise.
+    // The read-modify-write in flux_drive latches BRAM_ADDR at read time (cycle N), but by
+    // write time (cycle N+1) bit_position has advanced so bit_addr may point to a different byte.
+    // Using the latched address ensures the modified byte is written back to the correct location.
+    wire [15:0] bram_addr_b = bit_we ? bit_wr_addr : bit_addr;
+
     // Dual port RAM for Track Data (Side 0) — used by both 3.5" and 5.25"
     bram #(.width_a(8), .widthad_a(BRAM_ADDR_WIDTH)) track_ram_side0 (
         .clock_a(clk),
@@ -137,7 +147,7 @@ module woz_floppy_controller #(
         .q_a(track_ram_dout0),
 
         .clock_b(clk),
-        .address_b(bit_addr),
+        .address_b(bram_addr_b),
         .wren_b(bit_we && (!IS_35_INCH || (track_id[0] == 1'b0))),
         .data_b(bit_data_in),
         .q_b(bit_data0)
@@ -154,7 +164,7 @@ module woz_floppy_controller #(
                 .q_a(track_ram_dout1),
 
                 .clock_b(clk),
-                .address_b(bit_addr),
+                .address_b(bram_addr_b),
                 .wren_b(bit_we && (track_id[0] == 1'b1)),
                 .data_b(bit_data_in),
                 .q_b(bit_data1)
@@ -246,6 +256,12 @@ module woz_floppy_controller #(
     reg [6:0]  last_physical_track;   // Previous physical track for change detection
     reg [15:0] settle_counter;        // Cycles since last physical track change
     localparam SETTLE_THRESHOLD = 16'd50000;  // ~3.5ms at 14MHz for head settle (longer to survive fast seeks)
+
+    // Dirty flush timer: flush dirty tracks to disk after writes stop
+    // Handles the case where the ROM writes to a track and reads back without
+    // changing tracks or stopping the motor.
+    reg [23:0] dirty_flush_timer;
+    localparam [23:0] DIRTY_FLUSH_DELAY = 24'd7000000; // ~500ms at 14MHz
 
     reg [31:0] bit_count_side0;
     reg [31:0] bit_count_side1;
@@ -378,6 +394,10 @@ module woz_floppy_controller #(
 	            sd_wr <= 0;
 	            dirty_side0 <= 0;
 	            dirty_side1 <= 0;
+	            dirty_flush_timer <= 24'd0;
+`ifdef SIMULATION
+                bit_we_count <= 0;
+`endif
             current_track_id_side0 <= 8'hFF;
             current_track_id_side1 <= 8'hFF;
 	            pending_track_id <= 8'h00;
@@ -549,6 +569,19 @@ module woz_floppy_controller #(
                     dirty_side1 <= 1;
                 else
                     dirty_side0 <= 1;
+`ifdef SIMULATION
+                // Log dirty transitions (always) and first/periodic writes
+                if (!dirty_side0 && !(IS_35_INCH && track_id[0]))
+                    $display("WOZ_DIRTY_SET[%0d]: side0 now dirty, bit_we_count=%0d track_id=%0d state=%0d bram_b=%04X",
+                             IS_35_INCH, bit_we_count, track_id, state, bram_addr_b);
+                if (!dirty_side1 && IS_35_INCH && track_id[0])
+                    $display("WOZ_DIRTY_SET[%0d]: side1 now dirty, bit_we_count=%0d track_id=%0d state=%0d bram_b=%04X",
+                             IS_35_INCH, bit_we_count, track_id, state, bram_addr_b);
+                if (bit_we_count < 32'd200 || (bit_we_count & 32'hFFFF) == 0)
+                    $display("WOZ_WRITE[%0d]: bit_we #%0d rd_addr=%0d wr_addr=%0d bram_b=%04X data_in=%02X track_id=%0d side=%0d state=%0d dirty_s0=%0d dirty_s1=%0d",
+                             IS_35_INCH, bit_we_count, bit_addr, bit_wr_addr, bram_addr_b, bit_data_in, track_id, track_id[0], state, dirty_side0, dirty_side1);
+                bit_we_count <= bit_we_count + 1;
+`endif
             end
             
             // State Machine
@@ -629,6 +662,43 @@ module woz_floppy_controller #(
                 
                 S_IDLE: begin
                     busy <= 0;
+
+                    // Dirty flush timer: after IWM writes stop for ~500ms, flush to disk.
+                    // This handles the case where the ROM writes volume structures to track 0
+                    // then reads them back without changing tracks or stopping the motor.
+                    // Without this, the dirty BRAM data is never saved to the WOZ file.
+                    if (bit_we)
+                        dirty_flush_timer <= DIRTY_FLUSH_DELAY;
+                    else if (dirty_flush_timer > 0)
+                        dirty_flush_timer <= dirty_flush_timer - 1;
+
+                    // Dirty flush trigger: timer expired with dirty data
+                    if (dirty_flush_timer == 1 && (dirty_side0 || dirty_side1) && woz_valid) begin
+                        state <= S_SAVE_TRACK;
+                        busy <= 1;
+                        blocks_processed <= 0;
+                        old_ack <= sd_ack;
+                        transfer_active <= 1'b0;
+                        request_issued <= 1'b0;
+                        if (dirty_side0) begin
+                            save_side <= 1'b0;
+                            saving_second_side <= (IS_35_INCH != 0) & dirty_side1;
+                            sd_lba <= {16'b0, trk_start_block_side0};
+                            trk_block_count <= trk_block_count_side0;
+                        end else begin
+                            save_side <= 1'b1;
+                            saving_second_side <= 1'b0;
+                            sd_lba <= {16'b0, trk_start_block_side1};
+                            trk_block_count <= trk_block_count_side1;
+                        end
+                        sd_wr <= 1;
+                        save_is_flush <= 1'b1;
+`ifdef SIMULATION
+                        $display("WOZ_CTRL: Dirty timer flush (s0=%0d s1=%0d) start_blk=%0d",
+                                 dirty_side0, dirty_side1,
+                                 dirty_side0 ? trk_start_block_side0 : trk_start_block_side1);
+`endif
+                    end
 
                     // Motor-off save trigger: flush dirty tracks when motor spins down
                     prev_active <= active;
@@ -740,8 +810,10 @@ module woz_floppy_controller #(
                                 end
                                 sd_wr <= 1;
                                 save_is_flush <= 1'b0;
-                                $display("WOZ_CTRL: Track dirty (s0=%0d s1=%0d), saving before seek",
-                                         dirty_side0, dirty_side1);
+                                $display("WOZ_CTRL: Track dirty (s0=%0d s1=%0d), saving before seek start_blk=%0d blk_cnt=%0d",
+                                         dirty_side0, dirty_side1,
+                                         dirty_side0 ? trk_start_block_side0 : trk_start_block_side1,
+                                         dirty_side0 ? trk_block_count_side0 : trk_block_count_side1);
                             end else begin
                                 state <= S_SEEK_LOOKUP;
                                 busy <= 1;
@@ -1150,6 +1222,15 @@ module woz_floppy_controller #(
                 end
 
                 S_SAVE_TRACK: begin
+`ifdef SIMULATION
+                    // Debug: log first few bytes of each save block
+                    if (sd_ack && sd_buff_addr < 9'd8 && IS_35_INCH) begin
+                        $display("WOZ_SAVE_DBG[%0d]: blk=%0d addr=%0d bram_a=%04X dout0=%02X dout1=%02X save_side=%0d save_din=%02X sd_buff_din=%02X",
+                                 IS_35_INCH, blocks_processed, sd_buff_addr,
+                                 bram_addr_a, track_ram_dout0, track_ram_dout1,
+                                 save_side, save_din, sd_buff_din);
+                    end
+`endif
                     // Assert sd_wr while waiting for ack, but NOT when completing a transfer
                     if (!sd_ack && !(old_ack && transfer_active)) begin
                         sd_wr <= 1'b1;

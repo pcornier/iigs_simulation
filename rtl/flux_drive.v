@@ -91,6 +91,7 @@ module flux_drive (
     // Write outputs to BRAM (via woz_floppy_controller port B)
     output reg  [7:0]  WRITE_BYTE_OUT,     // Modified byte data
     output reg         WRITE_WE_OUT,       // Write enable (1-cycle pulse)
+    output reg  [15:0] WRITE_ADDR_OUT,     // Latched write address (matches BRAM_DATA timing)
 
     // Chunk-based streaming support for large flux tracks (>16KB)
     // When flux tracks exceed BRAM size, we reload 16KB chunks on demand
@@ -153,6 +154,8 @@ module flux_drive (
     reg [9:0]   bit_cell_frac;          // Fractional bit cell accumulator (3.5")
     reg [9:0]   bit_half_frac;          // Fractional half-cell accumulator (3.5")
     reg [5:0]   bit_cell_cycles_reg;    // Per-bit-cell length (with fractional add)
+    reg         prev_write_mode;        // For detecting write→read transitions
+    reg         write_strobe_steal;     // WRITE_STROBE stole position advance from bit_timer
 
     // Track loading state
     reg [7:0]   current_track;          // Track currently in buffer
@@ -572,20 +575,33 @@ module flux_drive (
     // When IWM is in write mode, each WRITE_STROBE pulse sets/clears one bit
     // at the current bit_position in the track BRAM. A 1-cycle delay accounts
     // for BRAM read latency (address at cycle N → data valid at cycle N+1).
+    //
+    // IMPORTANT: Latch the BRAM address and bit_shift alongside the strobe.
+    // Between cycle N (read address set) and cycle N+1 (BRAM_DATA valid),
+    // bit_position advances, which would change byte_index and bit_shift.
+    // Without latching, the modify-write uses the wrong bit position and/or
+    // writes to the wrong BRAM address, corrupting GCR sector data.
     reg write_strobe_d1;  // Delayed strobe (1 cycle for BRAM read latency)
     reg write_bit_d1;     // Delayed bit value
+    reg [2:0]  write_shift_d1;  // Delayed bit_shift (latched at read time)
+    reg [15:0] write_addr_d1;   // Delayed BRAM address (latched at read time)
 
     reg [31:0] write_count;  // Debug counter for writes
     always @(posedge CLK_14M or posedge RESET) begin
         if (RESET) begin
             write_strobe_d1 <= 1'b0;
             write_bit_d1    <= 1'b0;
+            write_shift_d1  <= 3'd0;
+            write_addr_d1   <= 16'd0;
             WRITE_BYTE_OUT  <= 8'h00;
             WRITE_WE_OUT    <= 1'b0;
+            WRITE_ADDR_OUT  <= 16'd0;
             write_count     <= 32'd0;
         end else begin
             write_strobe_d1 <= WRITE_STROBE && WRITE_MODE && !WRITE_PROTECT && TRACK_LOADED;
             write_bit_d1    <= WRITE_BIT;
+            write_shift_d1  <= bit_shift;    // Latch bit_shift at read time
+            write_addr_d1   <= BRAM_ADDR;    // Latch BRAM address at read time
 
 `ifdef SIMULATION
             // Debug: log when write conditions are partially met
@@ -601,17 +617,19 @@ module flux_drive (
 
             if (write_strobe_d1) begin
                 // Read-modify-write: BRAM_DATA is valid (1 cycle after address set)
+                // Use latched bit_shift from the read cycle, not current bit_shift
                 if (write_bit_d1)
-                    WRITE_BYTE_OUT <= BRAM_DATA | (8'd1 << bit_shift);
+                    WRITE_BYTE_OUT <= BRAM_DATA | (8'd1 << write_shift_d1);
                 else
-                    WRITE_BYTE_OUT <= BRAM_DATA & ~(8'd1 << bit_shift);
+                    WRITE_BYTE_OUT <= BRAM_DATA & ~(8'd1 << write_shift_d1);
                 WRITE_WE_OUT <= 1'b1;
+                WRITE_ADDR_OUT <= write_addr_d1;  // Use latched address for write
                 write_count <= write_count + 1;
 `ifdef SIMULATION
                 if (write_count < 64)
-                    $display("FLUX_WRITE[%0d]: #%0d pos=%0d addr=%04X bit=%0d shift=%0d bram_in=%02X bram_out=%02X",
-                             DRIVE_ID, write_count, bit_position, BRAM_ADDR, write_bit_d1, bit_shift,
-                             BRAM_DATA, write_bit_d1 ? (BRAM_DATA | (8'd1 << bit_shift)) : (BRAM_DATA & ~(8'd1 << bit_shift)));
+                    $display("FLUX_WRITE[%0d]: #%0d pos=%0d addr=%04X(latched=%04X) bit=%0d shift=%0d(latched=%0d) bram_in=%02X bram_out=%02X",
+                             DRIVE_ID, write_count, bit_position, BRAM_ADDR, write_addr_d1, write_bit_d1, bit_shift, write_shift_d1,
+                             BRAM_DATA, write_bit_d1 ? (BRAM_DATA | (8'd1 << write_shift_d1)) : (BRAM_DATA & ~(8'd1 << write_shift_d1)));
 `endif
             end else begin
                 WRITE_WE_OUT <= 1'b0;
@@ -990,6 +1008,8 @@ module flux_drive (
             bit_cell_cycles_reg <= bit_cell_base;
             bit_cell_frac <= 10'd0;
             bit_half_frac <= 10'd0;
+            prev_write_mode <= 1'b0;
+            write_strobe_steal <= 1'b0;
             FLUX_TRANSITION <= 1'b0;
             prev_flux <= 1'b0;
             SD_TRACK_REQ <= 8'd0;
@@ -1437,46 +1457,88 @@ module flux_drive (
                     // The disk rotates continuously; bram_first_read_pending only skips flux check,
                     // not position tracking. This keeps the simulated disk synchronized with real timing.
                     // skip_position_advance is set when TRACK_LOAD_COMPLETE or drive_ready resets position.
+                    //
+                    // WRITE MODE: When WRITE_MODE is active, advance bit_position from WRITE_STROBE
+                    // instead of bit_timer. The IWM's write state machine controls bit cell timing,
+                    // and we must stay exactly in sync with it. If we advance from bit_timer
+                    // independently, fractional accumulator drift causes bit_position to be off by
+                    // 1-2 bits after hundreds of writes, corrupting GCR sector checksums.
+                    // Write mode tracking
+                    if (prev_write_mode && !WRITE_MODE) begin
+                        // Clear steal flag on write→read transition so it doesn't
+                        // suppress a position advance in read mode
+                        write_strobe_steal <= 1'b0;
+`ifdef SIMULATION
+                        write_count <= 0;  // Reset so next write session is logged
+                        $display("FLUX_DRIVE[%0d]: Write->Read transition pos=%0d timer=%0d steal=%0d",
+                                 DRIVE_ID, bit_position, bit_timer, write_strobe_steal);
+`endif
+                    end
+                    prev_write_mode <= WRITE_MODE;
+
+                    // WRITE MODE POSITION SYNC:
+                    // During writes, WRITE_STROBE from the IWM fires once per bit cell.
+                    // bit_timer also ticks once per bit cell, but they can be slightly
+                    // out of phase (different fractional accumulators). Over hundreds of
+                    // writes, this drift corrupts GCR checksums.
+                    //
+                    // Solution: when WRITE_STROBE fires, it "steals" the position advance
+                    // for that bit cell — bit_timer continues counting but its position
+                    // advance is suppressed for that one cycle. This keeps bit_position
+                    // exactly aligned with the IWM's byte framing while preserving
+                    // bit_timer's phase for seamless read-back after writes end.
+                    //
+                    // write_strobe_steal is set when WRITE_STROBE advances position,
+                    // preventing bit_timer from also advancing in the same bit cell.
+                    if (WRITE_MODE && WRITE_STROBE && !skip_position_advance) begin
+                        // WRITE_STROBE fires: advance position and mark this cell as handled
+                        if (TRACK_BIT_COUNT > 0) begin
+                            if (effective_bit_position + 1 >= track_bit_count_17)
+                                bit_position <= 17'd0;
+                            else
+                                bit_position <= bit_position + 1'd1;
+                        end else begin
+                            bit_position <= bit_position + 1'd1;
+                        end
+                        write_strobe_steal <= 1'b1;
+                    end
+
                     if (!bram_first_read_pending) begin
                         if (bit_timer == 6'd1 && !skip_position_advance) begin
-                        // End of bit cell - advance to next bit
+                        // End of bit cell - reload timer and update head state
                         load_bit_timers();
-                        // Update MC3470 head window: shift in source bit
                         head_window <= {head_window[2:0], current_bit};
 
-                        // Update weak-bit zero run counter and active flag
                         if (current_bit) begin
                             zero_run_count <= 8'd0;
                             weak_bit_active <= 1'b0;
                         end else begin
                             if (zero_run_count < 8'd255)
                                 zero_run_count <= zero_run_count + 8'd1;
-                            // Activate after 4+ consecutive zeros
                             if (zero_run_count >= 8'd3)
                                 weak_bit_active <= 1'b1;
                         end
 
-                        // Advance bit position with wraparound
-                        // Use effective_bit_position for wrap check to handle side toggles correctly.
-                        // We wrap when the effective position completes a track, not raw position.
-                        if (TRACK_BIT_COUNT > 0) begin
-                            if (effective_bit_position + 1 >= track_bit_count_17) begin
-                                // Wrap: set bit_position to where effective_position would wrap to
-                                // This handles cases where bit_position > TRACK_BIT_COUNT
-                                bit_position <= 17'd0;
-                                // Signal that one full rotation has completed
-                                rotation_complete <= 1'b1;
-                                // Reset MC3470 window at track wrap to prevent
-                                // false triggers from zeros spanning the wrap point
-                                head_window <= 4'hF;
-                                zero_run_count <= 8'd0;
-                                weak_bit_active <= 1'b0;
+                        // Advance bit_position — UNLESS write_strobe_steal is set,
+                        // meaning WRITE_STROBE already advanced position this bit cell.
+                        // This prevents double-advancing and keeps the IWM's write byte
+                        // framing exactly aligned with bit_position.
+                        if (write_strobe_steal) begin
+                            write_strobe_steal <= 1'b0;  // Consumed — next cell is normal
+                        end else begin
+                            if (TRACK_BIT_COUNT > 0) begin
+                                if (effective_bit_position + 1 >= track_bit_count_17) begin
+                                    bit_position <= 17'd0;
+                                    rotation_complete <= 1'b1;
+                                    head_window <= 4'hF;
+                                    zero_run_count <= 8'd0;
+                                    weak_bit_active <= 1'b0;
+                                end else begin
+                                    bit_position <= bit_position + 1'd1;
+                                end
                             end else begin
                                 bit_position <= bit_position + 1'd1;
                             end
-                        end else begin
-                            // No track loaded yet; keep angular position advancing.
-                            bit_position <= bit_position + 1'd1;
                         end
 
                         end else if (!skip_position_advance) begin

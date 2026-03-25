@@ -102,6 +102,7 @@ module iigs
    input  [31:0]      WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
    output [7:0]       WOZ_TRACK3_BIT_DATA_IN, // Write byte to BRAM
    output             WOZ_TRACK3_BIT_WE,      // Write enable
+   output [15:0]      WOZ_TRACK3_BIT_WR_ADDR, // Write address (latched)
 
    // --- WOZ bit interface for 5.25" drive 1 ---
    output [5:0]       WOZ_TRACK1,           // Track number being read
@@ -114,6 +115,7 @@ module iigs
    input  [31:0]      WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
    output [7:0]       WOZ_TRACK1_BIT_DATA_IN,   // Write byte to BRAM
    output             WOZ_TRACK1_BIT_WE,        // Write enable
+   output [15:0]      WOZ_TRACK1_BIT_WR_ADDR,   // Write address (latched)
 
    input [3:0]        DISK_READY,
    input              FLOPPY_WP,
@@ -125,6 +127,7 @@ module iigs
 
    // Floppy motor status (for dirty track flush on motor-off)
    output             floppy_motor_on,
+   output             floppy35_motor_on,
 
    // Keyboard-triggered reset outputs
    output        keyboard_reset,      // Ctrl+F11 was pressed - trigger warm reset
@@ -2581,6 +2584,7 @@ wire ready_out;
   assign TRACK3_WE = 1'b0;
   assign FD_DISK_3 = 1'b0;
   assign floppy_motor_on = 1'b0;
+  assign floppy35_motor_on = 1'b0;
   // Stub WOZ bit interfaces
   assign WOZ_TRACK3 = 8'd0;
   assign WOZ_TRACK3_BIT_ADDR = 16'd0;
@@ -2589,8 +2593,10 @@ wire ready_out;
   assign WOZ_TRACK1_BIT_ADDR = 13'd0;
   assign WOZ_TRACK3_BIT_DATA_IN = 8'd0;
   assign WOZ_TRACK3_BIT_WE = 1'b0;
+  assign WOZ_TRACK3_BIT_WR_ADDR = 16'd0;
   assign WOZ_TRACK1_BIT_DATA_IN = 8'd0;
   assign WOZ_TRACK1_BIT_WE = 1'b0;
+  assign WOZ_TRACK1_BIT_WR_ADDR = 16'd0;
   `else
   // Hardware-accurate IWM with WOZ/flux-based disk interface
   iwm_woz iwmc (
@@ -2627,6 +2633,7 @@ wire ready_out;
       .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
       .WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
       .WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
+      .WOZ_TRACK3_BIT_WR_ADDR(WOZ_TRACK3_BIT_WR_ADDR),
       // WOZ bit interface for 5.25" drive 1
       .WOZ_TRACK1(WOZ_TRACK1),
       .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
@@ -2638,8 +2645,10 @@ wire ready_out;
       .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
       .WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
       .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
+      .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
       // Motor status for clock slowdown
-      .FLOPPY_MOTOR_ON(floppy_motor_on)
+      .FLOPPY_MOTOR_ON(floppy_motor_on),
+      .FLOPPY35_MOTOR_ON(floppy35_motor_on)
   );
   // Internal wires not used with flux-based IWM
   assign TRACK3 = 7'd0;

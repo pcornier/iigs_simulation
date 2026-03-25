@@ -61,13 +61,18 @@ module iwm_woz (
     // Write signals for 3.5" controller
     output [7:0]    WOZ_TRACK3_BIT_DATA_IN,  // Write byte to BRAM
     output          WOZ_TRACK3_BIT_WE,       // Write enable
+    output [15:0]   WOZ_TRACK3_BIT_WR_ADDR,  // Write address (latched, not same as read addr)
 
     // Write signals for 5.25" controller
     output [7:0]    WOZ_TRACK1_BIT_DATA_IN,  // Write byte to BRAM
     output          WOZ_TRACK1_BIT_WE,       // Write enable
+    output [15:0]   WOZ_TRACK1_BIT_WR_ADDR,  // Write address (latched)
 
     // Motor status for clock slowdown
-    output          FLOPPY_MOTOR_ON
+    output          FLOPPY_MOTOR_ON,
+
+    // 3.5" drive motor status (for dirty track flush in woz_floppy_controller)
+    output          FLOPPY35_MOTOR_ON
 );
 
     //=========================================================================
@@ -444,6 +449,7 @@ module iwm_woz (
     // Write outputs from drive35
     wire [7:0]  drive35_write_byte;
     wire        drive35_write_we;
+    wire [15:0] drive35_write_addr;
 
     // 3.5" drives must NOT use the 5.25" inertia-managed motor_spinning signal.
     // The IIgs ROM (Sony driver) can toggle DISK35 during command boundaries, and
@@ -513,6 +519,7 @@ module iwm_woz (
         .WRITE_MODE(flux_write_mode),
         .WRITE_BYTE_OUT(drive35_write_byte),
         .WRITE_WE_OUT(drive35_write_we),
+        .WRITE_ADDR_OUT(drive35_write_addr),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
         .SD_TRACK_ACK(1'b0),
@@ -662,6 +669,7 @@ module iwm_woz (
         .WRITE_MODE(1'b0),
         .WRITE_BYTE_OUT(),
         .WRITE_WE_OUT(),
+        .WRITE_ADDR_OUT(),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
         .SD_TRACK_ACK(1'b0),
@@ -688,6 +696,7 @@ module iwm_woz (
     // Write outputs from drive525
     wire [7:0]  drive525_write_byte;
     wire        drive525_write_we;
+    wire [15:0] drive525_write_addr;
 
     // Drive is active when motor is spinning, 5.25" mode, and disk ready
     wire drive525_active = motor_spinning && !is_35_inch && DISK_READY[0];
@@ -738,6 +747,7 @@ module iwm_woz (
         .WRITE_MODE(flux_write_mode),
         .WRITE_BYTE_OUT(drive525_write_byte),
         .WRITE_WE_OUT(drive525_write_we),
+        .WRITE_ADDR_OUT(drive525_write_addr),
         .SD_TRACK_REQ(),
         .SD_TRACK_STROBE(),
         .SD_TRACK_ACK(1'b0),
@@ -753,8 +763,10 @@ module iwm_woz (
     // Route write outputs to module ports
     assign WOZ_TRACK3_BIT_DATA_IN = drive35_write_byte;
     assign WOZ_TRACK3_BIT_WE = drive35_write_we;
+    assign WOZ_TRACK3_BIT_WR_ADDR = drive35_write_addr;
     assign WOZ_TRACK1_BIT_DATA_IN = drive525_write_byte;
     assign WOZ_TRACK1_BIT_WE = drive525_write_we;
+    assign WOZ_TRACK1_BIT_WR_ADDR = drive525_write_addr;
 
     //=========================================================================
     // Flux Mux - Select active drive's flux transitions
@@ -947,6 +959,41 @@ module iwm_woz (
     wire current_motor_spinning = flux_is_35_inch ? drive35_motor_spinning : drive525_motor_spinning;
 
     //=========================================================================
+    // SmartPort Device State Machine
+    //=========================================================================
+
+    wire        sp_wr_strobe;
+    wire [7:0]  sp_wr_data;
+    wire        sp_rd_strobe;
+    wire        sp_rd_data_valid;
+    wire [7:0]  sp_rd_data;
+    wire        sp_bsy;
+    wire        sp_req;
+
+    smartport_dev sp_dev (
+        .clk(CLK_14M),
+        .reset(RESET),
+        .smartport_mode(smartport_mode),
+        .wr_strobe(sp_wr_strobe),
+        .wr_data(sp_wr_data),
+        .rd_strobe(sp_rd_strobe),
+        .rd_data(sp_rd_data),
+        .rd_data_valid(sp_rd_data_valid),
+        .req(sp_req),
+        .bsy(sp_bsy),
+        // Block I/O ports - unconnected for now (will use sd_* interface later)
+        .sp_block_num(),
+        .sp_command(),
+        .sp_buf_addr(),
+        .sp_buf_data_out(),
+        .sp_buf_data_in(8'h00),
+        .sp_buf_we(1'b0),
+        .sp_request(),
+        .sp_done(1'b0),
+        .sp_error(1'b0)
+    );
+
+    //=========================================================================
     // IWM Chip (Flux-Based Byte Decoding)
     //=========================================================================
 
@@ -1045,6 +1092,13 @@ module iwm_woz (
         .FLUX_WRITE(flux_write_bit),
         .FLUX_WRITE_STROBE(flux_write_strobe),
         .FLUX_WRITE_MODE(flux_write_mode),
+        .SP_WR_STROBE(sp_wr_strobe),
+        .SP_WR_DATA(sp_wr_data),
+        .SP_RD_STROBE(sp_rd_strobe),
+        .SP_RD_DATA_VALID(sp_rd_data_valid),
+        .SP_RD_DATA(sp_rd_data),
+        .SP_BSY(sp_bsy),
+        .SP_REQ(sp_req),
         .DEBUG_RSH(),
         .DEBUG_STATE()
     );
@@ -1059,19 +1113,31 @@ module iwm_woz (
     // 3.5" drives (handled by Sony logic) should NOT slow the system to 1MHz.
     assign FLOPPY_MOTOR_ON = motor_spinning;
 
+    // 3.5" drive motor spinning state (from flux_drive Sony motor logic)
+    // Used by woz_floppy_controller to trigger dirty track flush on motor-off
+    assign FLOPPY35_MOTOR_ON = drive35_motor_spinning;
+
 `ifdef SIMULATION
     // Debug: Monitor state changes
     reg [3:0] prev_phase;
     reg       prev_drive_on;
     reg       prev_motor_spinning;
     reg       prev_iwm_active;
+    reg       prev_smartport_mode;
     reg [31:0] debug_cycle;
     always @(posedge CLK_14M) begin
         if (RESET) begin
             debug_cycle <= 0;
             prev_iwm_active <= 1'b0;
+            prev_smartport_mode <= 1'b0;
         end else begin
             debug_cycle <= debug_cycle + 1;
+            // Track SmartPort mode transitions
+            if (smartport_mode != prev_smartport_mode) begin
+                $display("IWM_WOZ: SMARTPORT_MODE %0d -> %0d (mode=%02h imm_mode=%02h iwm_active=%0d drive_on=%0d)",
+                         prev_smartport_mode, smartport_mode, mode_reg, immediate_mode, iwm_active, drive_on);
+            end
+            prev_smartport_mode <= smartport_mode;
         end
 
         if (motor_phase != prev_phase) begin

@@ -3749,6 +3749,8 @@ bool reset_at_frame_cold = false;  // true = cold reset, false = warm reset
 std::vector<int> memory_dump_frames;
 bool memory_dump_mode = false;
 
+// SmartPort Block I/O Handler
+// ---------------------------
 // Disk image support (supports 2 HDD units - ProDOS limit)
 // ---------------------------
 std::string disk_image = "";   // HDD unit 0 (--disk)
