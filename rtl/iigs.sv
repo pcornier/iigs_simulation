@@ -1879,53 +1879,28 @@ assign     fastram_datatoram = dout;
 assign     fastram_dout = fastram_datafromram;
 assign     fastram_we = we;
 
+logic [1:0] rom_bankaddr;
+assign rom_bankaddr = (rom2_ce | slot_internalrom_ce) ? 2'b11 : bank[1:0];
 
-//`define ROM3 1
 `ifdef ROM3
 
-
-
-rom #(.memfile("rom3/romc.mem")) romc(
+rom #(.AW(18), .memfile("rom3/boot.rom")) rom(
   .clock(CLK_14M),
-  .address(addr),
-  .q(romc_dout),
-  .ce(romc_ce)
+  .address({rom_bankaddr, addr}),
+  .q(rom_dout),
+  .ce(rom_ce)
 );
-rom #(.memfile("rom3/romd.mem")) romd(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(romd_dout),
-  .ce(romd_ce)
-);
-rom #(.memfile("rom3/rom1.mem")) rom1(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom1_dout),
-  .ce(rom1_ce)
-);
-
-rom #(.memfile("rom3/rom2.mem")) rom2(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom2_dout),
-  .ce(rom2_ce|slot_internalrom_ce)
-);
-
 
 `else
 
-rom #(.memfile("rom1/rom1.mem")) rom1(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom1_dout),
-  .ce(rom1_ce)
-);
+logic rom_bankaddr;
+assign rom_bankaddr = (rom2_ce | slot_internalrom_ce) ? 1'b1 : bank[0];
 
-rom #(.memfile("rom1/rom2.mem")) rom2(
+rom #(.AW(17), .memfile("rom1/boot.rom")) rom(
   .clock(CLK_14M),
-  .address(addr),
-  .q(rom2_dout),
-  .ce(rom2_ce|slot_internalrom_ce)
+  .address({rom_bankaddr[0], addr}),
+  .q(rom_dout),
+  .ce(rom_ce)
 );
 `endif
 
@@ -1939,7 +1914,7 @@ wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || ba
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
 reg [7:0] io_select;
-wire [7:0] rom1_dout, rom2_dout, romc_dout, romd_dout;
+wire [7:0] rom_dout;
 wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 
@@ -2056,11 +2031,7 @@ wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef :
 
 wire [7:0] din =
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
-  rom1_ce ? rom1_dout :
-  rom2_ce ? rom2_dout :
-  romc_ce ? romc_dout :
-  romd_ce ? romd_dout :
-  slot_internalrom_ce ?  rom2_dout :
+  rom_ce ?  rom_dout :
   fastram_ce ? fastram_dout :
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
@@ -2815,7 +2786,7 @@ wire ready_out;
   //wire sw3 = joystick_0[7];                 // Button 3
 
 // ROM access signal: refresh penalty is hidden during ROM reads
-wire is_rom_access = rom1_ce | rom2_ce | romc_ce | romd_ce;
+wire rom_ce = rom1_ce | rom2_ce | romc_ce | romd_ce | slot_internalrom_ce;
 
 // Clock divider instance
 clock_divider clk_div_inst (
@@ -2827,7 +2798,7 @@ clock_divider clk_div_inst (
     .IO(IO),
     .we(we),
     .valid(valid),
-    .is_rom_access(is_rom_access),
+    .is_rom_access(rom_ce),
     .reset(reset),
     .stretch(1'b0),  // TODO: Connect to VGC stretch signal
     .clk_14M_en(),

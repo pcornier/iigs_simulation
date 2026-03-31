@@ -4856,11 +4856,21 @@ int main(int argc, char** argv, char** env) {
 		ImGui::Begin("Slow RAM Editor");
 		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram, 131072, 0);
 		ImGui::End();
+
+		uint8_t *romp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->emu__DOT__iigs__DOT__rom__DOT__d);
+
+#ifdef ROM3
+		uint8_t *rom1p = romp + (65536 * 2);
+		uint8_t *rom2p = romp + (65536 * 3);
+#else
+		uint8_t *rom1p = romp;
+		uint8_t *rom2p = romp + (65536);
+#endif
 		ImGui::Begin("ROM 1 Editor");
-		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__iigs__DOT__rom1__DOT__d, 65536, 0);
+		mem_edit.DrawContents(rom1p, 65536, 0);
 		ImGui::End();
 		ImGui::Begin("ROM 2 Editor");
-		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__iigs__DOT__rom2__DOT__d, 65536, 0);
+		mem_edit.DrawContents(rom2p, 65536, 0);
 		ImGui::End();
 
 		ImGui::Begin("CPU Registers");
