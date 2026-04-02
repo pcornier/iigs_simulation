@@ -37,13 +37,14 @@ module iigs
   output phi0,
   output clk_7M,
 
-     // fastram sdram
-  output [22:0] fastram_address,
-  output [7:0] fastram_datatoram,
-  input  [7:0] fastram_datafromram,
-  output       fastram_we,
+  // fastram sdram
+  output [23:0] top_addr,
+  output[1:0]  rom_bankaddr,
+  output [7:0] top_dout,
+  input  [7:0] top_din,
+  output       we,
   output       fastram_ce,
-
+  output       rom_ce,
 
  // ps2 alternative interface.
  // [8] - extended, [9] - pressed, [10] - toggles with every press/release
@@ -134,6 +135,10 @@ module iigs
    output        keyboard_cold_reset  // Ctrl+OpenApple+F11 was pressed - trigger cold reset
 
 );
+
+   assign top_addr = addr_bus;
+   assign top_dout = dout;
+
    logic [7:0]       bank;
    logic [15:0]      addr;
    logic [7:0]       dout;
@@ -161,7 +166,6 @@ module iigs
    logic       AN3/*verilator public_flat*/;
    logic [7:0] NEWVIDEO/*verilator public_flat*/;
    logic IO/*verilator public_flat*/;
-   logic we/*verilator public_flat*/;
    logic slow/*verilator public_flat*/;
    logic slowMem/*verilator public_flat*/;
    logic ph0_state;
@@ -437,11 +441,6 @@ module iigs
     end
   end
 
-  // FastRAM uses the full address bus from CPU
-  always_comb begin
-    fastram_addr_bus = addr_bus;
-  end
-
   // ============================================================================
   // CLEAN SYSTEMATIC MEMORY CONTROLLER
   // ============================================================================
@@ -606,7 +605,7 @@ module iigs
     if (addr_bef == 16'hC034) begin
       $display("C034_ACCESS: cpu_addr=%06x bank_bef=%02x addr_bef=%04x we=%b IO=%b data=%02x",
                cpu_addr, bank_bef, addr_bef, we, IO, we ? cpu_dout : cpu_din);
-      $display("C034_ADDR_BUS: addr_bus=%06x fastram_addr=%06x", addr_bus, fastram_addr_bus);
+      $display("C034_ADDR_BUS: addr_bus=%06x", addr_bus);
     end
 
     // Monitor any writes that might be going to wrong addresses
@@ -715,13 +714,13 @@ module iigs
           if (txt1_shadow) begin
             $display("0600_PATTERN_WRITE: bank_%02x data=%02x shadow[0]=%b -> Bank_00 + Bank_E0 (dual write)", 
                      bank_bef, cpu_dout, shadow[0]);
-            $display("0600_WRITE_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x", 
+            $display("0600_WRITE_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x",
                      fastram_ce_int, slowram_ce_int, addr_bus);
-            $display("0600_WRITE_ADDR: fastram_addr=%06x slowram_addr=bank[0]_addr", 
-                     fastram_addr_bus);
-            $display("0600_WRITE_EN: fastram_we=%b slowram_we=%b mem_clk=%b CLK_14M=%b", 
+            $display("0600_WRITE_ADDR: addr_bus=%06x slowram_addr=bank[0]_addr",
+                     addr_bus);
+            $display("0600_WRITE_EN: we=%b slowram_we=%b mem_clk=%b CLK_14M=%b",
                      we, slowram_we, mem_clk, CLK_14M);
-            $display("0600_WRITE_TIMING: cpu_dout=%02x actual_write_data=%02x", 
+            $display("0600_WRITE_TIMING: cpu_dout=%02x actual_write_data=%02x",
                      cpu_dout, dout);
           end else begin
             $display("0600_PATTERN_WRITE: bank_%02x data=%02x shadow[0]=%b -> Bank_00", 
@@ -741,10 +740,10 @@ module iigs
           // Enhanced read debugging - show exactly where data comes from
           $display("0600_READ_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x txt1_shadow=%b", 
                    fastram_ce_int, slowram_ce_int, addr_bus, txt1_shadow);
-          $display("0600_READ_ADDR: fastram_addr=%06x slowram_addr=bank[0]_addr", 
-                   fastram_addr_bus);
-          $display("0600_READ_DATA: cpu_din=%02x fastram_data=%02x slowram_data=%02x", 
-                   cpu_din, fastram_datafromram, slowram_dout);
+          $display("0600_READ_ADDR: addr_bus=%06x slowram_addr=bank[0]_addr",
+                   addr_bus);
+          $display("0600_READ_DATA: cpu_din=%02x top_dout=%02x slowram_data=%02x",
+                   cpu_din, top_dout, slowram_dout);
           $display("0600_READ_EN: slowram_we=%b mem_clk=%b slowram_ce_actual=%b", 
                    slowram_we, mem_clk, slowram_ce);
           $display("0600_READ_MUX: rom1_ce=%b rom2_ce=%b IO=%b data_source=%s", 
@@ -1874,35 +1873,8 @@ module iigs
       else
         aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
     end
-assign     fastram_address = {bank[6:0],addr};
-assign     fastram_datatoram = dout;
-assign     fastram_dout = fastram_datafromram;
-assign     fastram_we = we;
 
-logic [1:0] rom_bankaddr;
 assign rom_bankaddr = (rom2_ce | slot_internalrom_ce) ? 2'b11 : bank[1:0];
-
-`ifdef ROM3
-
-rom #(.AW(18), .memfile("rom3/boot.rom")) rom(
-  .clock(CLK_14M),
-  .address({rom_bankaddr, addr}),
-  .q(rom_dout),
-  .ce(rom_ce)
-);
-
-`else
-
-logic rom_bankaddr;
-assign rom_bankaddr = (rom2_ce | slot_internalrom_ce) ? 1'b1 : bank[0];
-
-rom #(.AW(17), .memfile("rom1/boot.rom")) rom(
-  .clock(CLK_14M),
-  .address({rom_bankaddr[0], addr}),
-  .q(rom_dout),
-  .ce(rom_ce)
-);
-`endif
 
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~inhibit_cxxx;
@@ -1914,8 +1886,6 @@ wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || ba
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
 reg [7:0] io_select;
-wire [7:0] rom_dout;
-wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 
 always @(*)
@@ -1933,22 +1903,6 @@ begin
           io_select[addr[10:8]]=1'b1;
   end
 end
-`ifdef NOTDEFINED
-`ifdef VERILATOR
-dpram #(.widthad_a(23),.prefix("fast")) fastram
-`else
-dpram #(.widthad_a(16)) fastram
-`endif
-(
-        .clock_a(clk_sys),
-        .address_a({ bank[6:0], addr }),
-        .data_a(dout),
-        .q_a(fastram_dout),
-        .wren_a(we),
-        .ce_a(fastram_ce),
-);
-`endif
-
 
 `ifdef VERILATOR
 dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
@@ -2031,8 +1985,7 @@ wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef :
 
 wire [7:0] din =
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
-  rom_ce ?  rom_dout :
-  fastram_ce ? fastram_dout :
+  (fastram_ce | rom_ce) ?  top_din :
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
   floating_bus;
@@ -2786,7 +2739,7 @@ wire ready_out;
   //wire sw3 = joystick_0[7];                 // Button 3
 
 // ROM access signal: refresh penalty is hidden during ROM reads
-wire rom_ce = rom1_ce | rom2_ce | romc_ce | romd_ce | slot_internalrom_ce;
+assign rom_ce = rom1_ce | rom2_ce | romc_ce | romd_ce | slot_internalrom_ce;
 
 // Clock divider instance
 clock_divider clk_div_inst (

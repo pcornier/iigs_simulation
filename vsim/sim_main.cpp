@@ -3635,7 +3635,7 @@ int verilate() {
                                 unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                                 unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                                 // Prefer top-level bus write-enable computed in iigs.sv (we = ~cpu_we_n)
-                                bool is_write = VERTOPINTERN->emu__DOT__iigs__DOT__we;
+                                bool is_write = VERTOPINTERN->emu__DOT__we;
                                 unsigned char data = is_write ? (unsigned char)VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D_OUT : (unsigned char)din;
                                 hdd_ring_record(pbr_now, pc_now, bank, addr16, is_write, data);
                             }
@@ -4857,7 +4857,7 @@ int main(int argc, char** argv, char** env) {
 		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram, 131072, 0);
 		ImGui::End();
 
-		uint8_t *romp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->emu__DOT__iigs__DOT__rom__DOT__d);
+                uint8_t *romp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->emu__DOT__rom__DOT__d);
 
 #ifdef ROM3
 		uint8_t *rom1p = romp + (65536 * 2);

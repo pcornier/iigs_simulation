@@ -114,12 +114,18 @@ wire UART_TXD;
 // UART inputs: RXD idle (mark=1), CTS asserted (clear to send=0)
 wire UART_RXD = 1'b1;
 wire UART_CTS = 1'b0;
-    wire [22:0] fastram_address;
-    wire [7:0] fastram_datatoram;
-    wire [7:0] fastram_datafromram;
-    wire fastram_we;
-    wire fastram_ce;
+wire [23:0] addr_bus;
+wire [22:0] fastram_address;
+wire [1:0] rom_bankaddr;
+wire [7:0] fastram_dout;
+wire [7:0] rom_dout;
+wire [7:0] iigs_dout;
+wire [7:0] iigs_din;
+wire   we/*verilator public_flat*/;
+wire fastram_ce;
+wire rom_ce;
 
+assign fastram_address = addr_bus[22:0];
 
 // WOZ bit interfaces for flux-based IWM
 // 3.5" drive 1 WOZ bit interface
@@ -221,11 +227,13 @@ iigs  iigs(
     .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
     .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
 
-        .fastram_address(fastram_address),
-        .fastram_datatoram(fastram_datatoram),
-        .fastram_datafromram(fastram_datafromram),
-        .fastram_we(fastram_we),
+        .top_addr(addr_bus),
+        .rom_bankaddr(rom_bankaddr),
+        .top_dout(iigs_dout),
+        .top_din(iigs_din),
+        .we(we),
         .fastram_ce(fastram_ce),
+        .rom_ce(rom_ce),
 
         .ps2_key(ps2_key),
         .ps2_mouse(ps2_mouse),
@@ -262,25 +270,29 @@ iigs  iigs(
         .UART_CTS(UART_CTS)
 );
 
+  assign iigs_din = rom_ce ? rom_dout : fastram_dout;
+
   reg prev_fastram_we;
   reg [22:0] prev_fastram_addr;
   always @(posedge clk_sys) begin
-    prev_fastram_we <= fastram_we;
+    prev_fastram_we <= we;
     prev_fastram_addr <= fastram_address;
     // Show all transitions involving C010
     if (fastram_ce && (fastram_address == 23'h00c010 || prev_fastram_addr == 23'h00c010)) begin
       $display("FASTRAM C010: addr=%x->%x data_in=%x data_out=%x we=%b->%b ce=%b",
-               prev_fastram_addr, fastram_address, fastram_datatoram, fastram_datafromram, prev_fastram_we, fastram_we, fastram_ce);
+               prev_fastram_addr, fastram_address, iigs_dout, fastram_dout, prev_fastram_we, we, fastram_ce);
     end
   end
    //dpram #(.widthad_a(23),.prefix("fast")) fastram
+
+
 dpram #(.widthad_a(23),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),
         .address_a( fastram_address ),
-        .data_a(fastram_datatoram),
-        .q_a(fastram_datafromram),
-        .wren_a(fastram_we & fastram_ce),
+        .data_a(iigs_dout),
+        .q_a(fastram_dout),
+        .wren_a(we & fastram_ce),
         .ce_a(fastram_ce),
         .clock_b(clk_sys),
         .wren_b(1'b0),
@@ -290,6 +302,24 @@ dpram #(.widthad_a(23),.prefix("fast")) fastram
 );
 
 
+`ifdef ROM3
+
+rom #(.AW(18), .memfile("rom3/boot.rom")) rom(
+  .clock(CLK_14M),
+  .address({rom_bankaddr, addr_bus[15:0]}),
+  .q(rom_dout),
+  .ce(rom_ce)
+);
+
+`else
+
+rom #(.AW(17), .memfile("rom1/boot.rom")) rom(
+  .clock(CLK_14M),
+  .address({rom_bankaddr[0], addr_bus[15:0]}),
+  .q(rom_dout),
+  .ce(rom_ce)
+);
+`endif
 
 always @(posedge clk_sys) begin
 `ifdef DEBUG_SIM
