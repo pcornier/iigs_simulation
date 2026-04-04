@@ -1640,8 +1640,15 @@ module iwm_flux (
                         rd_from_completion <= byte_completing &&
                                               (data_out_mux == byte_complete_data);
                     end
-                end else if (!rd_from_completion && rd_was_data_reg && byte_completing) begin
-                    // Byte completed mid-PHI2: update latched value to the newly completed byte.
+                end else if (!rd_latched_valid && !rd_from_completion &&
+                             rd_was_data_reg && byte_completing) begin
+                    // Only adopt a byte that completes mid-PHI2 if there was NO valid byte
+                    // available at the start of the access. If a valid byte was already
+                    // present, the CPU can read that old byte while a new one completes later
+                    // in the same PHI2 window. Replacing rd_data_latched in that case makes
+                    // the acknowledge path consume a different byte from the one the CPU saw,
+                    // which is exactly the mismatch visible in the current hang log
+                    // (read_iwm ret=96 followed by IWM_READ_ACK latched=95/da/fa).
                     rd_data_latched <= byte_complete_data;
                     rd_latched_valid <= byte_complete_data[7];
                     rd_from_completion <= 1'b1;
@@ -1891,8 +1898,14 @@ module iwm_flux (
     // Output Assignments
     //=========================================================================
 
-    // Drive live data so reads can observe bytes that complete mid-PHI2.
-    assign DATA_OUT     = data_out_mux;
+    // Hold the data-register byte stable across a CPU read access. Without this,
+    // DATA_OUT can change underneath the CPU during PHI2-high when a new byte
+    // completes, so the core/logged read sees one byte while the ack path later
+    // consumes another. Status/handshake reads remain live/combinational.
+    wire [7:0] cpu_visible_data_out =
+        (rd_in_progress && rd_was_data_reg && rd_latched_valid) ? rd_data_latched
+                                                                : data_out_mux;
+    assign DATA_OUT     = cpu_visible_data_out;
     assign FLUX_WRITE_MODE = m_rw_mode;
     assign DEBUG_RSH    = m_rsh;
     assign DEBUG_STATE  = rw_state;
