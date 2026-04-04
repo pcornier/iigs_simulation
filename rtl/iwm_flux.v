@@ -124,8 +124,10 @@ module iwm_flux (
     // aren't broken when the CPU reads one byte per poll cycle.
     reg [7:0]  m_data_next;       // Buffered next byte (valid when m_data_next_valid=1)
     reg        m_data_next_valid; // Buffer has a pending byte
+    reg [31:0] m_data_next_gen;   // Generation id for buffered next byte
     reg        m_rw_mode;   // 0 = read mode, 1 = write mode (tracks Q7 for mode changes)
-    reg        m_motor_was_on; // Track motor state for edge detection
+    reg        m_motor_was_on;      // Track IWM active latch for edge detection
+    reg        m_decode_was_running; // Track physical byte-decoder activity
     reg [31:0] m_data_gen;  // Generation counter for m_data updates (guards async clear)
     // Minimal write-mode underrun handling:
     // We don't implement flux writing yet, but the IIgs ROM/SmartPort code can enter the
@@ -179,6 +181,35 @@ module iwm_flux (
     // stopped during these transient toggles, it would lose byte alignment.
     // MOTOR_ACTIVE still gates CPU register output and read acknowledgment.
     wire       motor_decode_ok = MOTOR_SPINNING && DISK_READY;
+    // Immediate Q6/Q7 values for current access.
+    wire       access_q6 = (ADDR[3:1] == 3'b110);
+    wire       access_q7 = (ADDR[3:1] == 3'b111);
+    wire       immediate_q6 = access_q6 ? ADDR[0] : SW_Q6;
+    wire       immediate_q7 = access_q7 ? ADDR[0] : SW_Q7;
+    // SmartPort/C-Bus mode detection (MAME-style): mode bit3 selects disk bit-cell width,
+    // and mode bit1 is used for async/SmartPort handshakes.
+    wire       smartport_mode = (!SW_MODE[3]) && SW_MODE[1];
+    // Same-cycle write detection is required for async 3.5" writes: the ROM can present a
+    // new byte exactly at the byte-boundary poll. However, if a previous byte is already
+    // buffered in m_data, that older byte must be shifted out first and the new byte must
+    // remain queued for the following boundary. Preferring DATA_IN unconditionally here can
+    // skip one serialized byte and corrupt sector/data prologues.
+    wire       cpu_write_data_reg =
+                    WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] &&
+                    MOTOR_ACTIVE && !smartport_mode;
+    wire       buffered_write_pending = (m_data_gen != write_data_gen);
+    wire [7:0] current_write_data = buffered_write_pending ? m_data :
+                                    (cpu_write_data_reg ? DATA_IN : m_data);
+    wire [31:0] current_write_gen = buffered_write_pending ? m_data_gen :
+                                    (cpu_write_data_reg ? (m_data_gen + 32'd1) : m_data_gen);
+    wire       write_byte_available = buffered_write_pending || cpu_write_data_reg;
+    wire       write_accepts_immediately =
+                    m_rw_mode && is_async &&
+                    ((rw_state == S_IDLE) ||
+                     ((rw_state == SW_WINDOW_END) &&
+                      (window_counter == 6'd1) &&
+                      (write_bit_count == 3'd0)) ||
+                     (rw_state == SW_UNDERRUN));
     //=========================================================================
     // State Machine (from MAME)
     //=========================================================================
@@ -329,6 +360,13 @@ module iwm_flux (
     // Acknowledge whichever byte the CPU actually saw (old or newly-completing).
     wire       rd_ack_take = rd_latched_valid && rd_data_latched[7] &&
                              (rd_ack_match_old || rd_ack_match_new);
+    // In latch mode, a byte can complete during the PHI2 where the CPU consumes the
+    // previous byte. The completion path queues that new byte in m_data_next; we must
+    // still acknowledge the old byte at PHI2-fall so the queued byte is promoted.
+    // Otherwise the CPU sees the old byte again on the next $C0EC poll, which breaks
+    // the immediate read after D5 AA AD when the ROM expects the sector mark.
+    wire       rd_ack_promote_queued = latch_mode && rd_ack_match_old &&
+                                       byte_completing && m_data_next_valid;
 
     reg [7:0]  prolog_last1;  // Most recent completed byte (for prolog detection)
     reg [7:0]  prolog_last2;  // Second most recent completed byte
@@ -427,8 +465,10 @@ module iwm_flux (
             m_data_read    <= 1'b1;   // Start as "read" so first byte triggers ready
             m_data_next       <= 8'h00;
             m_data_next_valid <= 1'b0;
+            m_data_next_gen   <= 32'd0;
             m_rw_mode      <= 1'b0;   // Start in read mode
             m_motor_was_on <= 1'b0;
+            m_decode_was_running <= 1'b0;
             m_data_gen     <= 32'd0;
             prev_flux      <= 1'b0;
             prev_sm_active <= 1'b0;
@@ -547,11 +587,15 @@ module iwm_flux (
 `endif
             end
 
-            // MAME behavior: Clear m_data when entering read mode
-            // Only reset if motor was truly stopped (not spinning), not just command toggling
-            if (MOTOR_ACTIVE && !m_motor_was_on && !SW_Q7_MODE && !MOTOR_SPINNING) begin
+            // Re-entering read mode needs a clean decoder state when the physical decode
+            // engine actually restarts (spindle start / disk ready transition), not when the
+            // ROM briefly toggles the IWM active latch during normal AppleDisk traffic.
+            // Resetting on every MOTOR_ACTIVE rising edge breaks 3.5" rdaddr because SDCLINES
+            // pulses $C0E8 between status/data accesses while the Sony spindle keeps running.
+            if (motor_decode_ok && !m_decode_was_running && !SW_Q7_MODE) begin
                 m_data <= 8'h00;
                 m_data_next_valid <= 1'b0;
+                m_data_next_gen <= 32'd0;
                 m_rw_mode <= 1'b0;
                 rw_state <= S_IDLE;
 `ifdef SIMULATION
@@ -561,6 +605,7 @@ module iwm_flux (
                 // Switching from write mode to read mode - always reset
                 m_data <= 8'h00;
                 m_data_next_valid <= 1'b0;
+                m_data_next_gen <= 32'd0;
                 m_rw_mode <= 1'b0;
                 rw_state <= S_IDLE;
                 FLUX_WRITE <= 1'b0;
@@ -570,7 +615,12 @@ module iwm_flux (
 `endif
             end else if (MOTOR_ACTIVE && SW_Q7_MODE && !m_rw_mode) begin
                 m_rw_mode <= 1'b1;
-                m_whd <= m_whd | 8'hC0;  // Set bit 7 (ready for data) + bit 6 (no underrun)
+                // Don't advertise "ready for data" until the selected track buffer is live.
+                // After 3.5" side/track switches the Sony spindle may still be spinning while
+                // the WOZ controller is saving/loading the new track. If bit7 goes high in that
+                // window, the ROM starts sending format bytes immediately and they are dropped
+                // by flux_drive with TRACK_LOADED=0.
+                m_whd <= DISK_READY ? (m_whd | 8'hC0) : ((m_whd | 8'h40) & 8'h7F);
                 write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                 // Initialize write state - S_IDLE will wait for CPU data write before shifting
                 rw_state <= S_IDLE;
@@ -597,6 +647,7 @@ module iwm_flux (
 `endif
             end
             m_motor_was_on <= MOTOR_ACTIVE;
+            m_decode_was_running <= motor_decode_ok;
 
             // MAME async behavior: in async mode, m_data clears when the NEXT bit-cell sync
             // happens at least 14 cycles (7MHz) after the sync that was current during
@@ -666,7 +717,8 @@ module iwm_flux (
                 // FIX: Don't clear if CPU has already read the data (m_data_read=1).
                 // The async clear is meant for cases where CPU doesn't consume data fast enough,
                 // not for clearing data that was successfully read.
-                if (is_async && !byte_completing && m_data[7] && (m_data_gen == async_clear_gen)) begin
+                if (is_async && !byte_completing && m_data[7] && !m_data_read &&
+                    (m_data_gen == async_clear_gen)) begin
                     if (!latch_hold_active) begin
                         m_data <= 8'h00;
 `ifdef SIMULATION
@@ -688,7 +740,7 @@ module iwm_flux (
                 // but no data is written. Once the write state machine is actively
                 // shifting (rw_state != S_IDLE), bit 6 is managed by the state
                 // machine's underrun detection at SW_WINDOW_END, so disable the timer.
-                if (m_rw_mode && m_whd[6] && rw_state == S_IDLE) begin
+                if (m_rw_mode && m_whd[6] && m_whd[7] && rw_state == S_IDLE) begin
                     if (write_underrun_cnt != 10'd0) begin
                         write_underrun_cnt <= write_underrun_cnt - 10'd1;
                     end else begin
@@ -713,10 +765,21 @@ module iwm_flux (
             if (motor_decode_ok) begin
                 case (rw_state)
                     S_IDLE: begin
-                        if (m_rw_mode && (m_data_gen != write_data_gen)) begin
+                        if (m_rw_mode && !DISK_READY) begin
+                            // Hold the write handshake not-ready until the backend has the
+                            // selected track loaded. CPU writes are still latched into m_data,
+                            // but the ROM will not advance into the format stream until bit7
+                            // rises again.
+                            m_whd <= (m_whd | 8'h40) & 8'h7F;
+                            FLUX_WRITE_STROBE <= 1'b0;
+                        end else if (m_rw_mode && !m_whd[7]) begin
+                            // Backend became ready while we were already in write mode.
+                            m_whd <= m_whd | 8'hC0;
+                            FLUX_WRITE_STROBE <= 1'b0;
+                        end else if (m_rw_mode && write_byte_available) begin
                             // Write mode: CPU has written new data - load m_wsh and start shifting
-                            m_wsh <= m_data;
-                            write_data_gen <= m_data_gen;
+                            m_wsh <= current_write_data;
+                            write_data_gen <= current_write_gen;
                             m_whd <= m_whd | 8'hC0;  // Byte consumed + no underrun (bits 7,6)
                             write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                             write_bit_count <= 3'd0;
@@ -725,7 +788,7 @@ module iwm_flux (
                             load_half_window();
 `ifdef SIMULATION
                             $display("IWM_FLUX: START_WRITE cycle=%0d m_data=%02h mode=%02h gen=%0d",
-                                     debug_cycle, m_data, SW_MODE, m_data_gen);
+                                     debug_cycle, current_write_data, SW_MODE, current_write_gen);
 `endif
                         end else if (!m_rw_mode) begin
                         // MAME COMPATIBILITY FIX: Always start with EDGE_0 and rsh=0x00
@@ -854,14 +917,12 @@ module iwm_flux (
                                             sync_run_count <= 4'd0;
                                             sync_resync_done <= 1'b0;
                                         end
-                                        if (shifted_rsh == 8'hAD && use_fractional_window) begin
-                                            // Resync window at data prologue to align byte boundaries
-                                            window_counter <= base_full_window;
-                                            full_window_frac <= 10'd0;
-                                            half_window_frac <= 10'd0;
-                                            sync_run_count <= 4'd0;
-                                            sync_resync_done <= 1'b0;
-                                        end
+                                        // Do not resync on the data prologue itself.
+                                        // The address-field 0x96 sync run has already established
+                                        // byte framing for this sector; resetting the window on
+                                        // D5 AA AD can cause the next byte after AD to be sampled
+                                        // twice or one bit late, which shows up in the logs as
+                                        // AD/9x garbage immediately after a valid data prologue.
                                     end
                                     prolog_last2 <= prolog_last1;
                                     prolog_last1 <= shifted_rsh;
@@ -973,18 +1034,24 @@ module iwm_flux (
                                     end
                                     byte_counter <= byte_counter + 1;
                                     if (!m_data_read && m_data[7] && !rd_consumes_byte) begin
-                                        bytes_lost_counter <= bytes_lost_counter + 1;
+                                        if (latch_mode && !m_data_next_valid) begin
+                                            m_data_next <= shifted_rsh;
+                                            m_data_next_gen <= m_data_gen + 32'd1;
+                                            m_data_next_valid <= 1'b1;
+                                        end else begin
+                                            bytes_lost_counter <= bytes_lost_counter + 1;
 `ifdef IWM_BYTELOG
-                                        $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
-                                                 bytes_lost_counter + 1, m_data, shifted_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
+                                            $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
+                                                     bytes_lost_counter + 1, m_data, shifted_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
 `else
 `ifdef SIMULATION
-                                        if (bytes_lost_counter < 16) begin
-                                            $display("IWM_FLUX: *** BYTE LOST #%0d *** m_data=%02h new=%02h pos=%0d cycle=%0d",
-                                                     bytes_lost_counter + 1, m_data, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
+                                            if (bytes_lost_counter < 16) begin
+                                                $display("IWM_FLUX: *** BYTE LOST #%0d *** m_data=%02h new=%02h pos=%0d cycle=%0d",
+                                                         bytes_lost_counter + 1, m_data, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
+                                            end
+`endif
+`endif
                                         end
-`endif
-`endif
                                     end
                                     // Debug near divergence point - compare internal state
                                     if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
@@ -1015,15 +1082,15 @@ module iwm_flux (
                                         sync_run_count <= 4'd0;
                                         sync_resync_done <= 1'b0;
                                     end
-                                    // Latch mode buffer: if m_data holds an unread byte, buffer the new
-                                    // byte in m_data_next instead of overwriting. This prevents the ~46%
-                                    // byte loss caused by vsim's clock-driven model running ahead of the CPU.
-                                    // When CPU reads m_data, m_data_next is promoted (see rd_ack_take below).
-                                    m_data <= shifted_rsh;
-                                    m_data_gen <= m_data_gen + 32'd1;
-                                    // New byte just arrived; mark unread.
-                                    m_data_read <= 1'b0;
-                                    async_update_pending <= 1'b0;
+                                    if (!m_data_read && m_data[7] && !rd_consumes_byte && latch_mode && !m_data_next_valid) begin
+                                        // Buffered above; keep the current unread byte at the front.
+                                    end else begin
+                                        m_data <= shifted_rsh;
+                                        m_data_gen <= m_data_gen + 32'd1;
+                                        // New byte just arrived; mark unread.
+                                        m_data_read <= 1'b0;
+                                        async_update_pending <= 1'b0;
+                                    end
                                     if (latch_mode) begin
                                         latch_hold_cnt <= 4'd8;
                                     end else begin
@@ -1139,14 +1206,12 @@ module iwm_flux (
                                             sync_run_count <= 4'd0;
                                             sync_resync_done <= 1'b0;
                                         end
-                                        if (shifted_rsh == 8'hAD && use_fractional_window) begin
-                                            // Resync window at data prologue to align byte boundaries
-                                            window_counter <= base_full_window;
-                                            full_window_frac <= 10'd0;
-                                            half_window_frac <= 10'd0;
-                                            sync_run_count <= 4'd0;
-                                            sync_resync_done <= 1'b0;
-                                        end
+                                        // Do not resync on the data prologue itself.
+                                        // The address-field 0x96 sync run has already established
+                                        // byte framing for this sector; resetting the window on
+                                        // D5 AA AD can cause the next byte after AD to be sampled
+                                        // twice or one bit late, which shows up in the logs as
+                                        // AD/9x garbage immediately after a valid data prologue.
                                     end
                                     prolog_last2 <= prolog_last1;
                                     prolog_last1 <= shifted_rsh;
@@ -1258,11 +1323,17 @@ module iwm_flux (
                                     end
                                     byte_counter <= byte_counter + 1;
                                     if (!m_data_read && m_data[7] && !rd_consumes_byte) begin
-                                        bytes_lost_counter <= bytes_lost_counter + 1;
+                                        if (latch_mode && !m_data_next_valid) begin
+                                            m_data_next <= shifted_rsh;
+                                            m_data_next_gen <= m_data_gen + 32'd1;
+                                            m_data_next_valid <= 1'b1;
+                                        end else begin
+                                            bytes_lost_counter <= bytes_lost_counter + 1;
 `ifdef IWM_BYTELOG
-                                        $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
-                                                 bytes_lost_counter + 1, m_data, shifted_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
+                                            $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
+                                                     bytes_lost_counter + 1, m_data, shifted_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
 `endif
+                                        end
                                     end
                                     // Debug near divergence point - compare internal state
                                     if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
@@ -1293,10 +1364,14 @@ module iwm_flux (
                                         sync_run_count <= 4'd0;
                                         sync_resync_done <= 1'b0;
                                     end
-                                    m_data <= shifted_rsh;
-                                    m_data_gen <= m_data_gen + 32'd1;
-                                    m_data_read <= 1'b0;
-                                    async_update_pending <= 1'b0;
+                                    if (!m_data_read && m_data[7] && !rd_consumes_byte && latch_mode && !m_data_next_valid) begin
+                                        // Buffered above; keep the current unread byte at the front.
+                                    end else begin
+                                        m_data <= shifted_rsh;
+                                        m_data_gen <= m_data_gen + 32'd1;
+                                        m_data_read <= 1'b0;
+                                        async_update_pending <= 1'b0;
+                                    end
                                     if (latch_mode) begin
                                         latch_hold_cnt <= 4'd8;
                                     end else begin
@@ -1390,39 +1465,30 @@ module iwm_flux (
                             FLUX_WRITE_STROBE <= 1'b0;
                             FLUX_WRITE <= 1'b0;
                         end else if (window_counter == 6'd1) begin
-                            if (write_bit_count == 3'd0 && m_data_gen == write_data_gen) begin
+                            if (write_bit_count == 3'd0 && !write_byte_available) begin
                                 // Underrun: full byte shifted out but no new CPU data written.
-                                // MAME behavior: flag the underrun (clear WHD bit 6) but CONTINUE
-                                // writing. The IIgs RWTS write loop takes ~40 machine cycles per
-                                // byte at 1MHz, which is ~8µs slower than the 32µs IWM byte shift.
-                                // If we stop here, the entire write operation fails. Instead,
-                                // continue shifting m_wsh (which contains the last written byte)
-                                // and check again at the next byte boundary. If the CPU writes
-                                // new data before then, the write continues normally.
+                                // Don't replay the previous byte into the track. Real async 3.5"
+                                // writes can present the next byte on the boundary itself; if no
+                                // byte is actually available, stop and wait for restart.
                                 m_whd <= m_whd & 8'hBF;  // Clear WHD bit6 (underrun flag)
-                                // Reload m_wsh from m_data for the next byte (in sync mode,
-                                // m_wsh was already set by direct CPU write; in async mode,
-                                // reload from the data buffer)
-                                if (is_async)
-                                    m_wsh <= m_data;
-                                rw_state <= SW_WINDOW_MIDDLE;
-                                load_half_window();
+                                rw_state <= SW_UNDERRUN;
                                 FLUX_WRITE_STROBE <= 1'b0;
+                                FLUX_WRITE <= 1'b0;
 `ifdef SIMULATION
-                                $display("IWM_FLUX: WRITE_UNDERRUN cycle=%0d data_gen=%0d (continuing)",
-                                         debug_cycle, m_data_gen);
+                                $display("IWM_FLUX: WRITE_UNDERRUN cycle=%0d data_gen=%0d (stopping)",
+                                         debug_cycle, current_write_gen);
 `endif
                             end else if (write_bit_count == 3'd0) begin
                                 // Byte boundary with new CPU data available:
                                 // consume the byte and signal ready for next.
                                 // (MAME: SW_WINDOW_LOAD non-underrun path)
-                                write_data_gen <= m_data_gen;
+                                write_data_gen <= current_write_gen;
                                 m_whd <= m_whd | 8'hC0;  // Byte consumed + no underrun (bits 7,6)
                                 write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                                 // In sync mode, m_wsh was loaded directly by CPU write.
                                 // In async mode, reload from data buffer at byte boundary.
                                 if (is_async)
-                                    m_wsh <= m_data;
+                                    m_wsh <= current_write_data;
                                 rw_state <= SW_WINDOW_MIDDLE;
                                 load_half_window();
                                 FLUX_WRITE_STROBE <= 1'b0;
@@ -1444,17 +1510,17 @@ module iwm_flux (
                             rw_state <= S_IDLE;
                             FLUX_WRITE_STROBE <= 1'b0;
                             FLUX_WRITE <= 1'b0;
-                        end else if (m_data_gen != write_data_gen) begin
+                        end else if (write_byte_available) begin
                             // CPU wrote new data while in underrun - restart shifting
-                            m_wsh <= m_data;
-                            write_data_gen <= m_data_gen;
+                            m_wsh <= current_write_data;
+                            write_data_gen <= current_write_gen;
                             write_bit_count <= 3'd0;
                             rw_state <= SW_WINDOW_MIDDLE;
                             load_half_window();
                             FLUX_WRITE_STROBE <= 1'b0;
 `ifdef SIMULATION
                             $display("IWM_FLUX: WRITE_RESTART from underrun cycle=%0d data=%02h gen=%0d",
-                                     debug_cycle, m_data, m_data_gen);
+                                     debug_cycle, current_write_data, current_write_gen);
 `endif
                         end else begin
                             FLUX_WRITE_STROBE <= 1'b0;
@@ -1483,6 +1549,8 @@ module iwm_flux (
                 flux_seen <= 1'b0;
                 async_update_pending <= 1'b0;
                 latch_hold_cnt <= 4'd0;
+                m_data_next_valid <= 1'b0;
+                m_data_next_gen <= 32'd0;
                 FLUX_WRITE <= 1'b0;
                 FLUX_WRITE_STROBE <= 1'b0;
                 sync_run_count <= 4'd0;
@@ -1539,10 +1607,10 @@ module iwm_flux (
             // MAME behavior: In active mode, a write to Q6=1,Q7=1 with odd offset is a DATA write
             // (used for write-mode shifting / SmartPort handshakes), not a mode register write.
             // iwm_woz.v gates mode writes on !iwm_active; handle the active case here.
-            if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE && !smartport_mode) begin
+            if (cpu_write_data_reg) begin
                 m_data <= DATA_IN;
                 m_data_gen <= m_data_gen + 32'd1;
-                if (SW_MODE[0]) begin
+                if (SW_MODE[0] && !write_accepts_immediately) begin
                     m_whd <= m_whd & 8'h7f;
                 end
                 // Sync-mode: direct-to-wsh (MAME iwm.cpp:377)
@@ -1588,9 +1656,14 @@ module iwm_flux (
                 // This keeps pushing the deadline forward while CPU is actively polling.
                 // The deadline only fires when CPU stops reading for >2µs.
                 if (access_in_progress) begin
-                    // MAME: any IWM access in async read mode while a valid byte is present
-                    // reschedules the async clear deadline (no Q6/Q7 filtering).
-                    if (MOTOR_ACTIVE && is_async && access_data_valid) begin
+                    // Only data-register reads should keep an unread byte alive.
+                    // Sony control/status traffic (phase touches, $C0ED/$C0EE mode/status)
+                    // happens between sector scans; if those accesses keep rescheduling the
+                    // async clear deadline, a stale sync/gap byte such as 0xFF can survive
+                    // into the next ReadData loop and be consumed as the first "ready" byte.
+                    // That is exactly what the current log shows at WOZ_READDATA_ENTRY #100.
+                    if (MOTOR_ACTIVE && is_async && access_data_valid &&
+                        !access_q7_latched && !access_q6_latched) begin
                         async_update_pending <= 1'b1;
                         // Deadline = current wall-clock time + 28 cycles (2µs)
                         async_update_deadline <= async_tick_14m + ASYNC_CLEAR_DELAY_14M;
@@ -1611,12 +1684,16 @@ module iwm_flux (
                         // Set m_data_read only when the CPU actually consumed the current byte.
                         // If a new byte completes at PHI2-fall and the CPU saw the old byte,
                         // do NOT mark read or we'll drop the freshly completed byte.
-                        if (rd_ack_take && (rd_from_completion || !byte_completing)) begin
-                            // Latch buffer promotion: if m_data_next has a buffered byte,
-                            // load it into m_data immediately so the CPU sees it on its
-                            // next poll without a gap. This keeps consecutive sequences
-                            // (D5 AA 96/AD) intact.
-                            m_data_read <= 1'b1;
+                        if (rd_ack_take &&
+                            (rd_from_completion || !byte_completing || rd_ack_promote_queued)) begin
+                            if (latch_mode && m_data_next_valid) begin
+                                m_data <= m_data_next;
+                                m_data_gen <= m_data_next_gen;
+                                m_data_next_valid <= 1'b0;
+                                m_data_read <= 1'b0;
+                            end else begin
+                                m_data_read <= 1'b1;
+                            end
                             if (latch_hold_active) begin
                                 latch_hold_cnt <= 4'd0; // Stop latch hold once CPU has consumed the byte.
                             end
@@ -1768,44 +1845,42 @@ module iwm_flux (
     wire motor_status_bit = MOTOR_ACTIVE;
     wire [7:0] status_reg = {SENSE_BIT, 1'b0, motor_status_bit, SW_MODE[4:0]};
 
-    // SmartPort/C-Bus mode detection (MAME-style): mode bit3 selects disk bit-cell width,
-    // and mode bit1 is used for async/SmartPort handshakes. In this mode we do not emulate
-    // a SmartPort device; we must avoid hanging the ROM in `smartdrvr.asm` polling loops.
-    wire smartport_mode = (!SW_MODE[3]) && SW_MODE[1];
-
     // Write handshake register (MAME: m_whd, initialized to 0xBF). In SmartPort mode,
     // report "ready" (bit7=1) so `ASL $C08C,X` polling loops can progress.
     // Bit 6: SP_BSY (0=idle/ready matches original 8'h80, 1=device busy)
     wire [7:0] handshake_reg = smartport_mode ? {1'b1, SP_BSY, 6'b0} : m_whd;
-
-    // Immediate Q6/Q7 values for current access
-    // If current access is to Q6/Q7 switch, use ADDR[0] for that bit
-    // Otherwise use the latched value from SW_Q6/SW_Q7
-    wire access_q6 = (ADDR[3:1] == 3'b110);
-    wire access_q7 = (ADDR[3:1] == 3'b111);
-    wire immediate_q6 = access_q6 ? ADDR[0] : SW_Q6;
-    wire immediate_q7 = access_q7 ? ADDR[0] : SW_Q7;
-    // For 5.25": Only IWM register reads (ADDR[3]=1, i.e. $C0E8-$C0EF) should
-    // acknowledge data bytes. Phase register reads ($C0E0-$C0E7, ADDR[3]=0)
-    // control the stepper motor and must NOT consume data from the shift register.
-    // For 3.5": Phase addresses are used for Sony drive commands and reads at
-    // Q6=0/Q7=0 must still return data, so don't gate on ADDR[3].
-    assign rd_is_data_reg = (IS_35_INCH || ADDR[3]) && (immediate_q7 == 1'b0) && (immediate_q6 == 1'b0);
+    // Only the IWM register window ($C0E8-$C0EF, ADDR[3]=1) may consume disk bytes.
+    // Phase accesses ($C0E0-$C0E7) are control strobes for both 5.25" and 3.5" paths.
+    // Letting 3.5" phase reads acknowledge data corrupts AppleDisk/Sony control flows:
+    // routines like SDCLINES/ReadBit use BIT $C0E0/$C0E3/$C0E5 while scanning sectors,
+    // and if those accesses drain m_data they can skip from one address field to the next
+    // sector and eventually hang during directory/file reads.
+    assign rd_is_data_reg = ADDR[3] && (immediate_q7 == 1'b0) && (immediate_q6 == 1'b0);
 
     wire [7:0] data_out_data = effective_data;
 
     // Combinatorial bypass for same-cycle read:
     // if a byte completes during the read, return it immediately.
 
-    // MAME: returns 0xFF when m_active is idle, otherwise returns m_data for Q6=0/Q7=0.
-    // Use MOTOR_ACTIVE (matching MAME's m_active check) to gate the data register.
-    wire       motor_data_ok = MOTOR_SPINNING && DISK_READY && MOTOR_ACTIVE;
+    // For 5.25" reads, keep MAME's idle 0xFF behavior. For 3.5" AppleDisk polling,
+    // returning 0xFF when no real byte is available is unsafe in this model because the
+    // ROM's $C0EC loop uses bit7 as "byte ready" and can consume a bogus 0xFF as data.
+    // Returning 0x00 instead preserves the "not ready yet" behavior the ROM expects.
+    //
+    // IMPORTANT: 3.5" reads must follow the actual Sony spindle, not just MOTOR_ACTIVE.
+    // The ROM can continue polling $C0EC while the spindle is still spinning after the
+    // IWM motor latch drops. `iwm_woz` already forces those accesses onto the data path;
+    // if we still require MOTOR_ACTIVE here, the CPU gets stuck in the "wait for byte"
+    // loop with endless 0x00 reads even though decode is still running.
+    wire       motor_data_ok = IS_35_INCH ? (MOTOR_SPINNING && DISK_READY)
+                                          : (MOTOR_SPINNING && DISK_READY && MOTOR_ACTIVE);
+    wire [7:0] idle_data_reg = IS_35_INCH ? 8'h00 : 8'hFF;
     reg [7:0] data_out_mux;
     always @(*) begin
         case ({immediate_q7, immediate_q6})
             // SmartPort: when device is sending a response, override data register
             2'b00: data_out_mux = (smartport_mode && SP_RD_DATA_VALID) ? SP_RD_DATA :
-                                  (motor_data_ok ? data_out_data : 8'hFF);
+                                  (motor_data_ok ? data_out_data : idle_data_reg);
             2'b01: data_out_mux = status_reg;
             2'b10: data_out_mux = handshake_reg;
             2'b11: data_out_mux = 8'hFF;

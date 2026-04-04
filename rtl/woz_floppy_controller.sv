@@ -103,18 +103,19 @@ module woz_floppy_controller #(
     reg         load_side;   // Which side is currently being DMA-loaded/saved (3.5" only)
     reg         track_load_side; // Side captured with track_load_* for synchronous BRAM write
 
-    // Combinational BRAM address for save mode (removes 1 pipeline stage for correct timing)
-    // During S_SAVE_TRACK, sd_buff_addr drives BRAM directly so data appears with 1-cycle
-    // latency (BRAM internal), matching MiSTer framework's expectation.
+    // During S_SAVE_TRACK, sd_buff_addr drives BRAM directly. Port A is synchronous, so
+    // q_a updates on clk edges; register the save-side output before handing it to the
+    // block device so the address/data pairing is stable at the simulator boundary.
     wire [BRAM_ADDR_WIDTH-1:0] save_bram_addr = {blocks_processed[6:0], sd_buff_addr};
     wire saving_active = (state == S_SAVE_TRACK);
     wire [BRAM_ADDR_WIDTH-1:0] bram_addr_a = saving_active ? save_bram_addr[BRAM_ADDR_WIDTH-1:0] : track_load_addr;
 
-    // sd_buff_din: combinational during saves (1-cycle BRAM latency only),
-    // registered for all other modes (scan/idle)
+    // sd_buff_din is always registered. In save mode this avoids exposing BRAM q_a as a raw
+    // combinational path to the C++ block-device shim, which can otherwise sample stale data
+    // around sd_buff_addr changes.
     reg  [7:0]  sd_buff_din_reg;
     wire [7:0]  save_din = (IS_35_INCH && save_side) ? track_ram_dout1 : track_ram_dout0;
-    assign sd_buff_din = saving_active ? save_din : sd_buff_din_reg;
+    assign sd_buff_din = sd_buff_din_reg;
 
     // Per-side dirty flags (track which side was modified by IWM writes)
     reg         dirty_side0;
@@ -465,7 +466,13 @@ module woz_floppy_controller #(
             // deassert during the transfer to avoid re-triggering when the transfer ends.
             sd_rd <= 1'b0;
             sd_wr <= 1'b0;
-            sd_buff_din_reg <= 8'h00;
+            if (saving_active) begin
+                if (sd_ack) begin
+                    sd_buff_din_reg <= save_din;
+                end
+            end else begin
+                sd_buff_din_reg <= 8'h00;
+            end
 
             // bit_count is now combinational (assigned above), no registered assignment needed
 

@@ -117,6 +117,13 @@ module flux_drive (
 
     // Nominal rotation period at 300 RPM (200ms) in 14MHz cycles.
     localparam [31:0] ROTATION_CYCLES_14M = 32'd2863636;
+    // Short 3.5" spindle coast-down after a Sony motor-off command.
+    // The IIgs ROM continues post-command status/data traffic for several milliseconds
+    // after deasserting the motor latch. If MOTOR_SPINNING drops immediately, the
+    // survey/mount path falls back to idle reads and reports I/O error $27 even though
+    // the disk was just formatted successfully. Keep flux playback alive briefly while
+    // the command-state sense line still reports "motor off" through sony_motor_on.
+    localparam [18:0] SONY_SPINDOWN_CYCLES = 19'd280000;  // ~20 ms at 14 MHz
 
     //=========================================================================
     // Internal State
@@ -125,6 +132,7 @@ module flux_drive (
     // Motor state
     reg         motor_spinning;         // Physical motor rotation state
     reg         prev_motor_spinning;    // For edge detection on motor state
+    reg [18:0]  sony_spindown_counter;  // 3.5" spindle coast-down timer
 
     // Drive ready state (MAME m_ready equivalent)
     // MAME: m_ready=true means NOT ready, m_ready=false means ready (active-low)
@@ -896,6 +904,7 @@ module flux_drive (
         if (RESET) begin
             motor_spinning <= 1'b0;
             prev_motor_spinning <= 1'b0;
+            sony_spindown_counter <= 19'd0;
             spinup_bits <= 18'd0;
             drive_ready <= 1'b0;
             spinup_timer <= BIT_CELL_35;
@@ -909,11 +918,24 @@ module flux_drive (
                 // command boundaries. The physical spindle keeps rotating based on the
                 // Sony motor command; do not gate rotation on SEL35 or we will "freeze"
                 // angular position during deselect windows and break subsequent prologue scans.
-                motor_spinning <= sony_motor_on && DISK_MOUNTED;
+                if (!DISK_MOUNTED) begin
+                    motor_spinning <= 1'b0;
+                    sony_spindown_counter <= 19'd0;
+                end else if (sony_motor_on) begin
+                    motor_spinning <= 1'b1;
+                    sony_spindown_counter <= SONY_SPINDOWN_CYCLES;
+                end else if (sony_spindown_counter != 19'd0) begin
+                    motor_spinning <= 1'b1;
+                    sony_spindown_counter <= sony_spindown_counter - 19'd1;
+                end else begin
+                    motor_spinning <= 1'b0;
+                end
 `ifdef SIMULATION
-                if ((sony_motor_on && DISK_MOUNTED) != motor_spinning) begin
-                    $display("FLUX_DRIVE[%0d]: motor_spinning %0d -> %0d (sony_motor_on=%0d DISK_MOUNTED=%0d)",
-                             DRIVE_ID, motor_spinning, (sony_motor_on && DISK_MOUNTED), sony_motor_on, DISK_MOUNTED);
+                if (((DISK_MOUNTED && (sony_motor_on || (sony_spindown_counter != 19'd0))) ? 1'b1 : 1'b0) != motor_spinning) begin
+                    $display("FLUX_DRIVE[%0d]: motor_spinning %0d -> %0d (sony_motor_on=%0d DISK_MOUNTED=%0d spindown=%0d)",
+                             DRIVE_ID, motor_spinning,
+                             ((DISK_MOUNTED && (sony_motor_on || (sony_spindown_counter != 19'd0))) ? 1'b1 : 1'b0),
+                             sony_motor_on, DISK_MOUNTED, sony_spindown_counter);
                 end
 `endif
             end else begin
@@ -946,24 +968,10 @@ module flux_drive (
 `endif
                 end
             end else if (!motor_spinning) begin
-                // Motor not spinning.
-                //
-                // For 5.25" drives, this means the motor is actually off, so we must clear ready.
-                //
-                // For 3.5" Sony drives, `motor_spinning` is gated by SEL35 (3.5" enable). The ROM
-                // routinely deasserts SEL35 at command boundaries, which would otherwise clear
-                // drive_ready and force the ROM into long /READY polling loops. Real hardware keeps
-                // the spindle spinning (inertia) and the drive electronics remain ready across brief
-                // deselect windows; treat the Sony motor command as the authoritative "spindle on".
-                if (!IS_35_INCH) begin
-                    drive_ready <= 1'b0;
-                    spinup_bits <= 18'd0;
-                    spinup_timer <= bit_cell_cycles;
-                end else if (!sony_motor_on || !DISK_MOUNTED) begin
-                    drive_ready <= 1'b0;
-                    spinup_bits <= 18'd0;
-                    spinup_timer <= bit_cell_cycles;
-                end
+                // Physical spindle stopped: clear ready state for both drive types.
+                drive_ready <= 1'b0;
+                spinup_bits <= 18'd0;
+                spinup_timer <= bit_cell_cycles;
             end
 
             // Spin-up timing should not depend on track data being loaded: /READY is a physical-drive
@@ -1504,7 +1512,14 @@ module flux_drive (
                     end
 
                     if (!bram_first_read_pending) begin
-                        if (bit_timer == 6'd1 && !skip_position_advance) begin
+                        if (WRITE_MODE && WRITE_STROBE && !skip_position_advance) begin
+                        // Keep the physical bit-cell timer phase locked to the IWM's write
+                        // strobe. The strobe is the authoritative write-cell boundary; if the
+                        // free-running timer is allowed to drift independently, the disk can be
+                        // read back with correct prologues but a misframed sector byte right
+                        // after D5 AA AD.
+                        load_bit_timers();
+                        end else if (bit_timer == 6'd1 && !skip_position_advance) begin
                         // End of bit cell - reload timer and update head state
                         load_bit_timers();
                         head_window <= {head_window[2:0], current_bit};
@@ -1519,11 +1534,13 @@ module flux_drive (
                                 weak_bit_active <= 1'b1;
                         end
 
-                        // Advance bit_position — UNLESS write_strobe_steal is set,
-                        // meaning WRITE_STROBE already advanced position this bit cell.
-                        // This prevents double-advancing and keeps the IWM's write byte
-                        // framing exactly aligned with bit_position.
-                        if (write_strobe_steal) begin
+                        // Advance bit_position — UNLESS WRITE_STROBE already advanced
+                        // it for this cell. Check both the registered steal flag from a
+                        // prior cycle and the live WRITE_STROBE condition from this cycle:
+                        // both blocks execute in the same always_ff, so relying only on the
+                        // registered flag misses the case where WRITE_STROBE and bit_timer==1
+                        // coincide and would otherwise double-advance the position.
+                        if (write_strobe_steal || (WRITE_MODE && WRITE_STROBE)) begin
                             write_strobe_steal <= 1'b0;  // Consumed — next cell is normal
                         end else begin
                             if (TRACK_BIT_COUNT > 0) begin

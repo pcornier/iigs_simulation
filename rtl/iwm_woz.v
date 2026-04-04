@@ -783,17 +783,62 @@ module iwm_woz (
                                               (smartport_mode_sense ? 1'b0 :
                                                ((drive_sel == 0) ? flux_transition_525 : 1'b0));
 
-    // Track which drive type's flux we're actually using (for window timing)
-    // CRITICAL: Window timing must match the SPINNING drive, not software DISK35 register!
-    // When a 3.5" drive is spinning, use 28-cycle windows even if ROM temporarily
-    // accesses slot 5 (5.25" mode). Otherwise byte decoding gets corrupted!
+    // Track which drive type's flux we're actually using (for window timing).
+    // CRITICAL: Window timing must match the active 3.5" cleanup window, not just
+    // the instantaneous DISK35 register. The ROM clears 35SEL and drops the Sony
+    // motor command before it finishes the surrounding status/handshake traffic.
+    //
+    // One subtlety: the Disk II motor inertia model can still report the 5.25"
+    // spindle as spinning during this cleanup window because $C0E9 drives the
+    // physical motor pin regardless of DISK35. That must NOT steal the routing
+    // away from the Sony status path; otherwise the post-command `ReadBit`
+    // sequence starts seeing 5.25"/idle status semantics and the driver returns
+    // a disk-switched / I/O error ($27).
+    //
+    // Hold 3.5" routing for only a few milliseconds after recent Sony activity:
+    // long enough for the cleanup/status reads, short enough not to interfere
+    // with a later real 5.25" access.
+    //
+    // The GS/OS post-format Sony cleanup can span slightly more than 4 ms once
+    // VBL/interrupt latency is included. At 4 ms the hold expired mid-cleanup,
+    // the mux fell back to the 5.25"/idle path, and the same status sequence
+    // started returning zeros/idle values, bubbling up as AppleDisk I/O error $27.
+    localparam [20:0] DRIVE35_TYPE_HOLD_CYCLES = 21'd112000;  // ~8 ms at 14 MHz
+    reg [20:0] drive35_type_hold_cnt;
+    wire hold_drive35_type = (drive35_type_hold_cnt != 21'd0);
+    always @(posedge CLK_14M or posedge RESET) begin
+        if (RESET) begin
+            drive35_type_hold_cnt <= 21'd0;
+        end else if (drive35_motor_spinning || drive35_2_motor_spinning ||
+                     (is_35_inch && (cpu_access_edge || drive_on) &&
+                      (DISK_READY[2] || DISK_READY[3]))) begin
+            drive35_type_hold_cnt <= DRIVE35_TYPE_HOLD_CYCLES;
+        end else if (drive35_type_hold_cnt != 21'd0) begin
+            drive35_type_hold_cnt <= drive35_type_hold_cnt - 21'd1;
+        end
+    end
+
     wire flux_is_35_inch = drive35_motor_spinning ? 1'b1 :
                           drive35_2_motor_spinning ? 1'b1 :
+                          hold_drive35_type ? 1'b1 :
                           drive525_motor_spinning ? 1'b0 :
-                          is_35_inch;  // Fallback to software setting when no drive spinning
+                          is_35_inch;  // Fallback only after the 3.5" cleanup window expires
 
-    wire drive_active = flux_is_35_inch ? drive35_active : drive525_active;
-    wire current_wp = flux_is_35_inch ? drive35_wp : drive525_wp;
+    wire selected_drive35_active = drive_sel ? 1'b0 : drive35_active;
+    wire selected_drive35_wp = drive_sel ? drive35_2_wp : drive35_wp;
+    wire selected_drive35_spinning = drive_sel ? drive35_2_motor_spinning : drive35_motor_spinning;
+    // The 3.5" byte decoder must not treat the drive as "ready" until the currently
+    // selected side/track is actually resident in the WOZ track buffer. After a seek or
+    // side switch, the physical Sony spindle is still spinning, but BRAM may still hold
+    // the previous side while the controller saves/loads the new track. If we expose that
+    // window as ready, the ROM can enter read/write mode and either poll forever on 0x00
+    // or start formatting while TRACK_LOADED=0, dropping the first sector bytes.
+    wire selected_drive35_track_valid = drive_sel ? 1'b0 : WOZ_TRACK3_DATA_VALID;
+    wire selected_drive35_ready = drive_sel ? (drive35_2_ready && DISK_READY[3])
+                                            : (drive35_ready && DISK_READY[2] &&
+                                               selected_drive35_track_valid);
+    wire drive_active = flux_is_35_inch ? selected_drive35_active : drive525_active;
+    wire current_wp = flux_is_35_inch ? selected_drive35_wp : drive525_wp;
 
     // Write signals from iwm_flux
     wire       flux_write_bit;
@@ -813,7 +858,8 @@ module iwm_woz (
     // The brief DISK_READY glitch would reset the IWM state machine mid-read, corrupting
     // byte boundaries. The state machine doesn't need to reset on side changes - the flux
     // data will change naturally and the IWM will resync via self-sync patterns.
-    wire iwm_disk_ready = any_disk_ready;
+    wire iwm_disk_ready = flux_is_35_inch ? selected_drive35_ready
+                                          : (drive_sel ? 1'b0 : (drive525_ready && DISK_READY[0]));
 
     //=========================================================================
     // Sense Mux - Select active drive's status sense
@@ -956,7 +1002,8 @@ module iwm_woz (
     wire sense_phase_updating = cpu_access_edge && (bus_addr[3:1] < 3'b100);
     wire current_sense_final = sense_phase_updating ? drive_sense : drive_sense_reg;
 
-    wire current_motor_spinning = flux_is_35_inch ? drive35_motor_spinning : drive525_motor_spinning;
+    wire current_motor_spinning = flux_is_35_inch ? selected_drive35_spinning
+                                                  : (drive_sel ? 1'b0 : drive525_motor_spinning);
 
     //=========================================================================
     // SmartPort Device State Machine
@@ -1000,9 +1047,8 @@ module iwm_woz (
     wire [7:0] iwm_data_out;
 
     // Disk mounted status
-    wire disk_mounted = DISK_READY[2] ? 1'b1 :
-                       DISK_READY[0] ? 1'b1 :
-                       (is_35_inch ? DISK_READY[2] : DISK_READY[0]);
+    wire disk_mounted = flux_is_35_inch ? (drive_sel ? DISK_READY[3] : DISK_READY[2])
+                                        : (drive_sel ? DISK_READY[1] : DISK_READY[0]);
 
     // Muxed bit position for debug logging and flux decoder
     // Use flux_is_35_inch (based on which motor is spinning) instead of is_35_inch (register)
@@ -1025,13 +1071,22 @@ module iwm_woz (
     // actually trying to read disk data from the still-spinning 3.5" drive.
     wire selected_disk_present = flux_is_35_inch ? (drive_sel ? DISK_READY[3] : DISK_READY[2])
                                                  : (drive_sel ? DISK_READY[1] : DISK_READY[0]);
-    // Only force data reads when a cached track is available for the selected drive.
-    wire selected_track_cached = flux_is_35_inch ? (WOZ_TRACK3_BIT_COUNT > 0)
-                                                 : (WOZ_TRACK1_BIT_COUNT > 0);
-    // Only force $C0EC to be treated as a data read when the IWM motor output is enabled.
-    // If we force this while `drive_on` is 0 but the Sony spindle is still spinning
-    // (common between SmartPort calls), the CPU can read 0xFF as "data" and corrupt
-    // the ROM's nibble decode loops.
+    // Only force data reads when the selected track/side is actually valid for the active
+    // drive. A stale nonzero BIT_COUNT from the previous side is not sufficient here.
+    wire selected_track_cached = flux_is_35_inch ? (drive_sel ? 1'b0 : WOZ_TRACK3_DATA_VALID)
+                                                 : (drive_sel ? 1'b0 : (WOZ_TRACK1_BIT_COUNT > 0));
+    // Only force $C0EC to be treated as a data read when the selected drive is the
+    // current floppy target and the ROM is in AppleDisk mode.
+    //
+    // For 5.25" this still tracks `drive_on`, matching the Disk II path.
+    //
+    // For 3.5", force the data path only while the selected Sony spindle is actually
+    // spinning. Using `drive_on` here is too broad: the IIgs ROM keeps the IWM motor
+    // latch high during parts of the post-command/status path after sending the Sony
+    // motor-off command. If $C0EC is still forced to the data register in that window,
+    // the CPU reads idle 0x00 bytes from a stopped spindle and the Sony driver reports
+    // I/O error $27. The spindle coast-down in flux_drive now covers the real hardware
+    // overlap window, so the force gate can follow physical spin state again.
     // IMPORTANT: Do NOT apply this compatibility hack in SmartPort/C-Bus mode.
     // The SmartPort driver intentionally reads $C0EC as the WHD/handshake register
     // (Q7=1,Q6=0) using `ASL $C08C,X` polling. Forcing Q7 low there breaks the
@@ -1039,18 +1094,25 @@ module iwm_woz (
     // Also do NOT apply during write mode: the CPU polls the handshake register
     // (Q7=1,Q6=0) at $C0EC for "write buffer ready" (bit 7). Forcing Q7 low
     // turns it into a data register read ($00, bit 7=0), causing an infinite loop.
+    wire selected_disk_spinning = flux_is_35_inch ? (drive_sel ? drive35_2_motor_spinning
+                                                               : drive35_motor_spinning)
+                                                  : (drive_sel ? 1'b0
+                                                               : drive525_motor_spinning);
     wire smartport_mode = (!immediate_mode[3]) && immediate_mode[1];
     assign force_q7_data_read = bus_rd && (bus_addr == 4'hC) &&
+                              !immediate_q7 &&
                               selected_disk_present &&
                               selected_track_cached &&
-                              drive_on &&
+                              (flux_is_35_inch ? selected_disk_spinning : drive_on) &&
                               !smartport_mode &&
                               !flux_write_mode;
     // Use immediate Q7 so iwm_flux sees same-cycle Q7 changes on $C0EE/$C0EF accesses.
     wire q7_for_flux = force_q7_data_read ? 1'b0 : immediate_q7;
-    // Use latched Q7 for read/write mode transitions so forced data reads
-    // don't constantly reset the read state machine.
-    wire q7_mode_for_flux = q7;
+    // Keep the internal read/write mode logic aligned with the same Q7 view used
+    // by the data mux. Using the latched q7 here lets mode transitions lag one
+    // access behind $C0EE/$C0EF, which can leave iwm_flux in the wrong state for
+    // the first $C0EC data poll.
+    wire q7_mode_for_flux = force_q7_data_read ? 1'b0 : immediate_q7;
 
     iwm_flux iwm (
         .CLK_14M(CLK_14M),
@@ -1080,7 +1142,7 @@ module iwm_woz (
         // immediately when mode bit2 is set (ROM uses mode=0x0F).
         // MAME-style active/delay behavior (not just raw motor soft switch).
         .MOTOR_ACTIVE(iwm_active),
-        .MOTOR_SPINNING(any_disk_spinning),  // Physical spinning (for flux decoding)
+        .MOTOR_SPINNING(current_motor_spinning),  // Physical spinning for the selected active drive
         .DISK_READY(iwm_disk_ready),
         .DISK_MOUNTED(disk_mounted),
         .IS_35_INCH(flux_is_35_inch),
