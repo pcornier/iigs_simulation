@@ -188,8 +188,9 @@ iigs  iigs(
         .HDD_RAM_DO(hdd_ram_do),
         .HDD_RAM_WE(sd_buff_wr & hdd_ack),
 
-    // Disk ready to IWM (pad to 4 bits)
-    // [0] = 5.25" WOZ controller, [1] = 0, [2] = 3.5" WOZ controller, [3] = 0
+    // Mounted-media bitmap to IWM (pad to 4 bits)
+    // [0] = 5.25" WOZ media mounted, [1] = 0, [2] = 3.5" WOZ media mounted, [3] = 0
+    // Drive-mechanism presence is modeled separately inside iwm_woz.
     .DISK_READY({1'b0, woz_ctrl_disk_mounted, 1'b0, woz_ctrl_525_disk_mounted}),
 
     .WOZ_TRACK3(WOZ_TRACK3),

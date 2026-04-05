@@ -456,9 +456,15 @@ module iwm_woz (
     // motor_spinning is intentionally forced low when is_35_inch=1. Feeding that into
     // the 3.5" flux_drive causes brief/glitchy motor pulses that prevent spin-up.
     //
+    // Important distinction: the Sony mechanism can exist with no disk inserted.
+    // Use a separate "drive present" concept for drive-detect/sense routing, while
+    // DISK_READY[2] continues to mean mounted media for the actual data path.
+    wire drive35_present = 1'b1;      // Built-in internal 3.5" drive
+    wire drive35_2_present = 1'b1;    // External Sony slot exists even if empty
+    //
     // For 3.5", MOTOR_ON should be driven from the IWM motor command (drive_on) gated
-    // by the software 3.5" select (DISK35[6]) and disk presence.
-    wire drive35_motor_on = drive_on && is_35_inch && DISK_READY[2];
+    // by the software 3.5" select (DISK35[6]) and drive presence, not media presence.
+    wire drive35_motor_on = drive_on && is_35_inch && drive35_present;
 
     // Drive is active when the 3.5" motor is physically spinning and disk is present
     wire drive35_active = drive35_motor_spinning && DISK_READY[2];
@@ -943,23 +949,12 @@ module iwm_woz (
     // for SmartPort bus enumeration (MORDEVICES/SendOnePack) where DISK35=0 and
     // smartport_mode_sense=1 returns sense=1 (bus idle / not busy).
     //
-    // When no 3.5" drive is present but a 5.25" IS, simulate a "virtual" empty 3.5"
-    // drive so the ROM's AppleDisk init succeeds and the Disk II (5.25") is enumerated.
-    // On real IIgs hardware, 5.25" drives are daisy-chained AFTER a 3.5" drive:
-    //   IWM → [3.5" drive] → [Disk II adapter] → [5.25" drive]
-    // The ROM counts the 3.5" drive first (DoDSony), then detects the Disk II as unit 1.
-    // Without a 3.5" drive responding, the ROM sets NumDevices=0 and ProDOS has no
-    // slot 5 entries. With the virtual drive, AppleDisk init sees drive state values
-    // (step_dir, at_track0, etc.) and counts it, giving NumDevices=1 (the Disk II).
-    //
-    // SmartPort phantom devices are prevented by the smartport_mode_sense overrides
-    // in drive35_computed_sense (all ssr values return 1 during SmartPort mode).
-    //
-    // When NO disks are present at all, force sense=1 (bus idle/no device).
-    wire virtual_35_drive = DISK_READY[0] && !DISK_READY[2];  // 5.25" present, no 3.5"
-
-    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? ((DISK_READY[2] || virtual_35_drive) ? drive35_computed_sense : 1'b1) :
-                                                               (DISK_READY[3] ? drive35_2_computed_sense : 1'b1)) :
+    // The IIgs drive-detect path expects an empty Sony mechanism to respond as a drive
+    // with no media, not as "no drive". Route 3.5" sense based on drive presence, while
+    // the per-status media bits (/DIP, /READY, /DSW) still come from the mounted-media
+    // state reflected in drive35_computed_sense.
+    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? (drive35_present ? drive35_computed_sense : 1'b1) :
+                                                               (drive35_2_present ? drive35_2_computed_sense : 1'b1)) :
                                            (smartport_mode_sense ? 1'b1 :
                                             ((drive_sel == 0) ? drive525_sense : 1'b1));
 
