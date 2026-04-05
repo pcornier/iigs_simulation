@@ -882,16 +882,19 @@ module iwm_woz (
                                    diskreg_sel,
                                    immediate_latched_sense_reg[2]};
 
-    // SmartPort /BSY workaround: When in SmartPort mode (mode[3]=0, mode[1]=1),
-    // the firmware polls the SENSE line for /BSY (device not busy). Since we don't
-    // emulate the SmartPort C-Bus device, we return sense=1 (not busy) for most
-    // status registers in SmartPort mode.
-    //
-    // EXCEPTION: ssr=$C (disk-switched) must ALWAYS return the actual drive state.
-    // The 3.5" disk driver checks disk-switched while mode may still be $07 from
-    // a preceding SmartPort block operation. On real hardware, the sense line is a
-    // direct electrical connection from the drive unaffected by IWM mode.
+    // SmartPort mode reuses the IWM status register layout, but this emulator does
+    // not yet model the full /BSY handshake on the external sense pin. The ROM's
+    // boot-time SmartPort probes expect the sense bit to read idle/high here; if
+    // we expose the raw internal C-Bus busy signal, GS/OS can wedge in the
+    // "wait for BSY to go high" loop before boot completes.
     wire smartport_mode_sense = (!immediate_mode[3]) && immediate_mode[1];
+    wire        sp_wr_strobe;
+    wire [7:0]  sp_wr_data;
+    wire        sp_rd_strobe;
+    wire        sp_rd_data_valid;
+    wire [7:0]  sp_rd_data;
+    wire        sp_bsy;
+    wire        sp_req;
 
     // Compute 3.5" sense for drive35 using parent-level signals
     // IMPORTANT: ALL ssr values that can return 0 from default drive state must have
@@ -945,18 +948,16 @@ module iwm_woz (
     //   5.25" motor spinning → sense from Disk II drive
     //   No motor spinning → falls back to is_35_inch (DISK35 register)
     //
-    // The fallback to is_35_inch when no motor is spinning preserves correct behavior
-    // for SmartPort bus enumeration (MORDEVICES/SendOnePack) where DISK35=0 and
-    // smartport_mode_sense=1 returns sense=1 (bus idle / not busy).
-    //
     // The IIgs drive-detect path expects an empty Sony mechanism to respond as a drive
     // with no media, not as "no drive". Route 3.5" sense based on drive presence, while
     // the per-status media bits (/DIP, /READY, /DSW) still come from the mounted-media
     // state reflected in drive35_computed_sense.
-    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? (drive35_present ? drive35_computed_sense : 1'b1) :
+    //
+    // Preserve the legacy idle-high SmartPort sense behavior for boot/runtime probes.
+    wire drive_sense = smartport_mode_sense ? 1'b1 :
+                       (flux_is_35_inch) ? ((drive_sel == 0) ? (drive35_present ? drive35_computed_sense : 1'b1) :
                                                                (drive35_2_present ? drive35_2_computed_sense : 1'b1)) :
-                                           (smartport_mode_sense ? 1'b1 :
-                                            ((drive_sel == 0) ? drive525_sense : 1'b1));
+                                           ((drive_sel == 0) ? drive525_sense : 1'b1);
 
     wire current_sense = drive_sense;
 
@@ -1003,14 +1004,6 @@ module iwm_woz (
     //=========================================================================
     // SmartPort Device State Machine
     //=========================================================================
-
-    wire        sp_wr_strobe;
-    wire [7:0]  sp_wr_data;
-    wire        sp_rd_strobe;
-    wire        sp_rd_data_valid;
-    wire [7:0]  sp_rd_data;
-    wire        sp_bsy;
-    wire        sp_req;
 
     smartport_dev sp_dev (
         .clk(CLK_14M),

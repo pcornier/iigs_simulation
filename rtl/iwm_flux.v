@@ -189,6 +189,8 @@ module iwm_flux (
     // SmartPort/C-Bus mode detection (MAME-style): mode bit3 selects disk bit-cell width,
     // and mode bit1 is used for async/SmartPort handshakes.
     wire       smartport_mode = (!SW_MODE[3]) && SW_MODE[1];
+    wire       write_engine_ok = smartport_mode ? MOTOR_ACTIVE : motor_decode_ok;
+    wire       state_machine_ok = m_rw_mode ? write_engine_ok : motor_decode_ok;
     // Same-cycle write detection is required for async 3.5" writes: the ROM can present a
     // new byte exactly at the byte-boundary poll. However, if a previous byte is already
     // buffered in m_data, that older byte must be shifted out first and the new byte must
@@ -196,7 +198,7 @@ module iwm_flux (
     // skip one serialized byte and corrupt sector/data prologues.
     wire       cpu_write_data_reg =
                     WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] &&
-                    MOTOR_ACTIVE && !smartport_mode;
+                    MOTOR_ACTIVE;
     wire       buffered_write_pending = (m_data_gen != write_data_gen);
     wire [7:0] current_write_data = buffered_write_pending ? m_data :
                                     (cpu_write_data_reg ? DATA_IN : m_data);
@@ -620,7 +622,10 @@ module iwm_flux (
                 // the WOZ controller is saving/loading the new track. If bit7 goes high in that
                 // window, the ROM starts sending format bytes immediately and they are dropped
                 // by flux_drive with TRACK_LOADED=0.
-                m_whd <= DISK_READY ? (m_whd | 8'hC0) : ((m_whd | 8'h40) & 8'h7F);
+                if (smartport_mode)
+                    m_whd <= m_whd | 8'h40;
+                else
+                    m_whd <= DISK_READY ? (m_whd | 8'hC0) : ((m_whd | 8'h40) & 8'h7F);
                 write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                 // Initialize write state - S_IDLE will wait for CPU data write before shifting
                 rw_state <= S_IDLE;
@@ -756,16 +761,16 @@ module iwm_flux (
             // vsim must run at 14M to avoid timing quantization that causes
             // byte boundary drift. Window values are doubled to compensate.
 `ifdef SIMULATION
-            if (motor_decode_ok != prev_sm_active) begin
+            if (state_machine_ok != prev_sm_active) begin
                 $display("IWM_FLUX: State machine %s (MOTOR_SPINNING=%0d DISK_READY=%0d pos=%0d byte_cnt=%0d rsh=%02h state=%0d win=%0d frac=%0d)",
-                         motor_decode_ok ? "ACTIVE" : "IDLE",
+                         state_machine_ok ? "ACTIVE" : "IDLE",
                          MOTOR_SPINNING, DISK_READY, DISK_BIT_POSITION, byte_counter, m_rsh, rw_state, window_counter, full_window_frac);
             end
 `endif
-            if (motor_decode_ok) begin
+            if (state_machine_ok) begin
                 case (rw_state)
                     S_IDLE: begin
-                        if (m_rw_mode && !DISK_READY) begin
+                        if (m_rw_mode && !smartport_mode && !DISK_READY) begin
                             // Hold the write handshake not-ready until the backend has the
                             // selected track loaded. CPU writes are still latched into m_data,
                             // but the ROM will not advance into the format stream until bit7
@@ -1535,7 +1540,7 @@ module iwm_flux (
             end
 
             // Reset state when motor stops or disk removed
-            if (!motor_decode_ok) begin
+            if (!state_machine_ok) begin
 `ifdef SIMULATION
                 if (byte_counter > 0 && prev_sm_active && (rw_state != S_IDLE || full_window_frac != 0)) begin
                     $display("IWM_FLUX: *** STATE_RESET *** byte_cnt=%0d pos=%0d rsh=%02h state=%0d->IDLE win=%0d frac=%0d->0 spin=%0d ready=%0d",
@@ -1557,7 +1562,7 @@ module iwm_flux (
                 sync_resync_done <= 1'b0;
             end
 
-            prev_sm_active <= motor_decode_ok;
+            prev_sm_active <= state_machine_ok;
 
             // Track CEN (PHI2) edge; the CPU latches read data near the end of PHI2-high.
             // IMPORTANT: Do not clear/acknowledge the data register during PHI2-high,
@@ -1852,10 +1857,13 @@ module iwm_flux (
     wire motor_status_bit = MOTOR_ACTIVE;
     wire [7:0] status_reg = {SENSE_BIT, 1'b0, motor_status_bit, SW_MODE[4:0]};
 
-    // Write handshake register (MAME: m_whd, initialized to 0xBF). In SmartPort mode,
-    // report "ready" (bit7=1) so `ASL $C08C,X` polling loops can progress.
-    // Bit 6: SP_BSY (0=idle/ready matches original 8'h80, 1=device busy)
-    wire [7:0] handshake_reg = smartport_mode ? {1'b1, SP_BSY, 6'b0} : m_whd;
+    // Write handshake register (MAME: m_whd, initialized to 0xBF).
+    // SmartPort boot code uses $C08C in two different ways:
+    // - SendOnePack waits for bit7=1 before feeding packet bytes
+    // - later code still tests bit6 for the real IWM underflow state
+    // Keep the true low 7 bits from m_whd, but force bit7 high in SmartPort mode
+    // so empty-drive enumeration can start without breaking the later bit6 poll.
+    wire [7:0] handshake_reg = smartport_mode ? {1'b1, m_whd[6:0]} : m_whd;
     // Only the IWM register window ($C0E8-$C0EF, ADDR[3]=1) may consume disk bytes.
     // Phase accesses ($C0E0-$C0E7) are control strobes for both 5.25" and 3.5" paths.
     // Letting 3.5" phase reads acknowledge data corrupts AppleDisk/Sony control flows:
