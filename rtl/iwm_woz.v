@@ -521,8 +521,8 @@ module iwm_woz (
         .FLUX_DATA_SIZE(WOZ_TRACK3_FLUX_SIZE),
         .FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
         .WRITE_BIT(flux_write_bit),
-        .WRITE_STROBE(flux_write_strobe),
-        .WRITE_MODE(flux_write_mode),
+        .WRITE_STROBE(disk_write_strobe),
+        .WRITE_MODE(disk_write_mode),
         .WRITE_BYTE_OUT(drive35_write_byte),
         .WRITE_WE_OUT(drive35_write_we),
         .WRITE_ADDR_OUT(drive35_write_addr),
@@ -749,8 +749,8 @@ module iwm_woz (
         .FLUX_DATA_SIZE(WOZ_TRACK1_FLUX_SIZE),
         .FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
         .WRITE_BIT(flux_write_bit),
-        .WRITE_STROBE(flux_write_strobe),
-        .WRITE_MODE(flux_write_mode),
+        .WRITE_STROBE(disk_write_strobe),
+        .WRITE_MODE(disk_write_mode),
         .WRITE_BYTE_OUT(drive525_write_byte),
         .WRITE_WE_OUT(drive525_write_we),
         .WRITE_ADDR_OUT(drive525_write_addr),
@@ -851,6 +851,14 @@ module iwm_woz (
     wire       flux_write_strobe;
     wire       flux_write_mode;
 
+    // Gate write signals: SmartPort bus protocol uses IWM write mode for packet
+    // transmission (SendOnePack), but those writes go to the external CBUS, not
+    // the disk.  Without this gate the flux_drive overwrites track data during
+    // SmartPort enumeration (SMARTTIME), corrupting subsequent reads.
+    wire       sp_mode_gate = (!immediate_mode[3]) && immediate_mode[1];
+    wire       disk_write_strobe = flux_write_strobe && !sp_mode_gate;
+    wire       disk_write_mode   = flux_write_mode   && !sp_mode_gate;
+
     // Any disk spinning - used for IWM MOTOR_SPINNING independent of is_35_inch
     wire any_disk_spinning = drive35_motor_spinning || drive35_2_motor_spinning || drive525_motor_spinning;
     // Any disk ready - drive must be spun up AND have track data loaded
@@ -908,7 +916,7 @@ module iwm_woz (
             4'h0: drive35_computed_sense = smartport_mode_sense ? 1'b1 : drive35_step_dir;
             4'h1: drive35_computed_sense = smartport_mode_sense ? 1'b1 : drive35_step_dir;
             4'h2: drive35_computed_sense = ~DISK_READY[2];         // ~DISK_MOUNTED
-            4'h4: drive35_computed_sense = smartport_mode_sense ? 1'b1 : drive35_step_busy;
+            4'h4: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_step_busy;
             4'h8: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_motor_on_sense;
             4'hA: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_at_track0;
             4'hB: drive35_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_ready;
@@ -925,7 +933,7 @@ module iwm_woz (
             4'h0: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : drive35_2_step_dir;
             4'h1: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : drive35_2_step_dir;
             4'h2: drive35_2_computed_sense = 1'b1;                 // No disk mounted
-            4'h4: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : drive35_2_step_busy;
+            4'h4: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_step_busy;
             4'h8: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_motor_on_sense;
             4'hA: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_at_track0;
             4'hB: drive35_2_computed_sense = smartport_mode_sense ? 1'b1 : ~drive35_2_ready;
@@ -953,7 +961,9 @@ module iwm_woz (
     // the per-status media bits (/DIP, /READY, /DSW) still come from the mounted-media
     // state reflected in drive35_computed_sense.
     //
-    // Preserve the legacy idle-high SmartPort sense behavior for boot/runtime probes.
+    // SmartPort mode uses the IWM sense line for bus /BSY handshake (idle=high).
+    // Override sense to idle-high in SmartPort mode so SendOnePack/ReceivePack don't
+    // get confused by real 3.5" drive sense data on the shared pin.
     wire drive_sense = smartport_mode_sense ? 1'b1 :
                        (flux_is_35_inch) ? ((drive_sel == 0) ? (drive35_present ? drive35_computed_sense : 1'b1) :
                                                                (drive35_2_present ? drive35_2_computed_sense : 1'b1)) :

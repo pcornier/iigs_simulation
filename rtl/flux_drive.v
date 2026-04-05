@@ -522,9 +522,9 @@ module flux_drive (
             4'h0: sense_35 = step_direction_immediate;  // Dir readback (IS35DRIVE)
             4'h1: sense_35 = step_direction_immediate;  // Dir readback (paired test)
             4'h2: sense_35 = ~DISK_MOUNTED;             // /DIP: 0=disk present, 1=no disk
-            // STAT35 polarity tweak: MAME logs show sense low while idle.
-            // Try matching that (1=stepping, 0=idle) to align ROM handshakes.
-            4'h4: sense_35 = step_busy;                 // Disk stepping (1=stepping, 0=idle)
+            // Apple docs: "bit is 0 while stepping, 1 when idle."
+            // ROM polls with BPL (loop while sense LOW), exits when sense goes HIGH (idle).
+            4'h4: sense_35 = ~step_busy;                // /STEP: 0=stepping, 1=idle
             4'h8: sense_35 = ~motor_on_sense;           // /MOTOR: 0=on, 1=off
             4'hA: sense_35 = ~at_track0;                // /TK0: 0=at track0, 1=not track0
             4'hB: sense_35 = ~drive_ready;              // /READY: 0=ready, 1=not ready

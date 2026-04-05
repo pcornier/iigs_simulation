@@ -615,17 +615,17 @@ module iwm_flux (
 `ifdef SIMULATION
                 $display("IWM_FLUX: Switching to READ mode, m_data <= 0x00");
 `endif
-            end else if (MOTOR_ACTIVE && SW_Q7_MODE && !m_rw_mode) begin
+            end else if (MOTOR_ACTIVE && SW_Q7_MODE && !m_rw_mode && !smartport_mode) begin
+                // SmartPort mode uses Q7=1 for bus packet transmission (SendOnePack),
+                // not for disk writes. Do NOT enter m_rw_mode — that would disrupt the
+                // byte decoder state machine and corrupt subsequent disk reads.
                 m_rw_mode <= 1'b1;
                 // Don't advertise "ready for data" until the selected track buffer is live.
                 // After 3.5" side/track switches the Sony spindle may still be spinning while
                 // the WOZ controller is saving/loading the new track. If bit7 goes high in that
                 // window, the ROM starts sending format bytes immediately and they are dropped
                 // by flux_drive with TRACK_LOADED=0.
-                if (smartport_mode)
-                    m_whd <= m_whd | 8'h40;
-                else
-                    m_whd <= DISK_READY ? (m_whd | 8'hC0) : ((m_whd | 8'h40) & 8'h7F);
+                m_whd <= DISK_READY ? (m_whd | 8'hC0) : ((m_whd | 8'h40) & 8'h7F);
                 write_underrun_cnt <= WRITE_UNDERRUN_DELAY_7M;
                 // Initialize write state - S_IDLE will wait for CPU data write before shifting
                 rw_state <= S_IDLE;
