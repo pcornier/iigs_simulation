@@ -2017,7 +2017,8 @@ wire [7:0] din =
     cpu_addr[7:0] == 8'h1c |  // $C01C - PAGE2
     cpu_addr[7:0] == 8'h1d |  // $C01D - HIRES
     cpu_addr[7:0] == 8'h1e |  // $C01E - ALTCHARSET
-    cpu_addr[7:0] == 8'h1f    // $C01F - EIGHTYCOL
+    cpu_addr[7:0] == 8'h1f |  // $C01F - EIGHTYCOL
+    cpu_addr[7:4] == 4'h7     // $C07x ROM
   );
 
   // Combinational mux for simple register data
@@ -2042,6 +2043,7 @@ wire [7:0] din =
     (cpu_addr[7:0] == 8'h1d) ? {HIRES_MODE, key_keys} :
     (cpu_addr[7:0] == 8'h1e) ? {ALTCHARSET, key_keys} :
     (cpu_addr[7:0] == 8'h1f) ? {EIGHTYCOL, key_keys} :
+    (cpu_addr[7:4] == 4'h7)  ? din :
     8'h00;
 
   // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
