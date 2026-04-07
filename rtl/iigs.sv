@@ -2564,40 +2564,6 @@ wire ready_out;
             .strobe(prtc_strobe)
             );
 
-`ifdef IWMSTUB
-  iwm iwm(
-          .CLK_14M(CLK_14M),
-          .cen(q3_en),
-          .reset(reset),
-          .addr(iwm_addr),
-          .din(iwm_din),
-          .dout(iwm_dout),
-          .rw(iwm_rw),
-          .strobe(iwm_strobe),
-          .DISK35(DISK35)
-          );
-  // Stub outputs for internal wires
-  assign TRACK3 = 7'd0;
-  assign TRACK3_ADDR = 14'd0;
-  assign TRACK3_SIDE = 1'b0;
-  assign TRACK3_DI = 8'd0;
-  assign TRACK3_WE = 1'b0;
-  assign FD_DISK_3 = 1'b0;
-  assign floppy_motor_on = 1'b0;
-  assign floppy35_motor_on = 1'b0;
-  // Stub WOZ bit interfaces
-  assign WOZ_TRACK3 = 8'd0;
-  assign WOZ_TRACK3_BIT_ADDR = 16'd0;
-  assign WOZ_TRACK3_STABLE_SIDE = 1'b0;
-  assign WOZ_TRACK1 = 6'd0;
-  assign WOZ_TRACK1_BIT_ADDR = 13'd0;
-  assign WOZ_TRACK3_BIT_DATA_IN = 8'd0;
-  assign WOZ_TRACK3_BIT_WE = 1'b0;
-  assign WOZ_TRACK3_BIT_WR_ADDR = 16'd0;
-  assign WOZ_TRACK1_BIT_DATA_IN = 8'd0;
-  assign WOZ_TRACK1_BIT_WE = 1'b0;
-  assign WOZ_TRACK1_BIT_WR_ADDR = 16'd0;
-  `else
   // Hardware-accurate IWM with WOZ/flux-based disk interface
   iwm_woz iwmc (
       // Global clocks/resets
@@ -2657,7 +2623,6 @@ wire ready_out;
   assign TRACK3_DI = 8'd0;
   assign TRACK3_WE = 1'b0;
   assign FD_DISK_3 = 1'b0;
-  `endif
 
     // Legacy slot-7 HDD (supports 4 units)
     hdd hdd(

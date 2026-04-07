@@ -3,7 +3,7 @@
 
 # Check for required disk images
 MISSING_DISKS=0
-for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv" ../customtests/mmu_test.2mg; do
+for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv" ../customtests/mmu_test.2mg "Arkanoid IIgs.woz"; do
     if [ ! -f "$disk" ]; then
         echo "ERROR: Missing disk image: $disk"
         MISSING_DISKS=1
@@ -19,6 +19,7 @@ if [ $MISSING_DISKS -eq 1 ]; then
     echo "  - arkanoid.hdv"
     echo "  - Total Replay II v1.0-alpha.4.hdv"
     echo "  - ../customtests/mmu_test.2mg"
+    echo "  - Arkanoid IIgs.woz"
     exit 1
 fi
 
@@ -120,6 +121,19 @@ if [ -f "regression_images/mmutest_screenshot_frame_0130.png" ]; then
     fi
 else
     echo "  SKIP: MMU test - missing reference image"
+fi
+
+echo "Running WOZ 3.5\" Arkanoid IIgs test..."
+./obj_dir/Vemu --woz "Arkanoid IIgs.woz" --stop-at-frame 525 --screenshot 525 &> woz35_arkanoid.txt
+if [ -f "regression_images/woz35_screenshot_frame_0525.png" ]; then
+    if diff screenshot_frame_0525.png regression_images/woz35_screenshot_frame_0525.png > /dev/null 2>&1; then
+        echo "  PASS: WOZ 3.5\" Arkanoid IIgs"
+    else
+        echo "  FAIL: WOZ 3.5\" Arkanoid IIgs - screenshot differs"
+        FAILED=1
+    fi
+else
+    echo "  SKIP: WOZ 3.5\" Arkanoid IIgs - missing reference image"
 fi
 
 echo ""
