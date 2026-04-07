@@ -961,13 +961,17 @@ module iwm_woz (
     // the per-status media bits (/DIP, /READY, /DSW) still come from the mounted-media
     // state reflected in drive35_computed_sense.
     //
-    // SmartPort mode uses the IWM sense line for bus /BSY handshake (idle=high).
-    // Override sense to idle-high in SmartPort mode so SendOnePack/ReceivePack don't
-    // get confused by real 3.5" drive sense data on the shared pin.
-    wire drive_sense = smartport_mode_sense ? 1'b1 :
-                       (flux_is_35_inch) ? ((drive_sel == 0) ? (drive35_present ? drive35_computed_sense : 1'b1) :
-                                                               (drive35_2_present ? drive35_2_computed_sense : 1'b1)) :
-                                           ((drive_sel == 0) ? drive525_sense : 1'b1);
+    // SmartPort mode reuses the IWM sense line as /BSY for non-Sony devices, but the
+    // built-in 3.5" AppleDisk path still relies on the real Sony status mux even while
+    // mode register bits look SmartPort-like (for example during GS/OS startup probes).
+    // If we flatten the Sony path to idle-high here, the helper at E0:F712 always sees
+    // bit7=1 ($A7 instead of $27) and reports drvr_disk_sw. Keep the idle-high override
+    // only on the non-3.5" path; let active Sony routing return the real multiplexed
+    // status values.
+    wire drive_sense = (flux_is_35_inch) ? ((drive_sel == 0) ? (drive35_present ? drive35_computed_sense : 1'b1) :
+                                                             (drive35_2_present ? drive35_2_computed_sense : 1'b1)) :
+                                           (smartport_mode_sense ? 1'b1 :
+                                                                   ((drive_sel == 0) ? drive525_sense : 1'b1));
 
     wire current_sense = drive_sense;
 
