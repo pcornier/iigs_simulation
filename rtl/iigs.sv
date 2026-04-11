@@ -304,7 +304,7 @@ module iigs
   assign VPB=cpu_vpb;
   assign CXROM=INTCXROM;
   assign { bank, addr } = addr_bus;
-  assign dout = cpu_dout;
+  assign dout = hdd_dma ? HDD_DO : cpu_dout;
   assign we = hdd_dma ? hdd_dma_we : ~cpu_we_n;
   assign valid = cpu_vpa | cpu_vda;
   
