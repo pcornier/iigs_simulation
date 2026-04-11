@@ -50,6 +50,7 @@ ifeq ($(UNAME_S), Linux) #LINUX
 	LIBS += -lGL -ldl `sdl2-config --libs`
 
 	CXXFLAGS += `sdl2-config --cflags` -Iimgui
+	CXXFLAGS += $(CXX_DEFINE)
 	CFLAGS = $(CXXFLAGS)
 endif
 
