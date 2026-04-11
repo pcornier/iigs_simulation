@@ -67,6 +67,7 @@ void SimBus::BeforeEval()
 		}
 		else {
 			console.AddLog("Starting download: %s %d", currentDownload.file.c_str(), ioctl_next_addr, ioctl_next_addr);
+			fprintf(stderr, "IOCTL: Starting download: %s\n", currentDownload.file.c_str());
 		}
 	}
 
@@ -81,6 +82,7 @@ void SimBus::BeforeEval()
 				*ioctl_download = 0;
 				*ioctl_wr = 0;
 				console.AddLog("ioctl_download complete %d", ioctl_next_addr);
+				fprintf(stderr, "IOCTL: Download complete, %d bytes\n", ioctl_next_addr);
 			}
 			if (ioctl_file) {
 				int curchar = fgetc(ioctl_file);

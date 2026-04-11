@@ -1062,10 +1062,10 @@ int verilate() {
 			fprintf(stderr, "Keyboard reset: Ctrl+F11 pressed (cold=%d)\n", reset_pending_cold);
 		}
 
-		// Assert reset during startup (always cold reset on power-on)
-		if (main_time < initialReset) { top->reset = 1; top->cold_reset = 1; }
-		// Deassert reset after startup
-		if (main_time == initialReset) { top->reset = 0; top->cold_reset = 0; }
+		// Assert reset during startup and ROM download (always cold reset on power-on)
+		if (main_time < initialReset || *bus.ioctl_download) { top->reset = 1; top->cold_reset = 1; }
+		// Deassert reset after startup AND ROM download complete
+		if (main_time >= initialReset && !*bus.ioctl_download && top->reset && reset_time == 0 && !reset_pending) { top->reset = 0; top->cold_reset = 0; }
 		
 		// Handle self-test mode override timing
 		if (selftest_mode) {
@@ -4480,6 +4480,14 @@ int main(int argc, char** argv, char** env) {
 	bus.ioctl_wr = &top->ioctl_wr;
 	bus.ioctl_dout = &top->ioctl_dout;
 	//bus.ioctl_din = &top->ioctl_din;
+
+	// Queue ROM download at startup via ioctl (loaded into unified SDRAM)
+#ifdef ROM3
+	bus.QueueDownload("rom3/boot.rom.bin", 1, 1);
+#else
+	bus.QueueDownload("rom1/boot.rom.bin", 1, 1);
+#endif
+
 	input.ps2_key = &top->ps2_key;
 
 	// hookup blk device
@@ -4851,20 +4859,20 @@ int main(int argc, char** argv, char** env) {
 
 		// Memory debug
 		ImGui::Begin("Fast RAM Editor");
-		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__fastram__DOT__ram, 8388608, 0);
+		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__fastram__DOT__ram, 16777216, 0);
 		ImGui::End();
 		ImGui::Begin("Slow RAM Editor");
 		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram, 131072, 0);
 		ImGui::End();
 
-                uint8_t *romp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->emu__DOT__rom__DOT__d);
-
+                // ROM is now in unified dpram at high addresses (FC0000-FFFFFF for ROM3, FE0000-FFFFFF for ROM1)
+                uint8_t *ramp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->emu__DOT__fastram__DOT__ram);
 #ifdef ROM3
-		uint8_t *rom1p = romp + (65536 * 2);
-		uint8_t *rom2p = romp + (65536 * 3);
+		uint8_t *rom1p = ramp + 0xFE0000;  // Bank FE
+		uint8_t *rom2p = ramp + 0xFF0000;  // Bank FF
 #else
-		uint8_t *rom1p = romp;
-		uint8_t *rom2p = romp + (65536);
+		uint8_t *rom1p = ramp + 0xFE0000;  // Bank FE
+		uint8_t *rom2p = ramp + 0xFF0000;  // Bank FF
 #endif
 		ImGui::Begin("ROM 1 Editor");
 		mem_edit.DrawContents(rom1p, 65536, 0);
