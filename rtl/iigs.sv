@@ -153,6 +153,7 @@ module iigs
    logic [3:0] BORDERCOLOR;
    logic [7:0] SLTROMSEL;
    logic [7:0] CYAREG;
+   logic [7:0] DMAREG; // DMA bank register
    logic reset_prev;  // For detecting reset release
    logic CXROM;
    logic       RDROM;
@@ -184,9 +185,11 @@ module iigs
   logic [7:0]         cpu_dout;
   logic [23:0]        addr_bus;
   logic [23:0]        fastram_addr_bus;
+  logic [15:0]        hdd_dma_addr;
   logic               cpu_vpa, cpu_vpb;
   logic               cpu_vda, cpu_mlb;
   logic               cpu_we_n;
+  logic               hdd_dma_we;
   logic [7:0]         io_dout;
   logic [7:0]         slot_dout;
 
@@ -302,7 +305,7 @@ module iigs
   assign CXROM=INTCXROM;
   assign { bank, addr } = addr_bus;
   assign dout = cpu_dout;
-  assign we = ~cpu_we_n;
+  assign we = hdd_dma ? hdd_dma_we : ~cpu_we_n;
   assign valid = cpu_vpa | cpu_vda;
   
   // φ2 is a clock ENABLE, not a clock - always use CLK_14M as clock
@@ -373,7 +376,7 @@ module iigs
   );
 
   // Use combinational logic but add debug to detect timing issues
-  assign { bank_bef, addr_bef } = cpu_addr;
+  assign { bank_bef, addr_bef } = hdd_dma ? {DMAREG, hdd_dma_addr} : cpu_addr;
   
   // Debug: Track bank changes to detect potential timing issues
   reg [7:0] prev_bank;
@@ -823,6 +826,7 @@ module iigs
       end
       STATEREG <=  8'b0000_1101;  // GSPlus: 0x0D (rdrom, lcbank2, intcx, bit2)
       shadow <= 8'b0000_1000;  // Original value: bit 3=1 (SHGR disabled), others=0 (enabled)
+      DMAREG <= 8'h00;
 `ifdef DEBUG_RESET
       $display("SHADOW_REG_INIT: shadow=%08b (Original shadowing config)", 8'b0000_1000);
       $display("  TXT1=%b HGR1=%b HGR2=%b SHGR=%b AUX=%b TXT2=%b LC=%b",
@@ -1068,6 +1072,7 @@ module iigs
 `else
             12'h036: begin CYAREG <= dout; end
 `endif
+            12'h037: DMAREG <= dout;
             // SCC (Serial Communications Controller) - Zilog 8530
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
 	      if (phi2) begin
@@ -1882,8 +1887,9 @@ wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
 wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && is_internal && ~inhibit_cxxx;
 
 // try to setup flags for traditional iie style slots
-reg [7:0] device_select;
-reg [7:0] io_select;
+reg [7:0]  device_select;
+reg [7:0]  io_select;
+wire       hdd_dma;
 wire [7:0] slowram_dout;
 
 always @(*)
@@ -1982,7 +1988,7 @@ vgc vgc(
 wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef : 8'h80;
 
 wire [7:0] din =
-  (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
+  (io_select[7] == 1'b1 | device_select[7] == 1'b1 | hdd_dma) ? HDD_DO :
   (fastram_ce | rom_ce) ?  top_din :
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
@@ -2562,6 +2568,9 @@ wire ready_out;
         .RD(~we),
         .D_IN(dout),
         .D_OUT(HDD_DO),
+        .DMA(hdd_dma),
+        .DMA_ADDR(hdd_dma_addr),
+        .DMA_WE(hdd_dma_we),
         .sector(HDD_SECTOR),
         .hdd_read(HDD_READ),
         .hdd_write(HDD_WRITE),

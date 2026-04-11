@@ -30,6 +30,9 @@ module hdd(
     RD,
     D_IN,
     D_OUT,
+    DMA,
+    DMA_ADDR,
+    DMA_WE,
     sector,
     hdd_read,
     hdd_write,
@@ -50,6 +53,9 @@ module hdd(
     input            RD;		// 6502 RD/WR
     input [7:0]      D_IN;		// From 6502
     output reg [7:0] D_OUT;		// To 6502
+    output           DMA;
+    output [15:0]    DMA_ADDR;
+    output           DMA_WE;
     output [15:0]    sector;		// Sector number to read/write
     output reg       hdd_read;
     output reg       hdd_write;
@@ -115,6 +121,11 @@ module hdd(
     // Detect DMA completion: when last byte (addr 511) is written to sector buffer
     // Use this to arm prefetch AFTER DMA is done, not before
     reg dma_complete_pending;
+
+    // TODO: Remove these when DMA is implemented
+    assign DMA = 0;
+    assign DMA_ADDR = 16'h0000;
+    assign DMA_WE = 0;
 
     always @(posedge CLK_14M)
     begin: cpu_interface
