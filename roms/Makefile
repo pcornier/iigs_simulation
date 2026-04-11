@@ -1,26 +1,30 @@
 all: roms
 
-
 apple2gs.zip: 
-	echo "put mame apple2gs.zip into this folder"
+	echo "put MAME 0.286 apple2gs.zip into this folder"
 
-apple2gs.chr: apple2gs.zip
-	unzip -o apple2gs.zip apple2gs.chr
+344s0047.bin : apple2gs.zip
+	unzip -o apple2gs.zip 344s0047.bin
 
 342-0077-b: apple2gs.zip
 	unzip -o -j apple2gs.zip apple2gsr1/342-0077-b
 
-roms: apple2gs.chr 342-0077-b
-	hexdump -v -n 65536 -e '1/1 "%02X" "\n"' 342-0077-b > ../vsim/rom1/rom1.mem
-	hexdump -v -s 65536 -e '1/1 "%02X" "\n"' 342-0077-b > ../vsim/rom1/rom2.mem
+341-0728: apple2gs.zip
+	unzip -o -j apple2gs.zip 341-0728
+
+341-0748: apple2gs.zip
+	unzip -o -j apple2gs.zip 341-0748
+
+roms: 344s0047.bin 342-0077-b 341-0728 341-0748
+	hexdump -v -e '1/1 "%02X" "\n"' 342-0077-b > ../vsim/rom1/boot.rom
 	# FC-FD from 341-0737
-	hexdump -v -n 65536 -e '1/1 "%02X" "\n"' "Apple IIGS ROM 3 Banks FC-FD - 341-0737.bin" > ../vsim/rom3/romc.mem
-	hexdump -v -s 65536 -e '1/1 "%02X" "\n"' "Apple IIGS ROM 3 Banks FC-FD - 341-0737.bin" > ../vsim/rom3/romd.mem
+	hexdump -v -e '1/1 "%02X" "\n"' 341-0728 > ../vsim/rom3/boot.rom
 	# FF-FE from 341-0748: First 64KB=FF bank, Second 64KB=FE bank
-	hexdump -v -n 65536 -e '1/1 "%02X" "\n"' "Apple IIGS ROM 3 Banks FF-FE - 341-0748.bin" > ../vsim/rom3/rom2.mem
-	hexdump -v -s 65536 -e '1/1 "%02X" "\n"' "Apple IIGS ROM 3 Banks FF-FE - 341-0748.bin" > ../vsim/rom3/rom1.mem
-	hexdump -v -e '1/1 "%02X" "\n"' apple2gs.chr > ../rtl/chr.mem
+	hexdump -v -s 65536 -e '1/1 "%02X" "\n"' 341-0748 >>  ../vsim/rom3/boot.rom
+	hexdump -v -n 65536 -e '1/1 "%02X" "\n"' 341-0748 >> ../vsim/rom3/boot.rom
+	hexdump -v -n 4096 -e '1/1 "%02X" "\n"' 344s0047.bin > ../rtl/chr.mem
+	mkdir -p ../rom1 ../rom3
+	cp ../vsim/rom1/boot.rom ../rom1/boot.rom
+	cp ../vsim/rom3/boot.rom ../rom3/boot.rom
 	cp ../rtl/chr.mem ../vsim/
 	cp ../rtl/chr.mem ../verilator/
-	cp ../rtl/rom?.mem ../vsim/
-	cp ../rtl/rom?.mem ../verilator/

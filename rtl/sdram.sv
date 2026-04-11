@@ -147,8 +147,8 @@ always @(posedge clk_8x) begin
 			{oe_latch, we_latch} <= {oe, we};
 			if (we || oe) begin
 				sd_cmd <= CMD_ACTIVE;
-				sd_addr <= { 1'b0, addr[19:8] };
-				sd_ba <= addr[21:20];
+				sd_addr <= { addr[12:0] };
+				sd_ba <= addr[23:22];
 			end
 		// ------------------------ no access --------------------------
 			else begin
@@ -162,7 +162,7 @@ always @(posedge clk_8x) begin
 			if (we_latch) sd_data <= din;
 			// always return both bytes in a read. The cpu may not
 			// need it, but the caches need to be able to store everything
-			sd_addr <= { we_latch ? ~ds : 2'b00, 2'b10, addr[22], addr[7:0] };  // auto precharge
+			sd_addr <= { we_latch ? ~ds : 2'b00, 2'b10, addr[21:13] };  // auto precharge
 		end
 
 		// Data ready

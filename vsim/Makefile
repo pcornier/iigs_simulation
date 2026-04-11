@@ -27,6 +27,7 @@ endif
 # ROM selection
 ifeq ($(ROM),rom3)
 V_DEFINE += +define+ROM3
+CXX_DEFINE += -DROM3
 endif
 V_DEFINE +=
 
@@ -40,6 +41,7 @@ ifeq ($(UNAME_S), Darwin) #APPLE
 	CXXFLAGS += `sdl2-config --cflags` -Iimgui
 	CXXFLAGS += `sdl2-config --cflags | sed 's|include/SDL2|include/|'`
 	CXXFLAGS += -I/usr/local/include -I/opt/local/include
+	CXXFLAGS += CXX_DEFINE
 	CFLAGS = $(CXXFLAGS) -Iimgui
 endif
 

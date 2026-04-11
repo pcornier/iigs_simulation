@@ -242,6 +242,10 @@ wire  [7:0] paddle_0;
 wire [10:0] ps2_key;
 wire [24:0] ps2_mouse;
 
+wire ioctl_download;
+wire ioctl_wr;
+wire [26:0] ioctl_addr;
+wire [7:0] ioctl_dout;
 
 hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 (
@@ -266,8 +270,6 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	
 	.TIMESTAMP(TIMESTAMP),
 	
-
-	
 	.buttons(buttons),
 	.status(status),
 	.status_menumask({status[5]}),
@@ -277,7 +279,13 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	.joystick_0(joystick_0),
 	.joystick_l_analog_0(joystick_l_analog_0),
 	.joystick_l_analog_1(joystick_l_analog_1),
-	.paddle_0(paddle_0)
+	.paddle_0(paddle_0),
+
+	.ioctl_download(ioctl_download),
+	.ioctl_wr(ioctl_wr),
+	.ioctl_addr(ioctl_addr),
+	.ioctl_dout(ioctl_dout)
+
 );
 
 ///////////////////////   CLOCKS   ///////////////////////////////
@@ -387,11 +395,13 @@ iigs iigs (
 	// Floppy motor status
 	.floppy_motor_on(floppy_motor_on),
 	.floppy35_motor_on(floppy35_motor_on),
-	.fastram_address(fastram_address),
-	.fastram_datatoram(fastram_datatoram),
-	.fastram_datafromram(fastram_datafromram),
-	.fastram_we(fastram_we),
+	.top_addr(addr_bus),
+	.rom_bankaddr(rom_bankaddr),
+	.top_din(sdram_dout),
+	.top_dout(iigs_dout),
+	.we(we),
 	.fastram_ce(fastram_ce),
+	.rom_ce(rom_ce),
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
 	.selftest_override(selftest_override),
@@ -418,24 +428,40 @@ iigs iigs (
 	.keyboard_cold_reset(keyboard_cold_reset)
 );
 
-wire [22:0] fastram_address;
-wire [7:0] fastram_datatoram;
-wire [7:0] fastram_datafromram;
-wire fastram_we;
+wire [23:0] addr_bus;
+wire [23:0] sdram_addr;
+wire [7:0] sdram_din;
+wire [1:0] rom_bankaddr;
+wire [7:0] iigs_dout;
+wire [7:0] sdram_dout;
+wire we;
 wire fastram_ce;
+wire rom_ce;
 wire fast_clk;
 wire fast_clk_delayed;
 wire fast_clk_delayed_mem;
 
+`ifdef ROM3
+assign sdram_addr = ioctl_download ? {6'b111111, ioctl_addr[17:0]} :
+                    (rom_ce & ~we) ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
+                    {1'b0, addr_bus[22:0]};
+`else
+assign sdram_addr = ioctl_download ? {7'b1111111, ioctl_addr[16:0]} :
+                    (rom_ce & ~we) ? {7'b1111111, rom_bankaddr[0], addr_bus[15:0]} :
+                    {1'b0, addr_bus[22:0]};
+
+`endif
+
+assign sdram_din = ioctl_download ? ioctl_dout : iigs_dout;
 logic [7:0] ram_data;
 /*
 dpram #(.widthad_a(23),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),
-        .address_a( fastram_address ),
-        .data_a(fastram_datatoram),
+        .address_a( addr_bus ),
+        .data_a(iigs_dout),
         .q_a(ram_data),
-        .wren_a(fastram_we & fastram_ce),
+        .wren_a(we & fastram_ce),
         .ce_a(fastram_ce)
 );
 wire ch0_busy = 1'b0;
@@ -450,12 +476,12 @@ sdram sdram
 	.*,
 	.init(~locked),
 	.clk(clk_mem),
-	.addr({2'b00, fastram_address}),
+	.addr({2'b00, addr_bus}),
 	.wtbt(0),
-	.dout(fastram_datafromram),
-	.din(fastram_datatoram),
-	.rd(phi2 & ~fastram_we & fastram_ce),
-	.we(phi2 & fastram_we & fastram_ce),
+	.dout(iigs_dout),
+	.din(iigs_dout),
+	.rd(phi2 & ~we & fastram_ce),
+	.we(phi2 & we & fastram_ce),
 	.ready()
 );
 */
@@ -467,12 +493,12 @@ sdram sdram
   	.clk(clk_mem),
 
   	// Channel 0: CPU fast RAM
-  	.ch0_addr({2'b00, fastram_address}),  // Pad to 25 bits
-  	.ch0_rd(phi2 & ~fastram_we & fastram_ce),
-  	.ch0_wr(phi2 & fastram_we & fastram_ce),
-  	.ch0_din(fastram_datatoram),
-  	.ch0_dout(fastram_datafromram),
-  	.ch0_busy(ch0_busy),
+	.ch0_addr({2'b00, addr_bus}),  // Pad to 25 bits
+	.ch0_rd(phi2 & ~we & fastram_ce),
+	.ch0_wr(phi2 & we & fastram_ce),
+	.ch0_din(iigs_dout),
+	.ch0_dout(iigs_dout),
+	.ch0_busy(ch0_busy),
 
   	// Channel 1: Video system (if needed)
   	.ch1_addr(25'h0),    // Unused for now
@@ -491,7 +517,6 @@ sdram sdram
   	.ch2_busy()          // Unconnected
   );
   */
- 
 
  sdram sdram
   (
@@ -510,17 +535,14 @@ sdram sdram
   	.clk(clk_sys),
 
   	// Channel 0: CPU fast RAM
-  	.addr({2'b00, fastram_address}),  // Pad to 25 bits
-  	.oe(phi2 & ~fastram_we & fastram_ce),
-  	.we(phi2 & fastram_we & fastram_ce),
-  	.din(fastram_datatoram),
-  	.dout(fastram_datafromram),
-	.ds(2'b11),
-
-
+	.addr(sdram_addr),
+	.oe((phi2 & ~we & (fastram_ce | rom_ce))),
+	.we(((phi2 & we & fastram_ce) | ioctl_wr)),
+	.din(sdram_din),
+	.dout(sdram_dout),
+	.ds(2'b11)
   );
-  
- 
+
 /*
 
 //wire ch0_busy = 1'b0;
@@ -528,10 +550,10 @@ sdram sdram
 bram #(.widthad_a(15)) slowram
 (
         .clock_a(clk_sys),
-        .address_a(fastram_address),
-        .data_a(fastram_datatoram),
+        .address_a(addr_bus),
+        .data_a(iigs_dout),
         .q_a(fastram_datafromramback),
-        .wren_a(fastram_we & fastram_ce),
+        .wren_a(we & fastram_ce),
 `ifdef VERILATOR
         .ce_a(fastram_ce),
 `else
