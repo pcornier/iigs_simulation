@@ -4499,10 +4499,10 @@ int main(int argc, char** argv, char** env) {
 	//bus.ioctl_din = &top->ioctl_din;
 
 	// Queue both ROMs at startup via ioctl (loaded into unified SDRAM)
-	// ROM3 (256KB) at FC0000: ioctl_index=0 (boot.rom)
-	// ROM1 (128KB) at F80000: ioctl_index=0x40 (boot1.rom, [15:6]=1)
-	bus.QueueDownload("rom3/boot.rom.bin", 0, 1);
-	bus.QueueDownload("rom1/boot.rom.bin", 0x40, 1);
+	// ROM3 (256KB) at FC0000: ioctl_index=0 (boot.rom on MiSTer)
+	// ROM1 (128KB) at F80000: ioctl_index=0x40 (boot1.rom on MiSTer, [15:6]=1)
+	bus.QueueDownload("boot.rom", 0, 1);
+	bus.QueueDownload("boot1.rom", 0x40, 1);
 
 	// Set initial ROM selection from command line (--rom option)
 	top->rom_select = initial_rom_select;
