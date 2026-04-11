@@ -19,10 +19,9 @@ module iigs
    input              CLK_14M,
    input              clk_vid,
    input              ce_pix,
-   input              cpu_wait,
    input [32:0]       timestamp,
 
-     output [7:0] R,
+  output [7:0] R,
   output [7:0] G,
   output [7:0] B,
   output HBlank,
@@ -84,6 +83,8 @@ module iigs
   output        HDD_UNIT,           // Which unit (0-1) is being accessed (from bit 7)
   input  [1:0]  HDD_MOUNTED,        // Per-unit mounted status
   input  [1:0]  HDD_PROTECT,        // Per-unit write protect
+  input [63:0]  HDD0_SIZE,
+  input [63:0]  HDD1_SIZE,
   input [8:0]   HDD_RAM_ADDR,
   input [7:0]   HDD_RAM_DI,
   output [7:0]  HDD_RAM_DO,
@@ -2186,7 +2187,7 @@ wire ready_out;
               .CLK(CLK_14M),
               .RST_N(~reset),
               .CE(phi2),
-              .RDY_IN(~cpu_wait),
+              .RDY_IN(~hdd_dma),
               .NMI_N(1'b1),
               .IRQ_N(cpu_irq_n),
               .ABORT_N(1'b1),
@@ -2577,7 +2578,9 @@ wire ready_out;
         .hdd_unit(HDD_UNIT),
         .hdd_mounted(HDD_MOUNTED),
         .hdd_protect(HDD_PROTECT),
-        .ram_addr(HDD_RAM_ADDR),
+        .hdd0_size(HDD0_SIZE),
+        .hdd1_size(HDD0_SIZE),
+        .hps_ram_addr(HDD_RAM_ADDR),
         .ram_di(HDD_RAM_DI),
         .ram_do(HDD_RAM_DO),
         .ram_we(HDD_RAM_WE)
