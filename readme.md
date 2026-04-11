@@ -8,6 +8,12 @@ cd roms
 make 
 ```
 
+
+ROM3: boot.rom
+ROM1: boot1.rom
+
+
+
 ```
 make
 ./obj_dir/Vtop -t 15 -l 2 -s 20
