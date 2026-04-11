@@ -45,6 +45,7 @@ module iigs
   output       we,
   output       fastram_ce,
   output       rom_ce,
+  input        rom_select,  // 0=ROM3, 1=ROM1
 
  // ps2 alternative interface.
  // [8] - extended, [9] - pressed, [10] - toggles with every press/release
@@ -2454,6 +2455,7 @@ wire ready_out;
           .CLK_14M(CLK_14M),
           .cen(phi2),
           .reset(reset),
+          .rom_select(rom_select),
           .addr(adb_addr_mux),
           .rw(adb_rw_mux),
           .din(adb_din),

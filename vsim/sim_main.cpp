@@ -159,6 +159,9 @@ static inline void hdd_ring_record(unsigned char pbr, unsigned short pc, unsigne
 }
 
 
+// ROM version selection (0=ROM3, 1=ROM1, default ROM3)
+int initial_rom_select = 0;
+
 // Self-test mode support
 bool selftest_mode = false;
 bool selftest_override_active = false;
@@ -4088,6 +4091,7 @@ void show_help() {
 	printf("  --stop-at-frame <frame>       Exit simulation after specified frame\n");
 	printf("  --reset-at-frame <frame>      Trigger warm reset at specified frame\n");
 	printf("  --cold-reset-at-frame <frame> Trigger cold reset at specified frame\n");
+	printf("  --rom <1|3|rom1|rom3>         Select ROM version (default: rom3)\n");
 	printf("  --selftest                    Enable self-test mode\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
 	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
@@ -4309,6 +4313,19 @@ int main(int argc, char** argv, char** env) {
 			dump_vcd_after_frame = std::stoi(argv[i + 1]);
 			printf("Will start dumping VCD at frame %d\n", dump_vcd_after_frame);
 			i++; // Skip the next argument since it's the frame number
+		} else if (strcmp(argv[i], "--rom") == 0 && i + 1 < argc) {
+			std::string rom_arg = argv[i + 1];
+			if (rom_arg == "1" || rom_arg == "rom1") {
+				initial_rom_select = 1;
+				printf("ROM1 selected (128KB, version 5)\n");
+			} else if (rom_arg == "3" || rom_arg == "rom3") {
+				initial_rom_select = 0;
+				printf("ROM3 selected (256KB, version 6)\n");
+			} else {
+				fprintf(stderr, "Error: --rom requires '1'/'rom1' or '3'/'rom3'\n");
+				return 1;
+			}
+			i++;
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
 			printf("Self-test mode enabled - will simulate Command+Option+Control+Reset\n");
@@ -4481,12 +4498,14 @@ int main(int argc, char** argv, char** env) {
 	bus.ioctl_dout = &top->ioctl_dout;
 	//bus.ioctl_din = &top->ioctl_din;
 
-	// Queue ROM download at startup via ioctl (loaded into unified SDRAM)
-#ifdef ROM3
-	bus.QueueDownload("rom3/boot.rom.bin", 1, 1);
-#else
-	bus.QueueDownload("rom1/boot.rom.bin", 1, 1);
-#endif
+	// Queue both ROMs at startup via ioctl (loaded into unified SDRAM)
+	// ROM3 (256KB) at FC0000: ioctl_index=0 (boot.rom)
+	// ROM1 (128KB) at F80000: ioctl_index=0x40 (boot1.rom, [15:6]=1)
+	bus.QueueDownload("rom3/boot.rom.bin", 0, 1);
+	bus.QueueDownload("rom1/boot.rom.bin", 0x40, 1);
+
+	// Set initial ROM selection from command line (--rom option)
+	top->rom_select = initial_rom_select;
 
 	input.ps2_key = &top->ps2_key;
 
@@ -4819,6 +4838,23 @@ int main(int argc, char** argv, char** env) {
 			ImGui::EndTooltip();
 		}
 
+		// ROM version selection
+		ImGui::Separator();
+		ImGui::Text("ROM Version:");
+		bool rom1_selected = top->rom_select != 0;
+		if (ImGui::RadioButton("ROM3", !rom1_selected)) { top->rom_select = 0; }
+		ImGui::SameLine();
+		if (ImGui::RadioButton("ROM1", rom1_selected)) { top->rom_select = 1; }
+		ImGui::SameLine();
+		ImGui::TextDisabled("(?)");
+		if (ImGui::IsItemHovered()) {
+			ImGui::BeginTooltip();
+			ImGui::Text("ROM3: 256KB ROM (1MB Apple IIgs, version 6)");
+			ImGui::Text("ROM1: 128KB ROM (256K Apple IIgs, version 5)");
+			ImGui::Text("Requires Cold Reset after switching.");
+			ImGui::EndTooltip();
+		}
+
 		// Floppy drives
 		ImGui::Separator();
 		ImGui::Text("Floppy Drives:");
@@ -4865,15 +4901,12 @@ int main(int argc, char** argv, char** env) {
 		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram, 131072, 0);
 		ImGui::End();
 
-                // ROM is now in unified dpram at high addresses (FC0000-FFFFFF for ROM3, FE0000-FFFFFF for ROM1)
+                // ROM is in unified dpram: ROM3 at FC0000-FFFFFF, ROM1 at F80000-F9FFFF
+                // Show the active ROM based on rom_select
                 uint8_t *ramp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->emu__DOT__fastram__DOT__ram);
-#ifdef ROM3
-		uint8_t *rom1p = ramp + 0xFE0000;  // Bank FE
-		uint8_t *rom2p = ramp + 0xFF0000;  // Bank FF
-#else
-		uint8_t *rom1p = ramp + 0xFE0000;  // Bank FE
-		uint8_t *rom2p = ramp + 0xFF0000;  // Bank FF
-#endif
+		uint8_t *rom_base = ramp + (top->rom_select ? 0xF80000 : 0xFC0000);
+		uint8_t *rom1p = rom_base + (top->rom_select ? 0x00000 : 0x20000);  // Bank FE (ROM3) or F80000 (ROM1)
+		uint8_t *rom2p = rom_base + (top->rom_select ? 0x10000 : 0x30000);  // Bank FF (ROM3) or F90000 (ROM1)
 		ImGui::Begin("ROM 1 Editor");
 		mem_edit.DrawContents(rom1p, 65536, 0);
 		ImGui::End();

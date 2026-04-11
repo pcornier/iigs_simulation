@@ -60,6 +60,9 @@ module emu (
         // Self-test mode override
         input selftest_override,
 
+        // ROM selection: 0=ROM3, 1=ROM1
+        input rom_select/*verilator public_flat*/,
+
         // [31:0] - seconds since 1970-01-01 00:00:00, [32] - toggle with every change
         input [32:0] TIMESTAMP,
 
@@ -124,15 +127,16 @@ wire fastram_ce;
 wire rom_ce;
 
 // Unified memory address mux (mirrors IIgs.sv SDRAM address formation)
-`ifdef ROM3
-wire [23:0] mem_addr = ioctl_download ? {6'b111111, ioctl_addr[17:0]} :
-                       (rom_ce & ~we) ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
+// ROM3 (256KB) loaded at FC0000 via ioctl_index==0 (boot.rom)
+// ROM1 (128KB) loaded at F80000 via ioctl_index==0x40 (boot1.rom, [15:6]==1)
+wire rom3_loading = ioctl_download && (ioctl_index[7:6] == 2'd0);
+wire rom1_loading = ioctl_download && (ioctl_index[7:6] != 2'd0);
+
+wire [23:0] mem_addr = rom3_loading                  ? {6'b111111, ioctl_addr[17:0]} :
+                       rom1_loading                  ? {7'b1111100, ioctl_addr[16:0]} :
+                       (rom_ce & ~we & ~rom_select)  ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
+                       (rom_ce & ~we &  rom_select)  ? {7'b1111100, rom_bankaddr[0], addr_bus[15:0]} :
                        {1'b0, addr_bus[22:0]};
-`else
-wire [23:0] mem_addr = ioctl_download ? {7'b1111111, ioctl_addr[16:0]} :
-                       (rom_ce & ~we) ? {7'b1111111, rom_bankaddr[0], addr_bus[15:0]} :
-                       {1'b0, addr_bus[22:0]};
-`endif
 
 assign iigs_din = fastram_dout;
 
@@ -243,6 +247,7 @@ iigs  iigs(
         .we(we),
         .fastram_ce(fastram_ce),
         .rom_ce(rom_ce),
+        .rom_select(rom_select),
 
         .ps2_key(ps2_key),
         .ps2_mouse(ps2_mouse),

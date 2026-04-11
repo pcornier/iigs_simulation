@@ -205,6 +205,7 @@ localparam CONF_STR = {
 	"S3,WOZ,WOZ 5.25;",
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
+	"OB,ROM Version,ROM3,ROM1;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -246,6 +247,7 @@ wire ioctl_download;
 wire ioctl_wr;
 wire [26:0] ioctl_addr;
 wire [7:0] ioctl_dout;
+wire [15:0] ioctl_index;
 
 hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 (
@@ -284,7 +286,8 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	.ioctl_download(ioctl_download),
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
-	.ioctl_dout(ioctl_dout)
+	.ioctl_dout(ioctl_dout),
+	.ioctl_index(ioctl_index)
 
 );
 
@@ -317,13 +320,19 @@ wire keyboard_cold_reset;
 // Combine all reset sources
 // Include ~locked to hold reset until PLL is stable (critical for FPGA)
 wire warm_reset_trigger = status[0] | keyboard_reset;
-wire cold_reset_trigger = status[1] | keyboard_cold_reset;
+wire cold_reset_trigger = status[1] | keyboard_cold_reset | rom_switch_reset;
 wire reset = RESET | ~locked | warm_reset_trigger | cold_reset_trigger | buttons[1];
 
-// cold_reset is 1 for power-on (RESET/~locked) or explicit cold reset, 0 for warm reset
+// cold_reset is 1 for power-on (RESET/~locked) or explicit cold reset or ROM switch, 0 for warm reset
 wire cold_reset = RESET | ~locked | cold_reset_trigger;
 
 wire selftest_override = status[10];
+wire rom_select = status[11];  // 0=ROM3, 1=ROM1
+
+// Detect ROM version change and trigger cold reset
+reg rom_select_prev;
+always @(posedge clk_sys) rom_select_prev <= rom_select;
+wire rom_switch_reset = (rom_select != rom_select_prev);
 
 wire phi2;
 wire phi0;
@@ -402,6 +411,7 @@ iigs iigs (
 	.we(we),
 	.fastram_ce(fastram_ce),
 	.rom_ce(rom_ce),
+	.rom_select(rom_select),
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
 	.selftest_override(selftest_override),
@@ -441,16 +451,16 @@ wire fast_clk;
 wire fast_clk_delayed;
 wire fast_clk_delayed_mem;
 
-`ifdef ROM3
-assign sdram_addr = ioctl_download ? {6'b111111, ioctl_addr[17:0]} :
-                    (rom_ce & ~we) ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
-                    {1'b0, addr_bus[22:0]};
-`else
-assign sdram_addr = ioctl_download ? {7'b1111111, ioctl_addr[16:0]} :
-                    (rom_ce & ~we) ? {7'b1111111, rom_bankaddr[0], addr_bus[15:0]} :
-                    {1'b0, addr_bus[22:0]};
+// ROM3 (256KB) loaded at FC0000 via boot.rom  (ioctl_index[15:6]==0)
+// ROM1 (128KB) loaded at F80000 via boot1.rom (ioctl_index[15:6]==1)
+wire rom3_loading = ioctl_download && (ioctl_index[15:6] == 10'd0);
+wire rom1_loading = ioctl_download && (ioctl_index[15:6] != 10'd0);
 
-`endif
+assign sdram_addr = rom3_loading                  ? {6'b111111, ioctl_addr[17:0]} :
+                    rom1_loading                  ? {7'b1111100, ioctl_addr[16:0]} :
+                    (rom_ce & ~we & ~rom_select)  ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
+                    (rom_ce & ~we &  rom_select)  ? {7'b1111100, rom_bankaddr[0], addr_bus[15:0]} :
+                    {1'b0, addr_bus[22:0]};
 
 assign sdram_din = ioctl_download ? ioctl_dout : iigs_dout;
 logic [7:0] ram_data;
