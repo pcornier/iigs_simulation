@@ -235,6 +235,19 @@ module iwm_flux (
     // Disable sync-run resync for now; it appears to drop one sync byte.
     wire       sync_resync_enable = 1'b0;
 
+    //=========================================================================
+    // Simple Shift Register for 5.25" Bitstream Tracks (Disk II behavior)
+    //=========================================================================
+    // The real Disk II controller uses a simple shift register: one raw bit
+    // shifts in per 4µs bit cell (56 clocks at 14MHz). When bit 7 is 1,
+    // the byte is latched. No windowing, no edge detection.
+    // The window-based decoder introduces byte boundary alignment differences
+    // that break timing-sensitive copy protection (nibble counting).
+    reg [5:0]  sr525_timer;          // Countdown: 56 clocks per bit cell
+    reg        sr525_flux_seen;      // Any flux transition during this bit cell?
+    wire       sr525_active = !IS_35_INCH && !m_rw_mode && motor_decode_ok;
+    localparam [5:0] SR525_BIT_CELL = 6'd56;  // 4µs at 14MHz
+
     // Track wrap detection: reset fractional accumulators when disk completes a rotation
     // to prevent accumulated drift from causing byte framing misalignment.
     reg [16:0] prev_disk_bit_position;
@@ -323,10 +336,16 @@ module iwm_flux (
     wire       shift_edge1_now = (rw_state == SR_WINDOW_EDGE_1) && (window_counter == 6'd1);
     wire [7:0] next_rsh_edge0 = {m_rsh[6:0], 1'b0};
     wire [7:0] next_rsh_edge1 = {m_rsh[6:0], 1'b1};
+    // Simple 5.25" shift register byte completion detection
+    wire       sr525_shift_now = sr525_active && (sr525_timer == 6'd1);
+    wire [7:0] sr525_next_rsh = {m_rsh[6:0], sr525_flux_seen ? 1'b1 : 1'b0};
+    wire       sr525_byte_completing = DISK_READY && sr525_shift_now && sr525_next_rsh[7];
     wire       byte_completing = DISK_READY &&
-                                 ((shift_edge0_now && next_rsh_edge0[7]) ||
+                                 (sr525_byte_completing ||
+                                  (shift_edge0_now && next_rsh_edge0[7]) ||
                                   (shift_edge1_now && next_rsh_edge1[7]));
-    wire [7:0] byte_complete_data = shift_edge0_now ? next_rsh_edge0 :
+    wire [7:0] byte_complete_data = sr525_byte_completing ? sr525_next_rsh :
+                                    shift_edge0_now ? next_rsh_edge0 :
                                     shift_edge1_now ? next_rsh_edge1 :
                                     8'h00;
 
@@ -502,6 +521,8 @@ module iwm_flux (
 `endif
             clear_rsh_pending   <= 1'b0;
             latch_hold_cnt <= 4'd0;
+            sr525_timer     <= SR525_BIT_CELL;
+            sr525_flux_seen <= 1'b0;
             sync_run_count <= 4'd0;
             sync_resync_done <= 1'b0;
 `ifdef SIMULATION
@@ -600,6 +621,8 @@ module iwm_flux (
                 m_data_next_gen <= 32'd0;
                 m_rw_mode <= 1'b0;
                 rw_state <= S_IDLE;
+                sr525_timer <= SR525_BIT_CELL;
+                sr525_flux_seen <= 1'b0;
 `ifdef SIMULATION
                 $display("IWM_FLUX: Entering READ mode, m_data <= 0x00");
 `endif
@@ -768,6 +791,80 @@ module iwm_flux (
             end
 `endif
             if (state_machine_ok) begin
+
+                //=============================================================
+                // 5.25" Simple Shift Register Path (Disk II behavior)
+                //=============================================================
+                // For 5.25" bitstream reads, bypass the window-based decoder
+                // and use a simple shift register clocked at one bit per 4µs
+                // cell. This matches real Disk II hardware and is critical for
+                // timing-sensitive copy protection (nibble counting).
+                if (sr525_active) begin
+                    // Latch any flux transition during this bit cell
+                    if (flux_edge) begin
+                        sr525_flux_seen <= 1'b1;
+                    end
+
+                    if (sr525_timer == 6'd1) begin
+                        // End of bit cell: shift in the accumulated flux bit
+                        shifted_rsh = {m_rsh[6:0], sr525_flux_seen ? 1'b1 : 1'b0};
+                        m_rsh <= shifted_rsh;
+                        sr525_flux_seen <= 1'b0;
+                        sr525_timer <= SR525_BIT_CELL;
+
+                        if (shifted_rsh[7]) begin
+                            // Byte complete - update data register and prologue tracking
+                            prolog_last2 <= prolog_last1;
+                            prolog_last1 <= shifted_rsh;
+`ifdef SIMULATION
+                            byte_counter <= byte_counter + 1;
+                            if (data_trace_active) begin
+                                $display("IWM_DATA_TRACE_BYTE: idx=%0d pos=%0d data=%02h",
+                                         data_trace_count, DISK_BIT_POSITION, shifted_rsh);
+                                if (data_trace_count == DATA_TRACE_LIMIT - 1'd1)
+                                    data_trace_active <= 1'b0;
+                                else
+                                    data_trace_count <= data_trace_count + 1'd1;
+                            end
+                            if (prolog_last2 == 8'hD5 && prolog_last1 == 8'hAA) begin
+                                if (shifted_rsh == 8'h96 || shifted_rsh == 8'hAD) begin
+                                    $display("IWM_PROLOG_OK: d5 aa %02h pos=%0d state=SR525 cycle=%0d",
+                                             shifted_rsh, DISK_BIT_POSITION, debug_cycle);
+                                    if (shifted_rsh == 8'hAD) begin
+                                        data_trace_active <= 1'b1;
+                                        data_trace_count <= 6'd0;
+                                    end
+                                end
+                            end
+`endif
+                            if (!m_data_read && m_data[7] && !rd_consumes_byte && latch_mode && !m_data_next_valid) begin
+                                m_data_next <= shifted_rsh;
+                                m_data_next_gen <= m_data_gen + 32'd1;
+                                m_data_next_valid <= 1'b1;
+                            end else begin
+                                m_data <= shifted_rsh;
+                                m_data_gen <= m_data_gen + 32'd1;
+                                m_data_read <= 1'b0;
+                                async_update_pending <= 1'b0;
+                            end
+                            if (latch_mode) begin
+                                latch_hold_cnt <= 4'd8;
+                            end else begin
+                                // Sync mode: clear shift register after byte completion
+                                m_rsh <= 8'h00;
+                            end
+                            clear_rsh_pending <= 1'b1;
+                        end
+                    end else begin
+                        sr525_timer <= sr525_timer - 6'd1;
+                    end
+                    // Keep rw_state at S_IDLE so write mode transitions work
+                    rw_state <= S_IDLE;
+                end else
+
+                //=============================================================
+                // Window-based State Machine (3.5" and write modes)
+                //=============================================================
                 case (rw_state)
                     S_IDLE: begin
                         if (m_rw_mode && !smartport_mode && !DISK_READY) begin
@@ -1552,6 +1649,8 @@ module iwm_flux (
                 full_window_frac <= 10'd0;
                 half_window_frac <= 10'd0;
                 flux_seen <= 1'b0;
+                sr525_timer <= SR525_BIT_CELL;
+                sr525_flux_seen <= 1'b0;
                 async_update_pending <= 1'b0;
                 latch_hold_cnt <= 4'd0;
                 m_data_next_valid <= 1'b0;
@@ -1872,7 +1971,12 @@ module iwm_flux (
     // sector and eventually hang during directory/file reads.
     assign rd_is_data_reg = ADDR[3] && (immediate_q7 == 1'b0) && (immediate_q6 == 1'b0);
 
-    wire [7:0] data_out_data = effective_data;
+    // For 5.25" reads using the simple shift register, expose the partial shift
+    // register value (m_rsh) when no complete byte is available. This matches
+    // the real Disk II where data_r always reflects the current latch state.
+    // Copy protection (nibble counting) reads the partial value at $825C to
+    // measure timing between sync markers.
+    wire [7:0] data_out_data = (sr525_active && !data_ready) ? m_rsh : effective_data;
 
     // Combinatorial bypass for same-cycle read:
     // if a byte completes during the read, return it immediately.
