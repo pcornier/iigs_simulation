@@ -197,7 +197,7 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 
 `include "build_id.v" 
 localparam CONF_STR = {
-	"IIgs;UART19200:9600:4800:2400:1200:300;",
+	"Apple-IIgs;UART19200:9600:4800:2400:1200:300;",
 	"-;",
 	"S0,HDVPO ;",
 	"S1,HDVPO ;",
