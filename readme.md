@@ -8,6 +8,12 @@ This is a verilog recreation of an Apple IIgs computer. It was based on the SNES
 
 ## Keyboard mappings
 
+* F11 - Reset
+* Left/Right Alt - Command
+* Windows/Menu - Option
+
+
+
 ## Disk handling notes
 
 ## Rom generation
@@ -19,8 +25,8 @@ make
 ```
 
 
-ROM3: boot.rom
-ROM1: boot1.rom
+* ROM3: boot.rom
+* ROM1: boot1.rom
 
 
 ## Development notes
