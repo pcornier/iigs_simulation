@@ -39,14 +39,22 @@ wire [7:0] VERSION = rom_select ? 8'd5 : 8'd6;
 // ADB microcontroller ROM (4KB, loaded from file)
 // Always use ROM3 ADB microcontroller ROM (superset of ROM1)
 wire [11:0] adb_rom_addr;
-wire [7:0] adb_rom_data;
+wire [7:0] adb_rom_data= rom_select ? adb_rom_data_1 : adb_rom_data_3;
+wire [7:0] adb_rom_data_3;
+wire [7:0] adb_rom_data_1;
 reg [11:0] adb_rom_addr_reg;
 
 rom #(12, 8, "rtl/roms/adb_rom3.hex") adb_rom_inst (
   .clock(CLK_14M),
   .ce(1'b1),
   .address(adb_rom_addr),
-  .q(adb_rom_data)
+  .q(adb_rom_data_3)
+);
+rom #(12, 8, "rtl/roms/adb_rom1.hex") adb_rom1_inst (
+  .clock(CLK_14M),
+  .ce(1'b1),
+  .address(adb_rom_addr),
+  .q(adb_rom_data_1)
 );
 
 // ROM address is derived from cmd_data when reading ROM area
