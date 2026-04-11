@@ -5,11 +5,7 @@ TOP = --top-module emu
 RTL = ../rtl
 V_INC = +incdir+$(RTL)
 
-# ROM selection switch:
-#   make ROM=rom1     -> builds with rom1
-#   make ROM=rom3     -> builds with rom3 (default)
-#   make             -> defaults to rom3
-ROM ?= rom3
+# ROM selection is now runtime (no build-time ROM3/ROM1 switch needed)
 
 V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD -Wno-fatal \
 	-I$(RTL)  \
@@ -24,10 +20,6 @@ V_DEFINE += --trace
 ifeq ($(SOUND),stub)
 V_DEFINE += +define+SOUND_STUB
 endif
-# ROM selection
-ifeq ($(ROM),rom3)
-V_DEFINE += +define+ROM3
-endif
 V_DEFINE +=
 
 UNAME_S := $(shell uname -s)
@@ -40,6 +32,7 @@ ifeq ($(UNAME_S), Darwin) #APPLE
 	CXXFLAGS += `sdl2-config --cflags` -Iimgui
 	CXXFLAGS += `sdl2-config --cflags | sed 's|include/SDL2|include/|'`
 	CXXFLAGS += -I/usr/local/include -I/opt/local/include
+	CXXFLAGS += $(CXX_DEFINE)
 	CFLAGS = $(CXXFLAGS) -Iimgui
 endif
 
@@ -48,6 +41,7 @@ ifeq ($(UNAME_S), Linux) #LINUX
 	LIBS += -lGL -ldl `sdl2-config --libs`
 
 	CXXFLAGS += `sdl2-config --cflags` -Iimgui
+	CXXFLAGS += $(CXX_DEFINE)
 	CFLAGS = $(CXXFLAGS)
 endif
 
@@ -90,11 +84,13 @@ V_SRC = \
 	$(RTL)/es5503.v \
 	$(RTL)/keyboard.v \
 	$(RTL)/paddle_timer.v \
-	$(RTL)/iwm_core_ref.v \
-	$(RTL)/iwm_controller.v \
-	$(RTL)/apple_drive.v \
-	$(RTL)/floppy_track.sv \
-	$(RTL)/iwm.v \
+	$(RTL)/iwm_woz.v \
+	$(RTL)/iwm_flux.v \
+	$(RTL)/smartport_dev.v \
+	$(RTL)/flux_drive.v \
+	$(RTL)/woz_track.sv \
+	$(RTL)/bram.sv \
+	$(RTL)/woz_floppy_controller.sv \
 	$(RTL)/vgc.v \
 	$(RTL)/hdd.v \
 	$(RTL)/dpram.sv \

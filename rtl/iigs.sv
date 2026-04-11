@@ -37,13 +37,15 @@ module iigs
   output phi0,
   output clk_7M,
 
-     // fastram sdram
-  output [22:0] fastram_address,
-  output [7:0] fastram_datatoram,
-  input  [7:0] fastram_datafromram,
-  output       fastram_we,
+  // fastram sdram
+  output [23:0] top_addr,
+  output[1:0]  rom_bankaddr,
+  output [7:0] top_dout,
+  input  [7:0] top_din,
+  output       we,
   output       fastram_ce,
-
+  output       rom_ce,
+  input        rom_select,  // 0=ROM3, 1=ROM1
 
  // ps2 alternative interface.
  // [8] - extended, [9] - pressed, [10] - toggles with every press/release
@@ -88,22 +90,34 @@ module iigs
   input         HDD_RAM_WE,
 
 
-      // --- 5.25" floppy track interfaces (Drive 1/2) ---
-   output [5:0]       TRACK1,
-   output [12:0]      TRACK1_ADDR,
-   output [7:0]       TRACK1_DI,
-   input  [7:0]       TRACK1_DO,
-   output             TRACK1_WE,
-   input              TRACK1_BUSY,
-   output             FD_DISK_1,     // Drive 1 active (for track buffer coordination)
+   // --- WOZ bit interface for 3.5" drive 1 ---
+   output [7:0]       WOZ_TRACK3,           // Track number being read
+   output [15:0]      WOZ_TRACK3_BIT_ADDR,  // Byte address in track bit buffer (16-bit for FLUX tracks)
+   output             WOZ_TRACK3_STABLE_SIDE, // Stable side for data reads (captured when motor starts)
+   input  [7:0]       WOZ_TRACK3_BIT_DATA,  // Byte from track bit buffer
+   input  [31:0]      WOZ_TRACK3_BIT_COUNT, // Total bits in track
+   input              WOZ_TRACK3_READY,     // Track data valid for current WOZ_TRACK3
+   input              WOZ_TRACK3_DATA_VALID, // BRAM data valid for selected side (no state check)
+   input              WOZ_TRACK3_LOAD_COMPLETE, // Pulses when track load finishes (reset bit_position)
+   input              WOZ_TRACK3_IS_FLUX,   // Track data is flux timing (not bitstream)
+   input  [31:0]      WOZ_TRACK3_FLUX_SIZE, // Size in bytes of flux data (when IS_FLUX)
+   input  [31:0]      WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+   output [7:0]       WOZ_TRACK3_BIT_DATA_IN, // Write byte to BRAM
+   output             WOZ_TRACK3_BIT_WE,      // Write enable
+   output [15:0]      WOZ_TRACK3_BIT_WR_ADDR, // Write address (latched)
 
-   output [5:0]       TRACK2,
-   output [12:0]      TRACK2_ADDR,
-   output [7:0]       TRACK2_DI,
-   input  [7:0]       TRACK2_DO,
-   output             TRACK2_WE,
-   input              TRACK2_BUSY,
-   output             FD_DISK_2,     // Drive 2 active (for track buffer coordination)
+   // --- WOZ bit interface for 5.25" drive 1 ---
+   output [5:0]       WOZ_TRACK1,           // Track number being read
+   output [15:0]      WOZ_TRACK1_BIT_ADDR,  // Byte address in track bit buffer (16-bit for FLUX)
+   input  [7:0]       WOZ_TRACK1_BIT_DATA,  // Byte from track bit buffer
+   input  [31:0]      WOZ_TRACK1_BIT_COUNT, // Total bits in track
+   input              WOZ_TRACK1_LOAD_COMPLETE, // Pulses when 5.25" track load finishes
+   input              WOZ_TRACK1_IS_FLUX,       // Track data is flux timing (not bitstream)
+   input  [31:0]      WOZ_TRACK1_FLUX_SIZE,     // Size in bytes of flux data
+   input  [31:0]      WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+   output [7:0]       WOZ_TRACK1_BIT_DATA_IN,   // Write byte to BRAM
+   output             WOZ_TRACK1_BIT_WE,        // Write enable
+   output [15:0]      WOZ_TRACK1_BIT_WR_ADDR,   // Write address (latched)
 
    input [3:0]        DISK_READY,
    input              FLOPPY_WP,
@@ -113,11 +127,19 @@ module iigs
     output        UART_RTS,
     input         UART_CTS,
 
+   // Floppy motor status (for dirty track flush on motor-off)
+   output             floppy_motor_on,
+   output             floppy35_motor_on,
+
    // Keyboard-triggered reset outputs
    output        keyboard_reset,      // Ctrl+F11 was pressed - trigger warm reset
    output        keyboard_cold_reset  // Ctrl+OpenApple+F11 was pressed - trigger cold reset
 
 );
+
+   assign top_addr = addr_bus;
+   assign top_dout = dout;
+
    logic [7:0]       bank;
    logic [15:0]      addr;
    logic [7:0]       dout;
@@ -145,7 +167,6 @@ module iigs
    logic       AN3/*verilator public_flat*/;
    logic [7:0] NEWVIDEO/*verilator public_flat*/;
    logic IO/*verilator public_flat*/;
-   logic we/*verilator public_flat*/;
    logic slow/*verilator public_flat*/;
    logic slowMem/*verilator public_flat*/;
    logic ph0_state;
@@ -231,6 +252,7 @@ module iigs
   logic [7:0]         SPKR;
   logic               speaker_state;  // Apple II speaker toggle state
   logic [7:0]         DISK35;
+  // floppy_motor_on is now a module output (for clock slowdown + dirty track flush)
   logic [7:0]         C02BVAL;
 
   logic [7:0]         VGCINT; //23
@@ -319,8 +341,14 @@ module iigs
                ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io) |
                 ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & ~cpu_we_n)); // ROM: only writes
 
+  // LC_IO: Language Card soft switches ($C080-$C08F) should ALWAYS trigger their side effects,
+  // even when IOLC is inhibited (shadow[6]=1). This is because IOLC inhibit only affects
+  // data routing, not the LC state machine. The ROM RAM address test relies on this.
   wire LC_IO = ~EXTERNAL_IO & cpu_addr[15:8] == 8'hC0 & (cpu_addr[7:4] == 4'h8) &
-               ((~shadow[6] & (bank_bef == 8'h00 | bank_bef == 8'h01)) | bank_bef == 8'he0 | bank_bef == 8'he1);
+               (bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1);
+
+  // IWM device select ($C0E0-$C0EF)
+  wire iwm_device_select = IO & (cpu_addr[7:4] == 4'hE);
 
   // Debug: IOLC inhibit testing
   always @(posedge CLK_14M) begin
@@ -379,12 +407,9 @@ module iigs
         addr_bus = {bank_bef, 16'h0} + addr_bef;
       end
     end
-    // Banks $00/$01 Language Card space - ORIGINAL LOGIC (pre-9b14d75)
+    // Banks $00/$01 Language Card space - keep addresses in bank 00/01 space
+    // Shadow writes to E0/E1 slow RAM are handled in the memory controller
     // Translation when LCRAM2=1 (Bank 1 selected per documentation naming)
-    // FIX: Only apply translation for:
-    //   - LC RAM reads (RDROM=0)
-    //   - LC RAM writes (LC_WE=1 and we=1)
-    // Do NOT translate ROM reads (RDROM=1 and not writing) - those should read from ROM at actual address
     else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6] && (~RDROM || (LC_WE && we))) begin
       lcram2_sel = 1;
       if (aux && bank_bef == 8'h00) begin
@@ -417,11 +442,6 @@ module iigs
     end
   end
 
-  // FastRAM uses the full address bus from CPU
-  always_comb begin
-    fastram_addr_bus = addr_bus;
-  end
-
   // ============================================================================
   // CLEAN SYSTEMATIC MEMORY CONTROLLER
   // ============================================================================
@@ -439,11 +459,8 @@ module iigs
   
   // Shadow region detection (when shadow bit = 0, shadowing is ACTIVE)
   wire txt1_shadow  = ~shadow[0] && (page == 4'h0 && addr_bef[11:8] >= 4'h4 && addr_bef[11:8] <= 4'h7);  // $0400-$07FF
-`ifdef ROM3
-  wire txt2_shadow  = ~shadow[5] && (page == 4'h0 && addr_bef[11:8] >= 4'h8 && addr_bef[11:8] <= 4'hB);  // $0800-$0BFF (ROM3+ only)
-`else
-  wire txt2_shadow  = 1'b0;  // Text page 2 shadowing not supported on ROM1 hardware (bit 5 reserved)
-`endif
+  wire txt2_shadow  = rom_select ? 1'b0: ~shadow[5] && (page == 4'h0 && addr_bef[11:8] >= 4'h8 && addr_bef[11:8] <= 4'hB);  // $0800-$0BFF (ROM3+ only)
+
   wire hgr1_shadow  = ~shadow[1] && (page >= 4'h2 && page <= 4'h3);          // $2000-$3FFF
   wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
   // SHR shadow bit 3: When 0, entire $2000-$9FFF shadows (master enable for SHR mode)
@@ -465,6 +482,7 @@ module iigs
         // Bank 00: Main memory with shadow regions
         8'h00: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
+          // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
           if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
@@ -488,10 +506,11 @@ module iigs
 `endif
           end
         end
-        
+
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
+          // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
           if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce_int = 0;
             slowram_ce_int = 0;
@@ -517,13 +536,16 @@ module iigs
               slowram_ce_int = 1;
             end
           end else begin
-            fastram_ce_int = 1;  // Normal Bank 01 RAM
+            fastram_ce_int = 1;  // Normal Bank 01 RAM (including LC area)
           end
         end
-        
+
         // Banks E0/E1: Shadow memory - always SLOWRAM
         8'hE0, 8'hE1: begin
           slowram_ce_int = 1;
+          if (we && addr_bef == 16'h0F3A)
+            $display("E0E1_CURCYL_WRITE: bank=%02x addr=%04x data=%02x addr_bus=%06x aux=%b cpu_addr=%06x",
+                     bank_bef, addr_bef, cpu_dout, addr_bus, aux, cpu_addr);
 `ifdef DEBUG_IO
           if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
             $display("SLOWRAM_DIRECT: bank%02x addr=%04x data=%02x we=%b slowram_addr=%05x bank[0]=%b addr_bus=%06x -> SLOWRAM",
@@ -581,7 +603,7 @@ module iigs
     if (addr_bef == 16'hC034) begin
       $display("C034_ACCESS: cpu_addr=%06x bank_bef=%02x addr_bef=%04x we=%b IO=%b data=%02x",
                cpu_addr, bank_bef, addr_bef, we, IO, we ? cpu_dout : cpu_din);
-      $display("C034_ADDR_BUS: addr_bus=%06x fastram_addr=%06x", addr_bus, fastram_addr_bus);
+      $display("C034_ADDR_BUS: addr_bus=%06x", addr_bus);
     end
 
     // Monitor any writes that might be going to wrong addresses
@@ -610,6 +632,14 @@ module iigs
     if ((bank_bef == 8'hE1) && (addr_bef >= 16'h0190) && (addr_bef <= 16'h0193)) begin
       $display("CURSOR_POS_DEBUG: addr=E1:%04x we=%b data=%02x slowram_ce=%b slowram_we=%b slowram_dout=%02x",
                addr_bef, we, we ? cpu_dout : slowram_dout, slowram_ce, slowram_we, slowram_dout);
+    end
+
+    // Watchpoint: catch any write that ends up at slowram address 0x10F3A
+    if (slowram_we && slowram_ce) begin
+      if ({bank[0], addr} == 17'h10F3A) begin
+        $display("CURCYL_WRITE: bank_bef=%02x addr_bef=%04x data=%02x addr_bus=%06x bank=%02x addr=%04x aux=%b cpu_addr=%06x",
+                 bank_bef, addr_bef, cpu_dout, addr_bus, bank, addr, aux, cpu_addr);
+      end
     end
 
   end
@@ -682,13 +712,13 @@ module iigs
           if (txt1_shadow) begin
             $display("0600_PATTERN_WRITE: bank_%02x data=%02x shadow[0]=%b -> Bank_00 + Bank_E0 (dual write)", 
                      bank_bef, cpu_dout, shadow[0]);
-            $display("0600_WRITE_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x", 
+            $display("0600_WRITE_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x",
                      fastram_ce_int, slowram_ce_int, addr_bus);
-            $display("0600_WRITE_ADDR: fastram_addr=%06x slowram_addr=bank[0]_addr", 
-                     fastram_addr_bus);
-            $display("0600_WRITE_EN: fastram_we=%b slowram_we=%b mem_clk=%b CLK_14M=%b", 
+            $display("0600_WRITE_ADDR: addr_bus=%06x slowram_addr=bank[0]_addr",
+                     addr_bus);
+            $display("0600_WRITE_EN: we=%b slowram_we=%b mem_clk=%b CLK_14M=%b",
                      we, slowram_we, mem_clk, CLK_14M);
-            $display("0600_WRITE_TIMING: cpu_dout=%02x actual_write_data=%02x", 
+            $display("0600_WRITE_TIMING: cpu_dout=%02x actual_write_data=%02x",
                      cpu_dout, dout);
           end else begin
             $display("0600_PATTERN_WRITE: bank_%02x data=%02x shadow[0]=%b -> Bank_00", 
@@ -708,10 +738,10 @@ module iigs
           // Enhanced read debugging - show exactly where data comes from
           $display("0600_READ_CTRL: fastram_ce=%b slowram_ce=%b addr_bus=%06x txt1_shadow=%b", 
                    fastram_ce_int, slowram_ce_int, addr_bus, txt1_shadow);
-          $display("0600_READ_ADDR: fastram_addr=%06x slowram_addr=bank[0]_addr", 
-                   fastram_addr_bus);
-          $display("0600_READ_DATA: cpu_din=%02x fastram_data=%02x slowram_data=%02x", 
-                   cpu_din, fastram_datafromram, slowram_dout);
+          $display("0600_READ_ADDR: addr_bus=%06x slowram_addr=bank[0]_addr",
+                   addr_bus);
+          $display("0600_READ_DATA: cpu_din=%02x top_dout=%02x slowram_data=%02x",
+                   cpu_din, top_dout, slowram_dout);
           $display("0600_READ_EN: slowram_we=%b mem_clk=%b slowram_ce_actual=%b", 
                    slowram_we, mem_clk, slowram_ce);
           $display("0600_READ_MUX: rom1_ce=%b rom2_ce=%b IO=%b data_source=%s", 
@@ -808,7 +838,7 @@ module iigs
       INTCXROM<=1'b1;
       RDROM<=1'b1;
       LCRAM2<=1'b1;
-      LC_WE_PRE<=1'b0;
+      LC_WE_PRE<=1'b1;  // Per Apple IIgs HW ref: reset enables writing to LC RAM
 
       DISKREG<=0;
       SLTROMSEL<=0;
@@ -832,7 +862,7 @@ module iigs
       MONOCHROME<=0;
       RDROM<=1;
       LCRAM2<=1;  // Fix: Should be 1 to match STATEREG initialization (bit 1 = LCRAM2)
-      LC_WE<=0;
+      LC_WE<=1;  // Per Apple IIgs HW ref: "reset initializes for writing to the RAM"
       ROMBANK<=0;;
 `ifdef DEBUG_RESET
       $display("RESET_TRACE: All registers initialized, waiting for reset release");
@@ -1144,10 +1174,10 @@ module iigs
                 begin
                   if (phi2) begin
 `ifdef DEBUG_IO
-                    $display("LC_WR C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+                    $display("LC_WR C082/C086: RDROM=1 LCRAM2=1 LC_WE=0 (ROM read, no write)");
 `endif
                     RDROM <= 1'b1;
-                    LCRAM2 <= 1'b0;
+                    LCRAM2 <= 1'b1;  // FIX: bank 2 for $C080-$C087 range
                     LC_WE <= 1'b0;
                     LC_WE_PRE<=1'b0;
                   end
@@ -1522,10 +1552,10 @@ module iigs
                 begin
                   if (phi2) begin
 `ifdef DEBUG_IO
-                    $display("LC_RD C082/C086: RDROM=1 LCRAM2=0 LC_WE=0 (ROM read, no write)");
+                    $display("LC_RD C082/C086: RDROM=1 LCRAM2=1 LC_WE=0 (ROM read, no write)");
 `endif
                     RDROM <= 1'b1;
-                    LCRAM2 <= 1'b0;
+                    LCRAM2 <= 1'b1;  // FIX: bank 2 for $C080-$C087 range
                     LC_WE <= 1'b0;
                     LC_WE_PRE<=1'b0;
                   end
@@ -1657,10 +1687,10 @@ module iigs
               LC_WE_PRE <= 1'b1;
             end
           end
-          12'h082, 12'h086: begin  // Read ROM, no write
+          12'h082, 12'h086: begin  // Read ROM, no write (bank 2)
             if (phi2) begin
               RDROM <= 1'b1;
-              LCRAM2 <= 1'b0;
+              LCRAM2 <= 1'b1;  // FIX: bank 2 for $C080-$C087 range
               LC_WE <= 1'b0;
               LC_WE_PRE <= 1'b0;
             end
@@ -1841,60 +1871,8 @@ module iigs
       else
         aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && ((RAMRD & (cpu_we_n)) | (RAMWRT & ~cpu_we_n))));
     end
-assign     fastram_address = {bank[6:0],addr};
-assign     fastram_datatoram = dout;
-assign     fastram_dout = fastram_datafromram;
-assign     fastram_we = we;
 
-
-//`define ROM3 1
-`ifdef ROM3
-
-
-
-rom #(.memfile("rom3/romc.mem")) romc(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(romc_dout),
-  .ce(romc_ce)
-);
-rom #(.memfile("rom3/romd.mem")) romd(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(romd_dout),
-  .ce(romd_ce)
-);
-rom #(.memfile("rom3/rom1.mem")) rom1(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom1_dout),
-  .ce(rom1_ce)
-);
-
-rom #(.memfile("rom3/rom2.mem")) rom2(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom2_dout),
-  .ce(rom2_ce|slot_internalrom_ce)
-);
-
-
-`else
-
-rom #(.memfile("rom1/rom1.mem")) rom1(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom1_dout),
-  .ce(rom1_ce)
-);
-
-rom #(.memfile("rom1/rom2.mem")) rom2(
-  .clock(CLK_14M),
-  .address(addr),
-  .q(rom2_dout),
-  .ce(rom2_ce|slot_internalrom_ce)
-);
-`endif
+assign rom_bankaddr = (rom2_ce | slot_internalrom_ce) ? 2'b11 : bank[1:0];
 
 //wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
 wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~inhibit_cxxx;
@@ -1906,8 +1884,6 @@ wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || ba
 // try to setup flags for traditional iie style slots
 reg [7:0] device_select;
 reg [7:0] io_select;
-wire [7:0] rom1_dout, rom2_dout, romc_dout, romd_dout;
-wire [7:0] fastram_dout;
 wire [7:0] slowram_dout;
 
 always @(*)
@@ -1925,22 +1901,6 @@ begin
           io_select[addr[10:8]]=1'b1;
   end
 end
-`ifdef NOTDEFINED
-`ifdef VERILATOR
-dpram #(.widthad_a(23),.prefix("fast")) fastram
-`else
-dpram #(.widthad_a(16)) fastram
-`endif
-(
-        .clock_a(clk_sys),
-        .address_a({ bank[6:0], addr }),
-        .data_a(dout),
-        .q_a(fastram_dout),
-        .wren_a(we),
-        .ce_a(fastram_ce),
-);
-`endif
-
 
 `ifdef VERILATOR
 dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
@@ -2023,12 +1983,7 @@ wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef :
 
 wire [7:0] din =
   (io_select[7] == 1'b1 | device_select[7] == 1'b1) ? HDD_DO :
-  rom1_ce ? rom1_dout :
-  rom2_ce ? rom2_dout :
-  romc_ce ? romc_dout :
-  romd_ce ? romd_dout :
-  slot_internalrom_ce ?  rom2_dout :
-  fastram_ce ? fastram_dout :
+  (fastram_ce | rom_ce) ?  top_din :
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
   floating_bus;
@@ -2060,7 +2015,8 @@ wire [7:0] din =
     cpu_addr[7:0] == 8'h1c |  // $C01C - PAGE2
     cpu_addr[7:0] == 8'h1d |  // $C01D - HIRES
     cpu_addr[7:0] == 8'h1e |  // $C01E - ALTCHARSET
-    cpu_addr[7:0] == 8'h1f    // $C01F - EIGHTYCOL
+    cpu_addr[7:0] == 8'h1f |  // $C01F - EIGHTYCOL
+    cpu_addr[7:4] == 4'h7     // $C07x ROM
   );
 
   // Combinational mux for simple register data
@@ -2085,6 +2041,7 @@ wire [7:0] din =
     (cpu_addr[7:0] == 8'h1d) ? {HIRES_MODE, key_keys} :
     (cpu_addr[7:0] == 8'h1e) ? {ALTCHARSET, key_keys} :
     (cpu_addr[7:0] == 8'h1f) ? {EIGHTYCOL, key_keys} :
+    (cpu_addr[7:4] == 4'h7)  ? din :
     8'h00;
 
   // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
@@ -2495,6 +2452,7 @@ wire ready_out;
           .CLK_14M(CLK_14M),
           .cen(phi2),
           .reset(reset),
+          .rom_select(rom_select),
           .addr(adb_addr_mux),
           .rw(adb_rw_mux),
           .din(adb_din),
@@ -2531,59 +2489,65 @@ wire ready_out;
             .strobe(prtc_strobe)
             );
 
-`ifdef IWMSTUB
-  iwm iwm(
-          .CLK_14M(CLK_14M),
-          .cen(q3_en),
-          .reset(reset),
-          .addr(iwm_addr),
-          .din(iwm_din),
-          .dout(iwm_dout),
-          .rw(iwm_rw),
-          .strobe(iwm_strobe),
-          .DISK35(DISK35)
-          );
-  `else
-        iwm_controller iwmc (
+  // Hardware-accurate IWM with WOZ/flux-based disk interface
+  iwm_woz iwmc (
       // Global clocks/resets
       .CLK_14M(CLK_14M),
       .CLK_7M_EN(clk_7M_en),
       .Q3(q3_en),
       .PH0(phi0),
+      .PH2(phi2),
       .RESET(reset),
       // Bus interface
-      .IO_SELECT(iwm_strobe),
-      .DEVICE_SELECT(iwm_strobe),
-      .WR_CYCLE(iwm_rw),
-      //.ACCESS_STROBE(iwm_strobe),
-      .A(iwm_addr),
-      .D_IN(iwm_din),
+      .IO_SELECT(iwm_device_select),
+      .DEVICE_SELECT(iwm_device_select),
+      .WR_CYCLE(cpu_we_n),  // 1 = read, 0 = write (matches cpu_we_n)
+      .VDA(cpu_vda),
+      .A(cpu_addr[7:0]),    // Combinational address
+      .D_IN(cpu_dout),      // Combinational data
       .D_OUT(iwm_dout),
       // Drive status and control
       .DISK_READY(DISK_READY),
       .DISK35(DISK35),
       .WRITE_PROTECT(floppy_wp),
-      // 5.25" Drive 1
-      .TRACK1(TRACK1),
-      .TRACK1_ADDR(TRACK1_ADDR),
-      .TRACK1_DI(TRACK1_DI),
-      .TRACK1_DO(TRACK1_DO),
-      .TRACK1_WE(TRACK1_WE),
-      .TRACK1_BUSY(TRACK1_BUSY),
-      .FD_DISK_1(FD_DISK_1),
-      // 5.25" Drive 2
-      .TRACK2(TRACK2),
-      .TRACK2_ADDR(TRACK2_ADDR),
-      .TRACK2_DI(TRACK2_DI),
-      .TRACK2_DO(TRACK2_DO),
-      .TRACK2_WE(TRACK2_WE),
-      .TRACK2_BUSY(TRACK2_BUSY),
-      .FD_DISK_2(FD_DISK_2),
-      // 3.5" not yet wired
-      .TRACK3(), .TRACK3_ADDR(), .TRACK3_SIDE(), .TRACK3_DI(), .TRACK3_DO(8'h00), .TRACK3_WE(), .TRACK3_BUSY(1'b0),
-      .TRACK4(), .TRACK4_ADDR(), .TRACK4_SIDE(), .TRACK4_DI(), .TRACK4_DO(8'h00), .TRACK4_WE(), .TRACK4_BUSY(1'b0)
+      // WOZ bit interface for 3.5" drive 1
+      .WOZ_TRACK3(WOZ_TRACK3),
+      .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+      .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
+      .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
+      .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+      .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
+      .WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
+      .WOZ_TRACK3_LOAD_COMPLETE(WOZ_TRACK3_LOAD_COMPLETE),
+      .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
+      .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
+      .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+      .WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
+      .WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
+      .WOZ_TRACK3_BIT_WR_ADDR(WOZ_TRACK3_BIT_WR_ADDR),
+      // WOZ bit interface for 5.25" drive 1
+      .WOZ_TRACK1(WOZ_TRACK1),
+      .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
+      .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
+      .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
+      .WOZ_TRACK1_LOAD_COMPLETE(WOZ_TRACK1_LOAD_COMPLETE),
+      .WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
+      .WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
+      .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+      .WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
+      .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
+      .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
+      // Motor status for clock slowdown
+      .FLOPPY_MOTOR_ON(floppy_motor_on),
+      .FLOPPY35_MOTOR_ON(floppy35_motor_on)
   );
-  `endif
+  // Internal wires not used with flux-based IWM
+  assign TRACK3 = 7'd0;
+  assign TRACK3_ADDR = 14'd0;
+  assign TRACK3_SIDE = 1'b0;
+  assign TRACK3_DI = 8'd0;
+  assign TRACK3_WE = 1'b0;
+  assign FD_DISK_3 = 1'b0;
 
     // Legacy slot-7 HDD (supports 4 units)
     hdd hdd(
@@ -2741,7 +2705,7 @@ wire ready_out;
   //wire sw3 = joystick_0[7];                 // Button 3
 
 // ROM access signal: refresh penalty is hidden during ROM reads
-wire is_rom_access = rom1_ce | rom2_ce | romc_ce | romd_ce;
+assign rom_ce = rom1_ce | rom2_ce | romc_ce | romd_ce | slot_internalrom_ce;
 
 // Clock divider instance
 clock_divider clk_div_inst (
@@ -2753,7 +2717,7 @@ clock_divider clk_div_inst (
     .IO(IO),
     .we(we),
     .valid(valid),
-    .is_rom_access(is_rom_access),
+    .is_rom_access(rom_ce),
     .reset(reset),
     .stretch(1'b0),  // TODO: Connect to VGC stretch signal
     .clk_14M_en(),

@@ -60,6 +60,9 @@ module emu (
         // Self-test mode override
         input selftest_override,
 
+        // ROM selection: 0=ROM3, 1=ROM1
+        input rom_select/*verilator public_flat*/,
+
         // [31:0] - seconds since 1970-01-01 00:00:00, [32] - toggle with every change
         input [32:0] TIMESTAMP,
 
@@ -114,27 +117,65 @@ wire UART_TXD;
 // UART inputs: RXD idle (mark=1), CTS asserted (clear to send=0)
 wire UART_RXD = 1'b1;
 wire UART_CTS = 1'b0;
-    wire [22:0] fastram_address;
-    wire [7:0] fastram_datatoram;
-    wire [7:0] fastram_datafromram;
-    wire fastram_we;
-    wire fastram_ce;
+wire [23:0] addr_bus;
+wire [1:0] rom_bankaddr;
+wire [7:0] fastram_dout;
+wire [7:0] iigs_dout;
+wire [7:0] iigs_din;
+wire   we/*verilator public_flat*/;
+wire fastram_ce;
+wire rom_ce;
 
-    wire TRACK1_RAM_BUSY;
-wire [12:0] TRACK1_RAM_ADDR;
-wire [7:0] TRACK1_RAM_DI;
-wire [7:0] TRACK1_RAM_DO;
-wire TRACK1_RAM_WE;
-wire [5:0] TRACK1;
+// Unified memory address mux (mirrors IIgs.sv SDRAM address formation)
+// ROM3 (256KB) loaded at FC0000 via ioctl_index==0 (boot.rom)
+// ROM1 (128KB) loaded at F80000 via ioctl_index==0x40 (boot1.rom, [15:6]==1)
+wire rom3_loading = ioctl_download && (ioctl_index[7:6] == 2'd0);
+wire rom1_loading = ioctl_download && (ioctl_index[7:6] != 2'd0);
 
-wire TRACK2_RAM_BUSY;
-wire [12:0] TRACK2_RAM_ADDR;
-wire [7:0] TRACK2_RAM_DI;
-wire [7:0] TRACK2_RAM_DO;
-wire TRACK2_RAM_WE;
-wire [5:0] TRACK2;
+wire [23:0] mem_addr = rom3_loading                  ? {6'b111111, ioctl_addr[17:0]} :
+                       rom1_loading                  ? {7'b1111100, ioctl_addr[16:0]} :
+                       (rom_ce & ~we & ~rom_select)  ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
+                       (rom_ce & ~we &  rom_select)  ? {7'b1111100, rom_bankaddr[0], addr_bus[15:0]} :
+                       {1'b0, addr_bus[22:0]};
 
+assign iigs_din = fastram_dout;
 
+// WOZ bit interfaces for flux-based IWM
+// 3.5" drive 1 WOZ bit interface
+wire [7:0]  WOZ_TRACK3;           // Track number being read
+wire [15:0] WOZ_TRACK3_BIT_ADDR;  // Byte address in track bit buffer (16-bit for FLUX)
+wire        WOZ_TRACK3_STABLE_SIDE; // Stable side for data reads (captured when motor starts)
+wire [7:0]  WOZ_TRACK3_BIT_DATA;  // Byte from track bit buffer
+wire [31:0] WOZ_TRACK3_BIT_COUNT; // Total bits in track
+wire        WOZ_TRACK3_READY;     // Track data valid for current WOZ_TRACK3
+wire        WOZ_TRACK3_DATA_VALID; // BRAM data valid for selected side (no state check)
+wire        WOZ_TRACK3_IS_FLUX;   // Track data is flux timing (not bitstream)
+wire [31:0] WOZ_TRACK3_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
+wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
+wire        woz_ctrl_ready;
+
+// 5.25" drive 1 WOZ bit interface
+wire [5:0]  WOZ_TRACK1;           // Track number being read
+wire [15:0] WOZ_TRACK1_BIT_ADDR;  // Byte address in track bit buffer (16-bit for FLUX)
+wire [7:0]  WOZ_TRACK1_BIT_DATA;  // Byte from track bit buffer
+wire [31:0] WOZ_TRACK1_BIT_COUNT; // Total bits in track
+wire        WOZ_TRACK1_IS_FLUX;   // Track data is flux timing (not bitstream)
+wire [31:0] WOZ_TRACK1_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
+wire [31:0] WOZ_TRACK1_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
+
+// Write interfaces from IWM back to WOZ controllers
+wire [7:0]  WOZ_TRACK3_BIT_DATA_IN;  // Write byte for 3.5" BRAM
+wire        WOZ_TRACK3_BIT_WE;       // Write enable for 3.5"
+wire [15:0] WOZ_TRACK3_BIT_WR_ADDR;  // Write address for 3.5" (latched)
+wire [7:0]  WOZ_TRACK1_BIT_DATA_IN;  // Write byte for 5.25" BRAM
+wire        WOZ_TRACK1_BIT_WE;       // Write enable for 5.25"
+wire [15:0] WOZ_TRACK1_BIT_WR_ADDR;  // Write address for 5.25" (latched)
+
+// Register stable_side to match BRAM timing - prevents 1-cycle glitches on side change
+reg woz3_stable_side_reg;
+always @(posedge CLK_14M) begin
+    woz3_stable_side_reg <= WOZ_TRACK3_STABLE_SIDE;
+end
 
 wire clk_sys=CLK_14M;
 iigs  iigs(
@@ -166,31 +207,47 @@ iigs  iigs(
         .HDD_RAM_DO(hdd_ram_do),
         .HDD_RAM_WE(sd_buff_wr & hdd_ack),
 
-    //-- track buffer interface for disk 1
-    .TRACK1(TRACK1),
-    .TRACK1_ADDR(TRACK1_RAM_ADDR),
-    .TRACK1_DO(TRACK1_RAM_DO),
-    .TRACK1_DI(TRACK1_RAM_DI),
-    .TRACK1_WE(TRACK1_RAM_WE),
-    .TRACK1_BUSY(TRACK1_RAM_BUSY),
-    .FD_DISK_1(fd_disk_1),
-    //-- track buffer interface for disk 2
-    .TRACK2(TRACK2),
-    .TRACK2_ADDR(TRACK2_RAM_ADDR),
-    .TRACK2_DO(TRACK2_RAM_DO),
-    .TRACK2_DI(TRACK2_RAM_DI),
-    .TRACK2_WE(TRACK2_RAM_WE),
-    .TRACK2_BUSY(TRACK2_RAM_BUSY),
-    .FD_DISK_2(fd_disk_2),
-    // Disk ready to IWM (pad to 4 bits)
-    .DISK_READY({2'b00, DISK_READY}),
+    // Mounted-media bitmap to IWM (pad to 4 bits)
+    // [0] = 5.25" WOZ media mounted, [1] = 0, [2] = 3.5" WOZ media mounted, [3] = 0
+    // Drive-mechanism presence is modeled separately inside iwm_woz.
+    .DISK_READY({1'b0, woz_ctrl_disk_mounted, 1'b0, woz_ctrl_525_disk_mounted}),
 
+    .WOZ_TRACK3(WOZ_TRACK3),
+    .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
+    .WOZ_TRACK3_STABLE_SIDE(WOZ_TRACK3_STABLE_SIDE),
+    .WOZ_TRACK3_BIT_DATA(WOZ_TRACK3_BIT_DATA),
+    .WOZ_TRACK3_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
+    .WOZ_TRACK3_READY(WOZ_TRACK3_READY),
+    .WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
+    .WOZ_TRACK3_LOAD_COMPLETE(woz_ctrl_track_load_complete),
+    .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
+    .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
+    .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+    .WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
+    .WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
+    .WOZ_TRACK3_BIT_WR_ADDR(WOZ_TRACK3_BIT_WR_ADDR),
 
-        .fastram_address(fastram_address),
-        .fastram_datatoram(fastram_datatoram),
-        .fastram_datafromram(fastram_datafromram),
-        .fastram_we(fastram_we),
+    // WOZ bit interface for 5.25" drive 1
+    .WOZ_TRACK1(WOZ_TRACK1),
+    .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
+    .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
+    .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
+    .WOZ_TRACK1_LOAD_COMPLETE(woz_ctrl_525_track_load_complete),
+    .WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
+    .WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
+    .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+    .WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
+    .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
+    .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
+
+        .top_addr(addr_bus),
+        .rom_bankaddr(rom_bankaddr),
+        .top_dout(iigs_dout),
+        .top_din(iigs_din),
+        .we(we),
         .fastram_ce(fastram_ce),
+        .rom_ce(rom_ce),
+        .rom_select(rom_select),
 
         .ps2_key(ps2_key),
         .ps2_mouse(ps2_mouse),
@@ -212,6 +269,10 @@ iigs  iigs(
         .keyboard_reset(keyboard_reset),
         .keyboard_cold_reset(keyboard_cold_reset),
 
+        // Floppy motor status (for dirty track flush on motor-off)
+        .floppy_motor_on(floppy_motor_on),
+        .floppy35_motor_on(floppy35_motor_on),
+
         // Audio outputs
         .AUDIO_L(AUDIO_L),
         .AUDIO_R(AUDIO_R),
@@ -223,34 +284,27 @@ iigs  iigs(
         .UART_CTS(UART_CTS)
 );
 
-  reg prev_fastram_we;
-  reg [22:0] prev_fastram_addr;
-  always @(posedge clk_sys) begin
-    prev_fastram_we <= fastram_we;
-    prev_fastram_addr <= fastram_address;
-    // Show all transitions involving C010
-    if (fastram_ce && (fastram_address == 23'h00c010 || prev_fastram_addr == 23'h00c010)) begin
-      $display("FASTRAM C010: addr=%x->%x data_in=%x data_out=%x we=%b->%b ce=%b",
-               prev_fastram_addr, fastram_address, fastram_datatoram, fastram_datafromram, prev_fastram_we, fastram_we, fastram_ce);
-    end
-  end
-   //dpram #(.widthad_a(23),.prefix("fast")) fastram
-dpram #(.widthad_a(23),.prefix("fast")) fastram
+   //dpram #(.widthad_a(24),.prefix("fast")) fastram - unified ROM+RAM
+
+
+dpram #(.widthad_a(24),.prefix("fast")) fastram
 (
         .clock_a(clk_sys),
-        .address_a( fastram_address ),
-        .data_a(fastram_datatoram),
-        .q_a(fastram_datafromram),
-        .wren_a(fastram_we & fastram_ce),
-        .ce_a(fastram_ce),
+        .address_a( mem_addr ),
+        .data_a(ioctl_download ? ioctl_dout : iigs_dout),
+        .q_a(fastram_dout),
+        .wren_a((we & fastram_ce) | ioctl_wr),
+        .ce_a(fastram_ce | rom_ce | ioctl_download),
         .clock_b(clk_sys),
         .wren_b(1'b0),
-        .address_b({23{1'b0}}),
+        .address_b({24{1'b0}}),
         .data_b(8'h00),
         .q_b()
 );
 
 
+// ROM is now loaded via ioctl into the unified dpram at startup
+// (ROM3: 256KB at addr FC0000-FFFFFF, ROM1: 128KB at addr FE0000-FFFFFF)
 
 always @(posedge clk_sys) begin
 `ifdef DEBUG_SIM
@@ -301,20 +355,20 @@ reg hdd_active_unit = 1'b0;
 // Both HDD units share the same sector (routed to their block device indices)
 assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 0
 assign sd_lba[3] = {16'b0, hdd_sector};  // Unit 1
-assign sd_lba[4] = 32'b0;                // Unused
-assign sd_lba[5] = 32'b0;                // Unused
+// sd_lba[4] driven by woz_ctrl_525
+// sd_lba[5] driven by woz_ctrl
 
 // Route sd_rd/sd_wr to the correct bit based on active unit
 reg  sd_rd_hd;
 reg  sd_wr_hd;
 assign sd_rd[1] = sd_rd_hd & (hdd_active_unit == 1'b0);
 assign sd_rd[3] = sd_rd_hd & (hdd_active_unit == 1'b1);
-assign sd_rd[4] = 1'b0;  // Unused
-assign sd_rd[5] = 1'b0;  // Unused
+// sd_rd[4] driven by woz_ctrl_525
+// sd_rd[5] driven by woz_ctrl
 assign sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b0);
 assign sd_wr[3] = sd_wr_hd & (hdd_active_unit == 1'b1);
-assign sd_wr[4] = 1'b0;  // Unused
-assign sd_wr[5] = 1'b0;  // Unused
+// sd_wr[4] driven by woz_ctrl_525
+// sd_wr[5] driven by woz_ctrl
 
 // Select the ack for the active unit
 wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[1] : sd_ack[3];
@@ -323,8 +377,8 @@ wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[1] : sd_ack[3];
 wire [7:0] hdd_ram_do;
 assign sd_buff_din[1] = hdd_ram_do;  // Unit 0
 assign sd_buff_din[3] = hdd_ram_do;  // Unit 1
-assign sd_buff_din[4] = 8'h00;       // Unused
-assign sd_buff_din[5] = 8'h00;       // Unused
+// sd_buff_din[4] driven by woz_ctrl_525
+// sd_buff_din[5] driven by woz_ctrl
 
 `ifdef SIMULATION
 // Debug counters to measure how long the CPU is stalled by HDD
@@ -420,96 +474,221 @@ always @(posedge clk_sys) begin
 end
 
 
-wire fd_disk_1;
-wire fd_disk_2;
+// Unused SD indices (formerly floppy_track_1 on index 0, floppy_track_2 on index 2)
+assign sd_lba[0] = 32'b0;
+assign sd_rd[0] = 1'b0;
+assign sd_wr[0] = 1'b0;
+assign sd_buff_din[0] = 8'h00;
+assign sd_lba[2] = 32'b0;
+assign sd_rd[2] = 1'b0;
+assign sd_wr[2] = 1'b0;
+assign sd_buff_din[2] = 8'h00;
 
-wire [1:0] DISK_READY;
-reg  [1:0] DISK_CHANGE;
-reg  [1:0] disk_mount;
-reg        img_mounted0_d, img_mounted2_d;
 
+// Floppy motor state from IWM (for dirty track flush on motor-off)
+wire floppy_motor_on;
+wire floppy35_motor_on;
 
+// 3.5" WOZ controller outputs
+wire        woz_ctrl_disk_mounted;
+wire        woz_ctrl_busy;
+wire [31:0] woz_ctrl_bit_count;
+wire [7:0]  woz_ctrl_bit_data;
+wire        woz_ctrl_track_load_complete;  // Pulses when track load finishes
+wire [31:0] woz_ctrl_flux_total_ticks;
 
+// Mount detection for WOZ controller (index 5)
+// On disk swap (mount while already mounted), create a 1-cycle glitch:
+//   woz_ctrl_mount goes 1→0 for 1 cycle, then back to 1 on the next cycle.
+//   This gives the controller a falling+rising edge to trigger a rescan,
+//   matching MiSTer behavior where a single mount pulse with new size arrives.
+reg         img_mounted5_d = 0;
+reg         woz_ctrl_mount = 0;
+reg         woz_ctrl_remount_pending = 0;
+reg         woz_ctrl_change = 0;
 
 always @(posedge clk_sys) begin
-        // Latch previous mount flags to detect rising edges
-        img_mounted0_d <= img_mounted[0];
-        img_mounted2_d <= img_mounted[2];
+    img_mounted5_d <= img_mounted[5];
 
-        // Only toggle change on rising edge to avoid continuous bouncing
-        if (~img_mounted0_d & img_mounted[0]) begin
-                disk_mount[0]   <= (img_size != 0);
-                DISK_CHANGE[0]  <= ~DISK_CHANGE[0];
-`ifdef SIMULATION
-                $display("FLOPPY: mount event drive0 (size=%0d)", img_size);
-`endif
+    // Detect rising edge of img_mounted[5]
+    if (~img_mounted5_d & img_mounted[5]) begin
+        if (woz_ctrl_mount) begin
+            // Already mounted: force unmount first, then remount next cycle
+            woz_ctrl_mount <= 0;
+            woz_ctrl_remount_pending <= (img_size != 0);
+        end else begin
+            woz_ctrl_mount  <= (img_size != 0);
         end
-        if (~img_mounted2_d & img_mounted[2]) begin
-                disk_mount[1]   <= (img_size != 0);
-                DISK_CHANGE[1]  <= ~DISK_CHANGE[1];
+        woz_ctrl_change <= ~woz_ctrl_change;
 `ifdef SIMULATION
-                $display("FLOPPY: mount event drive1 (size=%0d)", img_size);
+        $display("WOZ_CTRL: Mount detected for index 5 (size=%0d, remount=%0d)", img_size, woz_ctrl_mount);
 `endif
-        end
+    end else if (woz_ctrl_remount_pending) begin
+        // One cycle after unmount: complete the remount
+        woz_ctrl_mount <= 1;
+        woz_ctrl_remount_pending <= 0;
+    end
 end
-floppy_track floppy_track_1
-(
-   .clk(clk_sys),
-   .reset(reset),
-
-   .ram_addr(TRACK1_RAM_ADDR),
-   .ram_di(TRACK1_RAM_DI),
-   .ram_do(TRACK1_RAM_DO),
-   .ram_we(TRACK1_RAM_WE),
 
 
-   .track (TRACK1),
-   .busy  (TRACK1_RAM_BUSY),
-   .change(DISK_CHANGE[0]),
-   .mount (disk_mount[0]),   // Use disk_mount (persists) not img_mounted (gets cleared)
-   .ready  (DISK_READY[0]),
-   .active (fd_disk_1),
+woz_floppy_controller #(
+    .IS_35_INCH(1)
+) woz_ctrl (
+    .clk(clk_sys),
+    .reset(reset),
 
-   .sd_buff_addr (sd_buff_addr),
-   .sd_buff_dout (sd_buff_dout),
-   .sd_buff_din  (sd_buff_din[0]),
-   .sd_buff_wr   (sd_buff_wr),
+    // SD Block Device Interface (index 5)
+    .sd_lba(sd_lba[5]),
+    .sd_rd(sd_rd[5]),
+    .sd_wr(sd_wr[5]),
+    .sd_ack(sd_ack[5]),
+    .sd_buff_addr(sd_buff_addr),
+    .sd_buff_dout(sd_buff_dout),
+    .sd_buff_din(sd_buff_din[5]),
+    .sd_buff_wr(sd_buff_wr),
 
-   .sd_lba       (sd_lba[0] ),
-   .sd_rd        (sd_rd[0]),
-   .sd_wr       ( sd_wr[0]),
-   .sd_ack       (sd_ack[0])
+    // Disk Status
+    .img_mounted(woz_ctrl_mount),
+    .img_readonly(img_readonly),
+    .img_size(img_size),
+
+    // Drive Interface - use immediate track_id for correct bit_count timing
+    // The woz_floppy_controller needs immediate track_id for position calculations.
+    .track_id(WOZ_TRACK3),
+    .ready(woz_ctrl_ready),
+    .disk_mounted(woz_ctrl_disk_mounted),
+    .busy(woz_ctrl_busy),
+    .active(floppy35_motor_on),  // 3.5" motor state (from Sony drive logic, not 5.25" inertia)
+
+    // Bitstream Interface - use same bit_addr as C++ path
+    // Use REGISTERED stable_side to match C++ timing.
+    // When side changes, the BRAM mux must switch in sync with the BRAM data update.
+    // Using immediate stable_side causes a 1-cycle glitch where stale data is returned.
+    .bit_count(woz_ctrl_bit_count),
+    .bit_addr(WOZ_TRACK3_BIT_ADDR),
+    .stable_side(woz3_stable_side_reg),
+    .bit_data(woz_ctrl_bit_data),
+    .bit_data_in(WOZ_TRACK3_BIT_DATA_IN),
+    .bit_we(WOZ_TRACK3_BIT_WE),
+    .bit_wr_addr(WOZ_TRACK3_BIT_WR_ADDR),
+    // Track load notification (for flux_drive to reset bit_position)
+    .track_load_complete(woz_ctrl_track_load_complete),
+
+    // FLUX track support (WOZ v3)
+    .is_flux_track(WOZ_TRACK3_IS_FLUX),
+    .flux_data_size(WOZ_TRACK3_FLUX_SIZE),
+    .flux_total_ticks(woz_ctrl_flux_total_ticks),
+
+    // Track data validity (independent of controller state)
+    .track_data_valid(WOZ_TRACK3_DATA_VALID),
+
+    // Disk type mismatch
+    .disk_type_mismatch(woz_35_type_mismatch)
 );
 
-floppy_track floppy_track_2
-(
-   .clk(clk_sys),
-   .reset(reset),
+// Connect 3.5" WOZ controller outputs to IIgs inputs
+assign WOZ_TRACK3_BIT_DATA = woz_ctrl_bit_data;
+assign WOZ_TRACK3_BIT_COUNT = woz_ctrl_bit_count;
+assign WOZ_TRACK3_READY = woz_ctrl_ready;
+assign WOZ_TRACK3_FLUX_TOTAL_TICKS = woz_ctrl_flux_total_ticks;
 
-   .ram_addr(TRACK2_RAM_ADDR),
-   .ram_di(TRACK2_RAM_DI),
-   .ram_do(TRACK2_RAM_DO),
-   .ram_we(TRACK2_RAM_WE),
+wire woz_35_type_mismatch;
 
-   .track (TRACK2),
-   .busy  (TRACK2_RAM_BUSY),
-   .change(DISK_CHANGE[1]),
-   .mount (disk_mount[1]),
-   .ready  (DISK_READY[1]),
-   .active (fd_disk_2),
+// =========================================================================
+// 5.25" WOZ Floppy Controller (index 4)
+// =========================================================================
+wire        woz_ctrl_525_disk_mounted;
+wire        woz_ctrl_525_busy;
+wire [31:0] woz_ctrl_525_bit_count;
+wire [7:0]  woz_ctrl_525_bit_data;
+wire        woz_ctrl_525_track_load_complete;
+wire        woz_ctrl_525_is_flux;
+wire [31:0] woz_ctrl_525_flux_size;
+wire [31:0] woz_ctrl_525_flux_total_ticks;
+wire        woz_525_type_mismatch;
 
-   .sd_buff_addr (sd_buff_addr),
-   .sd_buff_dout (sd_buff_dout),
-   .sd_buff_din  (sd_buff_din[2]),
-   .sd_buff_wr   (sd_buff_wr),
+// Mount detection for 5.25" WOZ controller (index 4)
+// Same remount mechanism as 3.5" - see comments above
+reg         img_mounted4_d = 0;
+reg         woz_ctrl_525_mount = 0;
+reg         woz_ctrl_525_remount_pending = 0;
 
-   .sd_lba       (sd_lba[2] ),
-   .sd_rd        (sd_rd[2]),
-   .sd_wr       ( sd_wr[2]),
-   .sd_ack       (sd_ack[2])
+always @(posedge clk_sys) begin
+    img_mounted4_d <= img_mounted[4];
+    if (~img_mounted4_d & img_mounted[4]) begin
+        if (woz_ctrl_525_mount) begin
+            woz_ctrl_525_mount <= 0;
+            woz_ctrl_525_remount_pending <= (img_size != 0);
+        end else begin
+            woz_ctrl_525_mount <= (img_size != 0);
+        end
+`ifdef SIMULATION
+        $display("WOZ_CTRL_525: Mount detected for index 4 (size=%0d, remount=%0d)", img_size, woz_ctrl_525_mount);
+`endif
+    end else if (woz_ctrl_525_remount_pending) begin
+        woz_ctrl_525_mount <= 1;
+        woz_ctrl_525_remount_pending <= 0;
+    end
+end
+
+woz_floppy_controller #(
+    .IS_35_INCH(0)
+) woz_ctrl_525 (
+    .clk(clk_sys),
+    .reset(reset),
+
+    // SD Block Device Interface (index 4)
+    .sd_lba(sd_lba[4]),
+    .sd_rd(sd_rd[4]),
+    .sd_wr(sd_wr[4]),
+    .sd_ack(sd_ack[4]),
+    .sd_buff_addr(sd_buff_addr),
+    .sd_buff_dout(sd_buff_dout),
+    .sd_buff_din(sd_buff_din[4]),
+    .sd_buff_wr(sd_buff_wr),
+
+    // Disk Status
+    .img_mounted(woz_ctrl_525_mount),
+    .img_readonly(img_readonly),
+    .img_size(img_size),
+
+    // Drive Interface
+    .track_id({WOZ_TRACK1[5:0], 2'b00}),  // Full track * 4 = quarter-track TMAP index for 5.25"
+    .ready(),                          // Not connected (5.25" uses DISK_READY[0])
+    .disk_mounted(woz_ctrl_525_disk_mounted),
+    .busy(woz_ctrl_525_busy),
+    .active(floppy_motor_on),
+
+    // Bitstream Interface
+    .bit_count(woz_ctrl_525_bit_count),
+    .bit_addr(WOZ_TRACK1_BIT_ADDR),  // 16-bit for bitstream and FLUX tracks
+    .stable_side(1'b0),                // 5.25" is single-sided
+    .bit_data(woz_ctrl_525_bit_data),
+    .bit_data_in(WOZ_TRACK1_BIT_DATA_IN),
+    .bit_we(WOZ_TRACK1_BIT_WE),
+    .bit_wr_addr(WOZ_TRACK1_BIT_WR_ADDR),
+
+    // Track load notification
+    .track_load_complete(woz_ctrl_525_track_load_complete),
+
+    // FLUX track support
+    .is_flux_track(woz_ctrl_525_is_flux),
+    .flux_data_size(woz_ctrl_525_flux_size),
+    .flux_total_ticks(woz_ctrl_525_flux_total_ticks),
+
+    // Track data validity
+    .track_data_valid(),
+
+    // Disk type mismatch
+    .disk_type_mismatch(woz_525_type_mismatch)
 );
 
-
+// Connect 5.25" WOZ controller outputs to IIgs inputs
+assign WOZ_TRACK1_BIT_DATA = woz_ctrl_525_bit_data;
+assign WOZ_TRACK1_BIT_COUNT = woz_ctrl_525_bit_count;
+assign WOZ_TRACK1_IS_FLUX = woz_ctrl_525_is_flux;
+assign WOZ_TRACK1_FLUX_SIZE = woz_ctrl_525_flux_size;
+assign WOZ_TRACK1_FLUX_TOTAL_TICKS = woz_ctrl_525_flux_total_ticks;
 
 
 endmodule

@@ -28,33 +28,33 @@ module adb(
   output reg apple_ctrl,
   output reg akd,
   output reg [7:0] K,
-  output reset_key_pressed  // Reset key (F11/0x7F) is currently pressed
+  output reset_key_pressed,  // Reset key (F11/0x7F) is currently pressed
+  input rom_select            // 0=ROM3, 1=ROM1
 );
 
-// Version parameter - set based on ROM type
-`ifdef ROM3
-  parameter VERSION = 6;  // Version 6 for ROM3 (1MB Apple IIgs)
-`else
-  parameter VERSION = 5;  // Version 5 for ROM1 (256K Apple IIgs)
-`endif
+// Version - determined at runtime by rom_select
+// ROM3 (1MB Apple IIgs) = version 6, ROM1 (256K Apple IIgs) = version 5
+wire [7:0] VERSION = rom_select ? 8'd5 : 8'd6;
 
 // ADB microcontroller ROM (4KB, loaded from file)
-// ROM3: M50741 maps ROM at $1000-$1FFF (4KB file, data starts at index 0)
-// ROM1: M50740 maps ROM at $1400-$1FFF (3KB file, pre-padded with $400 zeros so data starts at index $400)
-// This allows the selftest to read and verify the ROM checksum
+// Always use ROM3 ADB microcontroller ROM (superset of ROM1)
 wire [11:0] adb_rom_addr;
-wire [7:0] adb_rom_data;
+wire [7:0] adb_rom_data= rom_select ? adb_rom_data_1 : adb_rom_data_3;
+wire [7:0] adb_rom_data_3;
+wire [7:0] adb_rom_data_1;
 reg [11:0] adb_rom_addr_reg;
 
-`ifdef ROM3
 rom #(12, 8, "rtl/roms/adb_rom3.hex") adb_rom_inst (
-`else
-rom #(12, 8, "rtl/roms/adb_rom1.hex") adb_rom_inst (
-`endif
   .clock(CLK_14M),
   .ce(1'b1),
   .address(adb_rom_addr),
-  .q(adb_rom_data)
+  .q(adb_rom_data_3)
+);
+rom #(12, 8, "rtl/roms/adb_rom1.hex") adb_rom1_inst (
+  .clock(CLK_14M),
+  .ce(1'b1),
+  .address(adb_rom_addr),
+  .q(adb_rom_data_1)
 );
 
 // ROM address is derived from cmd_data when reading ROM area
@@ -165,15 +165,13 @@ bram #(
     .address_a(ram_addr),
     .data_a(ram_din),
     .q_a(ram_dout),
-    .enable_a(1'b1),
-    
+
     // Port B unused
     .clock_b(CLK_14M),
     .wren_b(1'b0),
     .address_b(8'h00),
     .data_b(8'h00),
-    .q_b(),
-    .enable_b(1'b0)
+    .q_b()
 );
 
 // Apple IIe compatibility registers

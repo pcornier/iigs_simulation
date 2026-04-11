@@ -1,24 +1,34 @@
+# [Apple IIgs](https://en.wikipedia.org/wiki/Apple_IIGS) for [MiSTer](https://github.com/MiSTer-devel/Main_MiSTer/wiki)
+
+## Description
+
+This is a verilog recreation of an Apple IIgs computer. It was based on the SNES VHDL 65C816 core, and a lot of reading documents, books, and source code from Kegs, Mame, and Clemens emulators. 
+
+## Features
+
+## Keyboard mappings
+
+* F11 - Reset
+* Left/Right Alt - Command
+* Windows/Menu - Option
 
 
 
-generate the rom files:
+## Disk handling notes
+
+## Rom generation
+
 ```
 cd roms
-#download  apple2gs.zip from mame froms
+#download  apple2gs.zip from mame 
 make 
 ```
 
-```
-make
-./obj_dir/Vtop -t 15 -l 2 -s 20
-gtkwave conf.gtkw
-```
 
-options are:
+* ROM3: boot.rom
+* ROM1: boot1.rom
 
--s \<cycle> stop simulation after the number of cycles
 
--t \<cycle> start tracing at
+## Development notes
 
--l \<length in cycle> wave dump length
-
+There are two simulations, an old one in verilator, and a newer one in vsim

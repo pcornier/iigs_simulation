@@ -36,25 +36,58 @@ QData* img_size=NULL;
 
 
 void SimBlockDevice::MountDisk( std::string file, int index) {
+	bool was_mounted = disk[index].is_open();
+	// Close existing disk if already mounted
+	if (was_mounted) {
+		printf("BLKDEV: Closing existing disk %d before re-mount\n", index);
+		disk[index].close();
+	}
 	disk[index].open(file.c_str(), std::ios::out | std::ios::in | std::ios::binary | std::ios::ate);
         if (disk[index]) {
-           // we shouldn't do the actual mount here..
-           disk_size[index]= disk[index].tellg();
+           long int new_size = disk[index].tellg();
            disk[index].seekg(0);
-           mountQueue[index]=1;
-           printf("BLKDEV: disk %d inserted (%s) size=%ld bytes\n", index, file.c_str(), disk_size[index]);
+           // Store basename for UI display
+           std::string basename = file;
+           size_t slash = file.find_last_of("/\\");
+           if (slash != std::string::npos)
+               basename = file.substr(slash + 1);
+           disk_name[index] = basename;
+           printf("BLKDEV: disk %d inserted (%s) size=%ld bytes\n", index, file.c_str(), new_size);
            if (index == 0) {
                // NIB floppy format check: 232960 = 35 tracks × 6656 bytes/track
-               if (disk_size[index] == 232960) {
+               if (new_size == 232960) {
                    printf("BLKDEV: Detected 5.25\" NIB format (35 tracks × 6656 bytes)\n");
                } else {
-                   printf("BLKDEV: WARNING - Floppy size %ld doesn't match expected NIB size 232960\n", disk_size[index]);
+                   printf("BLKDEV: WARNING - Floppy size %ld doesn't match expected NIB size 232960\n", new_size);
                }
            }
+           // MiSTer behavior: single mount pulse with new size, whether fresh or swap
+           // For swap, Verilog side handles the rescan via 1-cycle glitch on woz_ctrl_mount
+           disk_size[index] = new_size;
+           mountQueue[index] = 1;
+           header_size[index] = 0;
+           if (was_mounted)
+               printf("BLKDEV: Disk swap for drive %d (single pulse, size=%ld)\n", index, new_size);
+           else
+               printf("BLKDEV: Fresh mount for drive %d (size=%ld)\n", index, new_size);
         }else {
 		fprintf(stderr,"BLKDEV ERROR: Failed to open: %s\n",file.c_str());
 	}
 
+}
+
+void SimBlockDevice::EjectDisk(int index) {
+	if (disk[index].is_open()) {
+		disk[index].close();
+	}
+	disk_size[index] = 0;
+	mountQueue[index] = 1;  // Triggers mount pulse with size=0, Verilog sees unmount
+	disk_name[index].clear();
+	printf("BLKDEV: disk %d ejected\n", index);
+}
+
+bool SimBlockDevice::IsMounted(int index) {
+	return disk[index].is_open();
 }
 
 
@@ -80,10 +113,11 @@ void SimBlockDevice::BeforeEval(int cycles)
          *sd_buff_dout = disk[i].get();
          *sd_buff_addr = bytecnt++;
          *sd_buff_wr= 1;
-         printf("cycles %x reading %X : %X ack %x\n",cycles,*sd_buff_addr,*sd_buff_dout,*sd_ack );
+         //printf("cycles %x reading %X : %X ack %x\n",cycles,*sd_buff_addr,*sd_buff_dout,*sd_ack );
       } else if(writing && *sd_buff_addr != bytecnt && (*sd_buff_addr< kBLKSZ)) {
       //} else if(writing && (bytecnt < kBLKSZ)) {
-  	//printf("writing disk %i at sd_buff_addr %x data %x ack %x\n",i,*sd_buff_addr,*sd_buff_din[i],*sd_ack);
+        if (i == 5 && bytecnt < 8)
+            printf("WOZ_SAVE_DMA[%d]: addr=%d bytecnt=%d data=%02X\n", i, *sd_buff_addr, bytecnt, *(sd_buff_din[i]));
         disk[i].put(*(sd_buff_din[i]));
         *sd_buff_addr = bytecnt;
       } else {
@@ -92,7 +126,10 @@ void SimBlockDevice::BeforeEval(int cycles)
 	  if (writing) {
 		  if (bytecnt>=kBLKSZ) {
 			  writing=0;
-			  //printf("writing stopped: bytecnt %x sd_buff_addr %x \n",bytecnt,*sd_buff_addr);
+			  if (i == 4 || i == 5) {
+			      printf("WOZ_DMA[%d]: Block write complete (bytecnt=%d)\n", i, bytecnt);
+			      disk[i].flush();  // Ensure data reaches disk (survives kill)
+			  }
 		  }
 		  if (bytecnt<kBLKSZ)
 		  	bytecnt++;
@@ -131,12 +168,11 @@ void SimBlockDevice::BeforeEval(int cycles)
            disk[i].seekg(header_size[i]);
            bitset(*img_mounted,i);
            ack_delay=1200;
-    } else if (ack_delay==1 && bitcheck(*img_mounted,i) && i == 0) {
-           // Only clear mount flag for floppy (index 0) - floppy uses mount pulse protocol
-           // HDD (index 1) should keep mount flag set permanently
-           printf("BLKDEV: Mount flag cleared for floppy drive %d\n", i);
+    } else if (ack_delay==1 && bitcheck(*img_mounted,i)) {
+           // Clear mount flag after ack_delay expires - allows next queued mount to proceed
+           // Verilog side latches state on rising edge (WOZ) or level (HDD), so pulse is sufficient
+           printf("BLKDEV: Mount flag cleared for drive %d\n", i);
         bitclear(*img_mounted,i) ;
-        //*img_size = 0;
     } else { if (!reading && !writing && ack_delay>0) ack_delay--; }
 
     // start reading when sd_rd pulses high
@@ -153,7 +189,11 @@ void SimBlockDevice::BeforeEval(int cycles)
 	}
 
         disk[i].clear();
-        disk[i].seekg((lba) * kBLKSZ + header_size[i]);
+        if (writing) {
+            disk[i].seekp((lba) * kBLKSZ + header_size[i]);
+        } else {
+            disk[i].seekg((lba) * kBLKSZ + header_size[i]);
+        }
         // Debug output for floppy (index 0) - show track calculation
         if (i == 0) {
             int track = lba / 13;  // 13 sectors per track
@@ -161,9 +201,17 @@ void SimBlockDevice::BeforeEval(int cycles)
             printf("FLOPPY DMA: LBA=%d (track=%d sector=%d) seek=%06X reading=%d writing=%d\n",
                    lba, track, sector, (lba) * kBLKSZ + header_size[i], reading, writing);
         }
+        if (i == 4 || i == 5) {
+            printf("WOZ_DMA[%d]: LBA=%d seek=0x%06lX %s\n",
+                   i, lba, (long)((lba) * kBLKSZ + header_size[i]),
+                   writing ? "WRITE" : "READ");
+        }
         bytecnt = 0;
         *sd_buff_addr = 0;
-        ack_delay = 1200;
+        // WOZ drives (index 4=5.25", index 5=3.5") use minimal ack_delay for instant track loading
+        // This simulates having all track data pre-cached in memory
+        // Using 2 cycles minimum to allow the protocol handshake to work
+        ack_delay = (i == 4 || i == 5) ? 2 : 1200;
       }
     }
 

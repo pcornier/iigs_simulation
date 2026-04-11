@@ -28,7 +28,8 @@ reg [15:0] prtc_txn_count = 0;
 initial begin
   // Initialize PRAM from hex file - MAME ROM3 nvram/apple2gs/rtc values
   // Bytes 0x00-0x59: ROM defaults, 0x5A-0xFB: 0xFF, 0xFC-0xFF: checksum
-  // Checksum 0x2D36, Complement 0x879C (verified: 0x2D36 XOR 0xAAAA = 0x879C)
+  // USERSLTST ($E8) = 0x00 (Scan mode: boot from slot 7 down)
+  // Checksum 0xAE1F, Complement 0x04B5 (verified: 0xAE1F XOR 0xAAAA = 0x04B5)
   $readmemh("rtl/roms/pram_init.hex", pram);
 
 `ifdef DEBUG_PRTC
