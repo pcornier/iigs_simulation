@@ -58,7 +58,7 @@ module hdd(
     input [7:0]      D_IN;		// From 6502
     output reg [7:0] D_OUT;		// To 6502
     output reg       DMA;
-    output reg [15:0] DMA_ADDR;
+    output [15:0]    DMA_ADDR;
     output reg       DMA_WE;
     output [15:0]    sector;		// Sector number to read/write
     output reg       hdd_read;
