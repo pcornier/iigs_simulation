@@ -45,7 +45,8 @@ module hdd(
     hps_ram_addr,
     ram_di,
     ram_do,
-    ram_we
+    ram_we,
+    sd_ack
 );
     input            CLK_14M;
     input            phi0;
@@ -71,6 +72,7 @@ module hdd(
     input [7:0]      ram_di;		// Data to sector buffer
     output reg [7:0] ram_do;		// Data from sector buffer
     input            ram_we;		// Sector buffer write enable
+    input [1:0]      sd_ack;
 
     wire [7:0]       sector_dout;
     wire [7:0]       rom_dout;
@@ -122,10 +124,12 @@ module hdd(
     // For disk read, the HPS DMA happens first, then the A2 DMA.
     // For disk write, the A2 DMA happens first, then the HPS DMA.
     localparam ST_IDLE   = 3'd0; // No DMA transfer in progress
-    localparam ST_RD_HPS = 3'd1; // HPS reading from SD
-    localparam ST_RD_A2  = 3'd2; // Writing A2 RAM
-    localparam ST_WR_A2  = 3'd3; // Reading A2 RAM
-    localparam ST_WR_HPS = 3'd4; // HPS writing to SD
+    localparam ST_RD_ACK = 3'd1; // Wait for HPS DMA to start
+    localparam ST_RD_HPS = 3'd2; // HPS reading from SD
+    localparam ST_RD_A2  = 3'd3; // Writing A2 RAM
+    localparam ST_WR_A2  = 3'd4; // Reading A2 RAM
+    localparam ST_WR_ACK = 3'd5; // Wait for HPS DMA to start
+    localparam ST_WR_HPS = 3'd6; // HPS writing to SD
 
     reg [2:0]  dma_state;
     reg        dma_req;
@@ -138,21 +142,24 @@ module hdd(
         case (dma_state)
           ST_IDLE: begin
               if (dma_req_rd) begin
-                  dma_state <= ST_RD_HPS;
+                  dma_state <= ST_RD_ACK;
                   DMA <= 1'b1;
                   DMA_WE <= 1'b0;
                   hdd_read <= 1'b1;
               end
               else if (dma_req_wr) begin
                   dma_state <=  ST_WR_A2;
-                  a2_ram_addr <= 9'd0;
                   DMA <= 1'b1;
                   DMA_WE <= 1'b0;
+                  a2_ram_we <= 1'b1;
               end
+          end // case: ST_IDLE
+          ST_RD_ACK: begin
+              hdd_read <= 1'b0;
+              if (sd_ack[hdd_unit]) dma_state <= ST_RD_HPS;
           end
           ST_RD_HPS: begin
-              hdd_read <= 1'b0;
-              if (ram_we && hps_ram_addr == 9'd511) begin
+              if (!sd_ack[hdd_unit]) begin
                   a2_ram_addr <= 9'd0;
                   dma_state <= ST_RD_A2;
                   DMA_WE <= 1'b1;
@@ -169,20 +176,24 @@ module hdd(
               end
           end
           ST_WR_A2: begin
-              a2_ram_we <= 1'b0;
+              //a2_ram_we <= 1'b0;
               if (phi0) begin
                   a2_ram_we <= 1'b1;
                   a2_ram_addr <= a2_ram_addr + 9'b1;
                   if (a2_ram_addr == 9'd511) begin
-                      dma_state <= ST_WR_HPS;
+                      dma_state <= ST_WR_ACK;
                       hdd_write <= 1'b1;
                       a2_ram_we <= 1'b0;
                   end
               end
           end
+          ST_WR_ACK: begin
+              hdd_write <= 1'b0;
+              if (sd_ack[hdd_unit]) dma_state <= ST_WR_HPS;
+          end
           ST_WR_HPS: begin
               hdd_write <= 1'b0;
-              if (hps_ram_addr == 9'd511) begin
+              if (!sd_ack[hdd_unit]) begin
                   dma_state <= ST_IDLE;
                   DMA <= 1'b0;
               end
@@ -433,7 +444,7 @@ bram #(.widthad_a(9)) sector_ram
         .q_a(sector_dma_q),
         // Port B: CPU NEXT BYTE (read-only)
         .clock_b(CLK_14M),
-        .wren_b(a2_ram_we),
+        .wren_b(a2_ram_we & phi0),
         .address_b(a2_ram_addr),
         .data_b(D_IN),
         .q_b(sector_dout),

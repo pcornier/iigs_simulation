@@ -89,7 +89,7 @@ module iigs
   input [7:0]   HDD_RAM_DI,
   output [7:0]  HDD_RAM_DO,
   input         HDD_RAM_WE,
-
+  input [1:0]   HDD_ACK,
 
    // --- WOZ bit interface for 3.5" drive 1 ---
    output [7:0]       WOZ_TRACK3,           // Track number being read
@@ -305,7 +305,11 @@ module iigs
   assign VPB=cpu_vpb;
   assign CXROM=INTCXROM;
   assign { bank, addr } = addr_bus;
-  assign dout = hdd_dma ? HDD_DO : cpu_dout;
+
+  assign dout = (hdd_dma & hdd_dma_we) ? HDD_DO :
+                (hdd_dma & ~hdd_dma_we) ? cpu_din :
+                cpu_dout;
+
   assign we = hdd_dma ? hdd_dma_we : ~cpu_we_n;
   assign valid = cpu_vpa | cpu_vda;
   
@@ -1989,7 +1993,7 @@ vgc vgc(
 wire [7:0] floating_bus = (bank_bef >= RAMSIZE && bank_bef < 8'hE0) ? bank_bef : 8'h80;
 
 wire [7:0] din =
-  (io_select[7] == 1'b1 | device_select[7] == 1'b1 | hdd_dma) ? HDD_DO :
+  (io_select[7] == 1'b1 | device_select[7] == 1'b1 | (hdd_dma & hdd_dma_we)) ? HDD_DO :
   (fastram_ce | rom_ce) ?  top_din :
   slowram_ce ? slowram_dout :
   slot_ce ? slot_dout :
@@ -2583,7 +2587,8 @@ wire ready_out;
         .hps_ram_addr(HDD_RAM_ADDR),
         .ram_di(HDD_RAM_DI),
         .ram_do(HDD_RAM_DO),
-        .ram_we(HDD_RAM_WE)
+        .ram_we(HDD_RAM_WE),
+        .sd_ack(HDD_ACK)
     );
 /*
     // Native SmartPort HDD on Slot 5 ($C0D0–$C0DF), no ROM

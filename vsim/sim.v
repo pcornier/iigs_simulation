@@ -207,6 +207,7 @@ iigs  iigs(
         .HDD_RAM_DI(sd_buff_dout),
         .HDD_RAM_DO(hdd_ram_do),
         .HDD_RAM_WE(sd_buff_wr & hdd_ack),
+        .HDD_ACK({sd_ack[3], sd_ack[1]}),
 
     // Mounted-media bitmap to IWM (pad to 4 bits)
     // [0] = 5.25" WOZ media mounted, [1] = 0, [2] = 3.5" WOZ media mounted, [3] = 0
