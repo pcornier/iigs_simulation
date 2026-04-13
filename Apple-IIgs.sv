@@ -344,7 +344,6 @@ iigs iigs (
 	.CLK_28M(clk_28),
 	.CLK_14M(clk_sys),
 	.clk_vid(clk_vid),
-	.cpu_wait(cpu_wait_hdd/*|ch0_busy*/),
 	.ce_pix(ce_pix),
 	.phi2(phi2),
 	.phi0(phi0),
@@ -367,10 +366,13 @@ iigs iigs (
 	.HDD_UNIT(hdd_unit),
 	.HDD_MOUNTED(hdd_mounted),
 	.HDD_PROTECT(hdd_protect),
+	.HDD0_SIZE(hdd0_size),
+	.HDD1_SIZE(hdd1_size),
 	.HDD_RAM_ADDR(sd_buff_addr),
 	.HDD_RAM_DI(sd_buff_dout),
 	.HDD_RAM_DO(hdd_ram_do),
 	.HDD_RAM_WE(sd_buff_wr & hdd_ack),
+	.HDD_ACK(sd_ack[1:0]),
 	//-- WOZ bit interfaces for flux-based IWM
 	// 3.5" drive 1
 	.WOZ_TRACK3(WOZ_TRACK3),
@@ -609,6 +611,8 @@ reg  [1:0] hdd_mounted = 2'b0;
 wire hdd_read;
 wire hdd_write;
 reg  [1:0] hdd_protect = 2'b0;
+reg [63:0] hdd0_size;
+reg [63:0] hdd1_size;
 reg  cpu_wait_hdd = 0;
 
 // HDD unit being served (latched when operation starts)
@@ -651,10 +655,12 @@ always @(posedge clk_sys) begin
 	if (img_mounted[0]) begin
 		hdd_mounted[0] <= img_size != 0;
 		hdd_protect[0] <= img_readonly;
+		hdd0_size <= img_size;
 	end
 	if (img_mounted[1]) begin
 		hdd_mounted[1] <= img_size != 0;
 		hdd_protect[1] <= img_readonly;
+		hdd1_size <= img_size;
 	end
 
 	if(reset) begin

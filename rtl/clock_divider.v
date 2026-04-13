@@ -97,12 +97,6 @@ wire slow_request = (cyareg[7] == 1'b0) ||
                    (waitforC0E8 && cyareg[2]) ||
                    (waitforC0F8 && cyareg[3]);
 
-// I/O bank check for motor detection - banks that have I/O mirrored at $C0xx
-// Banks 00, 01, E0, E1, FC, FD, FE, FF all have I/O at $C0xx
-// IMPORTANT: Can't use IO signal because IO=0 for ROM bank reads
-wire io_bank = (bank == 8'h00 || bank == 8'h01 || bank == 8'he0 || bank == 8'he1 ||
-               bank == 8'hfc || bank == 8'hfd || bank == 8'hfe || bank == 8'hff);
-
 `ifdef SIMULATION
 // Debug: track previous states and counters (module scope to avoid
 // procedural declarations errors in Verilog-2001 tools)
@@ -136,31 +130,30 @@ always @(posedge clk_14M) begin
     end else begin
         // Track motor state UNCONDITIONALLY (like MAME does)
         // The cyareg bits gate whether motor forces slow mode (in slow_request), not tracking
-        // Use io_bank wire (defined above) to check for I/O-mirrored banks
 
-        if (io_bank && addr == 16'hC0C9) begin
+        if (IO && addr == 16'hC0C9) begin
             waitforC0C8 <= 1;
         end
-        if (io_bank && addr == 16'hC0D9) begin
+        if (IO && addr == 16'hC0D9) begin
             waitforC0D8 <= 1;
         end
-        if (io_bank && addr == 16'hC0E9) begin
+        if (IO && addr == 16'hC0E9) begin
             waitforC0E8 <= 1;
         end
-        if (io_bank && addr == 16'hC0F9) begin
+        if (IO && addr == 16'hC0F9) begin
             waitforC0F8 <= 1;
         end
 
-        if (waitforC0C8 && io_bank && addr == 16'hC0C8) begin
+        if (waitforC0C8 && IO && addr == 16'hC0C8) begin
             waitforC0C8 <= 0;
         end
-        if (waitforC0D8 && io_bank && addr == 16'hC0D8) begin
+        if (waitforC0D8 && IO && addr == 16'hC0D8) begin
             waitforC0D8 <= 0;
         end
-        if (waitforC0E8 && io_bank && addr == 16'hC0E8) begin
+        if (waitforC0E8 && IO && addr == 16'hC0E8) begin
             waitforC0E8 <= 0;
         end
-        if (waitforC0F8 && io_bank && addr == 16'hC0F8) begin
+        if (waitforC0F8 && IO && addr == 16'hC0F8) begin
             waitforC0F8 <= 0;
         end
 
@@ -423,7 +416,7 @@ always @(posedge clk_14M) begin
         end
         ph2_en_prev <= ph2_en;
 
-        if (ph2_en && io_bank && addr == 16'hC0EC && iwm_slow_log_count < 16'd5000) begin
+        if (ph2_en && IO && addr == 16'hC0EC && iwm_slow_log_count < 16'd5000) begin
             $display("CLKDIV_IWM_SLOW: addr=%04x bank=%02x IO=%0d we=%0d slow=%0d slowMem=%0d slow_req=%0d cyareg=%02x slot_gate=%01x wC0C8=%0d wC0D8=%0d wC0E8=%0d wC0F8=%0d",
                      addr, bank, IO, we_reg, slow, slowMem, slow_request, cyareg, cyareg[3:0],
                      waitforC0C8, waitforC0D8, waitforC0E8, waitforC0F8);

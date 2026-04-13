@@ -3,7 +3,6 @@
 // HDD interface
 //
 // This is a ProDOS HDD interface based on the AppleWin interface.
-// Currently, the CPU must be halted during command execution.
 //
 // Steven A. Wilson
 //
@@ -17,7 +16,9 @@
 // C0F5         (r/w) HIGH BYTE OF MEMORY BUFFER
 // C0F6         (r/w) LOW BYTE OF BLOCK NUMBER
 // C0F7         (r/w) HIGH BYTE OF BLOCK NUMBER
-// C0F8         (r)   NEXT BYTE
+// C088         (r)   NEXT BYTE (legacy port; no longer supported with DMA)
+// C089         (r)   LOW BYTE OF DISK IMAGE SIZE IN BLOCKS
+// C08A         (r)   HIGH BYTE OF DISK IMAGE SIZE IN BLOCKS
 //-----------------------------------------------------------------------------
 
 module hdd(
@@ -30,16 +31,22 @@ module hdd(
     RD,
     D_IN,
     D_OUT,
+    DMA,
+    DMA_ADDR,
+    DMA_WE,
     sector,
     hdd_read,
     hdd_write,
     hdd_unit,
     hdd_mounted,
     hdd_protect,
-    ram_addr,
+    hdd0_size,
+    hdd1_size,
+    hps_ram_addr,
     ram_di,
     ram_do,
-    ram_we
+    ram_we,
+    sd_ack
 );
     input            CLK_14M;
     input            phi0;
@@ -50,17 +57,24 @@ module hdd(
     input            RD;		// 6502 RD/WR
     input [7:0]      D_IN;		// From 6502
     output reg [7:0] D_OUT;		// To 6502
+    output reg       DMA;
+    output [15:0]    DMA_ADDR;
+    output reg       DMA_WE;
     output [15:0]    sector;		// Sector number to read/write
     output reg       hdd_read;
     output reg       hdd_write;
     output           hdd_unit;		// Which unit (0-1) is being accessed (directly from bit 7)
     input [1:0]      hdd_mounted;	// Per-unit mounted status (active high)
     input [1:0]      hdd_protect;	// Per-unit write protect (active high)
-    input [8:0]      ram_addr;		// Address for sector buffer
+    input [63:0]     hdd0_size;
+    input [63:0]     hdd1_size;
+    input [8:0]      hps_ram_addr;	// Address for sector buffer
     input [7:0]      ram_di;		// Data to sector buffer
     output reg [7:0] ram_do;		// Data from sector buffer
     input            ram_we;		// Sector buffer write enable
-    
+    input [1:0]      sd_ack;
+
+    wire [7:0]       sector_dout;
     wire [7:0]       rom_dout;
     
     // Interface registers
@@ -76,16 +90,15 @@ module hdd(
     // Internal sector buffer offset counter; incremented by
     // access to C0F8 and reset when a command is written to
     // C0F2.
-    reg [8:0]        sec_addr;
-    reg              increment_sec_addr;
+    reg [8:0]        a2_ram_addr;
     reg              select_d;
-    
+
     // Sector buffer: true dual-port RAM (512x8)
     wire [7:0]       sector_dma_q;   // DMA (Port A) read data
     wire [7:0]       sector_cpu_q;   // CPU (Port B, C0F8) read data
     // Stage Port-B q to hide BRAM latency and align NEXT BYTE stream
     reg  [7:0]       next_byte_q;
-    reg              cpu_c0f8_we;    // CPU writes to C0F8 during WRITE
+    reg              a2_ram_we;    // A2-side write to sector buffer
     reg  [7:0]       cpu_c0f8_din;
     // First-byte prefetch to cover BRAM read latency on READ command
     reg              prefetch_armed;
@@ -93,12 +106,12 @@ module hdd(
     reg  [7:0]       prefetch_data;
     
     // ProDOS constants
-    parameter        PRODOS_COMMAND_STATUS = 8'h00;
-    parameter        PRODOS_COMMAND_READ = 8'h01;
-    parameter        PRODOS_COMMAND_WRITE = 8'h02;
-    parameter        PRODOS_COMMAND_FORMAT = 8'h03;
-    parameter        PRODOS_STATUS_NO_DEVICE = 8'h28;
-    parameter        PRODOS_STATUS_PROTECT = 8'h2B;
+    localparam       PRODOS_COMMAND_STATUS = 8'h00;
+    localparam       PRODOS_COMMAND_READ = 8'h01;
+    localparam       PRODOS_COMMAND_WRITE = 8'h02;
+    localparam       PRODOS_COMMAND_FORMAT = 8'h03;
+    localparam       PRODOS_STATUS_NO_DEVICE = 8'h28;
+    localparam       PRODOS_STATUS_PROTECT = 8'h2B;
     
     assign sector = {reg_block_h, reg_block_l};
 
@@ -106,46 +119,124 @@ module hdd(
     // For slot 7: $70=unit0 (bit7=0), $F0=unit1 (bit7=1)
     assign hdd_unit = reg_unit[7];
 
+    // DMA state machine
+    // "RD" and "WR" here are in the sense of disk read/write.
+    // For disk read, the HPS DMA happens first, then the A2 DMA.
+    // For disk write, the A2 DMA happens first, then the HPS DMA.
+    localparam ST_IDLE   = 3'd0; // No DMA transfer in progress
+    localparam ST_RD_ACK = 3'd1; // Wait for HPS DMA to start
+    localparam ST_RD_HPS = 3'd2; // HPS reading from SD
+    localparam ST_RD_A2  = 3'd3; // Writing A2 RAM
+    localparam ST_WR_PRE = 3'd4; // Synchronize to bus
+    localparam ST_WR_A2  = 3'd5; // Reading A2 RAM
+    localparam ST_WR_ACK = 3'd6; // Wait for HPS DMA to start
+    localparam ST_WR_HPS = 3'd7; // HPS writing to SD
+
+    reg [2:0]  dma_state;
+    reg        dma_req;
+    reg        dma_req_rd; // Read requested by CPU
+    reg        dma_req_wr; // Write requested by CPU
+
+    assign DMA_ADDR = {reg_mem_h, reg_mem_l} + {7'b0, a2_ram_addr};
+
+    always @(posedge CLK_14M) begin: dma_proc
+        case (dma_state)
+          ST_IDLE: begin
+              if (dma_req_rd) begin
+                  dma_state <= ST_RD_ACK;
+                  DMA <= 1'b1;
+                  DMA_WE <= 1'b0;
+                  hdd_read <= 1'b1;
+              end
+              else if (dma_req_wr) begin
+                  dma_state <=  ST_WR_PRE;
+                  DMA <= 1'b1;
+                  DMA_WE <= 1'b0;
+                  a2_ram_we <= 1'b1;
+              end
+          end // case: ST_IDLE
+          ST_RD_ACK: begin
+              hdd_read <= 1'b0;
+              if (sd_ack[hdd_unit]) dma_state <= ST_RD_HPS;
+          end
+          ST_RD_HPS: begin
+              if (!sd_ack[hdd_unit] & phi0) begin
+                  a2_ram_addr <= 9'd0;
+                  dma_state <= ST_RD_A2;
+                  DMA_WE <= 1'b1;
+              end
+          end
+          ST_RD_A2: begin
+              if (phi0) begin
+                  a2_ram_addr <= a2_ram_addr + 9'b1;
+                  if (a2_ram_addr == 9'd511) begin
+                      dma_state <= ST_IDLE;
+                      DMA_WE <= 1'b0;
+                      DMA <= 1'b0;
+                  end
+              end
+          end
+          ST_WR_PRE: begin
+              if (phi0) dma_state <= ST_WR_A2;
+          end
+          ST_WR_A2: begin
+              //a2_ram_we <= 1'b0;
+              if (phi0) begin
+                  a2_ram_we <= 1'b1;
+                  a2_ram_addr <= a2_ram_addr + 9'b1;
+                  if (a2_ram_addr == 9'd511) begin
+                      dma_state <= ST_WR_ACK;
+                      hdd_write <= 1'b1;
+                      a2_ram_we <= 1'b0;
+                  end
+              end
+          end
+          ST_WR_ACK: begin
+              hdd_write <= 1'b0;
+              if (sd_ack[hdd_unit]) dma_state <= ST_WR_HPS;
+          end
+          ST_WR_HPS: begin
+              hdd_write <= 1'b0;
+              if (!sd_ack[hdd_unit] & phi0) begin
+                  dma_state <= ST_IDLE;
+                  DMA <= 1'b0;
+              end
+          end
+          default: begin
+              dma_state <= ST_IDLE;
+`ifdef HDD_DEBUG
+              $error("%m: Invalid DMA state");
+`endif
+          end
+        endcase // case (dma_state)
+
+        if (RESET) begin
+            dma_state <= ST_IDLE;
+            hdd_read <= 1'b0;
+            hdd_write <= 1'b0;
+            DMA <= 1'b0;
+            DMA_WE <= 1'b0;
+            // dma_req_rd reset by CPU interface
+            // dma_req_wr reset by CPU interface
+        end
+    end // block: dma_proc
+
     // Helper wires for checking mounted/protect status of current unit
     wire current_unit_mounted = hdd_mounted[hdd_unit];
     wire current_unit_protect = hdd_protect[hdd_unit];
     // Check if any unit is mounted (for ROM visibility)
     wire any_unit_mounted = |hdd_mounted;
 
-    // Detect DMA completion: when last byte (addr 511) is written to sector buffer
-    // Use this to arm prefetch AFTER DMA is done, not before
-    reg dma_complete_pending;
-
     always @(posedge CLK_14M)
     begin: cpu_interface
-        // Arm prefetch when DMA is complete (detected by dma_complete_pending flag)
-        // This ensures the sector buffer has valid data before we prefetch
-        if (dma_complete_pending) begin
-            prefetch_data  <= sector_cpu_q;
-            prefetch_valid <= 1'b1;
-            dma_complete_pending <= 1'b0;
-`ifdef SIMULATION
-            $display("HDD PREFETCH (post-DMA) -> data=%02h at sec_addr=%03d", sector_cpu_q, sec_addr);
-`endif
-        end
-
-        // Detect end of DMA: when last byte is written to sector buffer
-        if (ram_we && ram_addr == 9'd511 && prefetch_armed) begin
-            // DMA just finished writing last byte - arm the actual prefetch for next cycle
-            dma_complete_pending <= 1'b1;
-            prefetch_armed <= 1'b0;
-`ifdef SIMULATION
-            $display("HDD DMA complete (addr 511 written), scheduling prefetch");
-`endif
-        end
-
-
         begin
             // Default output unless a read path below overrides
             D_OUT <= 8'hFF;
 
             // Asynchronous read path for slot ROM (C6xx) and a read-only mirror for HDD regs (C0F0–C0FF)
-            if (DEVICE_SELECT && RD) begin
+            if (DMA && DMA_WE) begin
+                D_OUT <= sector_dout;
+            end else if (DEVICE_SELECT && RD) begin
                 // Mirror register values without side-effects; phi0-gated path handles semantics
                 case (A[3:0])
                   4'h0: begin
@@ -161,12 +252,14 @@ module hdd(
                   4'h5: D_OUT <= reg_mem_h;       // MEM H
                   4'h6: D_OUT <= reg_block_l;     // BLK L
                   4'h7: D_OUT <= reg_block_h;     // BLK H
-                  4'h8: D_OUT <= next_byte_q;          // NEXT BYTE mirror (no increment here)
+                  //4'h8: D_OUT <= next_byte_q;     // NEXT BYTE mirror (no increment here)
+                  4'h9: D_OUT <= hdd_unit ? hdd1_size[16:9] : hdd0_size[16:9];
+                  4'ha: D_OUT <= hdd_unit ? hdd1_size[24:17] : hdd0_size[24:17];
                   default: D_OUT <= 8'hFF;
                 endcase
                 $display("HDD CPU %s 00:%04h -> %02h (cmd=%02h unit=%02h blk=%04h mem=%04h sec_idx=%03d)",
                          "READ-MIRROR", {12'h0F0, A[3:0]}, D_OUT, reg_command, reg_unit,
-                         {reg_block_h, reg_block_l}, {reg_mem_h, reg_mem_l}, sec_addr);
+                         {reg_block_h, reg_block_l}, {reg_mem_h, reg_mem_l}, a2_ram_addr);
             end else if (IO_SELECT && RD) begin
                 // Directly drive slot ROM data only if any HDD unit is mounted
                 // Otherwise return $FF (empty slot) so boot search skips this slot
@@ -184,27 +277,20 @@ module hdd(
                 reg_mem_h <= 8'h00;
                 reg_block_l <= 8'h00;
                 reg_block_h <= 8'h00;
-                sec_addr <= 9'd0;
-                increment_sec_addr <= 1'b0;
-                hdd_read <= 1'b0;
-                hdd_write <= 1'b0;
-                cpu_c0f8_we <= 1'b0;
                 prefetch_armed <= 1'b0;
                 prefetch_valid <= 1'b0;
-                dma_complete_pending <= 1'b0;
             end
             else
             begin
                 // Create a clean, one-cycle pulse for read/write strobes.
                 // De-assert on the cycle after assertion.
-                if (hdd_read) hdd_read <= 1'b0;
-                if (hdd_write) hdd_write <= 1'b0;
-                cpu_c0f8_we <= 1'b0;
+                dma_req_rd <= 1'b0;
+                dma_req_wr <= 1'b0;
 
                 select_d <= DEVICE_SELECT;
                 if (DEVICE_SELECT == 1'b1)
                 begin
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
 	//$display("HDD DEVSEL: D_IN %02h Alo %1h RD %1b", D_IN, A[3:0], RD);
 `endif
                     if (RD == 1'b1)
@@ -220,7 +306,7 @@ module hdd(
                                         // Use direct value for D_OUT to avoid non-blocking assignment delay
                                         reg_status <= current_unit_mounted ? 8'h00 : 8'h01;
                                         D_OUT      <= current_unit_mounted ? 8'h00 : 8'h01;
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                         $display("HDD RD C0F0: STATUS read -> %02h (mounted=%0d unit=%02h hdd_mounted=%b)",
                                                  current_unit_mounted ? 8'h00 : 8'h01, current_unit_mounted, reg_unit, hdd_mounted);
 `endif
@@ -228,7 +314,7 @@ module hdd(
                                       PRODOS_COMMAND_READ: begin
                                         // Initiate read if current unit is mounted; otherwise report error immediately
                                         if (current_unit_mounted) begin
-                                          if (~select_d) hdd_read <= 1'b1;
+                                          if (~select_d) dma_req_rd <= 1'b1;
                                           // Return 0 (success) since our emulation completes the DMA instantly.
                                           // The slot ROM saves this value and returns it to ProDOS; non-zero = error.
                                           reg_status <= 8'h00;
@@ -237,7 +323,7 @@ module hdd(
                                           reg_status <= 8'h01; // error
                                           D_OUT      <= 8'h01;
                                         end
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                         $display("HDD RD C0F0: READ start (blk=%04h) status=%02h mounted=%0d unit=%02h", {reg_block_h,reg_block_l}, reg_status, current_unit_mounted, reg_unit);
 `endif
                                       end
@@ -245,74 +331,51 @@ module hdd(
                                         if (current_unit_protect) begin
                                           D_OUT <= PRODOS_STATUS_PROTECT;
                                           reg_status <= 8'h01;
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                           $display("HDD RD C0F0: WRITE protect unit=%02h", reg_unit);
 `endif
                                         end else begin
                                           if (current_unit_mounted) begin
-                                            $display("HDD: WRITE command initiated for unit %02h. Asserting hdd_write.", reg_unit);
+                                            $display("HDD: WRITE command initiated for unit %02h. Asserting dma_req_wr.", reg_unit);
                                             // Return 0 (success) since our emulation completes the DMA instantly.
                                             reg_status <= 8'h00;
                                             D_OUT <= 8'h00;
-                                            hdd_write <= 1'b1;
+                                            dma_req_wr <= 1'b1;
                                           end else begin
                                             reg_status <= 8'h01; D_OUT <= 8'h01;
                                           end
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                           $display("HDD RD C0F0: WRITE (blk=%04h) status=%02h mounted=%0d unit=%02h", {reg_block_h,reg_block_l}, reg_status, current_unit_mounted, reg_unit);
 `endif
                                         end
                                       end
                                       default: begin
                                         D_OUT <= reg_status; // no change
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                         $display("HDD RD C0F0: unknown cmd %02h -> status %02h", reg_command, reg_status);
 `endif
                                       end
                                     endcase
                                 end
                             4'h1 :
-                                begin D_OUT <= reg_status; `ifdef SIMULATION $display("HDD RD C0F1: status=%02h", reg_status); `endif end
+                                begin D_OUT <= reg_status; `ifdef DEBUG_HDD $display("HDD RD C0F1: status=%02h", reg_status); `endif end
                             4'h2 :
-                                begin D_OUT <= reg_command; `ifdef SIMULATION $display("HDD RD C0F2: cmd=%02h", reg_command); `endif end
+                                begin D_OUT <= reg_command; `ifdef DEBUG_HDD $display("HDD RD C0F2: cmd=%02h", reg_command); `endif end
                             4'h3 :
-                                begin D_OUT <= reg_unit; `ifdef SIMULATION $display("HDD RD C0F3: unit=%02h", reg_unit); `endif end
+                                begin D_OUT <= reg_unit; `ifdef DEBUG_HDD $display("HDD RD C0F3: unit=%02h", reg_unit); `endif end
                             4'h4 :
-                                begin D_OUT <= reg_mem_l; `ifdef SIMULATION $display("HDD RD C0F4: memL=%02h", reg_mem_l); `endif end
+                                begin D_OUT <= reg_mem_l; `ifdef DEBUG_HDD $display("HDD RD C0F4: memL=%02h", reg_mem_l); `endif end
                             4'h5 :
-                                begin D_OUT <= reg_mem_h; `ifdef SIMULATION $display("HDD RD C0F5: memH=%02h", reg_mem_h); `endif end
+                                begin D_OUT <= reg_mem_h; `ifdef DEBUG_HDD $display("HDD RD C0F5: memH=%02h", reg_mem_h); `endif end
                             4'h6 :
-                                begin D_OUT <= reg_block_l; `ifdef SIMULATION $display("HDD RD C0F6: blkL=%02h", reg_block_l); `endif end
+                                begin D_OUT <= reg_block_l; `ifdef DEBUG_HDD $display("HDD RD C0F6: blkL=%02h", reg_block_l); `endif end
                             4'h7 :
-                                begin D_OUT <= reg_block_h; `ifdef SIMULATION $display("HDD RD C0F7: blkH=%02h", reg_block_h); `endif end
-                            4'h8 :
-                                begin
-                                    // First-byte guard: if a READ was just armed, return the prefetched byte
-                                    // to hide BRAM's 1-cycle latency on Port-B and only then advance.
-                                    if (prefetch_valid) begin
-                                        D_OUT <= prefetch_data;
-                                        prefetch_valid <= 1'b0; // consume prefetch
-                                        sec_addr <= sec_addr + 1;
-`ifdef SIMULATION
-                                        $display("HDD CPU READ C0F8[%03d] -> %02h (prefetch)", sec_addr, prefetch_data);
-`endif
-                                    end else begin
-                                        // Present staged NEXT BYTE on gated path, then increment address
-                                        D_OUT <= next_byte_q;
-                                        sec_addr <= sec_addr + 1;
-`ifdef SIMULATION
-                                        $display("HDD CPU READ C0F8[%03d] -> %02h (gated)", sec_addr, next_byte_q);
-`endif
-                                    end
-
-                                    if (sec_addr == 9'd511) begin
-                                        reg_status <= 8'h00; // clear busy at end of sector
-`ifdef SIMULATION
-                                        $display("HDD: READ complete via NEXT BYTE stream; status cleared");
-`endif
-                                    end
-                                end
-                            default :
+                                begin D_OUT <= reg_block_h; `ifdef DEBUG_HDD $display("HDD RD C0F7: blkH=%02h", reg_block_h); `endif end
+                            4'h9 :
+                                D_OUT <= hdd_unit ? hdd1_size[16:9] : hdd0_size[16:9];
+                            4'ha :
+                                D_OUT <= hdd_unit ? hdd1_size[24:17] : hdd0_size[24:17];
+                           default :
                                 ;
                         endcase
                     else
@@ -320,17 +383,12 @@ module hdd(
                         case (A[3:0])
                             4'h2 :
                                 begin
-                                    hdd_read <= 1'b0;
-                                    hdd_write <= 1'b0;
-                                    if (D_IN == 8'h02)
-                                        sec_addr <= 9'b000000000;
                                     reg_command <= D_IN;
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                     $display("HDD WR C0F2: cmd <= %02h (unit=%02h blk=%04h mem=%04h)", D_IN, reg_unit, {reg_block_h,reg_block_l}, {reg_mem_h,reg_mem_l});
 `endif
                                     if (D_IN == PRODOS_COMMAND_READ || D_IN == PRODOS_COMMAND_WRITE) begin
                                         reg_status <= 8'h80; // busy
-                                        sec_addr   <= D_IN == PRODOS_COMMAND_WRITE ? 9'h1FF : 9'd0;
                                         // Arm prefetch for first NEXT BYTE on READ to cover BRAM latency
                                         prefetch_armed <= (D_IN == PRODOS_COMMAND_READ);
                                         prefetch_valid <= 1'b0;
@@ -341,33 +399,23 @@ module hdd(
                                     end
                                 end
                             4'h1 : begin // ignore writes to status
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                 $display("HDD WR C0F1 IGNORED (status read-only)");
 `endif
                             end
                             4'h3 :
-                                begin reg_unit <= D_IN; `ifdef SIMULATION $display("HDD WR C0F3: unit <= %02h", D_IN); `endif end
+                                begin reg_unit <= D_IN; `ifdef DEBUG_HDD $display("HDD WR C0F3: unit <= %02h", D_IN); `endif end
                             4'h4 :
-                                begin reg_mem_l <= D_IN; `ifdef SIMULATION $display("HDD WR C0F4: memL <= %02h (mem=%04h)", D_IN, {reg_mem_h, D_IN}); `endif end
+                                begin reg_mem_l <= D_IN; `ifdef DEBUG_HDD $display("HDD WR C0F4: memL <= %02h (mem=%04h)", D_IN, {reg_mem_h, D_IN}); `endif end
                             4'h5 :
-                                begin reg_mem_h <= D_IN; `ifdef SIMULATION $display("HDD WR C0F5: memH <= %02h (mem=%04h)", D_IN, {D_IN, reg_mem_l}); `endif end
+                                begin reg_mem_h <= D_IN; `ifdef DEBUG_HDD $display("HDD WR C0F5: memH <= %02h (mem=%04h)", D_IN, {D_IN, reg_mem_l}); `endif end
                             4'h6 :
-                                begin reg_block_l <= D_IN; `ifdef SIMULATION $display("HDD WR C0F6: blkL <= %02h (blk=%04h)", D_IN, {reg_block_h, D_IN}); `endif end
+                                begin reg_block_l <= D_IN; `ifdef DEBUG_HDD $display("HDD WR C0F6: blkL <= %02h (blk=%04h)", D_IN, {reg_block_h, D_IN}); `endif end
                             4'h7 :
-                                begin reg_block_h <= D_IN; `ifdef SIMULATION $display("HDD WR C0F7: blkH <= %02h (blk=%04h)", D_IN, {D_IN, reg_block_l}); `endif end
-                            4'h8 :
-                                begin
-					    //$display("writing D_IN %x to NEXT BYTE at %x",D_IN,sec_addr);
-                                    cpu_c0f8_we  <= 1'b1;
-                                    cpu_c0f8_din <= D_IN;
-                                    sec_addr     <= sec_addr + 1;
-`ifdef SIMULATION
-                                    $display("HDD CPU WRITE C0F8[%03d] <= %02h", sec_addr, D_IN);
-`endif
-                                end
+                                begin reg_block_h <= D_IN; `ifdef DEBUG_HDD $display("HDD WR C0F7: blkH <= %02h (blk=%04h)", D_IN, {D_IN, reg_block_l}); `endif end
                             default :
 			    begin
-`ifdef SIMULATION
+`ifdef DEBUG_HDD
                                     $display("HDD DEFAULT WR A[%x] D_IN  %02h", A[3:0], D_IN);
 `endif
 				end
@@ -395,15 +443,15 @@ bram #(.widthad_a(9)) sector_ram
         // Port A: DMA
         .clock_a(CLK_14M),
         .wren_a(ram_we),
-        .address_a(ram_addr),
+        .address_a(hps_ram_addr),
         .data_a(ram_di),
         .q_a(sector_dma_q),
         // Port B: CPU NEXT BYTE (read-only)
         .clock_b(CLK_14M),
-        .wren_b(cpu_c0f8_we),
-        .address_b(sec_addr),
-        .data_b(cpu_c0f8_din),
-        .q_b(sector_cpu_q),
+        .wren_b(a2_ram_we & phi0),
+        .address_b(a2_ram_addr),
+        .data_b(D_IN),
+        .q_b(sector_dout),
         // Enables (keep Port A always enabled; Port B read always enabled)
 `ifdef VERILATOR
         .byteena_a(1'b1),
@@ -415,52 +463,23 @@ bram #(.widthad_a(9)) sector_ram
         .enable_b(1'b1)
 `endif
 );
-    /*
-    // Dual-ported RAM holding the contents of the sector
-    dpram #(
-        .width_a(8),
-        .widthad_a(9)
-    ) sector_ram (
-        // Port A: DMA
-        .clock_a(CLK_14M),
-        .wren_a(ram_we),
-        .address_a(ram_addr),
-        .data_a(ram_di),
-        .q_a(sector_dma_q),
-        // Port B: CPU NEXT BYTE (read-only)
-        .clock_b(CLK_14M),
-        .wren_b(cpu_c0f8_we),
-        .address_b(sec_addr),
-        .data_b(cpu_c0f8_din),
-        .q_b(sector_cpu_q),
-        // Unused enables
-        .byteena_a(1'b1),
-        .byteena_b(1'b1),
-        .ce_a(1'b1),
-        .enable_b(1'b1)
-    );
-*/
+
     // Registered DMA readback
     always @(posedge CLK_14M) begin
         ram_do <= sector_dma_q;
-        if (ram_we) $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", ram_addr, ram_di);
+        if (ram_we) $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", hps_ram_addr, ram_di);
     end
 
     // Stage Port-B q so mirror/gated paths return the correct byte with BRAM latency
     always @(posedge CLK_14M) begin
         next_byte_q <= sector_cpu_q;
     end
-    // Latch first byte after a READ command to ensure the first C0F8 returns correctly
-    always @(posedge CLK_14M) begin
-    end
- 
 
-      rom #(8,8,"rtl/roms/hdd.hex") hddrom (
+
+   rom #(8,8,"rtl/roms/hdd.hex") hddrom (
            .clock(CLK_14M),
            .ce(1'b1),
            .address(A[7:0]),
            .q(rom_dout)
    );
-
-
 endmodule
