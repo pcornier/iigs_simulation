@@ -58,7 +58,7 @@ module hdd(
     input [7:0]      D_IN;		// From 6502
     output reg [7:0] D_OUT;		// To 6502
     output reg       DMA;
-    output [15:0]    DMA_ADDR;
+    output reg [15:0] DMA_ADDR;
     output reg       DMA_WE;
     output [15:0]    sector;		// Sector number to read/write
     output reg       hdd_read;
@@ -132,13 +132,14 @@ module hdd(
     localparam ST_WR_HPS = 3'd6; // HPS writing to SD
 
     reg [2:0]  dma_state;
-    reg        dma_req;
     reg        dma_req_rd; // Read requested by CPU
     reg        dma_req_wr; // Write requested by CPU
+    reg [7:0]  a2_ram_din;
 
-    assign DMA_ADDR = {reg_mem_h, reg_mem_l} + {7'b0, a2_ram_addr};
+    //assign DMA_ADDR = {reg_mem_h, reg_mem_l} + {7'b0, a2_ram_addr};
 
     always @(posedge CLK_14M) begin: dma_proc
+        DMA_ADDR <= {reg_mem_h, reg_mem_l} + {7'b0, a2_ram_addr};
         case (dma_state)
           ST_IDLE: begin
               if (dma_req_rd) begin
@@ -151,6 +152,8 @@ module hdd(
                   dma_state <=  ST_WR_A2;
                   DMA <= 1'b1;
                   DMA_WE <= 1'b0;
+                  a2_ram_din <= D_IN;
+                  a2_ram_addr <= 9'd0;
                   a2_ram_we <= 1'b1;
               end
           end // case: ST_IDLE
@@ -159,7 +162,7 @@ module hdd(
               if (sd_ack[hdd_unit]) dma_state <= ST_RD_HPS;
           end
           ST_RD_HPS: begin
-              if (!sd_ack[hdd_unit]) begin
+              if (!sd_ack[hdd_unit] & phi0) begin
                   a2_ram_addr <= 9'd0;
                   dma_state <= ST_RD_A2;
                   DMA_WE <= 1'b1;
@@ -176,10 +179,11 @@ module hdd(
               end
           end
           ST_WR_A2: begin
-              //a2_ram_we <= 1'b0;
+              a2_ram_we <= 1'b0;
               if (phi0) begin
                   a2_ram_we <= 1'b1;
                   a2_ram_addr <= a2_ram_addr + 9'b1;
+                  a2_ram_din <= D_IN;
                   if (a2_ram_addr == 9'd511) begin
                       dma_state <= ST_WR_ACK;
                       hdd_write <= 1'b1;
@@ -211,7 +215,10 @@ module hdd(
             hdd_read <= 1'b0;
             hdd_write <= 1'b0;
             DMA <= 1'b0;
+            DMA_ADDR <= 16'h0000;
             DMA_WE <= 1'b0;
+            a2_ram_addr <=16'h000;
+            a2_ram_we <= 1'b0;
             // dma_req_rd reset by CPU interface
             // dma_req_wr reset by CPU interface
         end
@@ -444,9 +451,9 @@ bram #(.widthad_a(9)) sector_ram
         .q_a(sector_dma_q),
         // Port B: CPU NEXT BYTE (read-only)
         .clock_b(CLK_14M),
-        .wren_b(a2_ram_we & phi0),
+        .wren_b(a2_ram_we),
         .address_b(a2_ram_addr),
-        .data_b(D_IN),
+        .data_b(a2_ram_din),
         .q_b(sector_dout),
         // Enables (keep Port A always enabled; Port B read always enabled)
 `ifdef VERILATOR
