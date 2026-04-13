@@ -192,11 +192,14 @@ module iwm_woz (
     // Debug: track immediate_mode during status reads
     reg [7:0] prev_immediate_mode;
     reg       prev_cpu_rd;
+    reg [15:0] status_read_dbg_count;
+    reg [15:0] phase_access_dbg_count;
     always @(posedge CLK_14M) begin
-        // Log status reads where mode might be 0
-        if (cpu_rd && PH2 && immediate_q6 && !immediate_q7) begin
+        // Log status reads (capped — ROM polls these in tight loops)
+        if (cpu_rd && PH2 && immediate_q6 && !immediate_q7 && status_read_dbg_count < 16'd64) begin
             $display("IWM_WOZ: STATUS_READ mode_reg=%02h immediate_mode=%02h mode_write_active=%0d cpu_wr=%0d drive_on=%0d imm_q6=%0d imm_q7=%0d A=%04h D_IN=%02h",
                      mode_reg, immediate_mode, mode_write_active, cpu_wr, drive_on, immediate_q6, immediate_q7, A, D_IN);
+            status_read_dbg_count <= status_read_dbg_count + 1'd1;
         end
         // Log when mode_reg changes
         if (prev_immediate_mode != mode_reg) begin
@@ -292,18 +295,14 @@ module iwm_woz (
                 // Writing to phase 0-3 ($C0E0-$C0E7)
                 latched_sense_reg <= latched_immediate_phases[2:0];
 `ifdef SIMULATION
-                // Debug ALL phase accesses to trace command flow
-                $display("IWM_WOZ: PHASE_ACCESS A=%04h A31=%03b A0=%0d is_35=%0d drv_sel=%0d phases=%04b imm_phases=%04b",
-                         A, A[3:1], A[0], is_35_inch, drive_sel, motor_phase, immediate_phases);
+                // Debug ALL phase accesses to trace command flow (capped)
+                if (phase_access_dbg_count < 16'd128) begin
+                    $display("IWM_WOZ: PHASE_ACCESS A=%04h A31=%03b A0=%0d is_35=%0d drv_sel=%0d phases=%04b imm_phases=%04b",
+                             A, A[3:1], A[0], is_35_inch, drive_sel, motor_phase, immediate_phases);
+                    phase_access_dbg_count <= phase_access_dbg_count + 1'd1;
+                end
 `endif
             end
-`ifdef SIMULATION
-            // Debug: Log EVERY phase change access when motor is on
-            if (is_35_inch && motor_spinning && A[3:1] < 3'b100) begin
-                $display("IWM_WOZ: PHASE_SW addr=%04h A31=%03b A0=%0d phase[%0d]<=%0d (cur=%04b SEL=%0d)",
-                         A, A[3:1], A[0], A[3:1], A[0], motor_phase, diskreg_sel);
-            end
-`endif
 
             // Mode register write: see `is_mode_write_access` above.
             if (is_mode_write_access) begin

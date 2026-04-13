@@ -164,6 +164,9 @@ module flux_drive (
     reg [5:0]   bit_cell_cycles_reg;    // Per-bit-cell length (with fractional add)
     reg         prev_write_mode;        // For detecting write→read transitions
     reg         write_strobe_steal;     // WRITE_STROBE stole position advance from bit_timer
+`ifdef SIMULATION
+    reg [31:0]  flux_write_dbg_count;   // Cap for noisy partial-match debug output
+`endif
 
     // Track loading state
     reg [7:0]   current_track;          // Track currently in buffer
@@ -605,6 +608,9 @@ module flux_drive (
             WRITE_WE_OUT    <= 1'b0;
             WRITE_ADDR_OUT  <= 16'd0;
             write_count     <= 32'd0;
+`ifdef SIMULATION
+            flux_write_dbg_count <= 32'd0;
+`endif
         end else begin
             write_strobe_d1 <= WRITE_STROBE && WRITE_MODE && !WRITE_PROTECT && TRACK_LOADED;
             write_bit_d1    <= WRITE_BIT;
@@ -612,14 +618,18 @@ module flux_drive (
             write_addr_d1   <= BRAM_ADDR;    // Latch BRAM address at read time
 
 `ifdef SIMULATION
-            // Debug: log when write conditions are partially met
-            if (WRITE_STROBE && !write_strobe_d1) begin
+            // Debug: log when write conditions are partially met. Cap per-drive to
+            // avoid tens of millions of lines when FLUX_WRITE_STROBE gets stuck high
+            // during 5.25" read mode (a pre-existing iwm_flux bug unrelated to the
+            // write path we're debugging).
+            if (WRITE_STROBE && !write_strobe_d1 && flux_write_dbg_count < 32'd16) begin
                 if (!WRITE_MODE)
-                    $display("FLUX_WRITE_DBG[%0d]: STROBE but WRITE_MODE=0", DRIVE_ID);
+                    $display("FLUX_WRITE_DBG[%0d]: STROBE but WRITE_MODE=0 (n=%0d)", DRIVE_ID, flux_write_dbg_count);
                 else if (WRITE_PROTECT)
-                    $display("FLUX_WRITE_DBG[%0d]: STROBE but WRITE_PROTECT=1", DRIVE_ID);
+                    $display("FLUX_WRITE_DBG[%0d]: STROBE but WRITE_PROTECT=1 (n=%0d)", DRIVE_ID, flux_write_dbg_count);
                 else if (!TRACK_LOADED)
-                    $display("FLUX_WRITE_DBG[%0d]: STROBE but TRACK_LOADED=0", DRIVE_ID);
+                    $display("FLUX_WRITE_DBG[%0d]: STROBE but TRACK_LOADED=0 (n=%0d)", DRIVE_ID, flux_write_dbg_count);
+                flux_write_dbg_count <= flux_write_dbg_count + 1;
             end
 `endif
 

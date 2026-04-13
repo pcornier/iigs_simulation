@@ -1028,7 +1028,10 @@ module iigs
             12'h031: begin
               DISK35<= cpu_dout & 8'hc0;
 `ifdef SIMULATION
-              $display("IWM DBG: WR $C031 <= %02h (DISK35 bit6=%0d bit7=%0d)", cpu_dout, (cpu_dout>>6)&1'b1, (cpu_dout>>7)&1'b1);
+              // Only log when the value actually changes to avoid flooding the log
+              // (the ROM writes $C031 on every command boundary).
+              if ((cpu_dout & 8'hc0) != DISK35)
+                $display("IWM DBG: WR $C031 <= %02h (DISK35 bit6=%0d bit7=%0d)", cpu_dout, (cpu_dout>>6)&1'b1, (cpu_dout>>7)&1'b1);
 `endif
             end
             12'h032:

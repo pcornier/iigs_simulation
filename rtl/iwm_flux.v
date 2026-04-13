@@ -410,6 +410,14 @@ module iwm_flux (
     reg        data_trace_active;
     reg [5:0]  data_trace_count;
     localparam [5:0] DATA_TRACE_LIMIT = 6'd32;
+    // Cap the total number of prologue-triggered traces; after this many
+    // data-prologue events we stop activating new traces so the log stays readable.
+    reg [15:0] data_trace_total;
+    localparam [15:0] DATA_TRACE_TOTAL_LIMIT = 16'd8;
+    reg [15:0] gap_fill_dbg_count;
+    localparam [15:0] GAP_FILL_DBG_LIMIT = 16'd8;
+    reg [15:0] underrun_dbg_count;
+    localparam [15:0] UNDERRUN_DBG_LIMIT = 16'd16;
     reg [15:0] trace_byte_log_cnt;
     reg [15:0] trace_read_log_cnt;
     reg        dbg_seq_active;
@@ -546,6 +554,9 @@ module iwm_flux (
             hdr_trace_count <= 8'd0;
             data_trace_active <= 1'b0;
             data_trace_count <= 6'd0;
+            data_trace_total <= 16'd0;
+            gap_fill_dbg_count <= 16'd0;
+            underrun_dbg_count <= 16'd0;
             cpu_last1 <= 8'h00;
             cpu_last2 <= 8'h00;
             cpu_trace_active <= 1'b0;
@@ -828,11 +839,14 @@ module iwm_flux (
                             end
                             if (prolog_last2 == 8'hD5 && prolog_last1 == 8'hAA) begin
                                 if (shifted_rsh == 8'h96 || shifted_rsh == 8'hAD) begin
-                                    $display("IWM_PROLOG_OK: d5 aa %02h pos=%0d state=SR525 cycle=%0d",
-                                             shifted_rsh, DISK_BIT_POSITION, debug_cycle);
-                                    if (shifted_rsh == 8'hAD) begin
+                                    if (data_trace_total < DATA_TRACE_TOTAL_LIMIT) begin
+                                        $display("IWM_PROLOG_OK: d5 aa %02h pos=%0d state=SR525 cycle=%0d",
+                                                 shifted_rsh, DISK_BIT_POSITION, debug_cycle);
+                                    end
+                                    if (shifted_rsh == 8'hAD && data_trace_total < DATA_TRACE_TOTAL_LIMIT) begin
                                         data_trace_active <= 1'b1;
                                         data_trace_count <= 6'd0;
+                                        data_trace_total <= data_trace_total + 1'd1;
                                     end
                                 end
                             end
@@ -1567,18 +1581,40 @@ module iwm_flux (
                             FLUX_WRITE_STROBE <= 1'b0;
                             FLUX_WRITE <= 1'b0;
                         end else if (window_counter == 6'd1) begin
-                            if (write_bit_count == 3'd0 && !write_byte_available) begin
-                                // Underrun: full byte shifted out but no new CPU data written.
-                                // Don't replay the previous byte into the track. Real async 3.5"
-                                // writes can present the next byte on the boundary itself; if no
-                                // byte is actually available, stop and wait for restart.
+                            if (write_bit_count == 3'd0 && !write_byte_available && !IS_35_INCH && !is_async) begin
+                                // 5.25" sync mode underrun: keep the shift register running with
+                                // 0 bits shifted in. Real Disk II / IWM writes zero flux in the gap
+                                // cells between bytes, which is what produces the 10-bit self-sync
+                                // byte pattern (8 data bits + 2 gap bits with no flux). Previously
+                                // we went to SW_UNDERRUN which stopped shifting, leaving the gap
+                                // cells as stale BRAM data — this broke the reader's byte framing
+                                // since the self-sync shift register could never re-align on a
+                                // freshly-written sector.
+                                m_whd <= m_whd & 8'hBF;  // Signal underrun (clear bit6) to CPU
+                                m_wsh <= 8'h00;           // Shift out zero bits
+                                write_bit_count <= 3'd0;
+                                rw_state <= SW_WINDOW_MIDDLE;
+                                load_half_window();
+                                FLUX_WRITE_STROBE <= 1'b0;
+`ifdef SIMULATION
+                                if (gap_fill_dbg_count < GAP_FILL_DBG_LIMIT) begin
+                                    $display("IWM_FLUX: WRITE_GAP_FILL cycle=%0d data_gen=%0d (shifting 0s into gap)",
+                                             debug_cycle, current_write_gen);
+                                    gap_fill_dbg_count <= gap_fill_dbg_count + 1'd1;
+                                end
+`endif
+                            end else if (write_bit_count == 3'd0 && !write_byte_available) begin
+                                // 3.5"/async underrun: stop shifting (existing behavior).
                                 m_whd <= m_whd & 8'hBF;  // Clear WHD bit6 (underrun flag)
                                 rw_state <= SW_UNDERRUN;
                                 FLUX_WRITE_STROBE <= 1'b0;
                                 FLUX_WRITE <= 1'b0;
 `ifdef SIMULATION
-                                $display("IWM_FLUX: WRITE_UNDERRUN cycle=%0d data_gen=%0d (stopping)",
-                                         debug_cycle, current_write_gen);
+                                if (underrun_dbg_count < UNDERRUN_DBG_LIMIT) begin
+                                    $display("IWM_FLUX: WRITE_UNDERRUN cycle=%0d data_gen=%0d (stopping)",
+                                             debug_cycle, current_write_gen);
+                                    underrun_dbg_count <= underrun_dbg_count + 1'd1;
+                                end
 `endif
                             end else if (write_bit_count == 3'd0) begin
                                 // Byte boundary with new CPU data available:
@@ -1621,8 +1657,10 @@ module iwm_flux (
                             load_half_window();
                             FLUX_WRITE_STROBE <= 1'b0;
 `ifdef SIMULATION
-                            $display("IWM_FLUX: WRITE_RESTART from underrun cycle=%0d data=%02h gen=%0d",
-                                     debug_cycle, current_write_data, current_write_gen);
+                            if (underrun_dbg_count < UNDERRUN_DBG_LIMIT) begin
+                                $display("IWM_FLUX: WRITE_RESTART from underrun cycle=%0d data=%02h gen=%0d",
+                                         debug_cycle, current_write_data, current_write_gen);
+                            end
 `endif
                         end else begin
                             FLUX_WRITE_STROBE <= 1'b0;
