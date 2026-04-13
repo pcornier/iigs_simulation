@@ -127,9 +127,10 @@ module hdd(
     localparam ST_RD_ACK = 3'd1; // Wait for HPS DMA to start
     localparam ST_RD_HPS = 3'd2; // HPS reading from SD
     localparam ST_RD_A2  = 3'd3; // Writing A2 RAM
-    localparam ST_WR_A2  = 3'd4; // Reading A2 RAM
-    localparam ST_WR_ACK = 3'd5; // Wait for HPS DMA to start
-    localparam ST_WR_HPS = 3'd6; // HPS writing to SD
+    localparam ST_WR_PRE = 3'd4; // Synchronize to bus
+    localparam ST_WR_A2  = 3'd5; // Reading A2 RAM
+    localparam ST_WR_ACK = 3'd6; // Wait for HPS DMA to start
+    localparam ST_WR_HPS = 3'd7; // HPS writing to SD
 
     reg [2:0]  dma_state;
     reg        dma_req;
@@ -148,7 +149,7 @@ module hdd(
                   hdd_read <= 1'b1;
               end
               else if (dma_req_wr) begin
-                  dma_state <=  ST_WR_A2;
+                  dma_state <=  ST_WR_PRE;
                   DMA <= 1'b1;
                   DMA_WE <= 1'b0;
                   a2_ram_we <= 1'b1;
@@ -159,7 +160,7 @@ module hdd(
               if (sd_ack[hdd_unit]) dma_state <= ST_RD_HPS;
           end
           ST_RD_HPS: begin
-              if (!sd_ack[hdd_unit]) begin
+              if (!sd_ack[hdd_unit] & phi0) begin
                   a2_ram_addr <= 9'd0;
                   dma_state <= ST_RD_A2;
                   DMA_WE <= 1'b1;
@@ -174,6 +175,9 @@ module hdd(
                       DMA <= 1'b0;
                   end
               end
+          end
+          ST_WR_PRE: begin
+              if (phi0) dma_state <= ST_WR_A2;
           end
           ST_WR_A2: begin
               //a2_ram_we <= 1'b0;
@@ -193,7 +197,7 @@ module hdd(
           end
           ST_WR_HPS: begin
               hdd_write <= 1'b0;
-              if (!sd_ack[hdd_unit]) begin
+              if (!sd_ack[hdd_unit] & phi0) begin
                   dma_state <= ST_IDLE;
                   DMA <= 1'b0;
               end
