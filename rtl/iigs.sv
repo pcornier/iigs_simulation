@@ -78,13 +78,11 @@ module iigs
  
    // HDD control (supports 2 units - ProDOS limit)
   output [15:0] HDD_SECTOR,
-  output        HDD_READ,
-  output        HDD_WRITE,
-  output        HDD_UNIT,           // Which unit (0-1) is being accessed (from bit 7)
-  input  [1:0]  HDD_MOUNTED,        // Per-unit mounted status
-  input  [1:0]  HDD_PROTECT,        // Per-unit write protect
-  input [63:0]  HDD0_SIZE,
-  input [63:0]  HDD1_SIZE,
+  output [1:0]  HDD_READ,
+  output [1:0]  HDD_WRITE,
+  input [1:0]   HDD_MOUNTED,
+  input         img_readonly,
+  input [63:0]  img_size,
   input [8:0]   HDD_RAM_ADDR,
   input [7:0]   HDD_RAM_DI,
   output [7:0]  HDD_RAM_DO,
@@ -2590,13 +2588,11 @@ wire ready_out;
         .DMA_ADDR(hdd_dma_addr),
         .DMA_WE(hdd_dma_we),
         .sector(HDD_SECTOR),
-        .hdd_read(HDD_READ),
-        .hdd_write(HDD_WRITE),
-        .hdd_unit(HDD_UNIT),
-        .hdd_mounted(HDD_MOUNTED),
-        .hdd_protect(HDD_PROTECT),
-        .hdd0_size(HDD0_SIZE),
-        .hdd1_size(HDD1_SIZE),
+        .sd_rd(HDD_READ),
+        .sd_wr(HDD_WRITE),
+        .img_mounted(HDD_MOUNTED),
+        .img_readonly(img_readonly),
+        .img_size(img_size),
         .hps_ram_addr(HDD_RAM_ADDR),
         .ram_di(HDD_RAM_DI),
         .ram_do(HDD_RAM_DO),

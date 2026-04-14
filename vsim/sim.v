@@ -196,17 +196,15 @@ iigs  iigs(
         .VS(vsync),
         /* hard drive (supports 2 units - ProDOS limit) */
         .HDD_SECTOR(hdd_sector),
-        .HDD_READ(hdd_read),
-        .HDD_WRITE(hdd_write),
-        .HDD_UNIT(hdd_unit),
-        .HDD_MOUNTED(hdd_mounted),
-        .HDD_PROTECT(hdd_protect),
-        .HDD0_SIZE(hdd0_size),
-        .HDD1_SIZE(hdd1_size),
+        .HDD_READ({sd_rd[3], sd_rd[1]}),
+        .HDD_WRITE({sd_wr[3], sd_wr[1]}),
+        .HDD_MOUNTED({img_mounted[3], img_mounted[1]}),
+        .img_readonly(img_readonly),
+        .img_size(img_size),
         .HDD_RAM_ADDR(sd_buff_addr),
         .HDD_RAM_DI(sd_buff_dout),
         .HDD_RAM_DO(hdd_ram_do),
-        .HDD_RAM_WE(sd_buff_wr & hdd_ack),
+        .HDD_RAM_WE(sd_buff_wr & (sd_ack[3] | sd_ack[1])),
         .HDD_ACK({sd_ack[3], sd_ack[1]}),
 
     // Mounted-media bitmap to IWM (pad to 4 bits)
@@ -341,17 +339,6 @@ assign VGA_VB=vblank;
 
 // HARD DRIVE PARTS (supports 2 units - ProDOS limit)
 wire [15:0] hdd_sector;
-wire        hdd_unit;           // Which unit (0-1) is being accessed (from bit 7)
-
-// Per-unit mounted and protect status for 2 HDD units
-// Using img_mounted indices: [1]=unit0, [3]=unit1
-reg  [1:0] hdd_mounted = 2'b0;
-wire hdd_read;
-wire hdd_write;
-reg  [1:0] hdd_protect = 2'b0;
-reg [63:0] hdd0_size;
-reg [63:0] hdd1_size;
-reg  cpu_wait_hdd = 0;
 
 // HDD unit being served (latched when operation starts)
 reg hdd_active_unit = 1'b0;
@@ -362,123 +349,12 @@ assign sd_lba[3] = {16'b0, hdd_sector};  // Unit 1
 // sd_lba[4] driven by woz_ctrl_525
 // sd_lba[5] driven by woz_ctrl
 
-// Route sd_rd/sd_wr to the correct bit based on active unit
-reg  sd_rd_hd;
-reg  sd_wr_hd;
-assign sd_rd[1] = sd_rd_hd & (hdd_active_unit == 1'b0);
-assign sd_rd[3] = sd_rd_hd & (hdd_active_unit == 1'b1);
-// sd_rd[4] driven by woz_ctrl_525
-// sd_rd[5] driven by woz_ctrl
-assign sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b0);
-assign sd_wr[3] = sd_wr_hd & (hdd_active_unit == 1'b1);
-// sd_wr[4] driven by woz_ctrl_525
-// sd_wr[5] driven by woz_ctrl
-
-// Select the ack for the active unit
-wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[1] : sd_ack[3];
-
 // HDD RAM output - shared buffer routed to both HDD unit indices
 wire [7:0] hdd_ram_do;
 assign sd_buff_din[1] = hdd_ram_do;  // Unit 0
 assign sd_buff_din[3] = hdd_ram_do;  // Unit 1
 // sd_buff_din[4] driven by woz_ctrl_525
 // sd_buff_din[5] driven by woz_ctrl
-
-`ifdef SIMULATION
-// Debug counters to measure how long the CPU is stalled by HDD
-reg [31:0] hdd_wait_14m_cycles;
-reg [31:0] hdd_wait_events;
-`endif
-
-always @(posedge clk_sys) begin
-        reg old_ack ;
-        reg hdd_read_pending ;
-        reg hdd_write_pending ;
-        reg state;
-
-        old_ack <= hdd_ack;  // Use the muxed ack for active unit
-        hdd_read_pending <= hdd_read_pending | hdd_read;
-        hdd_write_pending <= hdd_write_pending | hdd_write;
-
-        // Latch hdd_unit when a new request arrives (before state machine picks it up)
-`ifdef SIMULATION
-        // Debug: show every time hdd_read or hdd_write pulses
-        if (hdd_read | hdd_write) begin
-                $display("HDD_SIM: Request pulse! hdd_unit=%0d hdd_read=%b hdd_write=%b state=%b hdd_read_pending=%b hdd_write_pending=%b hdd_active_unit=%0d",
-                         hdd_unit, hdd_read, hdd_write, state, hdd_read_pending, hdd_write_pending, hdd_active_unit);
-        end
-`endif
-        if ((hdd_read | hdd_write) & !state & !(hdd_read_pending | hdd_write_pending)) begin
-                hdd_active_unit <= hdd_unit;
-`ifdef SIMULATION
-                $display("HDD_SIM: LATCHING unit: hdd_unit=%0d -> hdd_active_unit", hdd_unit);
-`endif
-        end
-
-        // Handle HDD unit mounts (2 units mapped to img_mounted indices 1, 3)
-        if (img_mounted[1]) begin
-                hdd_mounted[0] <= img_size != 0;
-                hdd_protect[0] <= img_readonly;
-                hdd0_size <= img_size;
-        end
-        if (img_mounted[3]) begin
-                hdd_mounted[1] <= img_size != 0;
-                hdd_protect[1] <= img_readonly;
-                hdd1_size <= img_size;
-        end
-
-        if(reset) begin
-                state <= 0;
-                cpu_wait_hdd <= 0;
-                hdd_read_pending <= 0;
-                hdd_write_pending <= 0;
-                sd_rd_hd <= 0;
-                sd_wr_hd <= 0;
-`ifdef SIMULATION
-                hdd_wait_14m_cycles <= 0;
-                hdd_wait_events <= 0;
-`endif
-        end
-        else if(!state) begin
-                if (hdd_read_pending | hdd_write_pending) begin
-                        state <= 1;
-                        sd_rd_hd <= hdd_read_pending;
-                        sd_wr_hd <= hdd_write_pending;
-                        cpu_wait_hdd <= 1;
-`ifdef SIMULATION
-                        hdd_wait_events <= hdd_wait_events + 1;
-                        $display("HDD: cpu_wait asserted (read=%0d write=%0d) events=%0d t=%0t", hdd_read_pending, hdd_write_pending, hdd_wait_events+1, $time);
-`endif
-                end
-        end
-        else begin
-                if (~old_ack & hdd_ack) begin
-                        sd_rd_hd <= 0;
-                        sd_wr_hd <= 0;
-`ifdef SIMULATION
-                        $display("HDD: DMA ack rising (~old_ack -> ack) unit=%0d at t=%0t", hdd_active_unit, $time);
-`endif
-                end
-                else if(old_ack & ~hdd_ack) begin
-`ifdef SIMULATION
-                        $display("HDD: DMA ack falling (transfer complete) unit=%0d at t=%0t", hdd_active_unit, $time);
-`endif
-                        state <= 0;
-                        cpu_wait_hdd <= 0;
-                        hdd_read_pending <= 0;
-                        hdd_write_pending <= 0;
-`ifdef SIMULATION
-                        $display("HDD: cpu_wait deasserted; stalled cycles=%0d", hdd_wait_14m_cycles);
-                        hdd_wait_14m_cycles <= 0;
-`endif
-                end
-        end
-`ifdef SIMULATION
-        // Accumulate 14M cycles while CPU is waiting on HDD
-        if (cpu_wait_hdd) hdd_wait_14m_cycles <= hdd_wait_14m_cycles + 1;
-`endif
-end
-
 
 // Unused SD indices (formerly floppy_track_1 on index 0, floppy_track_2 on index 2)
 assign sd_lba[0] = 32'b0;
