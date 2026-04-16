@@ -2596,7 +2596,7 @@ wire ready_out;
         .hdd_mounted(HDD_MOUNTED),
         .hdd_protect(HDD_PROTECT),
         .hdd0_size(HDD0_SIZE),
-        .hdd1_size(HDD0_SIZE),
+        .hdd1_size(HDD1_SIZE),
         .hps_ram_addr(HDD_RAM_ADDR),
         .ram_di(HDD_RAM_DI),
         .ram_do(HDD_RAM_DO),
