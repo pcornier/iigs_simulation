@@ -566,6 +566,30 @@ always @(*) begin
         };
       end
     end
+    8'h26: begin  // $C026 - ADB Command/Data
+      if (rw) begin
+        case (state)
+          IDLE: begin
+            if (cmd_response_ready) begin
+              if (pending_data > 3'd0)
+                dout_comb_reg = 8'h80 | {5'd0, pending_data - 3'd1};
+              else
+                dout_comb_reg = 8'h80;
+            end else begin
+              dout_comb_reg = 8'h00;
+              if (pending_irq) dout_comb_reg = 8'b0001_0000;
+            end
+          end
+          DATA: dout_comb_reg = data[7:0];
+          default: dout_comb_reg = dout;
+        endcase
+`ifdef SIMULATION
+        if (strobe && cmd_response_ready)
+          $display("ADB C026_COMB: state=%0d rw=%d cmd_ready=%d pending=%d data[7:0]=%02h -> comb=%02h",
+                   state, rw, cmd_response_ready, pending_data, data[7:0], dout_comb_reg);
+`endif
+      end
+    end
     8'h00: begin  // $C000 - Keyboard data
       if (rw) begin
         dout_comb_reg = K;
@@ -1109,16 +1133,19 @@ always @(posedge CLK_14M) begin
               // Bits 2-0: Number of data bytes to return
               if (cmd_response_ready) begin
                 // Command completed - return response with bit 7 set
-                // Format: bit 7=response, bit 6=0, bits 5-4=0, bit 3=SRQ, bits 2-0=data count
+                // Format: bit 7=response, bits 2-0=(count-1) where count is # of data
+                // bytes to follow. Matches Clemens ADB protocol exactly.
                 if (pending_data > 3'd0) begin
-                  dout <= 8'h80 | {5'd0, pending_data};  // Response + data count
-                  // Transition IMMEDIATELY to DATA state on rising edge (like KEGS)
-                  // dout is already set above and won't change until next clock
-                  if (strobe & ~strobe_prev) begin
+                  dout <= 8'h80 | {5'd0, pending_data - 3'd1};
+                  // Transition to DATA on read strobe rising edge.
+                  // Gate on cen (phi2) so the header value is stable when CPU samples.
+                  // Also check addr=$26 to prevent C027 strobes from consuming the header.
+                  if (cen & strobe & ~strobe_prev & (addr == 8'h26)) begin
                     state <= DATA;
                     cmd_response_ready <= 1'b0;
-`ifdef DEBUG_ADB
-                    $display("ADB C026: returning 0x%02h, transitioning to DATA immediately", 8'h80 | {5'd0, pending_data});
+`ifdef SIMULATION
+                    $display("ADB C026 HEADER->DATA: returning 0x%02h pending=%d",
+                             8'h80 | {5'd0, pending_data - 3'd1}, pending_data);
 `endif
                   end
                 end else begin
@@ -1285,6 +1312,35 @@ always @(posedge CLK_14M) begin
                   end
                 end
                 8'h73: ; // disable SRQ on mouse
+                // IIgs GLU device commands: high nibble = op, low nibble = device.
+                // $F0-$FF: POLL register 3 (handler ID) — 2 bytes.
+                // Clemens decodes this way; Apple IIgs ROM sends $F2 to probe the
+                // keyboard handler ID during boot.
+                8'hF0, 8'hF1, 8'hF2, 8'hF3, 8'hF4, 8'hF5, 8'hF6, 8'hF7,
+                8'hF8, 8'hF9, 8'hFA, 8'hFB, 8'hFC, 8'hFD, 8'hFE, 8'hFF: begin
+`ifdef SIMULATION
+                  $display("ADB POLL_R3 cmd=%02h dev=%d", din, din[3:0]);
+`endif
+                  if (din[3:0] == 4'd2) begin
+                    // Keyboard register 3: handler ID (low byte first, then high)
+                    // Clemens default keyb_reg[3] = $2202 → returns $02 then $22
+                    data <= { 16'd0, 8'h22, 8'h02 };
+                    pending_data <= 3'd2;
+                    cmd_response_ready <= 1'b1;
+                    state <= IDLE;
+                  end else if (din[3:0] == 4'd3) begin
+                    // Mouse register 3: handler ID
+                    data <= { 16'd0, 8'h63, 8'h03 };
+                    pending_data <= 3'd2;
+                    cmd_response_ready <= 1'b1;
+                    state <= IDLE;
+                  end else begin
+                    // Unknown device: empty response
+                    cmd_response_ready <= 1'b1;
+                    pending_data <= 3'd0;
+                    state <= IDLE;
+                  end
+                end
                 default: begin
 `ifdef DEBUG_ADB
                   $display("ADB WRITE C026 DEFAULT: din=0x%02h, cmd=0x%02h, din>=0x10=%d, din[1:0]=%b, state=%d", din, cmd, (din >= 8'h10), din[1:0], state);

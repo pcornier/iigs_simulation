@@ -105,9 +105,19 @@ static bool monitor_trap_fired = false;
 static bool loader_entry_trap_fired = false;
 static int loader_ifetch_trace_budget = 0;
 
+// Stack-write recorder for the window between DBB9 call 8 and call 9.
+// Enabled at call 8, disabled at call 9. Writes to any stack location in
+// bank 0 get recorded, then dumped at call 9 entry.
+static bool stk_rec_enabled = false;
+struct StkWrite { unsigned short pc; unsigned char pbr; unsigned short addr; unsigned char data; unsigned char ir; unsigned short sp; };
+static const int STK_REC_CAP = 65536;
+static StkWrite stk_rec[STK_REC_CAP];
+static int stk_rec_count = 0;
+static int dbb9_hit_count = 0;
+
 // Ring buffer of recent instruction fetches (for postmortem at monitor entry)
-struct IfetchEntry { unsigned short pc; unsigned char pbr; unsigned char ir; };
-static const int IFETCH_RING_CAP = 128;
+struct IfetchEntry { unsigned short pc; unsigned char pbr; unsigned char ir; unsigned short sp; unsigned short x; };
+static const int IFETCH_RING_CAP = 2048;
 static IfetchEntry ifetch_ring[IFETCH_RING_CAP];
 static int ifetch_wptr = 0;
 
@@ -115,6 +125,17 @@ static inline void ifetch_ring_record(unsigned char pbr, unsigned short pc, unsi
     ifetch_ring[ifetch_wptr].pbr = pbr;
     ifetch_ring[ifetch_wptr].pc = pc;
     ifetch_ring[ifetch_wptr].ir = ir;
+    ifetch_ring[ifetch_wptr].sp = 0;
+    ifetch_ring[ifetch_wptr].x = 0;
+    ifetch_wptr = (ifetch_wptr + 1) & (IFETCH_RING_CAP - 1);
+}
+
+static inline void ifetch_ring_record2(unsigned char pbr, unsigned short pc, unsigned char ir, unsigned short sp, unsigned short x) {
+    ifetch_ring[ifetch_wptr].pbr = pbr;
+    ifetch_ring[ifetch_wptr].pc = pc;
+    ifetch_ring[ifetch_wptr].ir = ir;
+    ifetch_ring[ifetch_wptr].sp = sp;
+    ifetch_ring[ifetch_wptr].x = x;
     ifetch_wptr = (ifetch_wptr + 1) & (IFETCH_RING_CAP - 1);
 }
 
@@ -1223,6 +1244,32 @@ int verilate() {
 
                     // Track memory accesses
                     if (vda && we) {
+                        // Stack-window recorder: log every write in bank 00 to
+                        // the $0100..$1FFF range while enabled
+                        if (stk_rec_enabled && bank == 0x00 && addr16 >= 0x0100 && addr16 <= 0x1FFF) {
+                            if (stk_rec_count < STK_REC_CAP) {
+                                stk_rec[stk_rec_count].pc = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                stk_rec[stk_rec_count].pbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                stk_rec[stk_rec_count].addr = addr16;
+                                stk_rec[stk_rec_count].data = dout;
+                                stk_rec[stk_rec_count].ir = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                                stk_rec[stk_rec_count].sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                stk_rec_count++;
+                            }
+                        }
+                        // ADB command writes: log every write to $C026/C027 (any bank)
+                        // Narrow to PBR=FC (where the ADB command-send code lives)
+                        if ((addr16 == 0xC026 || addr16 == 0xC027) &&
+                            (VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR == 0xFC)) {
+                            static int adb_w_count = 0;
+                            if (adb_w_count < 400) {
+                                adb_w_count++;
+                                unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                printf("ADB_W #%d: bank=%02X $%04X <- %02X at %02X:%04X frame=%d\n",
+                                       adb_w_count, bank, addr16, dout, pbr_now, pc_now, video.count_frame);
+                            }
+                        }
                         // Memory write - add MVN debug for Language Card area
                         if ((bank >= 0xFC || bank == 0x00) && addr16 >= 0xBF00) {
 							debug_mvn_area = true;
@@ -1317,6 +1364,18 @@ int verilate() {
 								   dout, bank, addr16);
 						}
                     } else if (vda && !we) {
+                        // ADB $C026/C027 reads from PBR=FC (command-send code)
+                        if ((addr16 == 0xC026 || addr16 == 0xC027) &&
+                            (VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR == 0xFC)) {
+                            static int adb_r_count = 0;
+                            if (adb_r_count < 400) {
+                                adb_r_count++;
+                                unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                                unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                                printf("ADB_R #%d: bank=%02X $%04X -> %02X at %02X:%04X frame=%d\n",
+                                       adb_r_count, bank, addr16, din, pbr_now, pc_now, video.count_frame);
+                            }
+                        }
                         // Memory read - add timing debug for $BF00
                         if (bank == 0x00 && addr16 == 0xBF00) {
 							debug_bf00_timing = true;
@@ -1935,6 +1994,83 @@ int verilate() {
                                 bank_seen[pbr_now_bk] = true;
                                 printf("BANK_FIRST_EXEC: bank %02X at PC=%04X frame=%d\n",
                                        pbr_now_bk, pc_now_bk, video.count_frame);
+                                // Dump full postmortem for unexpected banks
+                                unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                                unsigned short d = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+                                unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                                unsigned short y = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                printf("  REGS: A=%04X X=%04X Y=%04X P=%02X SP=%04X D=%04X DBR=%02X\n",
+                                       a, x, y, p, sp, d, dbr);
+                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                printf("  STK@SP: ");
+                                for (int i = -2; i <= 16; i++) {
+                                    unsigned short saddr = (sp + i) & 0xFFFF;
+                                    printf("%04X=%02X%s", saddr, fr[saddr], i==0?"* ":" ");
+                                }
+                                printf("\n");
+                                printf("  STK 17C0-17E8: ");
+                                for (int saddr = 0x17C0; saddr <= 0x17E8; saddr++) {
+                                    printf("%04X=%02X ", saddr, fr[saddr]);
+                                }
+                                printf("\n");
+                                // Check how much of bank 17 has ever been touched (nonzero)
+                                if (pbr_now_bk == 0x17) {
+                                    int nonzero = 0, first_nz = -1, last_nz = -1;
+                                    for (int addr17 = 0x170000; addr17 <= 0x17FFFF; addr17++) {
+                                        if (fr[addr17] != 0) {
+                                            nonzero++;
+                                            if (first_nz < 0) first_nz = addr17;
+                                            last_nz = addr17;
+                                        }
+                                    }
+                                    printf("  BANK17_NONZERO: %d bytes, range %06X..%06X\n",
+                                           nonzero, first_nz, last_nz);
+                                    // Dump bytes around $17:D000 specifically
+                                    printf("  BANK17 $17CF00-$17D020: ");
+                                    for (int a = 0x17CFF0; a <= 0x17D020; a++) {
+                                        printf("%02X ", fr[a]);
+                                    }
+                                    printf("\n");
+                                }
+                                // IRQ save area $E1:0108-011C (slow ram)
+                                uint8_t* sr = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
+                                printf("  IRQ_SAVE E1:0108-011F: ");
+                                for (int i = 0x0108; i <= 0x011F; i++) {
+                                    printf("%02X ", sr[0x10000 + i]);
+                                }
+                                printf("\n");
+                                // Tool-set dispatch vector table at E1:03C0..03FF
+                                // Each tool set: 4 bytes (usually long-pointer or handle)
+                                printf("  TS_VECTORS E1:03C0..03FF (4 bytes per tool set, sets 00..0F):\n  ");
+                                for (int ts = 0; ts < 16; ts++) {
+                                    printf("[%02X]=%02X%02X%02X%02X ", ts,
+                                           sr[0x10000 + 0x03C0 + ts*4 + 0],
+                                           sr[0x10000 + 0x03C0 + ts*4 + 1],
+                                           sr[0x10000 + 0x03C0 + ts*4 + 2],
+                                           sr[0x10000 + 0x03C0 + ts*4 + 3]);
+                                    if (ts == 7) printf("\n  ");
+                                }
+                                printf("\n  TS_VECTORS E1:0400..043F (sets 10..1F):\n  ");
+                                for (int ts = 16; ts < 32; ts++) {
+                                    printf("[%02X]=%02X%02X%02X%02X ", ts,
+                                           sr[0x10000 + 0x03C0 + ts*4 + 0],
+                                           sr[0x10000 + 0x03C0 + ts*4 + 1],
+                                           sr[0x10000 + 0x03C0 + ts*4 + 2],
+                                           sr[0x10000 + 0x03C0 + ts*4 + 3]);
+                                    if (ts == 23) printf("\n  ");
+                                }
+                                printf("\n");
+                                printf("RECENT IFETCHES (oldest first):\n");
+                                int idx2 = ifetch_wptr;
+                                for (int i = 0; i < IFETCH_RING_CAP; i++) {
+                                    int j = (idx2 + i) & (IFETCH_RING_CAP - 1);
+                                    printf("  %02X:%04X IR=%02X SP=%04X X=%04X\n",
+                                           ifetch_ring[j].pbr, ifetch_ring[j].pc, ifetch_ring[j].ir,
+                                           ifetch_ring[j].sp, ifetch_ring[j].x);
+                                }
                             }
                         }
 
@@ -3626,7 +3762,106 @@ int verilate() {
                         if (vpa && nextstate == 1) {
                             unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                             unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                            ifetch_ring_record(pbr_now, pc_now, (unsigned char)din);
+                            unsigned short sp_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+                            unsigned short x_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+                            ifetch_ring_record2(pbr_now, pc_now, (unsigned char)din, sp_now, x_now);
+                            // Snapshot every FC:DBB9 call (9 total expected)
+                            if (pbr_now == 0xFC && pc_now == 0xDBB9) {
+                                unsigned short d_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
+                                unsigned short y_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+                                unsigned short a_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+                                unsigned char dbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
+                                dbb9_hit_count++;
+                                printf("DBB9_HIT #%d: SP=%04X D=%04X X=%04X Y=%04X A=%04X DBR=%02X frame=%d\n",
+                                       dbb9_hit_count, sp_now, d_now, x_now, y_now, a_now, dbr_now, video.count_frame);
+                                if (dbb9_hit_count == 8) {
+                                    stk_rec_enabled = true;
+                                    stk_rec_count = 0;
+                                    printf("STK_REC: enabled at DBB9 #8\n");
+                                }
+                                if (dbb9_hit_count == 9) {
+                                    stk_rec_enabled = false;
+                                    printf("STK_REC: dumping %d entries (window between calls 8 and 9)\n", stk_rec_count);
+                                    for (int i = 0; i < stk_rec_count; i++) {
+                                        printf("STK %06d: [00:%04X] <- %02X  pc=%02X:%04X ir=%02X sp=%04X\n",
+                                               i, stk_rec[i].addr, stk_rec[i].data,
+                                               stk_rec[i].pbr, stk_rec[i].pc,
+                                               stk_rec[i].ir, stk_rec[i].sp);
+                                    }
+                                    printf("STK_REC: dump complete\n");
+                                }
+                            }
+                            // Bank-02 nonzero census at first bank-17 touch — sanity check
+                            // that the game has written *somewhere* (is it alive at all?)
+                            {
+                                static bool b2_reported = false;
+                                if (!b2_reported && pbr_now == 0x17) {
+                                    b2_reported = true;
+                                    uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    for (int b = 0x02; b <= 0x20; b++) {
+                                        int nz = 0, first = -1, last = -1;
+                                        for (int o = 0; o < 0x10000; o++) {
+                                            if (fr[(b<<16)|o] != 0) {
+                                                nz++;
+                                                if (first < 0) first = o;
+                                                last = o;
+                                            }
+                                        }
+                                        if (nz > 0) {
+                                            printf("BANK_CENSUS %02X: %d nonzero bytes, $%02X:%04X..$%02X:%04X\n",
+                                                   b, nz, b, first, b, last);
+                                        }
+                                    }
+                                }
+                            }
+                            // Bank-17 first-write tracer: snapshot the whole bank and log
+                            // every time a byte in bank 17 transitions from 00 to nonzero
+                            // (or from nonzero to a different nonzero). Keep a short log.
+                            {
+                                static uint8_t bank17_shadow[0x10000];
+                                static bool bank17_init = false;
+                                static int bank17_writes_logged = 0;
+                                static int bank17_writes_total = 0;
+                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* bank17 = fr + 0x170000;
+                                if (!bank17_init) {
+                                    memcpy(bank17_shadow, bank17, 0x10000);
+                                    bank17_init = true;
+                                }
+                                // Only scan occasionally to keep cost down — scan every 64 ifetches
+                                static int scan_counter = 0;
+                                if ((++scan_counter & 0x3F) == 0) {
+                                    for (int off = 0; off < 0x10000; off++) {
+                                        if (bank17[off] != bank17_shadow[off]) {
+                                            bank17_writes_total++;
+                                            if (bank17_writes_logged < 40) {
+                                                bank17_writes_logged++;
+                                                printf("BANK17_WRITE #%d: $17:%04X %02X->%02X at near %02X:%04X SP=%04X frame=%d\n",
+                                                       bank17_writes_total, off,
+                                                       bank17_shadow[off], bank17[off],
+                                                       pbr_now, pc_now, sp_now, video.count_frame);
+                                            }
+                                            bank17_shadow[off] = bank17[off];
+                                        }
+                                    }
+                                }
+                            }
+                            // Watch $17E2..$17E4 — log when 17E4 becomes $17 specifically
+                            {
+                                static unsigned char prev_17e4 = 0;
+                                static bool prev_init = false;
+                                static int watch_hits = 0;
+                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                unsigned char v4 = fr[0x17E4];
+                                if (!prev_init) { prev_17e4 = v4; prev_init = true; }
+                                if (v4 != prev_17e4 && v4 == 0x17 && watch_hits < 20) {
+                                    watch_hits++;
+                                    printf("STK_WATCH #%d (17E4->17): 17E2=%02X 17E3=%02X 17E4=%02X  at %02X:%04X IR=%02X SP=%04X frame=%d\n",
+                                           watch_hits, fr[0x17E2], fr[0x17E3], fr[0x17E4],
+                                           pbr_now, pc_now, (unsigned)din & 0xFF, sp_now, video.count_frame);
+                                }
+                                prev_17e4 = v4;
+                            }
                         }
 
                         // HDD event ring for C0F0-C0FF accesses (bank 00 only)

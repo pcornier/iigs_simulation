@@ -2060,6 +2060,16 @@ wire [7:0] din =
 
   // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
   wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
+`ifdef SIMULATION
+  // Debug: log every C026 read showing what cpu_din resolves to
+  always @(posedge CLK_14M) begin
+    if (phi2 && ~we && addr_bef[7:0] == 8'h26 && addr_bef[15:8] == 8'hC0 &&
+        (bank_bef == 8'h00 || bank_bef == 8'h01 || bank_bef == 8'hE0 || bank_bef == 8'hE1)) begin
+      $display("C026_MUX: IO=%b adb_read=%b adb_dout=%02h io_dout=%02h din=%02h -> cpu_din=%02h  bank=%02h",
+               IO, adb_read, adb_dout, io_dout, din, cpu_din, bank_bef);
+    end
+  end
+`endif
 
   // DEBUG: Track what cpu_din is when CPU actually samples (phi2 high)
   always @(posedge CLK_14M) begin
