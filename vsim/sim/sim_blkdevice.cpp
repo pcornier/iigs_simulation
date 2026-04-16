@@ -1,3 +1,5 @@
+#include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <queue>
 #include <string>
@@ -147,15 +149,38 @@ void SimBlockDevice::BeforeEval(int cycles)
 
     // issue a mount if we aren't doing anything, and the img_mounted has no bits set
     if (!reading && !writing && mountQueue[i] && !*img_mounted) {
-            const size_t extrabytes = disk_size[i] % kBLKSZ;
-            if (disk_size[i] >= (kBLKSZ + 64) && extrabytes == 64) {
-                    char hdr[4];
+            // 2IMG/.2mg parse: read the 64-byte header if the "2IMG" magic is present
+            // and use its data_offset/data_length fields directly. This correctly
+            // handles images with trailing comment or creator chunks after the data.
+            // Layout (all little-endian): bytes 0-3 magic, 8-9 header length (=64),
+            // 24-27 data_offset, 28-31 data_length.
+            if (disk_size[i] >= 64) {
+                    unsigned char hdr[64];
                     disk[i].seekg(0);
-                    disk[i].read(hdr, 4);
-                    if (!memcmp(hdr, "2IMG", 4)) {
-                            fprintf(stderr, "Detected \"2IMG\" signature; adjusting sizes\n");
-                            header_size[i] = 64;
-                            disk_size[i] -= header_size[i];
+                    disk[i].read((char *)hdr, 64);
+                    if (disk[i] && !memcmp(hdr, "2IMG", 4)) {
+                            uint16_t hdr_len    = (uint16_t)hdr[8]  | ((uint16_t)hdr[9]  << 8);
+                            uint32_t data_off   = (uint32_t)hdr[24] | ((uint32_t)hdr[25] << 8)
+                                                | ((uint32_t)hdr[26] << 16) | ((uint32_t)hdr[27] << 24);
+                            uint32_t data_len   = (uint32_t)hdr[28] | ((uint32_t)hdr[29] << 8)
+                                                | ((uint32_t)hdr[30] << 16) | ((uint32_t)hdr[31] << 24);
+                            uint32_t block_cnt  = (uint32_t)hdr[20] | ((uint32_t)hdr[21] << 8)
+                                                | ((uint32_t)hdr[22] << 16) | ((uint32_t)hdr[23] << 24);
+                            if (hdr_len != 64 || data_off < 64 ||
+                                (long)(data_off + data_len) > disk_size[i]) {
+                                    fprintf(stderr, "2IMG header looks malformed (hdr_len=%u "
+                                                    "data_off=%u data_len=%u file=%ld); "
+                                                    "skipping header adjustment\n",
+                                                    hdr_len, data_off, data_len,
+                                                    disk_size[i]);
+                            } else {
+                                    // data_len can be 0 for ProDOS images -- derive from block_count
+                                    if (data_len == 0) data_len = block_cnt * kBLKSZ;
+                                    fprintf(stderr, "Detected \"2IMG\" (data_off=%u data_len=%u)\n",
+                                                    data_off, data_len);
+                                    header_size[i] = data_off;
+                                    disk_size[i]   = data_len;
+                            }
                     }
             }
            printf("BLKDEV: Mounting drive %d, img_size=%ld, header_offset=%ld\n", i, disk_size[i], header_size[i]);
