@@ -551,9 +551,11 @@ module iigs
         // Banks E0/E1: Shadow memory - always SLOWRAM
         8'hE0, 8'hE1: begin
           slowram_ce_int = 1;
+`ifdef DEBUG_CURCYL
           if (we && addr_bef == 16'h0F3A)
             $display("E0E1_CURCYL_WRITE: bank=%02x addr=%04x data=%02x addr_bus=%06x aux=%b cpu_addr=%06x",
                      bank_bef, addr_bef, cpu_dout, addr_bus, aux, cpu_addr);
+`endif
 `ifdef DEBUG_IO
           if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
             $display("SLOWRAM_DIRECT: bank%02x addr=%04x data=%02x we=%b slowram_addr=%05x bank[0]=%b addr_bus=%06x -> SLOWRAM",
@@ -923,7 +925,9 @@ module iigs
 
     // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & ~we & phi2) begin
+`ifdef DEBUG_IWM
       $display("read_iwm %x ret: %x GC036: %x (addr %x) addr_bef(%x)",addr[11:0],iwm_dout,CYAREG,addr,addr_bef);
+`endif
       io_dout <= iwm_dout;
     end
     iwm_strobe <= 1'b0;
@@ -1036,7 +1040,7 @@ module iigs
             12'h030: begin SPKR <= dout; if (phi2) speaker_state <= ~speaker_state; end
             12'h031: begin
               DISK35<= dout & 8'hc0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
               // Only log when the value actually changes to avoid flooding the log
               // (the ROM writes $C031 on every command boundary).
               if ((dout & 8'hc0) != DISK35)
@@ -1296,7 +1300,7 @@ module iigs
             12'h046: begin
               // Return interrupt flags directly from irq_pending (bits 3=VBL, 4=QSEC, 0=aggregator)
               io_dout <= irq_pending[7:0];
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
               if (frame_count >= 118 && frame_count <= 138) begin
                 $display("FRAME_DEBUG[%0d]: READ C046 -> %02h (INTEN=%02h cpu_irq=%0d snd=%0d VBL=%0d QSEC=%0d SCC=%0d)",
                          frame_count, irq_pending[7:0], INTEN, cpu_irq, snd_irq,
@@ -1383,7 +1387,7 @@ module iigs
               vgc_1sec_pending = (VGCINT[6] & VGCINT[2]);
               vgc_any_pending = (vgc_scan_pending | vgc_1sec_pending);
               io_dout <= {vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, 2'b00, VGCINT[2], VGCINT[1], 1'b0};
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
               $display("READ C023 (VGC IRQ ctrl/status): any=%0d 1sec_pend=%0d scan_pend=%0d en1s=%0d ensl=%0d RAW_VGCINT=%02x -> %02h",
                        vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, VGCINT[2], VGCINT[1], VGCINT, io_dout);
 `endif
@@ -1405,7 +1409,7 @@ module iigs
             // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
             12'h032: begin
               io_dout <= VGCINT;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
               $display("READ C032 (no side-effect): VGCINT=%02h", VGCINT);
 `endif
             end
@@ -1483,13 +1487,13 @@ module iigs
             // Joystick/Paddle I/O
             12'h061: begin
               io_dout <= {sw0, 7'b0000000};                      // SW0/Open Apple (bit 7: 1=pressed)
-`ifdef SIMULATION
+`ifdef DEBUG_JOYSTICK
               $display("JOYSTICK: Read button 1 ($C061) = $%02X (sw0=%d, open_apple=%d, joystick_0[4]=%d)", {sw0, 7'b0000000}, sw0, open_apple, joystick_0[4]);
 `endif
             end
             12'h062: begin
               io_dout <= {sw1, 7'b0000000};                      // SW1/Closed Apple (bit 7: 1=pressed)
-`ifdef SIMULATION
+`ifdef DEBUG_JOYSTICK
               $display("JOYSTICK: Read button 2 ($C062) = $%02X (sw1=%d, closed_apple=%d, joystick_0[5]=%d)", {sw1, 7'b0000000}, sw1, closed_apple, joystick_0[5]);
 `endif
             end
@@ -1778,7 +1782,7 @@ module iigs
     if (scanline_irq) begin
       // always set the status bit
       VGCINT[5] <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
       $display("VGC scanline_irq: set VGCINT[5]=1 (enable=%0d)", VGCINT[1]);
 `endif
       if (VGCINT[1]) // if it is enabled, set the bit
@@ -1790,7 +1794,7 @@ module iigs
     if (onesecond_irq & VGCINT[2]) begin
       VGCINT[6]<=1'b1;
       VGCINT[7]<=1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
       $display("VGC 1-second irq: set VGCINT[6]=1");
 `endif
     end
@@ -1824,7 +1828,7 @@ module iigs
   // CPU interrupt output
   wire cpu_irq;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
   // Trace sound IRQ line transitions and cpu_irq composition to verify behavior
   reg snd_irq_d;
   reg cpu_irq_d;
@@ -2060,7 +2064,7 @@ wire [7:0] din =
 
   // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
   wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
   // Debug: log every C026 read showing what cpu_din resolves to
   always @(posedge CLK_14M) begin
     if (phi2 && ~we && addr_bef[7:0] == 8'h26 && addr_bef[15:8] == 8'hC0 &&
@@ -2095,7 +2099,7 @@ wire [7:0] din =
   // - Trace writes to ROM-installed IRQ vector pointers in E1 bank
   // - Trace writes to $00:7000 used by ROM selftests to signal ISR ran
   // ----------------------------------------------------------------------------
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
   always @(posedge CLK_14M) begin
     // IRQ/BRK vectors in emulation and native mode
     if (~we) begin
@@ -2170,7 +2174,7 @@ wire ready_out;
   wire cpu_irq_n = ~cpu_irq;
   reg cpu_irq_n_d;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
   reg [23:0] cpu_addr_d;
   reg cpu_vpb_d;
 
@@ -2227,7 +2231,7 @@ wire ready_out;
   reg       irq3_prev = 1'b0;
   reg       inten3_prev = 1'b0;  // track rising edge of VBL enable
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
   // Frame counter for debugging (increments on VBL pulse)
   reg [15:0] frame_count = 0;
   reg vgc_vbl_irq_pulse_d = 0;
@@ -2255,7 +2259,7 @@ wire ready_out;
       vbl_started <= 1'b0;
       interrupt_clear_pulse <= 1'b0;
       inten3_prev <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
       frame_count <= 16'h0000;
       vgc_vbl_irq_pulse_d <= 1'b0;
       snd_irq_prev <= 1'b0;
@@ -2265,7 +2269,7 @@ wire ready_out;
 `endif
     end else begin
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
       // Increment frame counter on VBL pulse
       vgc_vbl_irq_pulse_d <= vgc_vbl_irq_pulse;
       if (vgc_vbl_irq_pulse && !vgc_vbl_irq_pulse_d) begin
@@ -2280,7 +2284,7 @@ wire ready_out;
       // Reference emulators (Clemens, GSplus) clear VBL/QSEC on both read and write operations
       if (IO && phi2 && (addr_bef[11:0] == 12'h047)) begin
         interrupt_clear_pulse <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         if (we) begin
           $display("IRQ_MANAGER: C047 clear request processed (write)");
         end else begin
@@ -2296,7 +2300,7 @@ wire ready_out;
       // 1. VBL pulse from VGC (normal case - once per frame at V=199)
       if (vgc_vbl_irq_pulse && INTEN[3]) begin
         irq_pending[3] <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         if (frame_count >= 118 && frame_count <= 138) begin
           $display("FRAME_DEBUG[%0d]: VBL interrupt set (V=%0d, INTEN[3]=1)", frame_count, V);
         end else begin
@@ -2311,7 +2315,7 @@ wire ready_out;
       if (cpu_vpa && cpu_vda && (cpu_addr[23:0] == 24'hFEFC3A)) begin
         if (INTEN[3] && VBlank && !irq_pending[3]) begin
           irq_pending[3] <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
           $display("ISR_LATCH_VBL: Set VBL pending at ISR entry (VBlank=1, INTEN3=1)");
 `endif
         end
@@ -2328,7 +2332,7 @@ wire ready_out;
       qtrsecond_irq_d <= qtrsecond_irq;
       if ((qtrsecond_irq & ~qtrsecond_irq_d) && INTEN[4]) begin
         irq_pending[4] <= 1'b1;  // Set quarter-second interrupt pending
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         if (frame_count >= 118 && frame_count <= 138) begin
           $display("FRAME_DEBUG[%0d]: QSEC interrupt set (INTEN[4]=1)", frame_count);
         end else begin
@@ -2356,13 +2360,13 @@ wire ready_out;
       
       // Interrupt clearing (C047 write)
       if (interrupt_clear_pulse) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         $display("INTERRUPTS: Before clear: INTEN=%02h INTFLAG=%02h VGCINT=%02h V=%0d H=%0d", INTEN, INTFLAG, VGCINT, V, H);
 `endif
         irq_pending[3] <= 1'b0;  // Clear VBL interrupt
         irq_pending[4] <= 1'b0;  // Clear quarter-second interrupt
         interrupt_clear_pulse <= 1'b0;  // Auto-clear the pulse after one cycle
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         $display("INTERRUPTS: Cleared VBL and QSEC flags via C047 write");
 `endif
       end
@@ -2373,7 +2377,7 @@ wire ready_out;
       inten3_prev <= INTEN[3];
 
       // Debug: track VBL pending transitions explicitly
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
       if (irq_pending[3] != irq3_prev) begin
         $display("IRQ_DEBUG: VBL pending %0d -> %0d at V=%0d H=%0d INTEN=%02h", irq3_prev, irq_pending[3], V, H, INTEN);
         irq3_prev <= irq_pending[3];

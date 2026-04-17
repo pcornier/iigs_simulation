@@ -190,7 +190,7 @@ module iwm_woz (
     wire mode_write_active = bus_wr && !iwm_active && immediate_q7 && immediate_q6 && bus_addr[0];
     wire [7:0] immediate_mode = mode_write_active ? {3'b000, bus_din[4:0]} : mode_reg;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     // Debug: track immediate_mode during status reads
     reg [7:0] prev_immediate_mode;
     reg       prev_cpu_rd;
@@ -265,7 +265,7 @@ module iwm_woz (
             // sampled bus indicates a write to offset $F. Repeated captures are harmless.
             if (cpu_access_edge && bus_wr && !iwm_active && (bus_addr == 4'hF)) begin
                 mode_reg <= {3'b000, bus_din[4:0]};
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_WOZ: MODE_REG <= %02h (robust wr, D_IN=%02h A=%01h)", {3'b000, bus_din[4:0]}, bus_din, bus_addr);
 `endif
             end
@@ -282,7 +282,7 @@ module iwm_woz (
                     3'b100: drive_on      <= bus_addr[0];  // $C0E8/$C0E9: Motor
                     3'b101: begin
                         drive_sel     <= bus_addr[0];  // $C0EA/$C0EB: Drive select
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("IWM_WOZ: DRIVE_SEL %0d -> %0d (A=%04h is_35=%0d)", drive_sel, bus_addr[0], A, is_35_inch);
 `endif
                     end
@@ -296,7 +296,7 @@ module iwm_woz (
             if (bus_addr[3:1] < 3'b100) begin
                 // Writing to phase 0-3 ($C0E0-$C0E7)
                 latched_sense_reg <= latched_immediate_phases[2:0];
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 // Debug ALL phase accesses to trace command flow (capped)
                 if (phase_access_dbg_count < 16'd128) begin
                     $display("IWM_WOZ: PHASE_ACCESS A=%04h A31=%03b A0=%0d is_35=%0d drv_sel=%0d phases=%04b imm_phases=%04b",
@@ -309,12 +309,12 @@ module iwm_woz (
             // Mode register write: see `is_mode_write_access` above.
             if (is_mode_write_access) begin
                 mode_reg <= {3'b000, D_IN[4:0]};
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_WOZ: MODE_REG <= %02h (D_IN=%02h q6=%0d q7=%0d)", {3'b000, D_IN[4:0]}, D_IN, write_mode_q6, write_mode_q7);
 `endif
             end
 
-`ifdef SIMULATION
+`ifdef DEBUG_IWM
             // Debug: Show Q6/Q7 changes for tracking soft switch state
             if (A[3:1] == 3'b110) begin
                 $display("IWM_WOZ: Q6 <= %0d (addr=%04h is_35=%0d)", A[0], A, is_35_inch);
@@ -405,7 +405,7 @@ module iwm_woz (
                         motor_spinning <= 1'b1;
                         motor_spinup_done <= 1'b1;
                         motor_counter <= SPINDOWN_TIME;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("IWM_WOZ: Motor spinup complete, motor_spinning=1");
 `endif
                     end else begin
@@ -578,7 +578,7 @@ module iwm_woz (
             // the selected side, filtering all command-sequence HDSEL toggles.
             if (iwm_data_reg_read && (stable_side_reg != diskreg_sel)) begin
                 stable_side_reg <= diskreg_sel;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_WOZ: HEAD_SELECT update (data-read gated) old=%0d new=%0d bitpos=%0d",
                          stable_side_reg, diskreg_sel, drive35_bit_position);
 `endif
@@ -597,7 +597,7 @@ module iwm_woz (
     assign WOZ_TRACK3 = woz_track3_comb;
     assign WOZ_TRACK3_BIT_ADDR = drive35_bram_addr;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     // Debug: track diskreg_sel changes to detect oscillation bug
     reg prev_diskreg_sel;
     reg [6:0] prev_drive35_track;
@@ -995,7 +995,7 @@ module iwm_woz (
         if (RESET)
             drive_sense_reg <= 1'b1;
         else begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             if (drive_sense != drive_sense_reg)
                 $display("SENSE_REG_TRANS: %0d->%0d ssr=%h ilsr=%03b flux35=%0d ds=%0d dsw=%0d mode=%02h t=%0t",
                          drive_sense_reg, drive_sense, sense_status_reg, immediate_latched_sense_reg,
@@ -1182,7 +1182,7 @@ module iwm_woz (
     // Used by woz_floppy_controller to trigger dirty track flush on motor-off
     assign FLOPPY35_MOTOR_ON = drive35_motor_spinning;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     // Debug: Monitor state changes
     reg [3:0] prev_phase;
     reg       prev_drive_on;

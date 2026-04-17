@@ -136,7 +136,7 @@ module woz_track (
                 9'd7: meta_byte7 <= sd_buff_dout;
                 default: ; // Other bytes are track data
             endcase
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             if (sd_buff_addr < 9'd8) begin
                 $display("WOZ_TRACK: Metadata byte[%0d] = %02h", sd_buff_addr, sd_buff_dout);
             end
@@ -153,7 +153,7 @@ module woz_track (
             sd_rd <= 0;
             track_bit_count <= 32'd0;
             track_byte_count <= 32'd0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             $display("WOZ_TRACK: change -> mount_pending=%0d", mount);
 `endif
         end else if (reset) begin
@@ -177,7 +177,7 @@ module woz_track (
                     // Reconstruct 32-bit little-endian values from captured bytes
                     track_bit_count <= {meta_byte3, meta_byte2, meta_byte1, meta_byte0};
                     track_byte_count <= {meta_byte7, meta_byte6, meta_byte5, meta_byte4};
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("WOZ_TRACK: Block 0 loaded, bit_count=%0d byte_count=%0d",
                              {meta_byte3, meta_byte2, meta_byte1, meta_byte0},
                              {meta_byte7, meta_byte6, meta_byte5, meta_byte4});
@@ -189,14 +189,14 @@ module woz_track (
                     lba <= lba + 1'd1;
                     rel_lba <= rel_lba + 1'd1;
                     sd_rd <= 1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("WOZ_TRACK: Loading block %0d (LBA=%0d)", rel_lba + 1, lba + 1);
 `endif
                 end else begin
                     // Track loading complete
                     busy <= 0;
                     ready <= mount_pending;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("WOZ_TRACK: Track %0d load complete, ready=%0d", cur_track, mount_pending);
 `endif
                 end
@@ -215,7 +215,7 @@ module woz_track (
                 busy <= 1;
                 sd_rd <= 1;
                 ready <= 0;  // Mark not ready during load
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("WOZ_TRACK: Starting load track=%0d side=%0d LBA=%0d",
                          track, side, {17'b0, side, track, 5'b0});
 `endif
@@ -223,7 +223,7 @@ module woz_track (
         end
     end
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     // Debug: monitor bit access
     reg [13:0] prev_bit_addr;
     always @(posedge clk) begin

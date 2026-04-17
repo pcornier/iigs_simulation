@@ -1160,26 +1160,36 @@ end
 	always@(posedge clk or posedge reset) begin
 		if (reset) begin
 			tx_empty_latch_a <= 1'b1;  // Reset: transmitter is empty
+`ifdef DEBUG_SCC
 			$display("SCC_LATCH: tx_empty_latch_a <= 1 (hardware reset)");
+`endif
 		end else if (reset_a) begin
 			tx_empty_latch_a <= 1'b1;  // Channel reset: transmitter is empty
+`ifdef DEBUG_SCC
 			$display("SCC_LATCH: tx_empty_latch_a <= 1 (channel reset)");
+`endif
     end else begin
         // Combinational detect of ADATA write (channel A data port)
         // Clear TXEMPTY immediately on ADATA write
         if (cs && we && rs[1] && rs[0]) begin
             tx_empty_latch_a <= 1'b0;
+`ifdef DEBUG_SCC
             $display("SCC_LATCH: tx_empty_latch_a <= 0 (ADATA write) baud_divid=%d WR4=%02x WR12=%02x WR13=%02x WR14=%02x", baud_divid_speed_a, wr4_a, wr12_a, wr13_a, wr14_a);
+`endif
         end
         // Also clear if writing explicit WR8 via control path
         if (cep && (wreg_a && rindex_latch == 8)) begin
             tx_empty_latch_a <= 1'b0;
+`ifdef DEBUG_SCC
             $display("SCC_LATCH: tx_empty_latch_a <= 0 (WR8 write)");
+`endif
         end
         // Set on TX complete (busy 1->0) independent of bus activity
         if (tx_busy_a_r == 1'b1 && tx_busy_a == 1'b0) begin
             tx_empty_latch_a <= 1'b1;
+`ifdef DEBUG_SCC
             $display("SCC_SERIAL_OUT: ch=A byte=%02x time=%0t", tx_data_a, $time);
+`endif
         end
     end
 	end

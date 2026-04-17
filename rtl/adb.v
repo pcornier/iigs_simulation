@@ -583,7 +583,7 @@ always @(*) begin
           DATA: dout_comb_reg = data[7:0];
           default: dout_comb_reg = dout;
         endcase
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         if (strobe && cmd_response_ready)
           $display("ADB C026_COMB: state=%0d rw=%d cmd_ready=%d pending=%d data[7:0]=%02h -> comb=%02h",
                    state, rw, cmd_response_ready, pending_data, data[7:0], dout_comb_reg);
@@ -764,7 +764,7 @@ always @(posedge CLK_14M) begin
     // PS/2 keyboard event processing
     // MiSTer toggles bit 10 on every key press/release - if toggle changed, it's a valid new event
     if (ps2_key[10] != ps2_key_toggle_prev) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
       $display("ADB: PS2 KEY EVENT: key=%03h down=%0d", ps2_key[8:0], ps2_key[9]);
 `endif
       
@@ -825,7 +825,7 @@ always @(posedge CLK_14M) begin
 
         if (temp_apple_key != 8'h7F) begin
           if (ps2_key[9]) begin  // Key pressed (not released)
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             $display("ADB: PS2 KEY DOWN: PS2=%03h Apple=%02h", ps2_key[8:0], temp_apple_key);
 `endif
             temp_iie_char = adb_to_apple_iie_ascii(
@@ -865,7 +865,7 @@ always @(posedge CLK_14M) begin
             end
           end else begin
             // Key released
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             $display("ADB: PS2 KEY UP: PS2=%03h (held=%03h held_flag=%0d)", ps2_key[8:0], held_ps2_key, ps2_key_held);
 `endif
             // Stop repeat if this was the held PS/2 key
@@ -1143,7 +1143,7 @@ always @(posedge CLK_14M) begin
                   if (cen & strobe & ~strobe_prev & (addr == 8'h26)) begin
                     state <= DATA;
                     cmd_response_ready <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("ADB C026 HEADER->DATA: returning 0x%02h pending=%d",
                              8'h80 | {5'd0, pending_data - 3'd1}, pending_data);
 `endif
@@ -1318,7 +1318,7 @@ always @(posedge CLK_14M) begin
                 // keyboard handler ID during boot.
                 8'hF0, 8'hF1, 8'hF2, 8'hF3, 8'hF4, 8'hF5, 8'hF6, 8'hF7,
                 8'hF8, 8'hF9, 8'hFA, 8'hFB, 8'hFC, 8'hFD, 8'hFE, 8'hFF: begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                   $display("ADB POLL_R3 cmd=%02h dev=%d", din, din[3:0]);
 `endif
                   if (din[3:0] == 4'd2) begin
@@ -1732,7 +1732,7 @@ always @(posedge CLK_14M) begin
               K <= {1'b1, held_iie_char[6:0]};
               c025[3] <= 1'b1;
               repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
               $display("ADB REPEAT: char=%02h at hz60=%d next_target=%d", held_iie_char, hz60_count, hz60_count + {8'd0, repeat_rate_vbl});
 `endif
             end

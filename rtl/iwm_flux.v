@@ -23,7 +23,7 @@
 
 // Enable byte offset debugging - tracks first D5 prologue position
 // Uncomment the following line to enable:
-`define DEBUG_BYTE_OFFSET
+//`define DEBUG_BYTE_OFFSET
 
 // EXPERIMENT: Allow EDGE_1 flux edges at the shift boundary to be latched
 // for the next bit-cell. This can eliminate a 1-bit slip if a flux edge
@@ -37,9 +37,10 @@
 
 // For simulator builds that already use `+define+debug=1`, enable a limited
 // sector/prologue trace without needing to edit this file per-run.
-`ifdef debug
-`define IWM_SECTOR_TRACE
-`endif
+// IWM_SECTOR_TRACE is opt-in; uncomment to enable sector-tracking stats
+//`ifdef debug
+//`define IWM_SECTOR_TRACE
+//`endif
 
 module iwm_flux (
     // Global signals
@@ -392,7 +393,7 @@ module iwm_flux (
     reg [7:0]  prolog_last1;  // Most recent completed byte (for prolog detection)
     reg [7:0]  prolog_last2;  // Second most recent completed byte
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     reg [31:0] debug_cycle;
     reg [31:0] sp_write_log_cnt;  // SmartPort write debug log counter
     reg [31:0] byte_counter;  // Sequential byte counter for comparison with MAME
@@ -524,7 +525,7 @@ module iwm_flux (
             SP_WR_STROBE       <= 1'b0;
             SP_WR_DATA         <= 8'h00;
             SP_RD_STROBE       <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             sp_write_log_cnt   <= 32'd0;
 `endif
             clear_rsh_pending   <= 1'b0;
@@ -533,14 +534,14 @@ module iwm_flux (
             sr525_flux_seen <= 1'b0;
             sync_run_count <= 4'd0;
             sync_resync_done <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             trace_byte_log_cnt <= 16'd0;
             trace_read_log_cnt <= 16'd0;
 `endif
             prev_byte_completing_dbg <= 1'b0;
             prolog_last1 <= 8'h00;
             prolog_last2 <= 8'h00;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             debug_cycle    <= 32'd0;
             byte_counter   <= 32'd0;
             bytes_read_counter <= 32'd0;
@@ -586,7 +587,7 @@ module iwm_flux (
             dbg_flux_count_after_idle <= 8'd0;
 `endif
         end else begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             debug_cycle <= debug_cycle + 1;
 `endif
             // Track byte_completing edges for DEBUG_BYTE_VALID
@@ -600,7 +601,7 @@ module iwm_flux (
             if (track_wrap_detected) begin
                 full_window_frac <= 10'd0;
                 half_window_frac <= 10'd0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_FLUX: TRACK_WRAP_RESET prev_pos=%0d cur_pos=%0d - resetting fractional accumulators",
                          prev_disk_bit_position, DISK_BIT_POSITION);
 `endif
@@ -614,7 +615,7 @@ module iwm_flux (
             if (clear_rsh_pending) begin
                 clear_rsh_pending <= 1'b0;
                 m_rsh <= 8'h00;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 if (byte_counter < 20) begin
                     $display("IWM_FLUX: RSH_CLEAR by clear_rsh_pending (was %02h)", m_rsh);
                 end
@@ -634,7 +635,7 @@ module iwm_flux (
                 rw_state <= S_IDLE;
                 sr525_timer <= SR525_BIT_CELL;
                 sr525_flux_seen <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_FLUX: Entering READ mode, m_data <= 0x00");
 `endif
             end else if (MOTOR_ACTIVE && m_motor_was_on && m_rw_mode && !SW_Q7_MODE) begin
@@ -646,7 +647,7 @@ module iwm_flux (
                 rw_state <= S_IDLE;
                 FLUX_WRITE <= 1'b0;
                 FLUX_WRITE_STROBE <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_FLUX: Switching to READ mode, m_data <= 0x00");
 `endif
             end else if (MOTOR_ACTIVE && SW_Q7_MODE && !m_rw_mode && !smartport_mode) begin
@@ -667,7 +668,7 @@ module iwm_flux (
                 write_data_gen <= m_data_gen;  // Match current gen so S_IDLE waits for new CPU write
                 FLUX_WRITE <= 1'b0;
                 FLUX_WRITE_STROBE <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_FLUX: Entering WRITE mode cycle=%0d mode=%02h async=%0d data_gen=%0d",
                          debug_cycle, SW_MODE, is_async, m_data_gen);
 `endif
@@ -681,7 +682,7 @@ module iwm_flux (
                 if (!MOTOR_SPINNING) begin
                     rw_state <= S_IDLE;
                 end
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("IWM_FLUX: Motor off, m_whd <= %02h (cleared bit 6) spin=%0d", m_whd & 8'hBF, MOTOR_SPINNING);
 `endif
             end
@@ -695,7 +696,7 @@ module iwm_flux (
 
             // Always track flux edges at 14M (so we don't miss any)
             prev_flux <= FLUX_TRANSITION;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             if (flux_edge && DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230 &&
                 flux_edge_log_count < 8) begin
                 $display("IWM_FLUX_EDGE pos=%0d state=%0d win=%0d frac=%0d seen=%0d",
@@ -708,7 +709,7 @@ module iwm_flux (
                 latch_hold_cnt <= 4'd0;
             end else if ((shift_edge0_now || shift_edge1_now) && latch_hold_cnt != 4'd0) begin
                 latch_hold_cnt <= latch_hold_cnt - 1'd1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 if ((DISK_BIT_POSITION >= 17'd7135) && (DISK_BIT_POSITION <= 17'd7205) &&
                     latch_hold_cnt == 4'd1) begin
                     $display("IWM_LATCH_END: pos=%0d m_data=%02h m_data_read=%0d",
@@ -724,7 +725,7 @@ module iwm_flux (
             if (flux_edge && (rw_state == SR_WINDOW_EDGE_1) &&
                 ((window_counter != 6'd1) || latch_edge1_boundary)) begin
                 flux_seen <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 // Debug: trace flux edges as they arrive at IWM
                 if (byte_counter < 100) begin
                     $display("IWM_FLUX: FLUX_EDGE #%0d pos=%0d state=%0d win=%0d rsh=%02h",
@@ -760,7 +761,7 @@ module iwm_flux (
                     (m_data_gen == async_clear_gen)) begin
                     if (!latch_hold_active) begin
                         m_data <= 8'h00;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("IWM_FLUX: ASYNC_CLEAR_CONTINUOUS m_data %02h -> 00 (cycle=%0d tick=%0d deadline=%0d gen=%0d)",
                                  m_data, debug_cycle, async_tick_14m, async_update_deadline, m_data_gen);
 `endif
@@ -794,7 +795,7 @@ module iwm_flux (
             // MAME's IWM clocks at 7M but processes flux at exact arrival times.
             // vsim must run at 14M to avoid timing quantization that causes
             // byte boundary drift. Window values are doubled to compensate.
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             if (state_machine_ok != prev_sm_active) begin
                 $display("IWM_FLUX: State machine %s (MOTOR_SPINNING=%0d DISK_READY=%0d pos=%0d byte_cnt=%0d rsh=%02h state=%0d win=%0d frac=%0d)",
                          state_machine_ok ? "ACTIVE" : "IDLE",
@@ -827,7 +828,7 @@ module iwm_flux (
                             // Byte complete - update data register and prologue tracking
                             prolog_last2 <= prolog_last1;
                             prolog_last1 <= shifted_rsh;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             byte_counter <= byte_counter + 1;
                             if (data_trace_active) begin
                                 $display("IWM_DATA_TRACE_BYTE: idx=%0d pos=%0d data=%02h",
@@ -902,7 +903,7 @@ module iwm_flux (
                             FLUX_WRITE_STROBE <= 1'b0;
                             rw_state <= SW_WINDOW_MIDDLE;
                             load_half_window();
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("IWM_FLUX: START_WRITE cycle=%0d m_data=%02h mode=%02h gen=%0d",
                                      debug_cycle, current_write_data, SW_MODE, current_write_gen);
 `endif
@@ -944,7 +945,7 @@ module iwm_flux (
                         // Reset fractional accumulators to sync with flux_drive
                         full_window_frac <= 10'd0;
                         half_window_frac <= 10'd0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("IWM_FLUX: START_READ cycle=%0d win=%0d flux_timer=%0d mode=%02h (synced to flux_drive)",
                                  debug_cycle, (FLUX_BIT_TIMER > 6'd0 && FLUX_BIT_TIMER <= base_full_window) ? FLUX_BIT_TIMER : base_full_window,
                                  FLUX_BIT_TIMER, SW_MODE);
@@ -967,7 +968,7 @@ module iwm_flux (
                             if (dbg_waiting_first_flux) begin
                                 dbg_waiting_first_flux <= 1'b0;
                                 dbg_first_flux_win <= window_counter;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 dbg_first_flux_cycle <= debug_cycle;
                                 $display("BYTE_OFFSET_FIRST_FLUX: window_counter=%0d pos=%0d cycle=%0d (flux #%0d since S_IDLE)",
                                          window_counter, DISK_BIT_POSITION, debug_cycle, dbg_flux_count_after_idle + 1);
@@ -978,7 +979,7 @@ module iwm_flux (
                             $display("IWM_FLUX: EDGE_0->EDGE_1 flux pos=%0d win=%0d half=%0d",
                                      DISK_BIT_POSITION, base_full_window, base_half_window);
 `endif
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
                                 $display("IWM_EDGE0_HIT pos=%0d cyc=%0d win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d rsh=%02h",
                                          DISK_BIT_POSITION, debug_cycle, window_counter, full_window_frac, half_window_frac,
@@ -995,7 +996,7 @@ module iwm_flux (
                             $display("IWM_FLUX: SHIFT bit=0 rsh=%02h->%02h state=EDGE_0 endw=%0d",
                                      m_rsh, {m_rsh[6:0], 1'b0}, window_counter);
 `endif
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
                                 $display("IWM_SHIFT0 pos=%0d cyc=%0d rsh=%02h->%02h win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
                                          DISK_BIT_POSITION, debug_cycle, m_rsh, {m_rsh[6:0], 1'b0},
@@ -1042,7 +1043,7 @@ module iwm_flux (
                                     end
                                     prolog_last2 <= prolog_last1;
                                     prolog_last1 <= shifted_rsh;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                     if (prolog_last1 == 8'hD5 && shifted_rsh != 8'hAA) begin
                                         $display("IWM_PROLOG_BAD: d5 %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
                                                  shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
@@ -1160,7 +1161,7 @@ module iwm_flux (
                                             $display("IWM_FLUX: *** BYTE LOST #%0d *** OVERRUN overwriting unread m_data=%02h with %02h (completed=%0d read=%0d) @cycle=%0d",
                                                      bytes_lost_counter + 1, m_data, shifted_rsh, byte_counter + 1, bytes_read_counter, debug_cycle);
 `else
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                             if (bytes_lost_counter < 16) begin
                                                 $display("IWM_FLUX: *** BYTE LOST #%0d *** m_data=%02h new=%02h pos=%0d cycle=%0d",
                                                          bytes_lost_counter + 1, m_data, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
@@ -1189,7 +1190,7 @@ module iwm_flux (
                                             full_window_frac <= 10'd0;
                                             half_window_frac <= 10'd0;
                                             sync_resync_done <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                             $display("IWM_RESYNC_SYNC_RUN: pos=%0d sync_cnt=%0d flux_timer=%0d",
                                                      DISK_BIT_POSITION, sync_run_count + 1'd1, FLUX_BIT_TIMER);
 `endif
@@ -1217,7 +1218,7 @@ module iwm_flux (
                                         // Matches MAME's iwm.cpp behavior.
                                         m_rsh <= 8'h00;
                                     end
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                     if (byte_counter < 50) begin
                                         $display("IWM_FLUX: BYTE_COMPLETE(E0) #%0d assigning m_data<=%02h (prev=%02h rsh=%02h)",
                                                  byte_counter, shifted_rsh, m_data, m_rsh);
@@ -1237,7 +1238,7 @@ module iwm_flux (
                                         dbg_byte_history[dbg_history_idx] <= shifted_rsh;
                                         dbg_history_idx <= dbg_history_idx + 1;
                                         // Log first 20 bytes after motor start
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                         if (dbg_first_byte_count < 20) begin
                                             $display("BYTE_OFFSET: byte[%0d] = 0x%02X at pos=%0d cycle=%0d",
                                                      dbg_first_byte_count, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
@@ -1247,7 +1248,7 @@ module iwm_flux (
                                         if (shifted_rsh == 8'hD5) begin
                                             dbg_first_d5_found <= 1'b1;
                                             dbg_first_d5_position <= DISK_BIT_POSITION;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                             dbg_first_d5_cycle <= debug_cycle;
                                             $display("BYTE_OFFSET: *** FIRST D5 FOUND *** at byte[%0d] pos=%0d cycle=%0d",
                                                      dbg_first_byte_count, DISK_BIT_POSITION, debug_cycle);
@@ -1284,7 +1285,7 @@ module iwm_flux (
                             $display("IWM_FLUX: SHIFT bit=1 rsh=%02h->%02h state=EDGE_1 endw=%0d",
                                      m_rsh, {m_rsh[6:0], 1'b1}, window_counter);
 `endif
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             if (DISK_BIT_POSITION >= 17'd70190 && DISK_BIT_POSITION <= 17'd70230) begin
                                 $display("IWM_SHIFT1 pos=%0d cyc=%0d rsh=%02h->%02h win=%0d frac=%0d hfrac=%0d state=%0d flux_edge=%0d flux_seen=%0d",
                                          DISK_BIT_POSITION, debug_cycle, m_rsh, {m_rsh[6:0], 1'b1},
@@ -1331,7 +1332,7 @@ module iwm_flux (
                                     end
                                     prolog_last2 <= prolog_last1;
                                     prolog_last1 <= shifted_rsh;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                     if (prolog_last1 == 8'hD5 && shifted_rsh != 8'hAA) begin
                                         $display("IWM_PROLOG_BAD: d5 %02h pos=%0d win=%0d frac=%0d state=%0d q6=%0d q7=%0d cycle=%0d",
                                                  shifted_rsh, DISK_BIT_POSITION, window_counter, full_window_frac,
@@ -1471,7 +1472,7 @@ module iwm_flux (
                                             full_window_frac <= 10'd0;
                                             half_window_frac <= 10'd0;
                                             sync_resync_done <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                             $display("IWM_RESYNC_SYNC_RUN: pos=%0d sync_cnt=%0d flux_timer=%0d",
                                                      DISK_BIT_POSITION, sync_run_count + 1'd1, FLUX_BIT_TIMER);
 `endif
@@ -1498,7 +1499,7 @@ module iwm_flux (
                                         // Matches MAME's iwm.cpp behavior.
                                         m_rsh <= 8'h00;
                                     end
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                     if (byte_counter < 50) begin
                                         $display("IWM_FLUX: BYTE_COMPLETE(E1) #%0d assigning m_data<=%02h (prev=%02h rsh=%02h)",
                                                  byte_counter, shifted_rsh, m_data, m_rsh);
@@ -1517,7 +1518,7 @@ module iwm_flux (
                                         dbg_first_byte_count <= dbg_first_byte_count + 1;
                                         dbg_byte_history[dbg_history_idx] <= shifted_rsh;
                                         dbg_history_idx <= dbg_history_idx + 1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                         if (dbg_first_byte_count < 20) begin
                                             $display("BYTE_OFFSET: byte[%0d] = 0x%02X at pos=%0d cycle=%0d (E1)",
                                                      dbg_first_byte_count, shifted_rsh, DISK_BIT_POSITION, debug_cycle);
@@ -1526,7 +1527,7 @@ module iwm_flux (
                                         if (shifted_rsh == 8'hD5) begin
                                             dbg_first_d5_found <= 1'b1;
                                             dbg_first_d5_position <= DISK_BIT_POSITION;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                             dbg_first_d5_cycle <= debug_cycle;
                                             $display("BYTE_OFFSET: *** FIRST D5 FOUND (E1) *** at byte[%0d] pos=%0d cycle=%0d",
                                                      dbg_first_byte_count, DISK_BIT_POSITION, debug_cycle);
@@ -1596,7 +1597,7 @@ module iwm_flux (
                                 rw_state <= SW_WINDOW_MIDDLE;
                                 load_half_window();
                                 FLUX_WRITE_STROBE <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 if (gap_fill_dbg_count < GAP_FILL_DBG_LIMIT) begin
                                     $display("IWM_FLUX: WRITE_GAP_FILL cycle=%0d data_gen=%0d (shifting 0s into gap)",
                                              debug_cycle, current_write_gen);
@@ -1609,7 +1610,7 @@ module iwm_flux (
                                 rw_state <= SW_UNDERRUN;
                                 FLUX_WRITE_STROBE <= 1'b0;
                                 FLUX_WRITE <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 if (underrun_dbg_count < UNDERRUN_DBG_LIMIT) begin
                                     $display("IWM_FLUX: WRITE_UNDERRUN cycle=%0d data_gen=%0d (stopping)",
                                              debug_cycle, current_write_gen);
@@ -1656,7 +1657,7 @@ module iwm_flux (
                             rw_state <= SW_WINDOW_MIDDLE;
                             load_half_window();
                             FLUX_WRITE_STROBE <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             if (underrun_dbg_count < UNDERRUN_DBG_LIMIT) begin
                                 $display("IWM_FLUX: WRITE_RESTART from underrun cycle=%0d data=%02h gen=%0d",
                                          debug_cycle, current_write_data, current_write_gen);
@@ -1676,7 +1677,7 @@ module iwm_flux (
 
             // Reset state when motor stops or disk removed
             if (!state_machine_ok) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 if (byte_counter > 0 && prev_sm_active && (rw_state != S_IDLE || full_window_frac != 0)) begin
                     $display("IWM_FLUX: *** STATE_RESET *** byte_cnt=%0d pos=%0d rsh=%02h state=%0d->IDLE win=%0d frac=%0d->0 spin=%0d ready=%0d",
                              byte_counter, DISK_BIT_POSITION, m_rsh, rw_state, window_counter, full_window_frac, MOTOR_SPINNING, DISK_READY);
@@ -1724,7 +1725,7 @@ module iwm_flux (
             // SmartPort write capture: route data writes to SmartPort device
             SP_WR_STROBE <= 1'b0; // Default: no strobe
             SP_RD_STROBE <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Debug: log ALL writes to Q6=1,Q7=1 when motor is active (both SP and non-SP)
             if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE) begin
                 if (sp_write_log_cnt < 32'd200) begin
@@ -1737,7 +1738,7 @@ module iwm_flux (
             if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE && smartport_mode) begin
                 SP_WR_STROBE <= 1'b1;
                 SP_WR_DATA <= DATA_IN;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("SP_DEV_WR: data=%02h mode=%02h", DATA_IN, SW_MODE);
 `endif
             end
@@ -1759,7 +1760,7 @@ module iwm_flux (
                 // In sync mode, CPU writes go directly into the shift register
                 if (!is_async && m_rw_mode)
                     m_wsh <= DATA_IN;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 if (m_rw_mode)
                     $display("IWM_FLUX: DATA_WRITE cycle=%0d data=%02h gen=%0d mode=%02h async=%0d rw=%0d",
                              debug_cycle, DATA_IN, m_data_gen + 1, SW_MODE, is_async, m_rw_mode);
@@ -1819,7 +1820,7 @@ module iwm_flux (
                         // FIX: Use gen captured at access START, not current gen which may have
                         // been incremented by a byte completing during this access cycle.
                         async_clear_gen <= access_gen_latched;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         if ((DISK_BIT_POSITION >= 17'd7100) && (DISK_BIT_POSITION <= 17'd7200)) begin
                             $display("IWM_ASYNC_SCHED: pos=%0d tick=%0d deadline=%0d data=%02h q6=%0d q7=%0d",
                                      DISK_BIT_POSITION, async_tick_14m, async_tick_14m + ASYNC_CLEAR_DELAY_14M,
@@ -1847,7 +1848,7 @@ module iwm_flux (
                                 latch_hold_cnt <= 4'd0; // Stop latch hold once CPU has consumed the byte.
                             end
                         end
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         if (rd_ack_take) begin
                             if (cpu_force_trace_start) begin
                                 cpu_trace_active <= 1'b1;
@@ -1956,7 +1957,7 @@ module iwm_flux (
                 access_data_valid <= 1'b1;
             end
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Track m_data changes - this runs at end of clock cycle after all assignments
             // Using non-blocking assignment for prev_m_data means we compare current m_data
             // against previous clock cycle's value
@@ -2064,7 +2065,7 @@ module iwm_flux (
     // SmartPort: REQ is CA1 (phases[1])
     assign SP_REQ = SW_PHASES[1];
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     // Debug: log register reads (only on CEN/PH2 to log once per CPU access)
     reg [31:0] debug_win_count;
     always @(posedge CLK_14M) begin

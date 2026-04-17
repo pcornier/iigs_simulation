@@ -124,7 +124,7 @@ module woz_floppy_controller #(
     // Per-side dirty flags (track which side was modified by IWM writes)
     reg         dirty_side0;
     reg         dirty_side1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     reg [31:0]  bit_we_count;
 `endif
     // Per-side track location metadata (for correct save-back to WOZ file)
@@ -402,7 +402,7 @@ module woz_floppy_controller #(
 	            dirty_side0 <= 0;
 	            dirty_side1 <= 0;
 	            dirty_flush_timer <= 24'd0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 bit_we_count <= 0;
 `endif
             current_track_id_side0 <= 8'hFF;
@@ -584,7 +584,7 @@ module woz_floppy_controller #(
                     dirty_side1 <= 1;
                 else
                     dirty_side0 <= 1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 // Log dirty transitions (always) and first/periodic writes
                 if (!dirty_side0 && !(IS_35_INCH && track_id[0]))
                     $display("WOZ_DIRTY_SET[%0d]: side0 now dirty, bit_we_count=%0d track_id=%0d state=%0d bram_b=%04X",
@@ -708,7 +708,7 @@ module woz_floppy_controller #(
                         end
                         sd_wr <= 1;
                         save_is_flush <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("WOZ_CTRL: Dirty timer flush (s0=%0d s1=%0d) start_blk=%0d",
                                  dirty_side0, dirty_side1,
                                  dirty_side0 ? trk_start_block_side0 : trk_start_block_side1);
@@ -1237,7 +1237,7 @@ module woz_floppy_controller #(
                 end
 
                 S_SAVE_TRACK: begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     // Debug: log first few bytes of each save block
                     if (sd_ack && sd_buff_addr < 9'd8 && IS_35_INCH) begin
                         $display("WOZ_SAVE_DBG[%0d]: blk=%0d addr=%0d bram_a=%04X dout0=%02X dout1=%02X save_side=%0d save_din=%02X sd_buff_din=%02X",

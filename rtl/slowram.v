@@ -16,7 +16,7 @@ always @(posedge clk)
       dout <= ram[addr];
     else begin
       ram[addr] <= din;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
       // Watchpoint: E1:0F3A = curcyl[0] in firmware driver
       if (addr == 17'h10F3A)
         $display("SLOWRAM_WATCHPOINT: write E1:0F3A <= %02h (curcyl[0])", din);

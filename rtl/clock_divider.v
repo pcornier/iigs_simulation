@@ -97,7 +97,7 @@ wire slow_request = (cyareg[7] == 1'b0) ||
                    (waitforC0E8 && cyareg[2]) ||
                    (waitforC0F8 && cyareg[3]);
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
 // Debug: track previous states and counters (module scope to avoid
 // procedural declarations errors in Verilog-2001 tools)
 reg        prev_slow;
@@ -121,7 +121,7 @@ always @(posedge clk_14M) begin
         waitforC0D8 <= 1'b0;
         waitforC0E8 <= 1'b0;
         waitforC0F8 <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         prev_waitforC0C8 <= 1'b0;
         prev_waitforC0D8 <= 1'b0;
         prev_waitforC0E8 <= 1'b0;
@@ -157,7 +157,7 @@ always @(posedge clk_14M) begin
             waitforC0F8 <= 0;
         end
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         // Edge-detected debug output for motor state changes
 `ifdef DEBUG_CLKDIV
         if (waitforC0C8 && !prev_waitforC0C8)
@@ -217,7 +217,7 @@ always @(posedge clk_14M) begin
         we_reg <= 1'b0;
         ph2_gap_count <= 4'd0;
         sync_aligned <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         prev_slow <= 1'b0;
         prev_slowMem <= 1'b0;
         slow_ph2_cnt <= 32'd0;
@@ -395,7 +395,7 @@ always @(posedge clk_14M) begin
         ph2_sync_pulse <= 1'b0;
     end
         
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
         if ((slow != prev_slow) || (slowMem != prev_slowMem)) begin
 `ifdef DEBUG_CLKDIV
             // Match MAME format for easy comparison

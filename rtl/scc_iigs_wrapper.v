@@ -151,7 +151,7 @@ assign rts_b = rts_a;
 assign irq_n = scc_internal_irq_n;  // Use actual SCC interrupt signal
 
 // Add some debug output for initial testing
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
 always @(posedge clk_14m) begin
     if (cs && we) begin
         $display("SCC IIgs: WR %s%s <= %02h",

@@ -13,7 +13,11 @@ V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../s
 	-I..
 #V_DEFINE += --converge-limit 2000 -Wno-WIDTH -Wno-IMPLICIT -Wno-MODDUP -Wno-UNSIGNED -Wno-CASEINCOMPLETE -Wno-CASEX -Wno-SYMRSVDWORD -Wno-COMBDLY -Wno-INITIALDLY -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-SELRANGE -Wno-CMPCONST -Wno-CASEOVERLAP -Wno-PINMISSING -Wno-MULTIDRIVEN
 #V_DEFINE += --threads 8  # this slows it way down
+# VCD trace support: adds ~20% runtime overhead even when not dumping. Opt in
+# with `make TRACE=1` when you need --dump-vcd-after.
+ifeq ($(TRACE),1)
 V_DEFINE += --trace
+endif
 # Sound implementation switch:
 #   make SOUND=stub   -> builds with +define+SOUND_STUB
 #   make SOUND=doc    -> builds full ES5503 path (default)
@@ -56,10 +60,12 @@ CXXFLAGS += $(CXX_DEFINE)
 CFLAGS += $(CC_OPT) $(CC_DEFINE) -Iimgui
 LDFLAGS = $(LIBS)
 EXE = ./obj_dir/Vemu
-#V_OPT = -O3 --x-assign fast --x-initial fast --noassert
-V_OPT =  --x-assign fast --x-initial fast --noassert
-#CC_OPT = -O
-CC_OPT =
+# Optimizations:
+#   -O3        Verilator model optimization
+#   --x-assign fast / --x-initial fast / --noassert  speed up x-propagation
+V_OPT = -O3 --x-assign fast --x-initial fast --noassert
+# C++ compile optimization (applied to Verilated model and glue code)
+CC_OPT = -O2
 
 V_SRC = \
 	sim.v  \

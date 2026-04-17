@@ -292,8 +292,10 @@ static void vsim_trace_log(char phase, char type,
     fflush(g_vsim_trace_csv);
 }
 
-// VCD trace dump support
+// VCD trace dump support (only compiled in when build has --trace, i.e. TRACE=1)
+#if VM_TRACE_VCD
 VerilatedVcdC* tfp = NULL;
+#endif
 int dump_vcd_after_frame = -1;
 
 vluint64_t main_time = 0;	// Current simulation time.
@@ -599,6 +601,12 @@ static const struct dasm_data32 gs_vectors[] =
 
 
 void DumpInstruction() {
+	// Fast path: if nobody would see the formatted instruction, skip the
+	// fmt::format work entirely. Saves ~40% on headless batch runs.
+	if (quiet_mode && !debug_6502) {
+		cpu_instruction_count++;
+		return;
+	}
 
 	std::string log = "{0:02X}:{1:04X}: ";
 	const char* f = "";
@@ -1054,24 +1062,18 @@ int verilate() {
 
 		// Handle reset from menu or keyboard
 		if (reset_pending) {
-			fprintf(stderr, "Reset triggered: cold=%d main_time=%lu\n", reset_pending_cold, main_time);
 			top->reset = 1;
 			top->cold_reset = reset_pending_cold;
 			reset_pending = 0;
 			reset_time = 0;
-			fprintf(stderr, "USER_RESET: Asserted reset=%d cold_reset=%d\n", top->reset, top->cold_reset);
 		}
 		if (top->reset && main_time >= initialReset) {
 			// Count reset duration
 			if (CLK_14M.IsRising()) {
 				reset_time++;
-				if (reset_time <= 5 || reset_time % 10000 == 0) {
-					fprintf(stderr, "USER_RESET: Reset held: reset_time=%lu/%u (rising edge)\n", reset_time, initialReset);
-				}
 			}
 			// Hold reset for same duration as initial reset
 			if (reset_time >= initialReset) {
-				fprintf(stderr, "USER_RESET: Releasing reset after %ld cycles, main_time=%lu\n", reset_time, main_time);
 				top->reset = 0;
 				top->cold_reset = 0;
 				reset_time = 0;
@@ -1128,8 +1130,10 @@ int verilate() {
 			}
 			top->eval();
 
+#if VM_TRACE_VCD
 			if (tfp && video.count_frame >= dump_vcd_after_frame)
 				tfp->dump(main_time);
+#endif
 
 			// Log 6502 instructions
 			cpu_clock = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__CLK;
@@ -1270,19 +1274,21 @@ int verilate() {
                                        adb_w_count, bank, addr16, dout, pbr_now, pc_now, video.count_frame);
                             }
                         }
+#ifdef DEBUG_MVN
                         // Memory write - add MVN debug for Language Card area
                         if ((bank >= 0xFC || bank == 0x00) && addr16 >= 0xBF00) {
 							debug_mvn_area = true;
-							printf("TIMING DEBUG MVN WRITE: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DOUT=%02X\n", 
+							printf("TIMING DEBUG MVN WRITE: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DOUT=%02X\n",
 								   vda, we, bank, addr16, dout);
-							printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n", 
-								   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR, 
+							printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n",
+								   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR,
 								   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
 							printf("  LC_WE=%d RDROM=%d LCRAM2=%d (should enable write-through)\n",
 								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE,
 								   VERTOPINTERN->emu__DOT__iigs__DOT__RDROM,
 								   VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2);
 						}
+#endif
 						
                         // Actual mapping sampling from hardware: use address bus and ROM selects
                         unsigned int phys_addr_bus = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
@@ -1344,6 +1350,7 @@ int verilate() {
                                        pc_local_write, pbr_local_write, ir_local_write,
                                        bank, addr16, dout,
                                        actual_phys_bank, actual_is_rom, actual_is_slow, is_io);
+#ifdef DEBUG_MVN
                         // Additional write-time diagnostics for STA abs,Y and BFxx
                         if (ir_local_write == 0x99 && sta99_base != 0xFFFF) {
                             unsigned short eff = (unsigned short)(sta99_base + VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y);
@@ -1351,18 +1358,21 @@ int verilate() {
                                    VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR,
                                    eff, bank, addr16, dout);
                         }
+#endif
+#ifdef DEBUG_MVN
                         if (bank == 0x00 && addr16 >= 0xBF00 && addr16 <= 0xBFFF) {
                             printf("BFxx WRITE: %02X:%04X <= %02X (PC=%04X PBR=%02X)\n",
                                    bank, addr16, dout,
                                    VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC,
                                    VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR);
                         }
-						
+
 						if (debug_mvn_area) {
 							debug_mvn_area = false;
-							printf("TIMING DEBUG MVN WRITE COMPLETE: Data %02X written to Bank %02X Addr %04X\n", 
+							printf("TIMING DEBUG MVN WRITE COMPLETE: Data %02X written to Bank %02X Addr %04X\n",
 								   dout, bank, addr16);
 						}
+#endif
                     } else if (vda && !we) {
                         // ADB $C026/C027 reads from PBR=FC (command-send code)
                         if ((addr16 == 0xC026 || addr16 == 0xC027) &&
@@ -1377,14 +1387,15 @@ int verilate() {
                             }
                         }
                         // Memory read - add timing debug for $BF00
+#ifdef DEBUG_MVN
                         if (bank == 0x00 && addr16 == 0xBF00) {
 							debug_bf00_timing = true;
-							printf("TIMING DEBUG $BF00: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DIN=%02X\n", 
+							printf("TIMING DEBUG $BF00: VDA=%d WE=%d LOGICAL_BANK=%02X ADDR=%04X DIN=%02X\n",
 								   vda, we, bank, addr16, din);
-							printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n", 
-								   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR, 
+							printf("  CPU_A_OUT=%06lX PBR=%02X PC=%04X (CPU view)\n",
+								   addr, VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR,
 								   VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
-							
+
 							// Check Language Card state
 							printf("  LC_WE=%d RDROM=%d LC_WE_PRE=%d LCRAM2=%d\n",
 								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE,
@@ -1392,6 +1403,7 @@ int verilate() {
 								   VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE_PRE,
 								   VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2);
                         }
+#endif
 
                         // CSV logging for VDA reads (including operand fetches that come through as data reads)
                         unsigned int phys_addr_bus = VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
@@ -1537,6 +1549,7 @@ int verilate() {
                                            actual_phys_bank, actual_is_rom, actual_is_slow, is_io2);
                         }
 
+#ifdef DEBUG_MVN
                         // MVN tracing: generic detection independent of hardcoded PC values
                         {
                             unsigned char ir_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
@@ -1633,13 +1646,14 @@ int verilate() {
                                 }
                             }
                         }
-						
+#endif
+
+#ifdef DEBUG_MVN
                         if (debug_bf00_timing && bank == 0x00 && addr16 == 0xBF00) {
                             debug_bf00_timing = false;
                             printf("TIMING DEBUG $BF00 COMPLETE: Data returned = %02X (should be ProDOS MLI, not BRK!)\n", din);
-                            // Dump recent writes to correlate with possible bad LC stub or misrouted early text writes
-                            // parallel_clemens_dump_recent_writes removed
                         }
+#endif
 
                         // WOZ denibble debug: trap at FF:4C84 (STA $0F30,Y - after denibble lookup)
                         // This shows what value A has after the LDA $FF3C00,X
@@ -3684,10 +3698,12 @@ int verilate() {
 					
 					// Track address/bank changes for timing analysis
 					if (addr != last_addr || bank != last_bank || din != last_din) {
+#ifdef DEBUG_MVN
 						if ((addr & 0xFFFF) >= 0xBF00 && (addr & 0xFFFF) <= 0xBFFF) {
 							printf("ADDR CHANGE: %06lX->%06lX BANK: %02X->%02X DIN: %02X->%02X\n",
 								   last_addr, addr, last_bank, bank, last_din, din);
 						}
+#endif
 						last_addr = addr;
 						last_bank = bank;
 						last_din = din;
@@ -3929,10 +3945,12 @@ last_cpu_addr=VERTOPINTERN->emu__DOT__iigs__DOT__addr_bus;
 	// Stop verilating and cleanup
 	top->final();
 
+#if VM_TRACE_VCD
 	if (tfp) {
 		tfp->close();
 		delete tfp;
 	}
+#endif
 
 	delete top;
 	exit(0);
@@ -4700,10 +4718,14 @@ int main(int argc, char** argv, char** env) {
 	Verilated::commandArgs(argc, argv);
 
 	if (dump_vcd_after_frame > -1) {
+#if VM_TRACE_VCD
 		Verilated::traceEverOn(true);
 		tfp = new VerilatedVcdC;
 		top->trace(tfp, 99);
 		tfp->open("vsim.vcd");
+#else
+		fprintf(stderr, "WARNING: --dump-vcd-after requested but build has no trace support. Rebuild with 'make TRACE=1'.\n");
+#endif
 	}
 
 	// parallel_clemens removed

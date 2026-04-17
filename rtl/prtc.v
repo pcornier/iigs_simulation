@@ -40,7 +40,7 @@ initial begin
            pram[8'hF0], pram[8'hF7], pram[8'hFC], pram[8'hFF]);
 `endif
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
   // Seed to deterministic values; CTL starts at 0x00 to match early read
   c033 = 8'h06;   // DATA
   c034 = 8'h00;   // CTL initial read returns 0x00

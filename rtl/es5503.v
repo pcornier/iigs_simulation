@@ -107,7 +107,9 @@ module es5503
 			    r_table_size[current_osc][2:0])};
 
       if (wr && host_en) begin
+`ifdef DEBUG_SOUND
 	 $display("%m: CPU write %h=%h", reg_addr, reg_data_in);
+`endif
 	 case (reg_addr[7:5])
 	   0: begin
 	      //if (current_osc == 0)

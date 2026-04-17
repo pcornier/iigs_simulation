@@ -205,13 +205,13 @@ module P65C816
       begin
          STATE <= {4{1'b0}};
          IR <= {8{1'b0}};
-`ifdef SIMULATION
+`ifdef DEBUG_RESET
          $display("CPU_RESET: RST_N asserted (low), STATE<=0, IR<=0");
 `endif
       end
       else
       begin
-`ifdef SIMULATION
+`ifdef DEBUG_RESET
          // Debug reset vector fetch
          if (IsResetInterrupt && MC.ADDR_BUS == 4'b1111) begin
             $display("CPU_RESET_VECTOR: IsResetInterrupt=%d ADDR_BUS=%06x D_IN=%02x STATE=%d EN=%d",
@@ -248,11 +248,13 @@ module P65C816
                //$display("MVN_STATE: %02x:%04x STATE %d -> %d (A=%04x P[2]=%d)", PBR, PC, STATE, NextState, A, P[2]);
             end
 
+`ifdef DEBUG_MVN
             // Debug: Track P[2] for every MVN instruction cycle
             if (IR == 8'h54) begin
                $display("MVN_P2_TRACK: %02x:%04x STATE=%d P[2]=%d IRQ_ACTIVE=%d LAST_CYCLE=%d",
                         PBR, PC, STATE, P[2], IRQ_ACTIVE, LAST_CYCLE);
             end
+`endif
          end
       end
 
@@ -728,7 +730,7 @@ module P65C816
          GotInterrupt <= 1'b1;
          NMI_ACTIVE <= 1'b0;
          IRQ_ACTIVE <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_RESET
          $display("CPU_RESET_INT: RST_N low -> IsResetInterrupt=1, GotInterrupt=1");
 `endif
       end
@@ -758,7 +760,7 @@ module P65C816
                end
                else begin
                   GotInterrupt <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                   if (IsResetInterrupt)
                      $display("CPU_RESET_INT: LAST_CYCLE clearing GotInterrupt and IsResetInterrupt, PC=%04x", PC);
 `endif

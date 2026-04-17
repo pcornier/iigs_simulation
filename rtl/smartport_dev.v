@@ -230,7 +230,7 @@ module smartport_dev (
                                 state <= SP_RECV_HEADER;
                                 checksum_odd <= 8'h00;
                                 checksum_even <= 8'h00;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 $display("SP_DEV: Preamble matched, receiving header");
 `endif
                             end else begin
@@ -241,7 +241,7 @@ module smartport_dev (
                             preamble_idx <= 3'd1;
                         end else begin
                             // Mismatch - reset
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("SP_DEV: Preamble MISMATCH at idx=%0d got=%02h expected=%02h",
                                      preamble_idx, wr_data, preamble_byte(preamble_idx));
 `endif
@@ -278,7 +278,7 @@ module smartport_dev (
                                 group_idx <= 3'd0;
                                 state <= SP_RECV_PAYLOAD;
                                 is_data_packet <= (pkt_type == 8'h82);
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 $display("SP_DEV: Header: dest=%02h src=%02h type=%02h aux=%02h cmd=%02h len=%0d",
                                          pkt_dest, pkt_src, pkt_type, pkt_aux, pkt_cmd_status,
                                          {2'b0, wr_data[6:0]} | ({2'b0, pkt_len_hi[6:0]} << 7));
@@ -365,7 +365,7 @@ module smartport_dev (
                             // Next byte should be $C8 end mark, but we don't
                             // strictly require it - proceed to process
                             state <= SP_PROCESS;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("SP_DEV: Packet complete type=%02h decoded=%0d cmd=%02h unit=%02h block=%0d is_data=%0d",
                                      pkt_type, payload_decoded_cnt, cmd_byte, cmd_unit, cmd_block, is_data_packet);
 `endif
@@ -386,7 +386,7 @@ module smartport_dev (
                         sp_request <= 1'b1;
                         state <= SP_WAIT_IO;
                         timeout_cnt <= TIMEOUT_CYCLES;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("SP_DEV: WriteBlock data received, block=%0d, requesting I/O", cmd_block);
 `endif
                     end else if (pkt_type == 8'h80) begin
@@ -400,7 +400,7 @@ module smartport_dev (
                                 send_data_packet <= 1'b1;
                                 state <= SP_WAIT_IO;
                                 timeout_cnt <= TIMEOUT_CYCLES;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 $display("SP_DEV: ReadBlock cmd, block=%0d", cmd_block);
 `endif
                             end
@@ -413,7 +413,7 @@ module smartport_dev (
                                 state <= SP_SEND_WAIT_REQ;
                                 rd_data_valid <= 1'b1;
                                 rd_data <= 8'hFF; // Idle byte until host reads
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 $display("SP_DEV: WriteBlock cmd received, block=%0d, waiting for data packet", cmd_block);
 `endif
                             end
@@ -424,7 +424,7 @@ module smartport_dev (
                                 state <= SP_SEND_WAIT_REQ;
                                 rd_data_valid <= 1'b1;
                                 rd_data <= 8'hFF;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 $display("SP_DEV: Status cmd");
 `endif
                             end
@@ -435,7 +435,7 @@ module smartport_dev (
                                 state <= SP_SEND_WAIT_REQ;
                                 rd_data_valid <= 1'b1;
                                 rd_data <= 8'hFF;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                 $display("SP_DEV: Unknown cmd %02h", cmd_byte);
 `endif
                             end
@@ -459,7 +459,7 @@ module smartport_dev (
                         state <= SP_SEND_WAIT_REQ;
                         rd_data_valid <= 1'b1;
                         rd_data <= 8'hFF;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("SP_DEV: I/O complete, error=%0d, sending response", sp_error);
 `endif
                     end else begin
@@ -471,7 +471,7 @@ module smartport_dev (
                             state <= SP_SEND_WAIT_REQ;
                             rd_data_valid <= 1'b1;
                             rd_data <= 8'hFF;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("SP_DEV: I/O TIMEOUT!");
 `endif
                         end
@@ -486,7 +486,7 @@ module smartport_dev (
                         resp_idx <= 5'd0;
                         rd_data <= resp_buf[0];
                         state <= SP_SEND_RESPONSE;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("SP_DEV: REQ detected, sending response (%0d bytes)", resp_len);
 `endif
                     end

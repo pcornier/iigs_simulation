@@ -14,7 +14,7 @@
 
 // Enable byte offset debugging - tracks first flux transitions and BRAM addresses
 // Uncomment the following line to enable:
-`define DEBUG_BYTE_OFFSET
+//`define DEBUG_BYTE_OFFSET
 
 module flux_drive (
     // Configuration
@@ -164,7 +164,7 @@ module flux_drive (
     reg [5:0]   bit_cell_cycles_reg;    // Per-bit-cell length (with fractional add)
     reg         prev_write_mode;        // For detecting write→read transitions
     reg         write_strobe_steal;     // WRITE_STROBE stole position advance from bit_timer
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     reg [31:0]  flux_write_dbg_count;   // Cap for noisy partial-match debug output
 `endif
 
@@ -564,7 +564,7 @@ module flux_drive (
     assign MOTOR_ON_SENSE_OUT = motor_on_sense;
     assign AT_TRACK0_OUT     = at_track0;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     // Debug: trace sense computation for 3.5" drive
     reg prev_sense_debug;
     reg [15:0] sense_read_cnt;
@@ -608,7 +608,7 @@ module flux_drive (
             WRITE_WE_OUT    <= 1'b0;
             WRITE_ADDR_OUT  <= 16'd0;
             write_count     <= 32'd0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             flux_write_dbg_count <= 32'd0;
 `endif
         end else begin
@@ -617,7 +617,7 @@ module flux_drive (
             write_shift_d1  <= bit_shift;    // Latch bit_shift at read time
             write_addr_d1   <= BRAM_ADDR;    // Latch BRAM address at read time
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Debug: log when write conditions are partially met. Cap per-drive to
             // avoid tens of millions of lines when FLUX_WRITE_STROBE gets stuck high
             // during 5.25" read mode (a pre-existing iwm_flux bug unrelated to the
@@ -643,7 +643,7 @@ module flux_drive (
                 WRITE_WE_OUT <= 1'b1;
                 WRITE_ADDR_OUT <= write_addr_d1;  // Use latched address for write
                 write_count <= write_count + 1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 if (write_count < 64)
                     $display("FLUX_WRITE[%0d]: #%0d pos=%0d addr=%04X(latched=%04X) bit=%0d shift=%0d(latched=%0d) bram_in=%02X bram_out=%02X",
                              DRIVE_ID, write_count, bit_position, BRAM_ADDR, write_addr_d1, write_bit_d1, bit_shift, write_shift_d1,
@@ -702,7 +702,7 @@ module flux_drive (
             //   never sees the disk was swapped and won't re-validate.
             if (!DISK_MOUNTED && prev_disk_mounted) begin
                 disk_switched <= 1'b0;  // MAME: call_unload() sets m_dskchg=0
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: disk_switched CLEAR by removal (disk changed)", DRIVE_ID);
 `endif
             end
@@ -710,11 +710,11 @@ module flux_drive (
                 if (!first_mount_done) begin
                     // Cold-start: disk_switched stays 1 (set by reset), mark first mount done
                     first_mount_done <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("FLUX_DRIVE[%0d]: first mount after reset (cold-start, disk_switched stays %0d)", DRIVE_ID, disk_switched);
 `endif
                 end
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 else begin
                     $display("FLUX_DRIVE[%0d]: hot swap insertion (disk_switched stays %0d, ROM must clear via DskchgClear)", DRIVE_ID, disk_switched);
                 end
@@ -726,7 +726,7 @@ module flux_drive (
             // These work even when motor is off - they just set direction for next step
             // Use IMMEDIATE_PHASES since MAME's seek_phase_w() sets direction immediately
             // Only update the currently selected drive's direction (MAME tracks per-drive)
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Debug: Track all phase changes on 3.5" drive
             if (IS_35_INCH && (IMMEDIATE_PHASES != prev_imm_phases_debug)) begin
                 $display("FLUX_DRIVE[%0d]: IMMEDIATE_PHASES %04b -> %04b [2:0]=%0d step_dir[%0d]=%0d",
@@ -736,7 +736,7 @@ module flux_drive (
             prev_imm_phases_debug <= IMMEDIATE_PHASES;
 `endif
             // Apple IIgs 3.5" drive command interface (ROM SDCLINES + LSTRB pulse).
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Debug: trace strobe conditions
             if (IS_35_INCH && lstrb && !prev_lstrb) begin
                 $display("FLUX_DRIVE[%0d]: LSTRB! DRIVE_SELECT=%0d DRIVE_SLOT=%0d sel_match=%0d sony_ctl=%01x DISK_MOUNTED=%0d SEL35=%0d",
@@ -744,7 +744,7 @@ module flux_drive (
             end
 `endif
             if (sony_cmd_strobe) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: sony_cmd_strobe! sony_ctl=%01x SEL35=%0d DISK_MOUNTED=%0d",
                          DRIVE_ID, sony_ctl, SEL35, DISK_MOUNTED);
 `endif
@@ -752,7 +752,7 @@ module flux_drive (
                     4'h0: begin
                         // Direction inward (toward higher tracks) - ROM dirinadr=0
                         step_direction_slot[DRIVE_SELECT] <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: cmd step dir +1 (toward higher tracks) t=%0t", DRIVE_ID, $time);
 `endif
                     end
@@ -760,7 +760,7 @@ module flux_drive (
                     4'h1: begin
                         // Direction outward (toward track 0) - ROM diroutadr=1
                         step_direction_slot[DRIVE_SELECT] <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: cmd step dir -1 (toward track 0) t=%0t", DRIVE_ID, $time);
 `endif
                     end
@@ -781,7 +781,7 @@ module flux_drive (
                         end
                         // Indicate head is stepping; ROM polls STAT35 $04 until it returns high.
                         step_busy_cnt <= STEP_BUSY_CYCLES;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: cmd STEP (dir=%0d head_phase=%0d)", DRIVE_ID, step_direction_slot[DRIVE_SELECT], head_phase);
 `endif
                     end
@@ -791,11 +791,11 @@ module flux_drive (
                         // Ignore SEL35 deassertions; the ROM clears $C031 between commands.
                         if (DISK_MOUNTED) begin
                             sony_motor_on <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("FLUX_DRIVE[%0d]: cmd motor ON (SEL35=%0d DISK_MOUNTED=%0d) -> sony_motor_on=1", DRIVE_ID, SEL35, DISK_MOUNTED);
 `endif
                         end
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         else begin
                             $display("FLUX_DRIVE[%0d]: cmd motor ON SKIPPED (SEL35=%0d DISK_MOUNTED=%0d)", DRIVE_ID, SEL35, DISK_MOUNTED);
                         end
@@ -805,7 +805,7 @@ module flux_drive (
                     4'h9: begin
                         // Motor off - ROM mtroffadr=9
                         sony_motor_on <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: cmd motor OFF", DRIVE_ID);
 `endif
                     end
@@ -814,13 +814,13 @@ module flux_drive (
                         // Disk-change clear (ROM uses DskchgClear via ReadBit/WriteBit)
                         // MAME: m_dskchg = 1 (acknowledged, no change)
                         disk_switched <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: cmd disk change clear", DRIVE_ID);
 `endif
                     end
 
                     default: begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: cmd %01x (unhandled)", DRIVE_ID, sony_ctl);
 `endif
                     end
@@ -830,14 +830,14 @@ module flux_drive (
                     // Eject reset / disk-switched clear used during CONFIGURE (ejct_reset=3)
                     // MAME: m_dskchg = 1 (acknowledged)
                     disk_switched <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("FLUX_DRIVE[%0d]: cmd eject reset (disk change clear)", DRIVE_ID);
 `endif
                 end
                 if (sony_ctl == 4'h7) begin
                     // Start eject: treat as disk removed (best-effort)
                     // Real hardware would unload; in sim we don't hot-unmount here.
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("FLUX_DRIVE[%0d]: cmd eject on (not implemented)", DRIVE_ID);
 `endif
                 end
@@ -940,7 +940,7 @@ module flux_drive (
                 end else begin
                     motor_spinning <= 1'b0;
                 end
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 if (((DISK_MOUNTED && (sony_motor_on || (sony_spindown_counter != 19'd0))) ? 1'b1 : 1'b0) != motor_spinning) begin
                     $display("FLUX_DRIVE[%0d]: motor_spinning %0d -> %0d (sony_motor_on=%0d DISK_MOUNTED=%0d spindown=%0d)",
                              DRIVE_ID, motor_spinning,
@@ -964,7 +964,7 @@ module flux_drive (
                     spinup_bits <= 18'd0;
                     drive_ready <= 1'b0;
                     spinup_timer <= bit_cell_cycles;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("FLUX_DRIVE[%0d]: Motor ON - starting spin-up (need %0d bits)", DRIVE_ID, SPINUP_BIT_COUNT);
 `endif
                 end else begin
@@ -973,7 +973,7 @@ module flux_drive (
                     // drive is at speed. Set drive_ready immediately.
                     drive_ready <= 1'b1;
                     spinup_bits <= SPINUP_BIT_COUNT;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("FLUX_DRIVE[%0d]: Motor ON - 5.25\" drive ready immediately (300ms inertia in iwm_woz)", DRIVE_ID);
 `endif
                 end
@@ -993,7 +993,7 @@ module flux_drive (
                         spinup_bits <= spinup_bits + 1'd1;
                         if (spinup_bits + 1 >= SPINUP_BIT_COUNT) begin
                             drive_ready <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("FLUX_DRIVE[%0d]: Drive ready after %0d bits spinup (needed %0d)",
                                      DRIVE_ID, spinup_bits + 1, SPINUP_BIT_COUNT);
 `endif
@@ -1055,7 +1055,7 @@ module flux_drive (
             weak_bit_active <= 1'b0;
             bram_first_read_pending <= 1'b1;  // Wait for registered BRAM on startup
             flux_startup_delay <= 6'd0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             side_transition_logged <= 1'b1;  // Start as logged to avoid spam at startup
             debug_read_count <= 5'd16;       // Disable log until first track change
             side_transition_byte_count <= 5'd16;  // Start above threshold to avoid spam
@@ -1107,7 +1107,7 @@ module flux_drive (
                 head_window <= 4'hF;      // Reset MC3470 window for new track
                 zero_run_count <= 8'd0;
                 weak_bit_active <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE - resetting bit_position to 0 (was %0d) is_flux=%0d", DRIVE_ID, bit_position, IS_FLUX_TRACK);
                 $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE bram_wait=1 bit_timer=%0d cell=%0d addr=%0d pos=%0d",
                          DRIVE_ID, bit_timer, bit_cell_cycles, BRAM_ADDR, bit_position);
@@ -1154,7 +1154,7 @@ module flux_drive (
                 flux_is_continuation <= 1'b0;
                 next_byte_valid <= 1'b0;
                 bram_first_read_pending <= 1'b1;  // Wait for BRAM to load new track data
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE while spinning - preserving bit_position=%0d (new TBC=%0d) is_flux=%0d",
                          DRIVE_ID, bit_position, track_bit_count_17, IS_FLUX_TRACK);
 `endif
@@ -1193,7 +1193,7 @@ module flux_drive (
                 // Startup delay: suppress flux for first bit-cell to ensure bit_position advances
                 // before first flux is detected by IWM. This matches testbench behavior.
                 flux_startup_delay <= bit_cell_base;  // One full bit cell (28 cycles for 3.5")
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: DRIVE_READY rising edge - resetting bit_position to 0 (was %0d)", DRIVE_ID, bit_position);
                 $display("FLUX_DRIVE[%0d]: DRIVE_READY bram_wait=1 bit_timer=%0d cell=%0d addr=%0d pos=%0d",
                          DRIVE_ID, bit_timer, bit_cell_cycles, BRAM_ADDR, bit_position);
@@ -1212,7 +1212,7 @@ module flux_drive (
             // the first flux check after motor restart uses stale BRAM data from the old address.
             if (motor_spinning && !prev_motor_for_position && drive_ready && TRACK_BIT_COUNT > 0) begin
                 bram_first_read_pending <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: MOTOR_RESTART while drive_ready - waiting for BRAM (addr=%0d)",
                          DRIVE_ID, BRAM_ADDR);
                 $display("FLUX_DRIVE[%0d]: MOTOR_RESTART bram_wait=1 bit_timer=%0d cell=%0d pos=%0d",
@@ -1227,7 +1227,7 @@ module flux_drive (
             // effective_bit_position logic computes a valid position using modulo.
             // This preserves angular position through rapid side toggles.
             if (prev_track_bit_count != TRACK_BIT_COUNT && TRACK_BIT_COUNT > 0) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: *** TRACK_BIT_COUNT CHANGED: %0d -> %0d (bit_pos=%0d, eff_pos=%0d, byte_idx=%0d, head_phase=%0d, track=%0d)",
                          DRIVE_ID, prev_track_bit_count, TRACK_BIT_COUNT, bit_position, effective_bit_position, byte_index, head_phase, head_phase[8:2]);
                 $display("FLUX_DRIVE[%0d]: *** TRACK_TRANSITION: BRAM_ADDR=%0d BRAM_DATA=0x%02X current_bit=%0d motor_spin=%0d drive_ready=%0d",
@@ -1241,7 +1241,7 @@ module flux_drive (
 
             prev_is_flux_track <= IS_FLUX_TRACK;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Log first 16 bytes after a side transition to verify data
             if (motor_spinning && TRACK_LOADED && TRACK_BIT_COUNT > 0 && side_transition_byte_count < 16) begin
                 // Log once per byte boundary (when starting a new byte)
@@ -1252,25 +1252,22 @@ module flux_drive (
                 end
             end
 
+`ifdef DEBUG_FLUX_DIV
             // Focused debug around suspected divergence position.
             if (motor_spinning && TRACK_LOADED &&
                 (bit_position >= 17'd70190) && (bit_position <= 17'd70230)) begin
                 $display("FLUX_DRIVE_WIN pos=%0d addr=%0d data=%02h shift=%0d bit=%0d timer=%0d",
                          bit_position, BRAM_ADDR, BRAM_DATA, bit_position[2:0], current_bit, bit_timer);
-            end
-
-            // Debug divergence point at position ~55883
-            if (motor_spinning && TRACK_LOADED &&
-                (bit_position >= 17'd70190) && (bit_position <= 17'd70230)) begin
                 $display("FLUX_DIV pos=%0d eff_pos=%0d addr=%0d data=%02h TBC=%0d shift=%0d bit=%0d timer=%0d",
                          bit_position, effective_bit_position, BRAM_ADDR, BRAM_DATA,
                          TRACK_BIT_COUNT, bit_shift, current_bit, bit_timer);
             end
 `endif
+`endif
 
             // Rotate whenever motor is spinning so angular position keeps advancing
             if (motor_spinning) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 if (TRACK_LOAD_COMPLETE || drive_ready_rising || motor_restart_ready) begin
                     $display("FLUX_DRIVE[%0d]: SKIP_ADVANCE reason=%0d%0d%0d timer=%0d pos=%0d eff=%0d addr=%0d",
                              DRIVE_ID, TRACK_LOAD_COMPLETE, drive_ready_rising, motor_restart_ready,
@@ -1320,7 +1317,7 @@ module flux_drive (
                             next_byte_valid <= 1'b1;
                         end
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         if (flux_byte_addr < 20 || (flux_byte_addr >= 95 && flux_byte_addr <= 105) || (flux_byte_addr >= FLUX_DATA_SIZE - 5)) begin
                             $display("FLUX_PLAY[%0d]: Loaded byte[%0d] = %0d (0x%02X) cont=%0d pending=%0d",
                                      DRIVE_ID, flux_byte_addr, BRAM_DATA, BRAM_DATA, (BRAM_DATA == 8'hFF), flux_byte_pending);
@@ -1355,7 +1352,7 @@ module flux_drive (
                             // Do NOT suppress the first bit-cell here; that drops a bit and shifts byte alignment.
                             if (!flux_is_continuation && drive_ready && !WRITE_MODE) begin
                                 FLUX_TRANSITION <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                     if (flux_count_debug < 110) begin
                                         $display("FLUX_PLAY[%0d]: Transition #%0d cycle=%0d byte_addr=%0d",
                                                  DRIVE_ID, flux_count_debug, cycle_count_debug, flux_byte_addr - 1);
@@ -1402,7 +1399,7 @@ module flux_drive (
                                         // Ideally we shouldn't stall, but if we have 0-byte, we must.
                                         // For now, allow stall if we missed deadline.
                                         flux_byte_pending <= 1'b1; // Fall back to stall logic
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                                         $display("FLUX_PLAY[%0d]: UNDERFLOW/STALL at byte_addr=%0d", DRIVE_ID, flux_byte_addr);
 `endif
                                     end else begin
@@ -1458,7 +1455,7 @@ module flux_drive (
                     if (bram_first_read_pending) begin
                         // BRAM wait cycle: stall rotation for one 14M tick so we don't drop a bit.
                         bram_first_read_pending <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: BRAM first read wait - stalling (addr=%0d pos=%0d)",
                                  DRIVE_ID, BRAM_ADDR, bit_position);
 `endif
@@ -1471,7 +1468,7 @@ module flux_drive (
                             (current_bit || (weak_bit_active && !current_bit && lfsr[3:0] < 4'd5)) &&
                             drive_ready && !WRITE_MODE) begin
                             FLUX_TRANSITION <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             if (flux_count_debug < 50) begin
                                 $display("FLUX[%0d] #%0d: pos=%0d addr=%0d data=%02X shift=%0d bit=%0d timer=%0d weak=%0d",
                                          DRIVE_ID, flux_count_debug, bit_position, BRAM_ADDR, BRAM_DATA, bit_shift, current_bit, bit_timer, weak_bit_active);
@@ -1499,7 +1496,7 @@ module flux_drive (
                         // Clear steal flag on write→read transition so it doesn't
                         // suppress a position advance in read mode
                         write_strobe_steal <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         write_count <= 0;  // Reset so next write session is logged
                         $display("FLUX_DRIVE[%0d]: Write->Read transition pos=%0d timer=%0d steal=%0d",
                                  DRIVE_ID, bit_position, bit_timer, write_strobe_steal);
@@ -1601,12 +1598,12 @@ module flux_drive (
             if (head_phase[8:2] != current_track) begin
                 current_track <= head_phase[8:2];
                 debug_read_count <= 5'd0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: Head moved to track %0d", DRIVE_ID, head_phase[8:2]);
 `endif
             end
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Log first 16 bytes read from BRAM after track change to verify data
             if (motor_spinning && TRACK_LOADED && debug_read_count < 16) begin
                 // Log when we start processing a new byte (bit_shift == 7)
@@ -1631,7 +1628,7 @@ module flux_drive (
     reg [3:0]  dbg_bram_idx;
 `endif
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     // Debug output
     reg [8:0] prev_head_phase;
     reg [31:0] flux_count_debug;
@@ -1718,11 +1715,13 @@ module flux_drive (
             // Log first flux transitions
             if (FLUX_TRANSITION) begin
                 flux_count_debug <= flux_count_debug + 1;
+`ifdef DEBUG_FLUX
                 if (flux_count_debug < 2000000 && head_phase == 0) begin
                     $display("FLUX_DRIVE[%0d]: FLUX #%0d at cycle=%0d bit_pos=%0d byte=%04h data=%02h bit=%0d",
                              DRIVE_ID, flux_count_debug, cycle_count_debug, bit_position,
                              byte_index, BRAM_DATA, current_bit);
                 end
+`endif
 `ifdef DEBUG_BYTE_OFFSET
                 // Track first flux transitions and BRAM data after drive ready
                 if (drive_ready && !dbg_ready_started) begin

@@ -57,7 +57,7 @@ module apple_drive(
     // When clear, D_OUT bit 7 is cleared so CPU knows to wait for next byte
     reg             data_ready;
     reg             prev_read_strobe;  // Delayed READ_STROBE for proper clearing
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     reg [31:0]      q3_edge_counter;
     reg [31:0]      data_update_counter;
     reg [7:0]       last_data_output;
@@ -119,7 +119,7 @@ module apple_drive(
 
     assign TRACK = phase[8:2];
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
     reg [8:0] prev_phase;
     always @(posedge CLK_14M) begin
         if (phase != prev_phase) begin
@@ -155,7 +155,7 @@ module apple_drive(
             bram_data_valid <= 1'b0;  // Need to wait for BRAM data after reset
             data_ready <= 1'b0;  // No data ready after reset
             prev_read_strobe <= 1'b0;  // Initialize strobe tracking
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             q3_edge_counter <= 0;
             data_update_counter <= 0;
             last_data_output <= 8'h00;
@@ -164,7 +164,7 @@ module apple_drive(
         end else begin
             TRACK_WE <= 1'b0;
             Q3_D <= Q3;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             // Monitor D_OUT changes
             if (data_reg != last_data_output && sample_count < 16'd50) begin
                 $display("DRIVE%0s: D_OUT changed %02h -> %02h (data_reg updated)", IS_35_INCH?"(3.5)":"(5.25)", last_data_output, data_reg);
@@ -172,20 +172,20 @@ module apple_drive(
             last_data_output <= data_reg;
 `endif
             if (DISK_READY != disk_ready_d) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("DRIVE%0s: DISK_READY %0d -> %0d", IS_35_INCH?"(3.5)":"(5.25)", disk_ready_d, DISK_READY);
 `endif
                 disk_ready_d <= DISK_READY;
             end
             if (DISK_ACTIVE != disk_active_d) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("DRIVE%0s: DISK_ACTIVE %0d -> %0d (phase=%0d)", IS_35_INCH?"(3.5)":"(5.25)", disk_active_d, DISK_ACTIVE, phase);
 `endif
                 disk_active_d <= DISK_ACTIVE;
                 sample_count <= 16'd0;
             end
             if (TRACK_BUSY != track_busy_d) begin
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 $display("DRIVE%0s: TRACK_BUSY %0d -> %0d", IS_35_INCH?"(3.5)":"(5.25)", track_busy_d, TRACK_BUSY);
 `endif
                 track_busy_d <= TRACK_BUSY;
@@ -200,7 +200,7 @@ module apple_drive(
             end
             prev_read_strobe <= READ_STROBE;
 
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
             if (Q3 && ~Q3_D && DISK_READY && DISK_ACTIVE && sample_count < 16'd20) begin
                 $display("DRIVE%0s: Q3 tick (ready=%0d active=%0d busy=%0d delay=%0d)", IS_35_INCH?"(3.5)":"(5.25)", DISK_READY, DISK_ACTIVE, TRACK_BUSY, byte_delay);
             end
@@ -237,7 +237,7 @@ module apple_drive(
             // This is essential for proper disk operation
             if (Q3 && ~Q3_D && DISK_READY && DISK_ACTIVE && ~TRACK_BUSY) begin
                 byte_delay <= byte_delay - 1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                 q3_edge_counter <= q3_edge_counter + 1;
                 if (sample_count < 16'd20) begin
                     $display("DRIVE%0s: Q3 edge #%0d - byte_delay %0d -> %0d (period=%0d) active=%0d ready=%0d busy=%0d", 
@@ -248,7 +248,7 @@ module apple_drive(
 `endif
                 if (byte_delay > 0) begin
                     // Still counting down
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     if (sample_count < 16'd10) begin
                         $display("DRIVE%0s: counting down byte_delay=%0d", IS_35_INCH?"(3.5)":"(5.25)", byte_delay-1);
                     end
@@ -256,7 +256,7 @@ module apple_drive(
                 end else begin
                     // Timer expired, perform a byte operation and reset timer
                     byte_delay <= byte_period;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     if (sample_count < 16'd10) begin
                         $display("DRIVE%0s: byte_delay RESET to %0d (was 0)", IS_35_INCH?"(3.5)":"(5.25)", byte_period);
                     end
@@ -267,7 +267,7 @@ module apple_drive(
                         if (reset_data_reg) begin
                             data_reg <= 8'b0;
                             reset_data_reg <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("DRIVE%0s: DATA_REG cleared to 00 (was %02h) [count=%0d]", IS_35_INCH?"(3.5)":"(5.25)", data_reg, sample_count);
 `endif
                         end
@@ -281,7 +281,7 @@ module apple_drive(
                         //
                         // The key insight: track_byte_addr is "one ahead" - it's fetching the
                         // NEXT byte while we output the CURRENT byte from TRACK_DO.
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         $display("DRIVE%0s: BYTE_DELAY EXPIRED - loading new data and advancing", IS_35_INCH?"(3.5)":"(5.25)");
                         $display("DRIVE%0s: BEFORE - data_reg=%02h track_byte_addr=%04h TRACK_DO=%02h", IS_35_INCH?"(3.5)":"(5.25)", data_reg, track_byte_addr, TRACK_DO);
 `endif
@@ -290,7 +290,7 @@ module apple_drive(
                         // Advance track address to fetch NEXT byte (BRAM will have it ready next time)
                         if (track_byte_addr == 13'h19FF) track_byte_addr <= 13'b0;
                         else track_byte_addr <= track_byte_addr + 1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                         data_update_counter <= data_update_counter + 1;
                         $display("DRIVE%0s: DATA_UPDATE #%0d - data_reg<=%02h track_byte_addr<=%04h (advancing to %04h) Q3_edge=#%0d", IS_35_INCH?"(3.5)":"(5.25)",
                                  data_update_counter + 1, TRACK_DO, track_byte_addr,
@@ -306,7 +306,7 @@ module apple_drive(
                         // Request data clearing for next cycle if needed
                         if (READ_DISK && PH0) begin
                             reset_data_reg <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                             $display("DRIVE%0s: DATA_REG clear requested (read_disk=%0d PH0=%0d) [count=%0d]", IS_35_INCH?"(3.5)":"(5.25)", READ_DISK, PH0, sample_count);
 `endif
                         end
@@ -330,13 +330,13 @@ module apple_drive(
                 /*if (reset_data_reg) begin
                     data_reg <= 8'b0;
                     reset_data_reg <= 1'b0;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("DRIVE%0s: DATA_REG cleared to 00 (was %02h) [count=%0d]", IS_35_INCH?"(3.5)":"(5.25)", data_reg, sample_count);
 `endif
                 end
                 if (READ_DISK && PH0) begin
                     reset_data_reg <= 1'b1;
-`ifdef SIMULATION
+`ifdef DEBUG_VERBOSE
                     $display("DRIVE%0s: DATA_REG clear requested (read_disk=%0d PH0=%0d) [count=%0d]", IS_35_INCH?"(3.5)":"(5.25)", READ_DISK, PH0, sample_count);
 `endif
                 end*/
