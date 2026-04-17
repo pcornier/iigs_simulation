@@ -361,17 +361,15 @@ iigs iigs (
 	.AUDIO_R(AUDIO_R),
 	/* hard drive (supports 2 units - ProDOS limit) */
 	.HDD_SECTOR(hdd_sector),
-	.HDD_READ(hdd_read),
-	.HDD_WRITE(hdd_write),
-	.HDD_UNIT(hdd_unit),
-	.HDD_MOUNTED(hdd_mounted),
-	.HDD_PROTECT(hdd_protect),
-	.HDD0_SIZE(hdd0_size),
-	.HDD1_SIZE(hdd1_size),
+	.HDD_READ({sd_rd[1:0]}),
+	.HDD_WRITE(sd_wr[1:0]),
+	.HDD_MOUNTED(img_mounted[1:0]),
+	.img_readonly(img_readonly),
+	.img_size(img_size),
 	.HDD_RAM_ADDR(sd_buff_addr),
 	.HDD_RAM_DI(sd_buff_dout),
 	.HDD_RAM_DO(hdd_ram_do),
-	.HDD_RAM_WE(sd_buff_wr & hdd_ack),
+	.HDD_RAM_WE(sd_buff_wr & (|sd_ack[1:0])),
 	.HDD_ACK(sd_ack[1:0]),
 	//-- WOZ bit interfaces for flux-based IWM
 	// 3.5" drive 1
@@ -605,20 +603,6 @@ assign CLK_VIDEO=clk_vid;
 
 // HARD DRIVE PARTS (supports 2 units - ProDOS limit)
 wire [15:0] hdd_sector;
-wire        hdd_unit;           // Which unit (0-1) is being accessed (from bit 7)
-
-// Per-unit mounted and protect status for 2 HDD units
-// Using img_mounted indices: [0]=unit0, [1]=unit1
-reg  [1:0] hdd_mounted = 2'b0;
-wire hdd_read;
-wire hdd_write;
-reg  [1:0] hdd_protect = 2'b0;
-reg [63:0] hdd0_size;
-reg [63:0] hdd1_size;
-reg  cpu_wait_hdd = 0;
-
-// HDD unit being served (latched when operation starts)
-reg hdd_active_unit = 1'b0;
 
 // Both HDD units share the same sector (routed to their block device indices)
 assign sd_lba[0] = {16'b0, hdd_sector};  // Unit 0
@@ -626,90 +610,18 @@ assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 1
 assign sd_lba[2] = woz_sd_lba;
 assign sd_lba[3] = woz_sd_525_lba;
 
-// Route sd_rd/sd_wr to the correct bit based on active unit
-reg  sd_rd_hd;
-reg  sd_wr_hd;
-
-// Select the ack for the active unit
-wire hdd_ack = (hdd_active_unit == 1'b0) ? sd_ack[0] : sd_ack[1];
-
 // HDD RAM output - shared buffer routed to both HDD unit indices
 wire [7:0] hdd_ram_do;
 assign sd_buff_din[0] = hdd_ram_do;  // Unit 0
 assign sd_buff_din[1] = hdd_ram_do;  // Unit 1
 
-always @(posedge clk_sys) begin
-	reg old_ack;
-	reg hdd_read_pending;
-	reg hdd_write_pending;
-	reg state;
-
-	old_ack <= hdd_ack;  // Use the muxed ack for active unit
-	hdd_read_pending <= hdd_read_pending | hdd_read;
-	hdd_write_pending <= hdd_write_pending | hdd_write;
-
-	// Latch hdd_unit when a new request arrives (before state machine picks it up)
-	if ((hdd_read | hdd_write) & !state & !(hdd_read_pending | hdd_write_pending)) begin
-		hdd_active_unit <= hdd_unit;
-	end
-
-	// Handle HDD unit mounts (2 units mapped to img_mounted indices 0, 1)
-	if (img_mounted[0]) begin
-		hdd_mounted[0] <= img_size != 0;
-		hdd_protect[0] <= img_readonly;
-		hdd0_size <= img_size;
-	end
-	if (img_mounted[1]) begin
-		hdd_mounted[1] <= img_size != 0;
-		hdd_protect[1] <= img_readonly;
-		hdd1_size <= img_size;
-	end
-
-	if(reset) begin
-		state <= 0;
-		cpu_wait_hdd <= 0;
-		hdd_read_pending <= 0;
-		hdd_write_pending <= 0;
-		sd_rd_hd <= 0;
-		sd_wr_hd <= 0;
-	end
-	else if(!state) begin
-		if (hdd_read_pending | hdd_write_pending) begin
-			state <= 1;
-			sd_rd_hd <= hdd_read_pending;
-			sd_wr_hd <= hdd_write_pending;
-			cpu_wait_hdd <= 1;
-		end
-	end
-	else begin
-		if (~old_ack & hdd_ack) begin
-			sd_rd_hd <= 0;
-			sd_wr_hd <= 0;
-		end
-		else if(old_ack & ~hdd_ack) begin
-			state <= 0;
-			cpu_wait_hdd <= 0;
-			hdd_read_pending <= 0;
-			hdd_write_pending <= 0;
-		end
-	end
-end
-
 // Route sd_rd/sd_wr to the correct index based on active unit
 always @(*) begin
-	sd_rd = 4'b0;
-	sd_wr = 4'b0;
-	sd_rd[0] = sd_rd_hd & (hdd_active_unit == 1'b0);
-	sd_rd[1] = sd_rd_hd & (hdd_active_unit == 1'b1);
-	sd_wr[0] = sd_wr_hd & (hdd_active_unit == 1'b0);
-	sd_wr[1] = sd_wr_hd & (hdd_active_unit == 1'b1);
-	sd_rd[2] = woz_sd_rd;
-	sd_wr[2] = woz_sd_wr;
-	sd_rd[3] = woz_sd_525_rd;
-	sd_wr[3] = woz_sd_525_wr;
+       sd_rd[2] = woz_sd_rd;
+       sd_wr[2] = woz_sd_wr;
+       sd_rd[3] = woz_sd_525_rd;
+       sd_wr[3] = woz_sd_525_wr;
 end
-
-
 
 wire fd_disk_1;
 wire fd_disk_2;

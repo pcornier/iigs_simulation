@@ -35,13 +35,11 @@ module hdd(
     DMA_ADDR,
     DMA_WE,
     sector,
-    hdd_read,
-    hdd_write,
-    hdd_unit,
-    hdd_mounted,
-    hdd_protect,
-    hdd0_size,
-    hdd1_size,
+    sd_rd,
+    sd_wr,
+    img_mounted,
+    img_readonly,
+    img_size,
     hps_ram_addr,
     ram_di,
     ram_do,
@@ -61,13 +59,11 @@ module hdd(
     output [15:0]    DMA_ADDR;
     output reg       DMA_WE;
     output [15:0]    sector;		// Sector number to read/write
-    output reg       hdd_read;
-    output reg       hdd_write;
-    output           hdd_unit;		// Which unit (0-1) is being accessed (directly from bit 7)
-    input [1:0]      hdd_mounted;	// Per-unit mounted status (active high)
-    input [1:0]      hdd_protect;	// Per-unit write protect (active high)
-    input [63:0]     hdd0_size;
-    input [63:0]     hdd1_size;
+    output reg [1:0] sd_rd;
+    output reg [1:0] sd_wr;
+    input [1:0]      img_mounted;
+    input            img_readonly;
+    input [63:0]     img_size;
     input [8:0]      hps_ram_addr;	// Address for sector buffer
     input [7:0]      ram_di;		// Data to sector buffer
     output reg [7:0] ram_do;		// Data from sector buffer
@@ -76,7 +72,7 @@ module hdd(
 
     wire [7:0]       sector_dout;
     wire [7:0]       rom_dout;
-    
+
     // Interface registers
     reg [7:0]        reg_status;
     reg [7:0]        reg_command;
@@ -95,16 +91,8 @@ module hdd(
 
     // Sector buffer: true dual-port RAM (512x8)
     wire [7:0]       sector_dma_q;   // DMA (Port A) read data
-    wire [7:0]       sector_cpu_q;   // CPU (Port B, C0F8) read data
     // Stage Port-B q to hide BRAM latency and align NEXT BYTE stream
-    reg  [7:0]       next_byte_q;
     reg              a2_ram_we;    // A2-side write to sector buffer
-    reg  [7:0]       cpu_c0f8_din;
-    // First-byte prefetch to cover BRAM read latency on READ command
-    reg              prefetch_armed;
-    reg              prefetch_valid;
-    reg  [7:0]       prefetch_data;
-    
     // ProDOS constants
     localparam       PRODOS_COMMAND_STATUS = 8'h00;
     localparam       PRODOS_COMMAND_READ = 8'h01;
@@ -117,7 +105,7 @@ module hdd(
 
     // Unit selection from reg_unit (ProDOS format: bit 7=drive select)
     // For slot 7: $70=unit0 (bit7=0), $F0=unit1 (bit7=1)
-    assign hdd_unit = reg_unit[7];
+    wire hdd_unit = reg_unit[7];
 
     // DMA state machine
     // "RD" and "WR" here are in the sense of disk read/write.
@@ -146,7 +134,7 @@ module hdd(
                   dma_state <= ST_RD_ACK;
                   DMA <= 1'b1;
                   DMA_WE <= 1'b0;
-                  hdd_read <= 1'b1;
+                  sd_rd[hdd_unit] <= 1'b1;
               end
               else if (dma_req_wr) begin
                   dma_state <=  ST_WR_PRE;
@@ -156,8 +144,10 @@ module hdd(
               end
           end // case: ST_IDLE
           ST_RD_ACK: begin
-              hdd_read <= 1'b0;
-              if (sd_ack[hdd_unit]) dma_state <= ST_RD_HPS;
+              if (sd_ack[hdd_unit]) begin
+                  dma_state <= ST_RD_HPS;
+                  sd_rd[hdd_unit] <= 1'b0;
+              end
           end
           ST_RD_HPS: begin
               if (!sd_ack[hdd_unit] & phi0) begin
@@ -186,17 +176,18 @@ module hdd(
                   a2_ram_addr <= a2_ram_addr + 9'b1;
                   if (a2_ram_addr == 9'd511) begin
                       dma_state <= ST_WR_ACK;
-                      hdd_write <= 1'b1;
+                      sd_wr[hdd_unit] <= 1'b1;
                       a2_ram_we <= 1'b0;
                   end
               end
           end
           ST_WR_ACK: begin
-              hdd_write <= 1'b0;
-              if (sd_ack[hdd_unit]) dma_state <= ST_WR_HPS;
+              if (sd_ack[hdd_unit]) begin
+                  dma_state <= ST_WR_HPS;
+                  sd_wr[hdd_unit] <= 1'b0;
+              end
           end
           ST_WR_HPS: begin
-              hdd_write <= 1'b0;
               if (!sd_ack[hdd_unit] & phi0) begin
                   dma_state <= ST_IDLE;
                   DMA <= 1'b0;
@@ -212,8 +203,8 @@ module hdd(
 
         if (RESET) begin
             dma_state <= ST_IDLE;
-            hdd_read <= 1'b0;
-            hdd_write <= 1'b0;
+            sd_rd <= 2'b00;
+            sd_wr <= 2'b00;
             DMA <= 1'b0;
             DMA_WE <= 1'b0;
             // dma_req_rd reset by CPU interface
@@ -221,6 +212,21 @@ module hdd(
         end
     end // block: dma_proc
 
+    reg [1:0] hdd_mounted;
+    reg [1:0] hdd_protect;
+    reg [15:0] hdd_size[2];
+    always @(posedge CLK_14M) begin
+        if (img_mounted[0]) begin
+            hdd_mounted[0] <= |img_size;
+            hdd_protect[0] <= img_readonly;
+            hdd_size[0] <= img_size[24:9];
+        end
+        if (img_mounted[1]) begin
+            hdd_mounted[1] <= |img_size;
+            hdd_protect[1] <= img_readonly;
+            hdd_size[1] <= img_size[24:9];
+        end
+    end
     // Helper wires for checking mounted/protect status of current unit
     wire current_unit_mounted = hdd_mounted[hdd_unit];
     wire current_unit_protect = hdd_protect[hdd_unit];
@@ -253,8 +259,8 @@ module hdd(
                   4'h6: D_OUT <= reg_block_l;     // BLK L
                   4'h7: D_OUT <= reg_block_h;     // BLK H
                   //4'h8: D_OUT <= next_byte_q;     // NEXT BYTE mirror (no increment here)
-                  4'h9: D_OUT <= hdd_unit ? hdd1_size[16:9] : hdd0_size[16:9];
-                  4'ha: D_OUT <= hdd_unit ? hdd1_size[24:17] : hdd0_size[24:17];
+                  4'h9: D_OUT <= hdd_size[hdd_unit][7:0];
+                  4'ha: D_OUT <= hdd_size[hdd_unit][15:8];
                   default: D_OUT <= 8'hFF;
                 endcase
                 $display("HDD CPU %s 00:%04h -> %02h (cmd=%02h unit=%02h blk=%04h mem=%04h sec_idx=%03d)",
@@ -277,8 +283,6 @@ module hdd(
                 reg_mem_h <= 8'h00;
                 reg_block_l <= 8'h00;
                 reg_block_h <= 8'h00;
-                prefetch_armed <= 1'b0;
-                prefetch_valid <= 1'b0;
             end
             else
             begin
@@ -372,9 +376,9 @@ module hdd(
                             4'h7 :
                                 begin D_OUT <= reg_block_h; `ifdef DEBUG_HDD $display("HDD RD C0F7: blkH=%02h", reg_block_h); `endif end
                             4'h9 :
-                                D_OUT <= hdd_unit ? hdd1_size[16:9] : hdd0_size[16:9];
+                                D_OUT <= hdd_size[hdd_unit][7:0];
                             4'ha :
-                                D_OUT <= hdd_unit ? hdd1_size[24:17] : hdd0_size[24:17];
+                                D_OUT <= hdd_size[hdd_unit][15:8];
                            default :
                                 ;
                         endcase
@@ -390,12 +394,8 @@ module hdd(
                                     if (D_IN == PRODOS_COMMAND_READ || D_IN == PRODOS_COMMAND_WRITE) begin
                                         reg_status <= 8'h80; // busy
                                         // Arm prefetch for first NEXT BYTE on READ to cover BRAM latency
-                                        prefetch_armed <= (D_IN == PRODOS_COMMAND_READ);
-                                        prefetch_valid <= 1'b0;
                                     end else begin
                                         reg_status <= 8'h00;
-                                        prefetch_armed <= 1'b0;
-                                        prefetch_valid <= 1'b0;
                                     end
                                 end
                             4'h1 : begin // ignore writes to status
@@ -469,12 +469,6 @@ bram #(.widthad_a(9)) sector_ram
         ram_do <= sector_dma_q;
         if (ram_we) $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", hps_ram_addr, ram_di);
     end
-
-    // Stage Port-B q so mirror/gated paths return the correct byte with BRAM latency
-    always @(posedge CLK_14M) begin
-        next_byte_q <= sector_cpu_q;
-    end
-
 
    rom #(8,8,"rtl/roms/hdd.hex") hddrom (
            .clock(CLK_14M),
