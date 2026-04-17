@@ -3986,6 +3986,11 @@ char spinner_toggle = 0;
 // ------------------------
 std::vector<int> screenshot_frames;
 bool screenshot_mode = false;
+// Optional override for screenshot output path. When non-empty, save_screenshot
+// writes to this exact path (single-shot) instead of the default
+// "screenshot_frame_NNNN.png" naming. Used by batch runners that want to run
+// multiple Vemu instances in the same cwd without filename collisions.
+std::string screenshot_name_override = "";
 
 // Stop at frame functionality
 // ---------------------------
@@ -4334,6 +4339,10 @@ void show_help() {
 	printf("Options:\n");
 	printf("  -h, --help                    Show this help message\n");
 	printf("  --headless, --no-gui          Run without SDL/ImGui (CI/headless)\n");
+	printf("  --screenshot-name <path>      Override screenshot output path (single-shot).\n");
+	printf("                                Useful for parallel batch runs so each worker\n");
+	printf("                                writes to a unique filename. Combine with\n");
+	printf("                                --screenshot <frame> to take at that frame.\n");
 	printf("  --screenshot <frames>         Take screenshots at specified frame numbers\n");
 	printf("                                (comma-separated list, e.g., 100,200,300)\n");
 	printf("  -screenshot <frames>          Legacy form of --screenshot (deprecated)\n");
@@ -4391,8 +4400,12 @@ void save_screenshot(int frame_number) {
 		return;
 	}
 	
-	char filename[256];
-	snprintf(filename, sizeof(filename), "screenshot_frame_%04d.png", frame_number);
+	char filename[512];
+	if (!screenshot_name_override.empty()) {
+		snprintf(filename, sizeof(filename), "%s", screenshot_name_override.c_str());
+	} else {
+		snprintf(filename, sizeof(filename), "screenshot_frame_%04d.png", frame_number);
+	}
 	
 	// Read directly from the IIgs video output buffer that video.Clock() writes to
 	// The colour format is: 0xFF000000 | B << 16 | G << 8 | R (ABGR)
@@ -4525,6 +4538,10 @@ int main(int argc, char** argv, char** env) {
 			}
 			printf("Screenshot mode enabled for frames: %s\n", frames_str.c_str());
 			i++; // Skip the next argument since it's the frame list
+		} else if (strcmp(argv[i], "--screenshot-name") == 0 && i + 1 < argc) {
+			screenshot_name_override = argv[i + 1];
+			printf("Screenshot output path override: %s\n", screenshot_name_override.c_str());
+			i++;
 		} else if (strcmp(argv[i], "--memory-dump") == 0 && i + 1 < argc) {
 			memory_dump_mode = true;
 			std::string frames_str = argv[i + 1];

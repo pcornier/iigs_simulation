@@ -23,8 +23,12 @@
 # Options:
 #   --out DIR       Output directory (default: woz_report). Reused between runs
 #                   for resume, so point at the same directory to continue.
-#   --frames N      Frames per test (default 500)
-#   --timeout S     Per-disk wall-clock timeout seconds (default 150)
+#   --frames N      Frames per test (default 1000)
+#   --timeout S     Per-disk wall-clock timeout seconds (default 300)
+#   --jobs N, -j N  Run N disks in parallel (default 1). With 7+ cores, -j 7
+#                   finishes the full set in ~1/7 the wall-clock time. Each
+#                   worker writes its own screenshot via --screenshot-name so
+#                   workers don't collide in the same cwd.
 #
 # Files produced in DIR/:
 #   index.html            human-review page
@@ -37,6 +41,7 @@ set -uo pipefail
 FRAMES=1000
 TIMEOUT=300
 BATCH=0
+JOBS=1
 RETEST=""
 REDO_STATUS=""
 OUT="woz_report"
@@ -47,11 +52,12 @@ while [[ $# -gt 0 ]]; do
     --frames)       FRAMES="$2"; shift 2 ;;
     --timeout)      TIMEOUT="$2"; shift 2 ;;
     --batch)        BATCH="$2"; shift 2 ;;
+    --jobs|-j)      JOBS="$2"; shift 2 ;;
     --retest)       RETEST="$2"; shift 2 ;;
     --redo-status)  REDO_STATUS="$2"; shift 2 ;;
     --out)          OUT="$2"; shift 2 ;;
     --help|-h)
-      sed -n '3,33p' "$0"; exit 0 ;;
+      sed -n '3,42p' "$0"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -177,24 +183,38 @@ fi
 rm -f screenshot_frame_*.png
 
 # ---------- Run tests ----------
-N=0
-while IFS= read -r woz; do
-  [[ -z "$woz" ]] && continue
-  N=$((N + 1))
-  rm -f screenshot_frame_*.png
+# Shared state for workers (exported so subshells can see them)
+TMPDIR_WORK=$(mktemp -d -t woz_batch_XXXXXX)
+trap 'rm -rf "$TMPDIR_WORK"' EXIT
+PROGRESS_FILE="$TMPDIR_WORK/progress"
+echo 0 > "$PROGRESS_FILE"
 
+export OUT CSV FRAMES TIMEOUT WORK_COUNT TMPDIR_WORK PROGRESS_FILE
+
+# Worker: process one disk. Called with the woz path as $1.
+# Writes a CSV row via flock and prints a progress line.
+run_one_disk() {
+  local woz="$1"
+  [[ -z "$woz" ]] && return 0
+
+  # Unique per-invocation screenshot path so parallel workers don't collide
+  local shot="$TMPDIR_WORK/shot.$$.$RANDOM.png"
+
+  local start end elapsed rc png_size hash status
   start=$(date +%s)
   if command -v gtimeout >/dev/null 2>&1; then
     gtimeout "$TIMEOUT" ./obj_dir/Vemu --quiet --no-cpu-log \
         --woz "$woz" --stop-at-frame "$FRAMES" --screenshot "$FRAMES" \
+        --screenshot-name "$shot" \
         >/dev/null 2>&1
     rc=$?
   else
     ./obj_dir/Vemu --quiet --no-cpu-log \
         --woz "$woz" --stop-at-frame "$FRAMES" --screenshot "$FRAMES" \
+        --screenshot-name "$shot" \
         >/dev/null 2>&1 &
-    pid=$!
-    (sleep "$TIMEOUT" && kill -9 "$pid" 2>/dev/null) & watchdog=$!
+    local pid=$!
+    (sleep "$TIMEOUT" && kill -9 "$pid" 2>/dev/null) & local watchdog=$!
     wait "$pid" 2>/dev/null
     rc=$?
     kill "$watchdog" 2>/dev/null
@@ -202,32 +222,55 @@ while IFS= read -r woz; do
   end=$(date +%s)
   elapsed=$((end - start))
 
-  png=$(printf 'screenshot_frame_%04d.png' "$FRAMES")
-  if [[ -f "$png" ]]; then
-    size=$(stat -f%z "$png" 2>/dev/null || stat -c%s "$png")
-    hash=$(md5 -q "$png" 2>/dev/null || md5sum "$png" | awk '{print $1}')
-    if [[ ! -f "$OUT/shots/$hash.png" ]]; then
-      cp "$png" "$OUT/shots/$hash.png"
-    fi
+  if [[ -f "$shot" ]]; then
+    png_size=$(stat -f%z "$shot" 2>/dev/null || stat -c%s "$shot")
+    hash=$(md5 -q "$shot" 2>/dev/null || md5sum "$shot" | awk '{print $1}')
     if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
       status=TIMEOUT
-    elif [[ "$size" -lt 5600 ]]; then
+    elif [[ "$png_size" -lt 5600 ]]; then
       status=BLANK
-    elif [[ "$size" -lt 6500 ]]; then
+    elif [[ "$png_size" -lt 6500 ]]; then
       status=TEXT_ONLY
     else
       status=BOOTED
     fi
   else
-    size=0
+    png_size=0
     hash=""
     status=CRASH
   fi
 
-  printf '%s,%d,%s,%d,%d,"%s"\n' "$status" "$size" "$hash" "$elapsed" "$rc" "$woz" >> "$CSV"
+  # Serialize writes: dedupe screenshot, append CSV row, bump progress counter.
+  # Use mkdir as an atomic lock (portable across macOS / Linux, no flock needed).
+  local lockdir="$TMPDIR_WORK/lock"
+  while ! mkdir "$lockdir" 2>/dev/null; do sleep 0.05; done
+  if [[ -n "$hash" && ! -f "$OUT/shots/$hash.png" ]]; then
+    cp "$shot" "$OUT/shots/$hash.png"
+  fi
+  printf '%s,%d,%s,%d,%d,"%s"\n' "$status" "$png_size" "$hash" "$elapsed" "$rc" "$woz" >> "$CSV"
+  local n=$(( $(< "$PROGRESS_FILE") + 1 ))
+  echo "$n" > "$PROGRESS_FILE"
   printf '[%4d/%4d] %-10s %6d bytes  %3ds  %s\n' \
-      "$N" "$WORK_COUNT" "$status" "$size" "$elapsed" "$woz"
-done < "$WORK_LIST"
+      "$n" "$WORK_COUNT" "$status" "$png_size" "$elapsed" "$woz"
+  rmdir "$lockdir"
+
+  rm -f "$shot"
+}
+export -f run_one_disk
+
+if [[ "$JOBS" -le 1 ]]; then
+  # Sequential mode
+  while IFS= read -r woz; do
+    [[ -z "$woz" ]] && continue
+    run_one_disk "$woz"
+  done < "$WORK_LIST"
+else
+  # Parallel mode. Use NUL separators so paths with spaces survive xargs.
+  # macOS's xargs lacks -d, but -0 works everywhere.
+  echo "Parallelism: $JOBS workers"
+  tr '\n' '\0' < "$WORK_LIST" | \
+    xargs -0 -n1 -P "$JOBS" -I {} bash -c 'run_one_disk "$@"' _ {}
+fi
 
 rm -f screenshot_frame_*.png
 
