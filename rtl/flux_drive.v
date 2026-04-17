@@ -1252,6 +1252,7 @@ module flux_drive (
                 end
             end
 
+`ifdef DEBUG_VERBOSE
             // Focused debug around suspected divergence position.
             if (motor_spinning && TRACK_LOADED &&
                 (bit_position >= 17'd70190) && (bit_position <= 17'd70230)) begin
@@ -1266,6 +1267,7 @@ module flux_drive (
                          bit_position, effective_bit_position, BRAM_ADDR, BRAM_DATA,
                          TRACK_BIT_COUNT, bit_shift, current_bit, bit_timer);
             end
+`endif
 `endif
 
             // Rotate whenever motor is spinning so angular position keeps advancing
@@ -1718,11 +1720,13 @@ module flux_drive (
             // Log first flux transitions
             if (FLUX_TRANSITION) begin
                 flux_count_debug <= flux_count_debug + 1;
+`ifdef DEBUG_VERBOSE
                 if (flux_count_debug < 2000000 && head_phase == 0) begin
                     $display("FLUX_DRIVE[%0d]: FLUX #%0d at cycle=%0d bit_pos=%0d byte=%04h data=%02h bit=%0d",
                              DRIVE_ID, flux_count_debug, cycle_count_debug, bit_position,
                              byte_index, BRAM_DATA, current_bit);
                 end
+`endif
 `ifdef DEBUG_BYTE_OFFSET
                 // Track first flux transitions and BRAM data after drive ready
                 if (drive_ready && !dbg_ready_started) begin

@@ -416,12 +416,14 @@ always @(posedge clk_14M) begin
         end
         ph2_en_prev <= ph2_en;
 
+`ifdef DEBUG_VERBOSE
         if (ph2_en && IO && addr == 16'hC0EC && iwm_slow_log_count < 16'd5000) begin
             $display("CLKDIV_IWM_SLOW: addr=%04x bank=%02x IO=%0d we=%0d slow=%0d slowMem=%0d slow_req=%0d cyareg=%02x slot_gate=%01x wC0C8=%0d wC0D8=%0d wC0E8=%0d wC0F8=%0d",
                      addr, bank, IO, we_reg, slow, slowMem, slow_request, cyareg, cyareg[3:0],
                      waitforC0C8, waitforC0D8, waitforC0E8, waitforC0F8);
             iwm_slow_log_count <= iwm_slow_log_count + 1'd1;
         end
+`endif
 `endif
     end
 end
