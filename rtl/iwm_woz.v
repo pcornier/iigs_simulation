@@ -197,6 +197,7 @@ module iwm_woz (
     reg [15:0] status_read_dbg_count;
     reg [15:0] phase_access_dbg_count;
     always @(posedge CLK_14M) begin
+`ifdef DEBUG_VERBOSE
         // Log status reads (capped — ROM polls these in tight loops)
         if (cpu_rd && PH2 && immediate_q6 && !immediate_q7 && status_read_dbg_count < 16'd64) begin
             $display("IWM_WOZ: STATUS_READ mode_reg=%02h immediate_mode=%02h mode_write_active=%0d cpu_wr=%0d drive_on=%0d imm_q6=%0d imm_q7=%0d A=%04h D_IN=%02h",
@@ -207,6 +208,7 @@ module iwm_woz (
         if (prev_immediate_mode != mode_reg) begin
             $display("IWM_WOZ: MODE_REG_CHANGED %02h -> %02h", prev_immediate_mode, mode_reg);
         end
+`endif
         prev_immediate_mode <= mode_reg;
         prev_cpu_rd <= cpu_rd;
     end
@@ -314,7 +316,7 @@ module iwm_woz (
 `endif
             end
 
-`ifdef DEBUG_IWM
+`ifdef DEBUG_VERBOSE
             // Debug: Show Q6/Q7 changes for tracking soft switch state
             if (A[3:1] == 3'b110) begin
                 $display("IWM_WOZ: Q6 <= %0d (addr=%04h is_35=%0d)", A[0], A, is_35_inch);
@@ -1225,6 +1227,7 @@ module iwm_woz (
         prev_motor_spinning <= motor_spinning;
         prev_iwm_active <= iwm_active;
 
+`ifdef DEBUG_VERBOSE
         // Periodic status when motor is on
         if (motor_spinning && (debug_cycle[19:0] == 20'h80000)) begin
             $display("IWM_WOZ: Status: is_35=%0d drive35_active=%0d drive525_active=%0d DISK_READY=%04b q6=%0d q7=%0d drive_sel=%0d",
@@ -1232,6 +1235,7 @@ module iwm_woz (
             $display("IWM_WOZ: Track3=%0d BitAddr3=%0d BitCount3=%0d Data3=%02h woz_track3_comb=%0d diskreg_sel=%0d",
                      drive35_track, drive35_bram_addr, WOZ_TRACK3_BIT_COUNT, WOZ_TRACK3_BIT_DATA, woz_track3_comb, diskreg_sel);
         end
+`endif
     end
 
     // Debug: Monitor flux transitions
@@ -1252,20 +1256,24 @@ module iwm_woz (
             // Debug: trace raw flux_transition_35 from drive35 (before mux)
             if (flux_transition_35 && !prev_flux35_raw) begin
                 flux35_raw_count <= flux35_raw_count + 1'd1;
+`ifdef DEBUG_VERBOSE
                 if (flux35_raw_count < 16'd50) begin
                     $display("IWM_WOZ: RAW flux_transition_35 #%0d (flux_is_35=%0d drive_sel=%0d mux_out=%0d any_spinning=%0d)",
                              flux35_raw_count, flux_is_35_inch, drive_sel, flux_transition, any_disk_spinning);
                 end
+`endif
             end
 
             // Debug: trace muxed flux_transition (should match flux_transition_35 when 3.5" active)
             if (flux_transition && !prev_flux && any_disk_spinning) begin
                 flux_count <= flux_count + 1'd1;
+`ifdef DEBUG_VERBOSE
                 if (flux_count < 16'd50) begin
                     $display("IWM_WOZ: Flux #%0d at bit_pos=%0d (flux_is_35=%0d drive_sel=%0d active=%0d)",
                              flux_count, flux_is_35_inch ? drive35_bit_position : drive525_bit_position,
                              flux_is_35_inch, drive_sel, drive_active);
                 end
+`endif
             end
         end
     end

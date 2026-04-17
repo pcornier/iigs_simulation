@@ -7,7 +7,7 @@ V_INC = +incdir+$(RTL)
 
 # ROM selection is now runtime (no build-time ROM3/ROM1 switch needed)
 
-V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD -Wno-fatal \
+V_DEFINE = +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD -Wno-fatal \
 	-I$(RTL)  \
 	-I$(RTL)/65C816  \
 	-I..
@@ -56,16 +56,12 @@ ifeq ($(findstring MINGW,$(UNAME_S)),MINGW)
 	CFLAGS = $(CXXFLAGS)
 endif
 
-CXXFLAGS += $(CXX_DEFINE)
+CC_OPT = -O2
+V_OPT = -O3 --x-assign fast --x-initial fast --noassert
+CXXFLAGS += $(CC_OPT) $(CXX_DEFINE)
 CFLAGS += $(CC_OPT) $(CC_DEFINE) -Iimgui
 LDFLAGS = $(LIBS)
 EXE = ./obj_dir/Vemu
-# Optimizations:
-#   -O3        Verilator model optimization
-#   --x-assign fast / --x-initial fast / --noassert  speed up x-propagation
-V_OPT = -O3 --x-assign fast --x-initial fast --noassert
-# C++ compile optimization (applied to Verilated model and glue code)
-CC_OPT = -O2
 
 V_SRC = \
 	sim.v  \
@@ -125,7 +121,7 @@ $(VOUT): $(V_SRC)  Makefile
 
 $(EXE): $(VOUT) $(C_SRC)
 #	(cd obj_dir; make OPT="-fauto-inc-dec -fdce -fdefer-pop -fdse -ftree-ccp -ftree-ch -ftree-fre -ftree-dce -ftree-dse" -f Vemu.mk)
-	(cd obj_dir; make -f Vemu.mk OBJCACHE=)
+	(cd obj_dir; make -f Vemu.mk OBJCACHE= OPT_FAST="-O2" OPT_SLOW="-O0" OPT_GLOBAL="-O2")
 
 fast:
 	(cd obj_dir; rm -f *.o ; make OPT="-fcompare-elim -fcprop-registers -fguess-branch-probability -fauto-inc-dec -fif-conversion2 -fif-conversion -fipa-pure-const -fdce -fipa-profile -fipa-reference -fmerge-constants -fsplit-wide-types -fdefer-pop -fdse -ftree-ccp -ftree-ch -ftree-fre -ftree-dce -ftree-dse -ftree-builtin-call-dce -ftree-copyrename -ftree-dominator-opts -ftree-forwprop -ftree-phiprop -ftree-sra -ftree-pta -ftree-ter -funit-at-a-time -ftree-bit-ccp -falign-functions  -falign-jumps -falign-loops  -falign-labels -fcaller-saves -fcrossjumping -fcse-follow-jumps -fcse-skip-blocks -fdelete-null-pointer-checks -fdevirtualize -fexpensive-optimizations -fgcse  -fgcse-lm -finline-small-functions -findirect-inlining -fipa-sra -foptimize-sibling-calls -fpartial-inlining -fpeephole2 -fregmove -freorder-blocks  -freorder-functions -frerun-cse-after-loop -fsched-interblock  -fsched-spec -fschedule-insns -fschedule-insns2 -fstrict-aliasing -fstrict-overflow -ftree-switch-conversion -ftree-pre -ftree-vrp" -f Vemu.mk)

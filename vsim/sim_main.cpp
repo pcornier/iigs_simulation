@@ -601,8 +601,10 @@ static const struct dasm_data32 gs_vectors[] =
 
 
 void DumpInstruction() {
-	// Fast path: if nobody would see the formatted instruction, skip the
-	// fmt::format work entirely. Saves ~40% on headless batch runs.
+	// Fast path: when quiet mode is active and the in-memory CPU log is disabled,
+	// there is nothing that will consume the formatted instruction string.
+	// Formatting is expensive (fmt::format + std::string allocations) and happens
+	// on every CPU instruction, so skipping it when not needed is a big speedup.
 	if (quiet_mode && !debug_6502) {
 		cpu_instruction_count++;
 		return;
@@ -3738,24 +3740,20 @@ int verilate() {
 							ins_formatted[i] = false;
 						}
 
-						std::string log = fmt::format("{0:06d} > ", cpu_instruction_count);
-						log.append(fmt::format("A={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A));
-						log.append(fmt::format("X={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X));
-						log.append(fmt::format("Y={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y));
-
-						log.append(fmt::format("M={0:x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__MF));
-						log.append(fmt::format("E={0:x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__EF));
-						log.append(fmt::format("D={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D));
-						//ImGui::Text("D       0x%04X", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D);
-						//ImGui::Text("SP      0x%04X", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP);
-						//ImGui::Text("DBR     0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR);
-						//ImGui::Text("PBR     0x%02X", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR);
-						//ImGui::Text("PC      0x%04X", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
-						if (0x011B==VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC)
-						   log.append(fmt::format("D={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP));
-							
-						// Only add to console log when debug_6502 is enabled (saves memory)
+						// Only format the register snapshot when something will consume it.
+						// Without this guard we do ~13 fmt::format allocations per CPU
+						// instruction that are immediately discarded in --quiet --no-cpu-log.
 						if (debug_6502) {
+							std::string log = fmt::format("{0:06d} > ", cpu_instruction_count);
+							log.append(fmt::format("A={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A));
+							log.append(fmt::format("X={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X));
+							log.append(fmt::format("Y={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y));
+
+							log.append(fmt::format("M={0:x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__MF));
+							log.append(fmt::format("E={0:x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__EF));
+							log.append(fmt::format("D={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D));
+							if (0x011B==VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC)
+							   log.append(fmt::format("D={0:04x} ", VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP));
 							console.AddLog(log.c_str());
 						}
 					}

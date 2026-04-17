@@ -925,7 +925,7 @@ module iigs
 
     // Check iwm_strobe BEFORE resetting it
     if (iwm_strobe & ~we & phi2) begin
-`ifdef DEBUG_IWM
+`ifdef DEBUG_VERBOSE
       $display("read_iwm %x ret: %x GC036: %x (addr %x) addr_bef(%x)",addr[11:0],iwm_dout,CYAREG,addr,addr_bef);
 `endif
       io_dout <= iwm_dout;
@@ -1361,7 +1361,10 @@ module iigs
             12'h016: io_dout <= {ALTZP, key_keys};
             12'h017: io_dout <= {SLOTC3ROM, key_keys};
             12'h018: io_dout <= {STORE80, key_keys};
-            12'h019: io_dout <= {mega2_vbl, key_keys};  // Mega II VBL flag
+            // $C019 RDVBLBAR: bit 7 = 1 when NOT in VBL, bit 7 = 0 when IN VBL
+            // (Apple IIgs Hardware Reference / tech doc: "Read vertical blanking: 1 = not VBL.")
+            // mega2_vbl is high during VBL, so invert it for the $C019 bit.
+            12'h019: io_dout <= {~mega2_vbl, key_keys};
             12'h01a: io_dout <= {TEXTG, key_keys};
             12'h01b: io_dout <= {MIXG, key_keys};
             12'h01c: io_dout <= {PAGE2, key_keys};
@@ -2052,7 +2055,7 @@ wire [7:0] din =
     (addr_bef[7:0] == 8'h16) ? {ALTZP, key_keys} :
     (addr_bef[7:0] == 8'h17) ? {SLOTC3ROM, key_keys} :
     (addr_bef[7:0] == 8'h18) ? {STORE80, key_keys} :
-    (addr_bef[7:0] == 8'h19) ? {mega2_vbl, key_keys} :  // Mega II VBL flag
+    (addr_bef[7:0] == 8'h19) ? {~mega2_vbl, key_keys} :  // RDVBLBAR: bit 7 = 1 when NOT in VBL
     (addr_bef[7:0] == 8'h1a) ? {TEXTG, key_keys} :
     (addr_bef[7:0] == 8'h1b) ? {MIXG, key_keys} :
     (addr_bef[7:0] == 8'h1c) ? {PAGE2, key_keys} :

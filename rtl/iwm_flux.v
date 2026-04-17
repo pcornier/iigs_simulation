@@ -830,6 +830,7 @@ module iwm_flux (
                             prolog_last1 <= shifted_rsh;
 `ifdef DEBUG_VERBOSE
                             byte_counter <= byte_counter + 1;
+`ifdef DEBUG_VERBOSE
                             if (data_trace_active) begin
                                 $display("IWM_DATA_TRACE_BYTE: idx=%0d pos=%0d data=%02h",
                                          data_trace_count, DISK_BIT_POSITION, shifted_rsh);
@@ -838,6 +839,7 @@ module iwm_flux (
                                 else
                                     data_trace_count <= data_trace_count + 1'd1;
                             end
+`endif
                             if (prolog_last2 == 8'hD5 && prolog_last1 == 8'hAA) begin
                                 if (shifted_rsh == 8'h96 || shifted_rsh == 8'hAD) begin
                                     if (data_trace_total < DATA_TRACE_TOTAL_LIMIT) begin
@@ -1088,6 +1090,7 @@ module iwm_flux (
                                                      hdr_trace_count + 1'd1);
                                         end
                                     end
+`ifdef DEBUG_VERBOSE
                                     if (hdr_trace_active) begin
                                         $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d",
                                                  shifted_rsh, DISK_BIT_POSITION);
@@ -1103,6 +1106,7 @@ module iwm_flux (
                                             data_trace_count <= data_trace_count + 1'd1;
                                         end
                                     end
+`endif
                                     prolog_last2 <= prolog_last1;
                                     prolog_last1 <= shifted_rsh;
                                     last_bc_byte <= shifted_rsh;
@@ -1377,6 +1381,7 @@ module iwm_flux (
                                                      hdr_trace_count + 1'd1);
                                         end
                                     end
+`ifdef DEBUG_VERBOSE
                                     if (hdr_trace_active) begin
                                         $display("IWM_FLUX: BYTE_COMPLETE_ASYNC data=%02h pos=%0d",
                                                  shifted_rsh, DISK_BIT_POSITION);
@@ -1392,6 +1397,7 @@ module iwm_flux (
                                             data_trace_count <= data_trace_count + 1'd1;
                                         end
                                     end
+`endif
                                     prolog_last2 <= prolog_last1;
                                     prolog_last1 <= shifted_rsh;
                                     last_bc_byte <= shifted_rsh;
@@ -1929,11 +1935,13 @@ module iwm_flux (
                             end
                             dbg_cpu_count <= dbg_cpu_count + 1'd1;
                         end
+`ifdef DEBUG_VERBOSE
                         if (MOTOR_ACTIVE) begin
                             $display("IWM_READ_ACK: cycle=%0d pos=%0d latched=%02h m_data=%02h bc=%0d bc_data=%02h rd_valid=%0d ack=%0d was_data=%0d",
                                      debug_cycle, DISK_BIT_POSITION, rd_data_latched, m_data, byte_completing,
                                      byte_complete_data, rd_latched_valid, rd_ack_take, rd_was_data_reg);
                         end
+`endif
 `endif
                     end
                 end

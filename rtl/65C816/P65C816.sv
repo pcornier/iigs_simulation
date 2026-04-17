@@ -205,7 +205,7 @@ module P65C816
       begin
          STATE <= {4{1'b0}};
          IR <= {8{1'b0}};
-`ifdef DEBUG_RESET
+`ifdef DEBUG_VERBOSE
          $display("CPU_RESET: RST_N asserted (low), STATE<=0, IR<=0");
 `endif
       end
@@ -248,7 +248,7 @@ module P65C816
                //$display("MVN_STATE: %02x:%04x STATE %d -> %d (A=%04x P[2]=%d)", PBR, PC, STATE, NextState, A, P[2]);
             end
 
-`ifdef DEBUG_MVN
+`ifdef DEBUG_VERBOSE
             // Debug: Track P[2] for every MVN instruction cycle
             if (IR == 8'h54) begin
                $display("MVN_P2_TRACK: %02x:%04x STATE=%d P[2]=%d IRQ_ACTIVE=%d LAST_CYCLE=%d",
@@ -730,7 +730,7 @@ module P65C816
          GotInterrupt <= 1'b1;
          NMI_ACTIVE <= 1'b0;
          IRQ_ACTIVE <= 1'b0;
-`ifdef DEBUG_RESET
+`ifdef DEBUG_VERBOSE
          $display("CPU_RESET_INT: RST_N low -> IsResetInterrupt=1, GotInterrupt=1");
 `endif
       end
