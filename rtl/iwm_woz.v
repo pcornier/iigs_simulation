@@ -47,6 +47,7 @@ module iwm_woz (
     input           WOZ_TRACK3_IS_FLUX,        // Track data is flux timing (not bitstream)
     input  [31:0]   WOZ_TRACK3_FLUX_SIZE,      // Size in bytes of flux data (when IS_FLUX)
     input  [31:0]   WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+    input           WOZ_TRACK3_WP,             // Write-protected (from WOZ INFO chunk)
 
     // WOZ Track bit interface for 5.25" drive 1
     output [5:0]    WOZ_TRACK1,
@@ -57,6 +58,7 @@ module iwm_woz (
     input           WOZ_TRACK1_IS_FLUX,        // Track data is flux timing (not bitstream)
     input  [31:0]   WOZ_TRACK1_FLUX_SIZE,      // Size in bytes of flux data
     input  [31:0]   WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+    input           WOZ_TRACK1_WP,             // Write-protected (from WOZ INFO chunk)
 
     // Write signals for 3.5" controller
     output [7:0]    WOZ_TRACK3_BIT_DATA_IN,  // Write byte to BRAM
@@ -496,7 +498,7 @@ module iwm_woz (
         .DRIVE_SELECT(drive_sel),       // Pass drive selection for per-slot direction tracking
         .DRIVE_SLOT(1'b0),              // This drive is slot 0 (drive 1 - internal drive)
         .DISK_MOUNTED(DISK_READY[2]),
-        .DISK_WP(1'b0),                 // Writable (write protect from WOZ INFO chunk can be wired here later)
+        .DISK_WP(WOZ_TRACK3_WP || !DISK_READY[2]),  // From WOZ INFO byte 2; also WP when empty
         .DOUBLE_SIDED(1'b1),
         .FLUX_TRANSITION(flux_transition_35),
         .WRITE_PROTECT(drive35_wp),
@@ -724,7 +726,7 @@ module iwm_woz (
         .DRIVE_SELECT(drive_sel),       // Pass drive selection
         .DRIVE_SLOT(1'b0),              // 5.25" doesn't use per-slot direction (IS_35_INCH=0)
         .DISK_MOUNTED(DISK_READY[0]),
-        .DISK_WP(!DISK_READY[0]),        // Writable when disk present, WP when empty (prevents boot interference)
+        .DISK_WP(WOZ_TRACK1_WP || !DISK_READY[0]),  // From WOZ INFO byte 2; also WP when empty
         .DOUBLE_SIDED(1'b0),
         .FLUX_TRANSITION(flux_transition_525),
         .WRITE_PROTECT(drive525_wp),

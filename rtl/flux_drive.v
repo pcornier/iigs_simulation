@@ -1113,21 +1113,34 @@ module flux_drive (
                          DRIVE_ID, bit_timer, bit_cell_cycles, BRAM_ADDR, bit_position);
 `endif
             end
-            // When a new track loads while spinning, ALWAYS reset flux playback state.
-            // This is needed for mixed-format WOZ disks (e.g., AppleWorks) where one side
-            // is bitstream and the other is flux. TRACK_LOAD_COMPLETE fires once after both
-            // sides finish loading. IS_FLUX_TRACK depends on stable_side at that moment,
-            // so it may reflect the bitstream side and miss the flux side's new data.
-            // Resetting flux state unconditionally is safe: for all-bitstream tracks,
-            // flux state is unused (only accessed when IS_FLUX_TRACK=1).
+            // When a new track loads while spinning, reset flux playback state
+            // (flux_byte_addr, flux_phase_accum) but PRESERVE the angular head
+            // position bit_position.
             //
-            // CRITICAL: bit_position must also be reset to 0 here. While TRACK_LOADED=0
-            // (waiting for BRAM to load), bit_position was FROZEN (not advancing), so it
-            // does NOT represent the true angular head position - it is stale. Resetting
-            // it to 0 ensures flux_byte_addr (also reset to 0) and bit_position are in
-            // sync: both start at the beginning of the newly loaded track data.
+            // On a real drive, the spindle keeps rotating during a head step.
+            // When the head arrives on the new track, the bitstream under the
+            // head is at whatever angular position the spindle happens to be
+            // at -- NOT bit 0. Copy-protection schemes that time nibble counts
+            // across two tracks (e.g. Wizardry's "sync across tracks") depend
+            // on this angular continuity and break catastrophically if we
+            // teleport to bit 0 on every step.
+            //
+            // If the new track's bit_count is shorter than the current
+            // bit_position, the effective_bit_position logic above wraps with
+            // modulo. On load, compute that wrap explicitly so bit_position
+            // itself stays in range.
+            //
+            // Flux state (flux_byte_addr, etc.) IS reset because flux data is
+            // byte-indexed and has no angular meaning once the track changes.
+            // This is a compromise: FLUX-format tracks lose angular
+            // continuity, but FLUX tracks are rare and the common 5.25"
+            // protection disks are all bitstream WOZ2.
             if (TRACK_LOAD_COMPLETE && motor_spinning) begin
-                bit_position <= 17'd0;
+                if (track_bit_count_17 > 0 && bit_position >= track_bit_count_17) begin
+                    // Wrap via the same modulo as effective_bit_position
+                    bit_position <= effective_bit_position;
+                end
+                // else: keep bit_position as-is
                 bit_timer <= bit_cell_base;
                 bit_half_timer <= bit_half_base;
                 bit_cell_cycles_reg <= bit_cell_base;
@@ -1142,8 +1155,8 @@ module flux_drive (
                 next_byte_valid <= 1'b0;
                 bram_first_read_pending <= 1'b1;  // Wait for BRAM to load new track data
 `ifdef SIMULATION
-                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE while spinning - resetting flux state (was flux_addr=%0d) is_flux=%0d pos=%0d",
-                         DRIVE_ID, flux_byte_addr, IS_FLUX_TRACK, bit_position);
+                $display("FLUX_DRIVE[%0d]: TRACK_LOAD_COMPLETE while spinning - preserving bit_position=%0d (new TBC=%0d) is_flux=%0d",
+                         DRIVE_ID, bit_position, track_bit_count_17, IS_FLUX_TRACK);
 `endif
             end
 

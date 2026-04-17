@@ -103,6 +103,7 @@ module iigs
    input              WOZ_TRACK3_IS_FLUX,   // Track data is flux timing (not bitstream)
    input  [31:0]      WOZ_TRACK3_FLUX_SIZE, // Size in bytes of flux data (when IS_FLUX)
    input  [31:0]      WOZ_TRACK3_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+   input              WOZ_TRACK3_WP,        // Write-protected flag from WOZ INFO chunk
    output [7:0]       WOZ_TRACK3_BIT_DATA_IN, // Write byte to BRAM
    output             WOZ_TRACK3_BIT_WE,      // Write enable
    output [15:0]      WOZ_TRACK3_BIT_WR_ADDR, // Write address (latched)
@@ -116,6 +117,7 @@ module iigs
    input              WOZ_TRACK1_IS_FLUX,       // Track data is flux timing (not bitstream)
    input  [31:0]      WOZ_TRACK1_FLUX_SIZE,     // Size in bytes of flux data
    input  [31:0]      WOZ_TRACK1_FLUX_TOTAL_TICKS, // Sum of FLUX bytes for timing normalization
+   input              WOZ_TRACK1_WP,            // Write-protected flag from WOZ INFO chunk
    output [7:0]       WOZ_TRACK1_BIT_DATA_IN,   // Write byte to BRAM
    output             WOZ_TRACK1_BIT_WE,        // Write enable
    output [15:0]      WOZ_TRACK1_BIT_WR_ADDR,   // Write address (latched)
@@ -2546,6 +2548,7 @@ wire ready_out;
       .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
       .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
       .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+      .WOZ_TRACK3_WP(WOZ_TRACK3_WP),
       .WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
       .WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
       .WOZ_TRACK3_BIT_WR_ADDR(WOZ_TRACK3_BIT_WR_ADDR),
@@ -2558,6 +2561,7 @@ wire ready_out;
       .WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
       .WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
       .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+      .WOZ_TRACK1_WP(WOZ_TRACK1_WP),
       .WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
       .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
       .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),

@@ -384,6 +384,7 @@ iigs iigs (
 	.WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
 	.WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
 	.WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+	.WOZ_TRACK3_WP(WOZ_TRACK3_WP),
 	.WOZ_TRACK3_READY(WOZ_TRACK3_READY),
 	.WOZ_TRACK3_DATA_VALID(WOZ_TRACK3_DATA_VALID),
 	.WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
@@ -398,6 +399,7 @@ iigs iigs (
 	.WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
 	.WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
 	.WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+	.WOZ_TRACK1_WP(WOZ_TRACK1_WP),
 	.WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
 	.WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
 	.WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
@@ -723,6 +725,7 @@ wire        WOZ_TRACK3_LOAD_COMPLETE;
 wire        WOZ_TRACK3_IS_FLUX;
 wire [31:0] WOZ_TRACK3_FLUX_SIZE;
 wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS;
+wire        WOZ_TRACK3_WP;
 wire        WOZ_TRACK3_READY;
 wire        WOZ_TRACK3_DATA_VALID;
 wire [7:0]  WOZ_TRACK3_BIT_DATA_IN;  // Write byte from IWM to BRAM
@@ -738,6 +741,7 @@ wire        WOZ_TRACK1_LOAD_COMPLETE;
 wire        WOZ_TRACK1_IS_FLUX;
 wire [31:0] WOZ_TRACK1_FLUX_SIZE;
 wire [31:0] WOZ_TRACK1_FLUX_TOTAL_TICKS;
+wire        WOZ_TRACK1_WP;
 wire [7:0]  WOZ_TRACK1_BIT_DATA_IN;  // Write byte from IWM to BRAM
 wire        WOZ_TRACK1_BIT_WE;       // Write enable from IWM
 wire [15:0] WOZ_TRACK1_BIT_WR_ADDR;  // Write address (latched)
@@ -880,7 +884,10 @@ woz_floppy_controller #(
 	.track_data_valid(WOZ_TRACK3_DATA_VALID),
 
 	// Disk type mismatch
-	.disk_type_mismatch()
+	.disk_type_mismatch(),
+
+	// Write-protect flag from WOZ INFO chunk
+	.disk_write_protected(WOZ_TRACK3_WP)
 );
 
 // =========================================================================
@@ -935,7 +942,10 @@ woz_floppy_controller #(
 	.track_data_valid(),
 
 	// Disk type mismatch
-	.disk_type_mismatch()
+	.disk_type_mismatch(),
+
+	// Write-protect flag from WOZ INFO chunk
+	.disk_write_protected(WOZ_TRACK1_WP)
 );
 
 endmodule

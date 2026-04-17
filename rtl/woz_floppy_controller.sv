@@ -53,7 +53,11 @@ module woz_floppy_controller #(
     output wire       track_data_valid,
 
     // Disk type mismatch detection
-    output wire       disk_type_mismatch  // High when loaded WOZ disk_type doesn't match IS_35_INCH
+    output wire       disk_type_mismatch, // High when loaded WOZ disk_type doesn't match IS_35_INCH
+
+    // Write-protect flag from WOZ INFO chunk (byte offset 2).
+    // Some copy-protection (e.g. Wizardry) refuses to boot unless the disk reports WP=1.
+    output wire       disk_write_protected
 );
 
     //=========================================================================
@@ -287,6 +291,7 @@ module woz_floppy_controller #(
 
     // Disk type mismatch: WOZ INFO disk_type 1=5.25", 2=3.5"
     assign disk_type_mismatch = woz_valid && ((IS_35_INCH && info_disk_type == 8'd1) || (!IS_35_INCH && info_disk_type == 8'd2));
+    assign disk_write_protected = woz_valid && (info_wp != 8'd0);
 
     // WOZ Parsing
     reg [10:0] meta_read_addr;
@@ -314,6 +319,7 @@ module woz_floppy_controller #(
     // INFO fields (mostly for debug)
     reg  [7:0] info_version;
     reg  [7:0] info_disk_type;
+    reg  [7:0] info_wp;           // INFO byte 2: write-protected (1=WP, 0=writable)
     reg  [7:0] info_bit_timing;
 
     // WOZ v3 FLUX support
@@ -442,6 +448,7 @@ module woz_floppy_controller #(
 	            chunk_index <= 32'd0;
 	            info_version <= 8'd0;
 	            info_disk_type <= 8'd0;
+	            info_wp <= 8'd0;
 	            info_bit_timing <= 8'd0;
 	            info_flux_block <= 16'd0;
 	            have_flux <= 1'b0;
@@ -528,6 +535,7 @@ module woz_floppy_controller #(
 	                chunk_index <= 32'd0;
 	                info_version <= 8'd0;
 	                info_disk_type <= 8'd0;
+	                info_wp <= 8'd0;
 	                info_bit_timing <= 8'd0;
 	                info_flux_block <= 16'd0;
 	                have_flux <= 1'b0;
@@ -1339,6 +1347,7 @@ module woz_floppy_controller #(
 	                                     // WOZ2: bit_timing byte is at offset 39 within INFO chunk:
 	                                     // ver(0), disk_type(1), wp(2), sync(3), cleaned(4), creator(5..36),
 	                                     // sides(37), boot_type(38), bit_timing(39)
+	                                     if (chunk_index == 32'd2)  info_wp <= b;
 	                                     if (chunk_index == 32'd39) info_bit_timing <= b;
 	                                     // WOZ3: flux_block at offset 46-47 (little-endian uint16)
 	                                     // Starting block number for flux data in TRKS chunk

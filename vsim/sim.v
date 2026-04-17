@@ -152,6 +152,7 @@ wire        WOZ_TRACK3_DATA_VALID; // BRAM data valid for selected side (no stat
 wire        WOZ_TRACK3_IS_FLUX;   // Track data is flux timing (not bitstream)
 wire [31:0] WOZ_TRACK3_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
 wire [31:0] WOZ_TRACK3_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
+wire        WOZ_TRACK3_WP;        // Write-protected flag from WOZ INFO chunk
 wire        woz_ctrl_ready;
 
 // 5.25" drive 1 WOZ bit interface
@@ -162,6 +163,7 @@ wire [31:0] WOZ_TRACK1_BIT_COUNT; // Total bits in track
 wire        WOZ_TRACK1_IS_FLUX;   // Track data is flux timing (not bitstream)
 wire [31:0] WOZ_TRACK1_FLUX_SIZE; // Size in bytes of flux data (when IS_FLUX)
 wire [31:0] WOZ_TRACK1_FLUX_TOTAL_TICKS; // Sum of FLUX bytes for timing normalization
+wire        WOZ_TRACK1_WP;        // Write-protected flag from WOZ INFO chunk
 
 // Write interfaces from IWM back to WOZ controllers
 wire [7:0]  WOZ_TRACK3_BIT_DATA_IN;  // Write byte for 3.5" BRAM
@@ -225,6 +227,7 @@ iigs  iigs(
     .WOZ_TRACK3_IS_FLUX(WOZ_TRACK3_IS_FLUX),
     .WOZ_TRACK3_FLUX_SIZE(WOZ_TRACK3_FLUX_SIZE),
     .WOZ_TRACK3_FLUX_TOTAL_TICKS(WOZ_TRACK3_FLUX_TOTAL_TICKS),
+    .WOZ_TRACK3_WP(WOZ_TRACK3_WP),
     .WOZ_TRACK3_BIT_DATA_IN(WOZ_TRACK3_BIT_DATA_IN),
     .WOZ_TRACK3_BIT_WE(WOZ_TRACK3_BIT_WE),
     .WOZ_TRACK3_BIT_WR_ADDR(WOZ_TRACK3_BIT_WR_ADDR),
@@ -238,6 +241,7 @@ iigs  iigs(
     .WOZ_TRACK1_IS_FLUX(WOZ_TRACK1_IS_FLUX),
     .WOZ_TRACK1_FLUX_SIZE(WOZ_TRACK1_FLUX_SIZE),
     .WOZ_TRACK1_FLUX_TOTAL_TICKS(WOZ_TRACK1_FLUX_TOTAL_TICKS),
+    .WOZ_TRACK1_WP(WOZ_TRACK1_WP),
     .WOZ_TRACK1_BIT_DATA_IN(WOZ_TRACK1_BIT_DATA_IN),
     .WOZ_TRACK1_BIT_WE(WOZ_TRACK1_BIT_WE),
     .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
@@ -589,7 +593,10 @@ woz_floppy_controller #(
     .track_data_valid(WOZ_TRACK3_DATA_VALID),
 
     // Disk type mismatch
-    .disk_type_mismatch(woz_35_type_mismatch)
+    .disk_type_mismatch(woz_35_type_mismatch),
+
+    // Write-protect flag from WOZ INFO chunk
+    .disk_write_protected(WOZ_TRACK3_WP)
 );
 
 // Connect 3.5" WOZ controller outputs to IIgs inputs
@@ -686,7 +693,10 @@ woz_floppy_controller #(
     .track_data_valid(),
 
     // Disk type mismatch
-    .disk_type_mismatch(woz_525_type_mismatch)
+    .disk_type_mismatch(woz_525_type_mismatch),
+
+    // Write-protect flag from WOZ INFO chunk
+    .disk_write_protected(WOZ_TRACK1_WP)
 );
 
 // Connect 5.25" WOZ controller outputs to IIgs inputs
