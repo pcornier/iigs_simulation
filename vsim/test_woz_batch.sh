@@ -34,8 +34,8 @@
 
 set -uo pipefail
 
-FRAMES=500
-TIMEOUT=150
+FRAMES=1000
+TIMEOUT=300
 BATCH=0
 RETEST=""
 REDO_STATUS=""
@@ -74,10 +74,40 @@ if [[ ! -f "$CSV" ]]; then
   echo "status,png_size,png_hash,seconds,rc,woz_path" > "$CSV"
 fi
 
-# Enumerate all .woz
+# Enumerate all .woz. For games that ship as multi-disk sets, only test
+# "disk 1" (or the sole disk) so we don't waste time trying to boot
+# disk 2/3/4/etc. Heuristic:
+#   - If a filename contains "disk N" (any case), keep only N=1
+#   - Or "side A/B": keep side A
+#   - Or "- Disk 1 -" / "- Side A -" style
+#   - Keep files that don't match these patterns (single-disk games)
+# Raw enumeration is kept in ALL_WOZ_RAW for the total count; the filtered
+# set goes to ALL_WOZ and drives actual work selection.
+ALL_WOZ_RAW=$(mktemp)
 ALL_WOZ=$(mktemp)
-find "$WOZTEST_DIR" -name '*.woz' -type f | sort > "$ALL_WOZ"
+find "$WOZTEST_DIR" -name '*.woz' -type f | sort > "$ALL_WOZ_RAW"
+awk '
+  {
+    # Match on lowercased basename so patterns work regardless of case
+    n = split($0, parts, "/")
+    fname = tolower(parts[n])
+    # If filename mentions "disk N", keep only disk 1* variants
+    if (match(fname, / disk *[0-9]+/)) {
+      if (match(fname, / disk *1[^0-9]/) || match(fname, / disk *1$/)) print $0
+      next
+    }
+    # If filename mentions "side X", keep only side A variants
+    if (match(fname, / side *[a-z]/)) {
+      if (match(fname, / side *a[^a-z]/) || match(fname, / side *a$/)) print $0
+      next
+    }
+    # No disk/side marker: single-disk image — keep
+    print $0
+  }
+' "$ALL_WOZ_RAW" > "$ALL_WOZ"
+TOTAL_RAW=$(wc -l < "$ALL_WOZ_RAW" | tr -d ' ')
 TOTAL=$(wc -l < "$ALL_WOZ" | tr -d ' ')
+echo "Found $TOTAL_RAW .woz files; testing $TOTAL first-disk/side-A images (skipping additional disks)"
 
 # Build working set based on mode
 WORK_LIST=$(mktemp)
@@ -226,7 +256,32 @@ cat > "$HTML" <<HTML_HEAD
   .group { background: #fff; border: 1px solid #ccc; border-radius: 6px;
            margin-bottom: 12px; padding: 10px; }
   .group-header { display: flex; align-items: center; gap: 15px; }
-  .group-header img { max-width: 200px; border: 1px solid #888; image-rendering: pixelated; }
+  .group-header img {
+    width: 400px;
+    border: 1px solid #888;
+    image-rendering: pixelated;
+    cursor: zoom-in;
+    transition: transform 0.15s;
+  }
+  .group-header img:hover {
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  /* Full-size lightbox overlay when an image is clicked */
+  #lightbox {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.9);
+    z-index: 1000;
+    align-items: center; justify-content: center;
+    cursor: zoom-out;
+  }
+  #lightbox.open { display: flex; }
+  #lightbox img {
+    max-width: 95vw; max-height: 95vh;
+    image-rendering: pixelated;
+    border: 1px solid #444;
+  }
   .group-info { flex: 1; }
   .status { display: inline-block; padding: 2px 8px; border-radius: 3px;
             font-weight: bold; font-size: 12px; color: #fff; }
@@ -270,6 +325,7 @@ cat > "$HTML" <<HTML_HEAD
   <button data-filter="TIMEOUT">TIMEOUT</button>
   <button data-filter="CRASH">CRASH</button>
 </div>
+<div id="lightbox"><img src="" alt=""></div>
 <div id="report">
 HTML_HEAD
 
@@ -394,6 +450,20 @@ cat >> "$HTML" <<'HTML_FOOT'
     document.querySelectorAll('.retest-cb:checked, .mark-group-cb:checked')
       .forEach(cb => cb.checked = false);
     updateRetestBar();
+  });
+
+  // Lightbox: click any thumbnail to show full-size; click overlay to close
+  const lightbox = document.getElementById('lightbox');
+  const lightboxImg = lightbox.querySelector('img');
+  document.querySelectorAll('.group-header img').forEach(img => {
+    img.addEventListener('click', () => {
+      lightboxImg.src = img.src;
+      lightbox.classList.add('open');
+    });
+  });
+  lightbox.addEventListener('click', () => lightbox.classList.remove('open'));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') lightbox.classList.remove('open');
   });
 </script>
 </body>
