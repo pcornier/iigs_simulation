@@ -419,29 +419,36 @@ cat >> "$TMP" <<'HTML_FOOT'
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   }
 
-  // Seed from embedded triage.csv unless localStorage already has entries.
+  // Merge embedded triage.csv with localStorage.
+  // triage.csv acts as the baseline; localStorage wins for any path the user
+  // has touched since the last save. This lets freshly-applied auto-entries
+  // (e.g. from woz_detect_13sector.py --apply) show up even if the user has
+  // already started triaging — they fill in paths localStorage doesn't know
+  // about, without clobbering the user's in-progress work.
   function seedFromEmbedded() {
     const local = loadLocal();
-    if (Object.keys(local).length > 0) return local;  // don't clobber
     const csv = document.getElementById('initialTriageCsv').textContent.trim();
-    if (!csv) return local;
-    const lines = csv.split('\n');
-    const map = {};
-    for (let i = 1; i < lines.length; i++) {  // skip header
-      const line = lines[i];
-      if (!line.trim()) continue;
-      const fields = parseCsvLine(line);
-      if (fields.length < 2) continue;
-      const [path, label, note, ts] = fields;
-      if (!path) continue;
-      map[path] = {
-        label: label || '',
-        note: note || '',
-        ts: ts || '',
-      };
+    const fromCsv = {};
+    if (csv) {
+      const lines = csv.split('\n');
+      for (let i = 1; i < lines.length; i++) {  // skip header
+        const line = lines[i];
+        if (!line.trim()) continue;
+        const fields = parseCsvLine(line);
+        if (fields.length < 2) continue;
+        const [path, label, note, ts] = fields;
+        if (!path) continue;
+        fromCsv[path] = {
+          label: label || '',
+          note: note || '',
+          ts: ts || '',
+        };
+      }
     }
-    saveLocal(map);
-    return map;
+    // Merge: CSV baseline + localStorage overrides
+    const merged = Object.assign({}, fromCsv, local);
+    saveLocal(merged);
+    return merged;
   }
 
   // --------------- UI wiring ---------------
