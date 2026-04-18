@@ -796,7 +796,17 @@ module iigs
   assign rom2_ce = (bank_bef == 8'hff) || vec_fetch_force_rom_ce ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB) && !shadow[6]) ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef < 16'hc100 && (RDROM|~VPB) && !shadow[6]) ||  // I/O ($C000-$C0FF) - only when IOLC not inhibited
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc800 & addr_bef <= 16'hcfff && (RDROM|~VPB) && !shadow[6]) ||  // Expansion ($C800-$CFFF) - only when IOLC not inhibited
+                   // $C800-$CFFF: slot expansion ROM. On real hardware this maps to
+                   // the expansion ROM of whichever slot most recently had $CN00
+                   // accessed (cleared by reading $CFFF). We don't model external slot
+                   // cards — every slot in this sim points at internal IIgs firmware —
+                   // so routing $C800-$CFFF to internal ROM unconditionally (when IOLC
+                   // is not inhibited) matches every observable behavior. Previously we
+                   // gated on (RDROM | ~VPB), which broke games that do JSR $C300 /
+                   // JMP $C803 with both RDROM=0 and INTCXROM=0 (e.g. A Mind Forever
+                   // Voyaging) — they'd read $C803 as RAM = 0x00 and BRK into the
+                   // monitor at frame ~430.
+                   (bank_bef == 8'h0 & addr_bef >= 16'hc800 & addr_bef <= 16'hcfff && !shadow[6]) ||  // Expansion ($C800-$CFFF)
                    // Note: $C100-$C7FF (slot ROM) deliberately NOT included here - handled by slot_internalrom_ce/slot_ce
                    (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB) && !shadow[6]) ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f && !shadow[6]);
