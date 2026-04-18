@@ -1371,10 +1371,14 @@ module iigs
             12'h016: io_dout <= {ALTZP, key_keys};
             12'h017: io_dout <= {SLOTC3ROM, key_keys};
             12'h018: io_dout <= {STORE80, key_keys};
-            // $C019 RDVBLBAR: bit 7 = 1 when NOT in VBL, bit 7 = 0 when IN VBL
-            // (Apple IIgs Hardware Reference / tech doc: "Read vertical blanking: 1 = not VBL.")
-            // mega2_vbl is high during VBL, so invert it for the $C019 bit.
-            12'h019: io_dout <= {~mega2_vbl, key_keys};
+            // $C019 on the IIgs reports VBL directly (bit 7 = 1 during VBL),
+            // INVERTED from the Apple IIe's VBLBAR. Apple IIGS Tech Note #40:
+            // "On the IIGS, the screen is blanked when the most significant
+            // bit of $C019 is high (greater than 127 or $7F), while on the
+            // IIe, the screen is blanked when the bit is low." All four
+            // reference emulators (MAME IIgs, KEGS, GSplus, Clemens) do it
+            // this way. mega2_vbl is high during VBL, so pass it through.
+            12'h019: io_dout <= {mega2_vbl, key_keys};
             12'h01a: io_dout <= {TEXTG, key_keys};
             12'h01b: io_dout <= {MIXG, key_keys};
             12'h01c: io_dout <= {PAGE2, key_keys};
@@ -2065,7 +2069,7 @@ wire [7:0] din =
     (addr_bef[7:0] == 8'h16) ? {ALTZP, key_keys} :
     (addr_bef[7:0] == 8'h17) ? {SLOTC3ROM, key_keys} :
     (addr_bef[7:0] == 8'h18) ? {STORE80, key_keys} :
-    (addr_bef[7:0] == 8'h19) ? {~mega2_vbl, key_keys} :  // RDVBLBAR: bit 7 = 1 when NOT in VBL
+    (addr_bef[7:0] == 8'h19) ? {mega2_vbl, key_keys} :   // IIgs RDVBL (Tech Note #40): bit 7 = 1 in VBL
     (addr_bef[7:0] == 8'h1a) ? {TEXTG, key_keys} :
     (addr_bef[7:0] == 8'h1b) ? {MIXG, key_keys} :
     (addr_bef[7:0] == 8'h1c) ? {PAGE2, key_keys} :
@@ -2692,8 +2696,22 @@ wire ready_out;
             .dsr_a(1'b0)        // DSR asserted (active low on real hardware)
 				);
 
-  // Apple IIe compatibility signals now come from ADB module
-  wire [6:0] key_keys = adb_K[6:0];        // Use ADB's Apple IIe character output
+  // Apple IIe compatibility signals now come from ADB module.
+  //
+  // On the Apple IIe, $C011-$C01F return (status_bit << 7) | last_ASCII[6:0],
+  // where the keyboard shadow persists across strobe clears. The IIgs IOU
+  // does NOT mirror the keyboard character onto these registers — the Keyglu
+  // $C010 read exposes only AKD (bit 7), so the low 7 bits on $C011-$C01F
+  // are always zero.
+  //
+  // Verified against all four reference emulators (MAME apple2gs.cpp:1550-96,
+  // KEGS moremem.c:1112-1142, GSplus moremem.c:1251-1281, Clemens
+  // clem_mmio.c:680-715 / clem_vgc.c:293). Previously we carried the IIe
+  // shadow, which wedged Mean 18 at $02:5540 after any keystroke (it polls
+  // `lda [$f3]; and #$00ff; beq` against $C019 and needs the low byte to
+  // reach 0). $C000 (line ~2710 onward) keeps the persistent character —
+  // that register is the real keyboard data port on both machines.
+  wire [6:0] key_keys = 7'd0;
   //wire       key_anykeydown = adb_akd;     // Any key down from ADB
   wire       open_apple = adb_open_apple;  // Command key from ADB
   wire       closed_apple = adb_closed_apple; // Option key from ADB
