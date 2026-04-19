@@ -134,7 +134,10 @@ module iigs
 
    // Keyboard-triggered reset outputs
    output        keyboard_reset,      // Ctrl+F11 was pressed - trigger warm reset
-   output        keyboard_cold_reset  // Ctrl+OpenApple+F11 was pressed - trigger cold reset
+   output        keyboard_cold_reset, // Ctrl+OpenApple+F11 was pressed - trigger cold reset
+
+   // Keyboard LED state for MiSTer HPS PS/2 LED passthrough
+   output        capslock             // Caps Lock state (1 = Caps Lock on)
 
 );
 
@@ -2476,6 +2479,7 @@ wire ready_out;
 `endif
 
   wire adb_capslock;
+  assign capslock = adb_capslock;
   wire adb_open_apple, adb_closed_apple, adb_shift, adb_ctrl;
   wire adb_akd;
   wire [7:0] adb_K;

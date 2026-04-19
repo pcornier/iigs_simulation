@@ -4183,8 +4183,20 @@ static AsciiToPS2 ascii_to_ps2(char c) {
 // Queue key events for a string of characters
 void queue_key_string(const std::string& keys) {
     const unsigned int SHIFT_SCANCODE = 0x12;  // Left shift PS/2 scancode
+    const unsigned int CAPSLOCK_SCANCODE = 0x58;  // PS/2 caps lock
+    static bool capslock_led_on = false;
 
     for (char c : keys) {
+        // Special marker: 0x01 is used as "caps lock toggle" (one SDL-like
+        // transition that flips the LED). We inject it here as a single
+        // PS/2 event with pressed = new LED state.
+        if (c == 0x01) {
+            capslock_led_on = !capslock_led_on;
+            SimInput_PS2KeyEvent evt(CAPSLOCK_SCANCODE, capslock_led_on, false, CAPSLOCK_SCANCODE);
+            input.keyEvents.push(evt);
+            printf("Queued caps-lock toggle event (new state=%d)\n", (int)capslock_led_on);
+            continue;
+        }
         AsciiToPS2 mapping = ascii_to_ps2(c);
         if (mapping.scancode == 0xFF) {
             fprintf(stderr, "Warning: unmapped character '%c' (0x%02x) in key injection\n", c, (unsigned char)c);
@@ -4638,6 +4650,7 @@ int main(int argc, char** argv, char** env) {
                     else if (next == 'r') { processed_keys += '\r'; j++; }
                     else if (next == 't') { processed_keys += '\t'; j++; }
                     else if (next == 'e') { processed_keys += '\x1b'; j++; }  // ESC key
+                    else if (next == 'C') { processed_keys += (char)0x01; j++; }  // caps lock toggle
                     else if (next == '\\') { processed_keys += '\\'; j++; }
                     else if (next == 'x' && j + 3 < keys.length()) {
                         // Handle \xNN hex escape sequences

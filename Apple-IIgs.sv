@@ -275,9 +275,18 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	.buttons(buttons),
 	.status(status),
 	.status_menumask({status[5]}),
-	
+
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
+
+	// PS/2 keyboard LEDs (HPS-side passthrough). Bit ordering per MiSTer
+	// convention: {scrl_lock, num_lock, caps_lock}. We only own Caps Lock
+	// on the IIgs (there's no Num Lock or Scroll Lock on the ADB keyboard),
+	// so led_use[0]=1 to take ownership of that LED and leave the others to
+	// the HPS. The status bit is fed from the ADB's caps_lock_state output.
+	.ps2_kbd_led_status({2'b00, capslock_led}),
+	.ps2_kbd_led_use(3'b001),
+
 	.joystick_0(joystick_0),
 	.joystick_l_analog_0(joystick_l_analog_0),
 	.joystick_l_analog_1(joystick_l_analog_1),
@@ -316,6 +325,9 @@ pll pll
 // Keyboard reset signals come from iigs module (Ctrl+F11, Ctrl+OpenApple+F11)
 wire keyboard_reset;
 wire keyboard_cold_reset;
+
+// Caps Lock LED passthrough from the ADB to HPS PS/2 keyboard LEDs
+wire capslock_led;
 
 // Combine all reset sources
 // Include ~locked to hold reset until PLL is stable (critical for FPGA)
@@ -437,7 +449,8 @@ iigs iigs (
 
 	// Keyboard-triggered reset outputs (Ctrl+F11, Ctrl+OpenApple+F11)
 	.keyboard_reset(keyboard_reset),
-	.keyboard_cold_reset(keyboard_cold_reset)
+	.keyboard_cold_reset(keyboard_cold_reset),
+	.capslock(capslock_led)
 );
 
 wire [23:0] addr_bus;

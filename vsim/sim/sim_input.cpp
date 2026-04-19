@@ -370,7 +370,7 @@ static const int ev2ps2[] =
 	EXT | 0x6b, //80  KEY_LEFT
 	EXT | 0x72, //81  KEY_DOWN
 	EXT | 0x75, //82  KEY_UP
-	EMU_SWITCH_2 | 0x77, //83  KEY_NUMLOCK
+	0x77, //83  SDL_SCANCODE_NUMLOCKCLEAR  (Mac keypad Clear -> ADB 0x47 via adb.v)
 	EXT | 0x4a, //84  KEY_KPSLASH
 	0x7c, //85  KEY_KPASTERISK
 	0x7b, //86  KEY_KPMINUS
@@ -387,10 +387,10 @@ static const int ev2ps2[] =
 	0x7d, //97  KEY_KP9
 	0x70, //98  KEY_KP0
 	0x71, //99  KEY_KPDOT
-	NONE, //100 ???
-	NONE, //101 ???
-	NONE, //102 ???
-	NONE, //103 KEY_KPEQUAL
+	0x61, //100 SDL_SCANCODE_NONUSBACKSLASH  (102nd key / ISO <> between LShift and Z)
+	EXT | 0x27, //101 SDL_SCANCODE_APPLICATION  (reuse PS/2 R-Windows code -> Option/Closed Apple)
+	NONE, //102 KEY_POWER
+	0x0F, //103 SDL_SCANCODE_KP_EQUALS  (numeric keypad =)
 	NONE, //104 KEY_F13
 	NONE, //105 KEY_F14
 	NONE, //106 KEY_F15
@@ -511,13 +511,14 @@ static const int ev2ps2[] =
 	NONE, //221 
 	NONE, //222 
 	NONE, //223 
-	NONE, //224 
-	 0x12, //225  KEY_LEFTSHIFT
-	 0x11, //226  KEY_LEFTALT
-	NONE,          //227
-	 EXT | 0x14, //228  KEY_RIGHTCTRL
-	 0x59, //229  KEY_RIGHTSHIFT
-	 EXT | 0x11, //230 KEY_RIGHTALT
+	 0x14, //224  SDL_SCANCODE_LCTRL
+	 0x12, //225  SDL_SCANCODE_LSHIFT
+	 0x11, //226  SDL_SCANCODE_LALT  (Open Apple / Command)
+	 EXT | 0x1F, //227  SDL_SCANCODE_LGUI  (Mac ⌘, Win key) -> Closed Apple / Option
+	 EXT | 0x14, //228  SDL_SCANCODE_RCTRL
+	 0x59, //229  SDL_SCANCODE_RSHIFT
+	 EXT | 0x11, //230  SDL_SCANCODE_RALT
+	 EXT | 0x27, //231  SDL_SCANCODE_RGUI  (RightGUI) -> Closed Apple / Option (menu key PS/2 code)
 
 };
 /* http://www-personal.umich.edu/~bazald/l/api/_s_d_l__scancode_8h.html */
@@ -597,9 +598,31 @@ void SimInput::Read() {
 	}
 #else
 	if (!headless) {
+		// Caps Lock: macOS SDL delivers the latch as a transient scancode
+		// blip that polling typically misses, but SDL_GetModState() &
+		// KMOD_CAPS reflects the actual latched LED state reliably.
+		// Track that separately and synthesize a PS/2 caps-lock event on
+		// each toggle. The scancode loop below explicitly skips scancode
+		// 57 so we don't double-emit.
+		static int caps_mod_last = -1;
+		int caps_mod_now = (SDL_GetModState() & KMOD_CAPS) ? 1 : 0;
+		if (caps_mod_last == -1) caps_mod_last = caps_mod_now;
+		if (caps_mod_last != caps_mod_now) {
+			const unsigned int CAPSLOCK_PS2 = 0x58;
+			SimInput_PS2KeyEvent evt(57, caps_mod_now, false, CAPSLOCK_PS2);
+			keyEvents.push(evt);
+			caps_mod_last = caps_mod_now;
+			if (m_keyboardState_last && m_keyboardStateCount > 57) {
+				m_keyboardState_last[57] = caps_mod_now;
+			}
+		}
 		for (int k = 0; k < m_keyboardStateCount; k++) {
 			if (m_keyboardState_last[k] != m_keyboardState[k]) {
-				// Extract extended flag from the mapped PS/2 code
+				if (k == 57) {
+					// Caps Lock handled via SDL_GetModState above.
+					m_keyboardState_last[k] = m_keyboardState[k];
+					continue;
+				}
 				unsigned int mapped = ev2ps2[k];
 				bool ext = (mapped & EXT) != 0;
 				SimInput_PS2KeyEvent evt = SimInput_PS2KeyEvent(k, m_keyboardState[k], ext, mapped);

@@ -273,6 +273,9 @@ iigs  iigs(
         .keyboard_reset(keyboard_reset),
         .keyboard_cold_reset(keyboard_cold_reset),
 
+        // Caps Lock LED (unused in vsim)
+        .capslock(),
+
         // Floppy motor status (for dirty track flush on motor-off)
         .floppy_motor_on(floppy_motor_on),
         .floppy35_motor_on(floppy35_motor_on),
