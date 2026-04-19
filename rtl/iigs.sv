@@ -1343,22 +1343,12 @@ module iigs
             end
             // NOTE: $C064-$C067 are paddle timer reads, handled below at lines 1205-1208
 
-            // Apple II compatibility soft switches ($C002-$C005) - RAMRD/RAMWRT control
-            // These should ONLY respond to bank $00 and $E0 accesses, NOT bank $01/$E1
-            // This prevents MVN/MVP block moves through bank $01 I/O space from corrupting state
-            // See doc/gauntlet_crash_analysis.md for details
-`ifdef DEBUG_IO
-            12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",0); RAMRD<= 1'b0 ; end end
-            12'h003: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMRD %x",1); RAMRD<= 1'b1 ; end end
-            12'h004: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",0); RAMWRT<= 1'b0 ; end end
-            12'h005: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin $display("**RAMWRT %x",1); RAMWRT<= 1'b1 ; end end
-`else
-            12'h002: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMRD<= 1'b0 ; end end
-            12'h003: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMRD<= 1'b1 ; end end
-            12'h004: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMWRT<= 1'b0 ; end end
-            12'h005: begin if (bank_bef == 8'h00 || bank_bef == 8'he0) begin RAMWRT<= 1'b1 ; end end
-`endif
-
+            // $C002-$C005 are WRITE-ONLY softswitches on both IIe and IIgs —
+            // reads must NOT toggle RAMRD/RAMWRT. arekkusu's SWITCHES_V1
+            // softswitch tester exposes this: it reads $C000,X across all
+            // softswitches; toggling RAMRD on a $C003 read swaps the test
+            // code bank under the running CPU and BRKs. Writes are handled
+            // in the `if (we)` branch above.
             //12'h010: begin io_dout<=key_keys; key_reads<=1; end
             //12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
 
