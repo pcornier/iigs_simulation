@@ -3687,8 +3687,10 @@ int verilate() {
                                 int hidx = hdd_wptr;
                                 for (int i = 0; i < 32; i++) {
                                     hidx = (hidx - 1) & (HDD_RING_CAP - 1);
+                                    char rw = hdd_ring[hidx].rw;
+				    if (rw != 'R' && rw != 'W') continue; // Prevent nulls in log
                                     printf("  %02X:%04X %c 00:%04X = %02X\n", hdd_ring[hidx].pbr, hdd_ring[hidx].pc,
-                                           hdd_ring[hidx].rw, hdd_ring[hidx].addr16, hdd_ring[hidx].data);
+                                           rw, hdd_ring[hidx].addr16, hdd_ring[hidx].data);
                                 }
                             }
                         }
