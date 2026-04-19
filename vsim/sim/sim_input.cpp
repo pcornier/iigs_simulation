@@ -370,7 +370,7 @@ static const int ev2ps2[] =
 	EXT | 0x6b, //80  KEY_LEFT
 	EXT | 0x72, //81  KEY_DOWN
 	EXT | 0x75, //82  KEY_UP
-	EMU_SWITCH_2 | 0x77, //83  KEY_NUMLOCK
+	0x77, //83  SDL_SCANCODE_NUMLOCKCLEAR  (Mac keypad Clear -> ADB 0x47 via adb.v)
 	EXT | 0x4a, //84  KEY_KPSLASH
 	0x7c, //85  KEY_KPASTERISK
 	0x7b, //86  KEY_KPMINUS
