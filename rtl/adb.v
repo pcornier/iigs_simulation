@@ -112,9 +112,20 @@ reg [7:0] device_data_pending [15:0];    // Pending data count per device
 parameter MAX_KBD_BUF = 8;
 reg [7:0] kbd_fifo [MAX_KBD_BUF-1:0];    // Keyboard FIFO buffer
 reg [3:0] kbd_fifo_head;                 // FIFO head pointer
-reg [3:0] kbd_fifo_tail;                 // FIFO tail pointer  
+reg [3:0] kbd_fifo_tail;                 // FIFO tail pointer
 reg [3:0] kbd_fifo_count;                // Number of keys in FIFO
 reg kbd_strobe;                          // Keyboard strobe bit
+
+// ADB-side 1-deep staging buffer for Register 0 events. When a press
+// arrives and the host hasn't yet read the previous event
+// (device_data_pending[2] still 1), subsequent press/release events land
+// here and get promoted to device_registers[2][0] as soon as the host
+// drains. Without this, a fast tap (press immediately followed by
+// release, before the test's next TALK R0) would overwrite the press with
+// the release and the diag keyboard test would see an unexpected release
+// and flag "key stuck in down position".
+reg [7:0] kbd_r0_next;
+reg       kbd_r0_next_valid;
 
 // Modifier key tracking for selftest override and keyboard processing
 reg shift_down;           // Bit 0: Shift key down
@@ -360,14 +371,14 @@ endfunction
 function is_repeatable_key;
   input [7:0] key_code;  // Apple ADB key code
   begin
-    // Repeatable keys are ASCII keys (not modifiers)
-    // Exclude modifier keys: Shift (0x38, 0x7B), Control (0x36), Command (0x37), Option (0x3A)
-    is_repeatable_key = (key_code != 8'h36) &&  // Control
-                       (key_code != 8'h37) &&   // Command
-                       (key_code != 8'h38) &&   // Left Shift
-                       (key_code != 8'h3A) &&   // Option
-                       (key_code != 8'h7B) &&   // Right Shift
-                       (key_code != 8'h7F);     // Invalid (removed 8'h00 check - A key is valid!)
+    // Repeatable keys are ASCII keys (not modifiers / locks)
+    is_repeatable_key = (key_code != 8'h36) &&   // Control
+                       (key_code != 8'h37) &&    // Command
+                       (key_code != 8'h38) &&    // Left Shift
+                       (key_code != 8'h39) &&    // Caps Lock (state toggle, not repeat)
+                       (key_code != 8'h3A) &&    // Option
+                       (key_code != 8'h7B) &&    // Right Shift
+                       (key_code != 8'h7F);      // Invalid
   end
 endfunction
 
@@ -717,6 +728,10 @@ always @(posedge CLK_14M) begin
       kbd_fifo[i] <= 8'h00;
     end
 
+    // ADB R0 staging buffer
+    kbd_r0_next <= 8'h00;
+    kbd_r0_next_valid <= 1'b0;
+
     // Initialize modifier key states
     shift_down <= 1'b0;
     ctrl_down <= 1'b0;
@@ -768,10 +783,29 @@ always @(posedge CLK_14M) begin
       $display("ADB: PS2 KEY EVENT: key=%03h down=%0d", ps2_key[8:0], ps2_key[9]);
 `endif
       
-      // Handle Caps Lock toggle
-      if (ps2_key[8:0] == 9'h058 && ps2_key[9]) begin  // Caps Lock pressed
+      // Handle Caps Lock — each host-side event (one per physical tap on
+      // Mac SDL, or a press/release on other platforms) represents one
+      // physical activation of the caps-lock latch. Synthesize a full
+      // ADB press+release pair for each event so the diag ADB keyboard
+      // test sees both halves. Toggle caps_lock_state so the case-shift
+      // and capslock LED output track the latch.
+      if (ps2_key[8:0] == 9'h058) begin
         caps_lock_state <= ~caps_lock_state;
         capslock <= ~caps_lock_state;
+        if (device_data_pending[2] == 8'h00) begin
+          device_registers[2][0] <= 8'h39;          // press (bit7=0)
+          kbd_r0_next <= 8'hB9;                     // release (bit7=1)
+          kbd_r0_next_valid <= 1'b1;
+          device_data_pending[2] <= 8'h01;
+        end else if (!kbd_r0_next_valid) begin
+          // Live slot full — stage the press; release will be reported
+          // as missing but the next TALK R0 will eventually drain.
+          kbd_r0_next <= 8'h39;
+          kbd_r0_next_valid <= 1'b1;
+        end
+        // If both slots full, the tap is dropped silently; the test
+        // accepts the next one after the host drains via TALK R0.
+        valid_kbd <= 1'b1;
       end
       
       // Handle modifier keys (only when selftest override is not active)
@@ -809,9 +843,13 @@ always @(posedge CLK_14M) begin
 `endif
       end
 
-      // Process normal keys (not modifier keys or reset key)
-      // Skip modifier keys: Shift (0x012, 0x059), Ctrl (0x014, 0x114), Alt (0x011, 0x111), Win/Menu (0x11f, 0x127)
-      // Also skip F11 (0x078) which is now the reset key
+      // Process normal keys (not modifier keys, caps lock, or reset key).
+      // Caps Lock (0x058) is handled above with a synthesized press+release
+      // pair — skip it here so we don't emit extra events.
+      // Skip the modifiers whose state is reflected via $C025 — they must NOT
+      // generate ADB Register 0 byte events (the diag ADB keyboard test counts
+      // those separately).
+      // Skip F11 (0x078) which is bound to the Apple Reset key combo.
       if (ps2_key[8:0] != 9'h012 && ps2_key[8:0] != 9'h059 &&  // Shift
           ps2_key[8:0] != 9'h014 && ps2_key[8:0] != 9'h114 &&  // Ctrl
           ps2_key[8:0] != 9'h011 && ps2_key[8:0] != 9'h111 &&  // Alt
@@ -845,23 +883,35 @@ always @(posedge CLK_14M) begin
               repeat_vbl_target <= hz60_count + {8'd0, repeat_delay_vbl};
             end
 
-            // Add to keyboard FIFO if there's space
-            if (kbd_fifo_count < MAX_KBD_BUF[3:0]) begin
+            // ADB TALK R0 delivery is INDEPENDENT of IIe FIFO state — the
+            // diagnostic keyboard test reads ADB and does not drain the
+            // IIe FIFO, so gating ADB push on FIFO-space would cause
+            // "release without press" (flagged as stuck) once the FIFO
+            // fills. Route through the 1-deep staging buffer so a quick
+            // release can't overwrite an un-consumed press.
+            valid_kbd <= 1'b1;
+            if (device_data_pending[2] == 8'h00) begin
+              device_registers[2][0] <= {1'b0, temp_apple_key[6:0]};
+              device_data_pending[2] <= 8'h01;
+            end else begin
+              kbd_r0_next <= {1'b0, temp_apple_key[6:0]};
+              kbd_r0_next_valid <= 1'b1;
+            end
+
+            // Only populate the IIe keyboard FIFO / K register for keys
+            // that produce an ASCII character. Caps Lock / modifiers
+            // have temp_iie_char == 0xFF and shouldn't waste FIFO slots.
+            if (temp_iie_char != 8'hFF &&
+                kbd_fifo_count < MAX_KBD_BUF[3:0]) begin
               kbd_fifo[kbd_fifo_head[2:0]] <= temp_apple_key;
               kbd_fifo_head <= (kbd_fifo_head + 4'd1) & 4'd7;  // MAX_KBD_BUF-1 mask
               kbd_fifo_count <= kbd_fifo_count + 4'd1;
 
-              valid_kbd <= 1'b1;
-              device_data_pending[2] <= 8'h01;
-
-              // Update Apple IIe K register immediately
-              if (temp_iie_char != 8'hFF) begin
 `ifdef DEBUG_ADB
-                $display("ADB: Setting K register: PS2=%03h Apple=%02h ASCII=%02h", ps2_key[8:0], temp_apple_key, temp_iie_char);
+              $display("ADB: Setting K register: PS2=%03h Apple=%02h ASCII=%02h", ps2_key[8:0], temp_apple_key, temp_iie_char);
 `endif
-                K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
-                akd <= 1'b1;  // Any key down
-              end
+              K <= {1'b1, temp_iie_char[6:0]};  // Set strobe bit + 7-bit ASCII
+              akd <= 1'b1;  // Any key down
             end
           end else begin
             // Key released
@@ -877,17 +927,57 @@ always @(posedge CLK_14M) begin
               c025[3] <= 1'b0;  // Clear repeat function flag
             end
 
+            // Deliver a release event on the ADB TALK keyboard/R0 path via
+            // the same 1-deep staging buffer used by the press side, so a
+            // quick tap (press → release before the host polls) doesn't have
+            // the release overwrite the un-consumed press. Without this the
+            // diagnostic disk "ADB Keyboard Test" intermittently sees the
+            // release-only half and flags "key stuck in down position".
+            if (device_data_pending[2] == 8'h00) begin
+              device_registers[2][0] <= {1'b1, temp_apple_key[6:0]};
+              device_data_pending[2] <= 8'h01;
+            end else begin
+              kbd_r0_next <= {1'b1, temp_apple_key[6:0]};
+              kbd_r0_next_valid <= 1'b1;
+            end
+            valid_kbd <= 1'b1;
+
             akd <= 1'b0;  // Clear any key down
           end
         end
       end
     end
     
-    // Key repeat: disabled for now - was causing keyboard to hang
-    // TODO: Implement proper repeat that doesn't flood FIFO
-    // The issue is that repeat needs to be gated by whether the FIFO is being consumed,
-    // not just blindly adding characters on a timer
-    
+    // Key repeat. Gate only on the ADB-side event register having been
+    // drained (device_data_pending[2] == 0) and on the VBL-count-based
+    // target time having been reached. We deliberately DO NOT gate on
+    // kbd_fifo_count here — the FIFO is consumed by the IIe $C000/$C010
+    // path, and a test that reads only the ADB TALK R0 path (e.g. the diag
+    // ADB keyboard test) wouldn't drain it, which would otherwise wedge
+    // repeat forever. We also use `>=` (with modulo-16 wraparound) rather
+    // than `==` so a missed cycle doesn't cost a full 60Hz-counter
+    // rollover. `repeat_delay_vbl == 0` means "no repeat" per ADB config.
+    if (ps2_key_held && !reset_key_down &&
+        device_data_pending[2] == 8'h00 &&
+        repeat_delay_vbl != 8'd0 &&
+        ((hz60_count - repeat_vbl_target) < 16'h8000)) begin
+      reg [7:0] rep_apple_key;
+      rep_apple_key = ps2_to_apple_key(held_ps2_key);
+      if (rep_apple_key != 8'h7F) begin
+        // Re-push a press event on the ADB TALK R0 path. We intentionally
+        // don't also re-push into kbd_fifo or re-strobe K here: the existing
+        // $C010-gated repeat at line ~1769 handles the IIe $C000 path, and
+        // doubling up would double-count characters.
+        device_registers[2][0] <= {1'b0, rep_apple_key[6:0]};
+        device_data_pending[2] <= 8'h01;
+        valid_kbd <= 1'b1;
+        c025[3] <= 1'b1;                    // Report "repeat-active" on $C025 bit3
+        // Schedule the next repeat at the post-initial-delay rate.
+        repeat_vbl_target <= hz60_count + {8'd0, repeat_rate_vbl};
+      end
+    end
+
+
     // PS/2 mouse event processing
     // PS/2 format: [7:0]=status (bit0=lbtn, bit1=rbtn, bit2=mbtn, bit3=1, bit4=Xsign, bit5=Ysign)
     //              [15:8]=X delta, [23:16]=Y delta, [24]=toggle
@@ -1388,7 +1478,16 @@ always @(posedge CLK_14M) begin
                             if (device_data_pending[2] > 0) begin
                               data <= { 24'd0, device_registers[2][0] };
                               pending_data <= 3'd1;
-                              device_data_pending[2] <= 8'h00;  // Clear pending data
+                              // If a staged follow-on event is waiting, promote
+                              // it into the live slot and keep pending=1 so the
+                              // next TALK R0 picks it up. Otherwise mark the
+                              // slot empty.
+                              if (kbd_r0_next_valid) begin
+                                device_registers[2][0] <= kbd_r0_next;
+                                kbd_r0_next_valid <= 1'b0;
+                              end else begin
+                                device_data_pending[2] <= 8'h00;
+                              end
                               if ((device_registers[2][0] & 8'h80) != 8'd0) valid_kbd <= 1'b0;  // Clear on key release
                             end else begin
                               data <= 32'd0;  // No data available
