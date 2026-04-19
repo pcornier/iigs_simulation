@@ -1062,12 +1062,14 @@ int verilate() {
 			fprintf(stderr, "soft_reset_time %ld initialReset %x\n", soft_reset_time, initialReset);
 		}
 
-		// Handle reset from menu or keyboard
+		// Handle reset from menu or keyboard. Start reset_time at 1 so
+		// the startup-deassert branch below (which looks for reset_time
+		// == 0) doesn't clear our reset on the very next iteration.
 		if (reset_pending) {
 			top->reset = 1;
 			top->cold_reset = reset_pending_cold;
 			reset_pending = 0;
-			reset_time = 0;
+			reset_time = 1;
 		}
 		if (top->reset && main_time >= initialReset) {
 			// Count reset duration
@@ -1082,12 +1084,21 @@ int verilate() {
 			}
 		}
 
-		// Check keyboard-triggered resets (Ctrl+F11 or Ctrl+OpenApple+F11)
-		if (top->keyboard_reset && !top->reset) {
-			// Keyboard triggered a reset
-			reset_pending = 1;
-			reset_pending_cold = top->keyboard_cold_reset ? 1 : 0;
-			fprintf(stderr, "Keyboard reset: Ctrl+F11 pressed (cold=%d)\n", reset_pending_cold);
+		// Check keyboard-triggered resets (Ctrl+F11 or Ctrl+OpenApple+F11).
+		// EDGE-triggered: fire reset exactly once per press. The keyboard
+		// signal stays high as long as Ctrl+F11 is held (~50k cycles),
+		// while the reset pulse lasts only `initialReset` cycles (~48),
+		// so a level check re-triggered reset continuously, preventing
+		// the CPU from ever getting past the reset vector.
+		{
+			static int keyboard_reset_prev = 0;
+			int kr = top->keyboard_reset ? 1 : 0;
+			if (kr && !keyboard_reset_prev && !top->reset) {
+				reset_pending = 1;
+				reset_pending_cold = top->keyboard_cold_reset ? 1 : 0;
+				fprintf(stderr, "Keyboard reset: Ctrl+F11 pressed (cold=%d)\n", reset_pending_cold);
+			}
+			keyboard_reset_prev = kr;
 		}
 
 		// Assert reset during startup and ROM download (always cold reset on power-on)
@@ -4197,6 +4208,18 @@ void queue_key_string(const std::string& keys) {
             printf("Queued caps-lock toggle event (new state=%d)\n", (int)capslock_led_on);
             continue;
         }
+        // Special marker: 0x02 = Ctrl+F11 warm reset sequence.
+        // Sends: LCtrl down, F11 down, F11 up, LCtrl up.
+        if (c == 0x02) {
+            const unsigned int LCTRL_PS2 = 0x14;
+            const unsigned int F11_PS2   = 0x78;
+            input.keyEvents.push(SimInput_PS2KeyEvent(LCTRL_PS2, true,  false, LCTRL_PS2));
+            input.keyEvents.push(SimInput_PS2KeyEvent(F11_PS2,   true,  false, F11_PS2));
+            input.keyEvents.push(SimInput_PS2KeyEvent(F11_PS2,   false, false, F11_PS2));
+            input.keyEvents.push(SimInput_PS2KeyEvent(LCTRL_PS2, false, false, LCTRL_PS2));
+            printf("Queued Ctrl+F11 warm reset sequence\n");
+            continue;
+        }
         AsciiToPS2 mapping = ascii_to_ps2(c);
         if (mapping.scancode == 0xFF) {
             fprintf(stderr, "Warning: unmapped character '%c' (0x%02x) in key injection\n", c, (unsigned char)c);
@@ -4651,6 +4674,7 @@ int main(int argc, char** argv, char** env) {
                     else if (next == 't') { processed_keys += '\t'; j++; }
                     else if (next == 'e') { processed_keys += '\x1b'; j++; }  // ESC key
                     else if (next == 'C') { processed_keys += (char)0x01; j++; }  // caps lock toggle
+                    else if (next == 'R') { processed_keys += (char)0x02; j++; }  // Ctrl+F11 warm reset
                     else if (next == '\\') { processed_keys += '\\'; j++; }
                     else if (next == 'x' && j + 3 < keys.length()) {
                         // Handle \xNN hex escape sequences
