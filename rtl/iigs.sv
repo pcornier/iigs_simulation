@@ -235,7 +235,8 @@ module iigs
 
   // SCC (Serial Communications Controller) signals
   logic [7:0]         scc_din;
-  logic [7:0]         scc_dout;  
+  logic [7:0]         scc_dout;
+  logic [7:0]         scc_dout_reg;
   logic               scc_cs;
   logic               scc_we;
   logic [1:0]         scc_rs;
@@ -814,7 +815,92 @@ module iigs
                    (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB) && !shadow[6]) ||
                    (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f && !shadow[6]);
 
-  // driver for io_dout and fake registers
+    // IO read (handle only io_dout, and only here)
+    wire vgc_scan_pending = (VGCINT[5] & VGCINT[1]);
+    wire vgc_1sec_pending = (VGCINT[6] & VGCINT[2]);
+    wire vgc_any_pending = (vgc_scan_pending | vgc_1sec_pending);
+
+    always_comb begin: io_read
+        io_dout = din; // TODO: Handle video data for floating bus
+        case (addr[11:0])
+          12'h046: io_dout = irq_pending[7:0];
+          12'h011: io_dout = {LCRAM2, 7'h00};
+          12'h012: io_dout = {~RDROM, 7'h00};
+          12'h013: io_dout = {RAMRD, 7'h00};
+          12'h014: io_dout = {RAMWRT, 7'h00};
+          12'h015: io_dout = {INTCXROM, 7'h00};
+          12'h016: io_dout = {ALTZP, 7'h00};
+          12'h017: io_dout = {SLOTC3ROM, 7'h00};
+          12'h018: io_dout = {STORE80, 7'h00};
+
+          // $C019 on the IIgs reports VBL directly (bit 7 = 1 during VBL),
+          // INVERTED from the Apple IIe's VBLBAR. Apple IIGS Tech Note #40:
+          // "On the IIGS, the screen is blanked when the most significant
+          // bit of $C019 is high (greater than 127 or $7F), while on the
+          // IIe, the screen is blanked when the bit is low." All four
+          // reference emulators (MAME IIgs, KEGS, GSplus, Clemens) do it
+          // this way. mega2_vbl is high during VBL, so pass it through.
+          12'h019: io_dout = {mega2_vbl, 7'h00};
+          12'h01a: io_dout = {TEXTG, 7'h00};
+          12'h01b: io_dout = {MIXG, 7'h00};
+          12'h01c: io_dout = {PAGE2, 7'h00};
+          12'h01d: io_dout = {HIRES_MODE, 7'h00};
+          12'h01e: io_dout = {ALTCHARSET, 7'h00};
+          12'h01f: io_dout = {EIGHTYCOL, 7'h00};
+          12'h022: io_dout = TEXTCOLOR;
+
+          // C023: VGC IRQ control/status (GSplus/Clemens semantics)
+          // Read returns synthesized status:
+          //  bit7: any VGC IRQ pending (scanline or 1-sec) when enabled
+          //  bit6: 1-sec pending
+          //  bit5: scanline pending
+          //  bit2: 1-sec enable
+          //  bit1: scanline enable
+          12'h023: io_dout = {vgc_any_pending, vgc_1sec_pending,
+                              vgc_scan_pending, 2'b00,
+                              VGCINT[2], VGCINT[1], 1'b0};
+          12'h029: io_dout = NEWVIDEO;
+          12'h02a: io_dout = 'h0; // from gsplus
+          12'h02b: io_dout = C02BVAL; // from gsplus
+          12'h02c: io_dout = 'h0; // from gsplus
+          12'h02d: io_dout = SLTROMSEL;
+          12'h02e: io_dout = V >> 1;
+          12'h02f: io_dout = {V[0], H[6:0]};
+          12'h031: io_dout = DISK35;
+          12'h032: io_dout = VGCINT;
+          12'h035: io_dout = shadow;
+          12'h036: io_dout = CYAREG;
+          12'h037: io_dout = 'h0; // from gsplus
+          12'h038, 12'h039, 12'h03a, 12'h03b:
+            io_dout = scc_dout_reg;
+          12'h041: io_dout = INTEN;
+          12'h047: io_dout = 8'h00;
+          12'h058: io_dout = 'h0; // some kind of soft switch?
+          12'h05a: io_dout = 'h0; // some kind of soft switch?
+          12'h05d: io_dout = 'h0; // some kind of soft switch?
+          12'h061: io_dout = {sw0, 7'b0000000};
+          12'h062: io_dout = {sw1, 7'b0000000};
+          12'h063: io_dout = {sw2, 7'b0000000};
+          12'h064: io_dout = {~paddle_timer_expired[0], 1'b0, ~AN3, 5'b00000};
+          12'h065: io_dout = {~paddle_timer_expired[1], 7'b0000000};
+          12'h066: io_dout = {~paddle_timer_expired[2], 7'b0000000};
+          12'h067: io_dout = {~paddle_timer_expired[3], 7'b0000000};
+          12'h068: io_dout = {ALTZP,PAGE2,RAMRD,RAMWRT,
+                               RDROM,LCRAM2,ROMBANK,INTCXROM};
+        endcase // case (addr[11:0])
+
+        // IRQ dispatch ROM
+        if (addr[11:0] >= 12'h071 && addr[11:0] <= 12'h7f)
+          io_dout = din;
+
+        // Submodule strobes override generic I/O
+        if (adb_strobe)  io_dout = adb_dout;
+        if (prtc_strobe) io_dout = prtc_dout;
+        if (iwm_strobe)  io_dout = iwm_dout;
+        if (snd_strobe)  io_dout = snd_dout;
+    end // block: io_read
+
+  // IO side effects (reset, write, address-sensitive)
   always_ff @(posedge CLK_14M) begin
     // Track active read cycle for SCC to one-shot cs
     if (!(IO && ~we && (addr[11:0] >= 12'h038) && (addr[11:0] <= 12'h03b))) begin
@@ -904,24 +990,8 @@ module iigs
     // INTFLAG changes are tracked by centralized IRQ logic in iigs.sv
     // interrupt_clear_pulse is managed in IO section to avoid race condition
 
-    // Default pass-through for unhandled IO: feed external bus data
-    // BUT: Don't override SCC, ADB, or other peripheral responses
-    // NOTE: Only do this when actually handling I/O, not every cycle
-    // NEVER use default for SCC address range C038-C03B
-    if (IO && ~(scc_cs & ~we) && ~(adb_strobe & ~we) && ~(snd_strobe & ~we) &&
-        ~((addr[11:8] == 4'h0) && (addr[7:2] == 6'h0e))) begin // Exclude C038-C03B
-      io_dout <= din;
-`ifdef DEBUG_BANK
-      // DEBUG: Warn when CPU receives default 0x80 value from unhandled I/O
-      if (din == 8'h80 && ~we) begin
-        $display("WARNING_DEFAULT_IO: CPU reading default 0x80 from unhandled I/O addr=C%03X bank=%02X", addr[11:0], bank);
-      end
-`endif
-    end
     paddle_trigger <= 1'b0;  // Default: no paddle trigger
-    // Check adb_strobe BEFORE resetting it (otherwise we'd check the new value of 0)
     if (adb_strobe & ~we) begin
-      io_dout <= adb_dout;
 `ifdef DEBUG_BANK
       if (adb_addr == 8'h24) begin
         $display("IIGS C024 RESPONSE: adb_dout=0x%02h -> io_dout", adb_dout);
@@ -930,10 +1000,6 @@ module iigs
     end
     adb_strobe <= 1'b0;
 
-    // Check prtc_strobe BEFORE resetting it
-    if (prtc_strobe & ~we) begin
-      io_dout <= prtc_dout;
-    end
     prtc_strobe <= 1'b0;
 
     // Check iwm_strobe BEFORE resetting it
@@ -941,19 +1007,14 @@ module iigs
 `ifdef DEBUG_VERBOSE
       $display("read_iwm %x ret: %x GC036: %x (addr %x) addr_bef(%x)",addr[11:0],iwm_dout,CYAREG,addr,addr_bef);
 `endif
-      io_dout <= iwm_dout;
     end
     iwm_strobe <= 1'b0;
 
-    // Check snd_strobe BEFORE resetting it
-    if (snd_strobe & ~we) begin
-      io_dout <= snd_dout;
-    end
     snd_strobe <= 1'b0;
 
     // Handle SCC read response (same cycle pattern like other peripherals)
     if (scc_cs & ~we) begin
-      io_dout <= scc_dout;
+      scc_dout_reg <= scc_dout;
       $display("SCC_READ_RESPONSE: data=%02X scc_cs=%b ~we=%b addr=C%03X io_dout<=%02X addr_bef=%06X",
                scc_dout, scc_cs, ~we, addr[11:0], scc_dout, addr_bef);
     end
@@ -1312,7 +1373,6 @@ module iigs
           case (addr[11:0])
             12'h046: begin
               // Return interrupt flags directly from irq_pending (bits 3=VBL, 4=QSEC, 0=aggregator)
-              io_dout <= irq_pending[7:0];
 `ifdef DEBUG_VERBOSE
               if (frame_count >= 118 && frame_count <= 138) begin
                 $display("FRAME_DEBUG[%0d]: READ C046 -> %02h (INTEN=%02h cpu_irq=%0d snd=%0d VBL=%0d QSEC=%0d SCC=%0d)",
@@ -1352,73 +1412,23 @@ module iigs
             //12'h010: begin io_dout<=key_keys; key_reads<=1; end
             //12'h010: begin $display("anykeydown: %x",key_anykeydown); if (key_anykeydown) io_dout<='h80 | key_keys ; else io_dout<='h00; end
 
-            12'h011: io_dout <= {LCRAM2, key_keys};
-            12'h012: io_dout <= {~RDROM, key_keys};
-            12'h013: io_dout <= {RAMRD, key_keys};
-            12'h014: io_dout <= {RAMWRT, key_keys};
 `ifdef DEBUG_IO
-            12'h015: begin io_dout <= {INTCXROM, key_keys}; $display("read INTCXROM %x ", INTCXROM); end
-`else
-            12'h015: begin io_dout <= {INTCXROM, key_keys}; end
+            12'h015: $display("read INTCXROM %x ", INTCXROM);
 `endif
-            12'h016: io_dout <= {ALTZP, key_keys};
-            12'h017: io_dout <= {SLOTC3ROM, key_keys};
-            12'h018: io_dout <= {STORE80, key_keys};
-            // $C019 on the IIgs reports VBL directly (bit 7 = 1 during VBL),
-            // INVERTED from the Apple IIe's VBLBAR. Apple IIGS Tech Note #40:
-            // "On the IIGS, the screen is blanked when the most significant
-            // bit of $C019 is high (greater than 127 or $7F), while on the
-            // IIe, the screen is blanked when the bit is low." All four
-            // reference emulators (MAME IIgs, KEGS, GSplus, Clemens) do it
-            // this way. mega2_vbl is high during VBL, so pass it through.
-            12'h019: io_dout <= {mega2_vbl, key_keys};
-            12'h01a: io_dout <= {TEXTG, key_keys};
-            12'h01b: io_dout <= {MIXG, key_keys};
-            12'h01c: io_dout <= {PAGE2, key_keys};
-            12'h01d: io_dout <= {HIRES_MODE, key_keys};
-            12'h01e: io_dout <= {ALTCHARSET, key_keys};
-            12'h01f: io_dout <= {EIGHTYCOL, key_keys};
-
-            12'h022: io_dout <= TEXTCOLOR;
-            // C023: VGC IRQ control/status (GSplus/Clemens semantics)
-            // Read returns synthesized status:
-            //  bit7: any VGC IRQ pending (scanline or 1-sec) when enabled
-            //  bit6: 1-sec pending
-            //  bit5: scanline pending
-            //  bit2: 1-sec enable
-            //  bit1: scanline enable
             12'h023: begin
               // Pending when status bit set AND enable bit set
-              // (declare temps as regs via inline assignments)
-              reg vgc_scan_pending;
-              reg vgc_1sec_pending;
-              reg vgc_any_pending;
-              vgc_scan_pending = (VGCINT[5] & VGCINT[1]);
-              vgc_1sec_pending = (VGCINT[6] & VGCINT[2]);
-              vgc_any_pending = (vgc_scan_pending | vgc_1sec_pending);
-              io_dout <= {vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, 2'b00, VGCINT[2], VGCINT[1], 1'b0};
 `ifdef DEBUG_VERBOSE
               $display("READ C023 (VGC IRQ ctrl/status): any=%0d 1sec_pend=%0d scan_pend=%0d en1s=%0d ensl=%0d RAW_VGCINT=%02x -> %02h",
                        vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, VGCINT[2], VGCINT[1], VGCINT, io_dout);
 `endif
             end
 
-
             // C028: ROMBANK register does not exist as a separate register on real Apple IIgs hardware.
             // See write section above for detailed explanation. Reads to C028 should also be unimplemented.
             // 12'h028: [REMOVED - does not exist on real hardware]
-            12'h029: io_dout <= NEWVIDEO;
-            12'h02a: io_dout <= 'h0; // from gsplus
-            12'h02b: io_dout <= C02BVAL; // from gsplus
-            12'h02c: io_dout <= 'h0; // from gsplus
-            12'h02d: io_dout <= SLTROMSEL;
-            12'h02e: io_dout <= V >> 1; /* vertcount - (Vertical addr / 2) per Apple IIgs spec */
-            12'h02f: io_dout <= {V[0], H[6:0]}; /* horizcount - Vertical low bit + Horizontal per Apple IIgs spec */
-            12'h030: begin io_dout <= SPKR; if (phi2) speaker_state <= ~speaker_state; end
-            12'h031: io_dout <= DISK35;
+            12'h030: if (phi2) speaker_state <= ~speaker_state;
             // C032: VGC IRQ clear switches (write-to-clear). Read has no side-effects.
             12'h032: begin
-              io_dout <= VGCINT;
 `ifdef DEBUG_VERBOSE
               $display("READ C032 (no side-effect): VGCINT=%02h", VGCINT);
 `endif
@@ -1428,14 +1438,9 @@ module iigs
               prtc_rw <= 1'b1;
               prtc_strobe <= 1'b1;
             end
-            12'h035: io_dout <= shadow;
 `ifdef DEBUG_IO
-            12'h036: begin $display("__CYAREG %x",CYAREG);io_dout<=CYAREG; end
-`else
-            12'h036: begin io_dout<=CYAREG; end
+            12'h036: $display("__CYAREG %x",CYAREG);
 `endif
-            12'h037: io_dout <= 'h0; // from gsplus
-
             12'h038, 12'h039, 12'h03a, 12'h03b: begin
               // One-shot SCC read strobe: assert cs exactly once when the CPU
               // first presents the address, ensuring data is ready in time
@@ -1457,16 +1462,11 @@ module iigs
               snd_strobe <= 1'b1;
             end
 `ifdef DEBUG_IRQ
-            12'h041: begin $display("read INTEN %x",INTEN);io_dout <= INTEN;end
+            12'h041: begin $display("read INTEN %x",INTEN);end
             12'h042: $display("**++UNIMPLEMENTEDMEGAIIINTERRUPT");
-`else
-            12'h041: begin io_dout <= INTEN;end
 `endif
             // Note: 12'h046 (INTFLAG) is handled earlier in this case statement (line ~1197)
             //12'h047: begin io_dout <= 'h0; C046VAL &= 'he7; end// some kind of interrupt thing
-            12'h047: begin
-              io_dout <= 8'h00;  // C047 reads return 0 (interrupt clear handled in clocked block)
-            end
 `ifdef DEBUG_IO
             12'h050: begin $display("**TEXTG %x",0); TEXTG<=1'b0;end
             12'h051: begin $display("**TEXTG %x",1); TEXTG<=1'b1;end
@@ -1490,40 +1490,23 @@ module iigs
             12'h05e: begin AN3<=1'b0; end  // CLRAN3
             12'h05f: begin AN3<=1'b1; end  // SETAN3
 `endif
-            12'h058: io_dout <= 'h0; // some kind of soft switch?
-            12'h05a: io_dout <= 'h0; // some kind of soft switch?
-            12'h05d: io_dout <= 'h0; // some kind of soft switch?
-            
             // Joystick/Paddle I/O
             12'h061: begin
-              io_dout <= {sw0, 7'b0000000};                      // SW0/Open Apple (bit 7: 1=pressed)
 `ifdef DEBUG_JOYSTICK
               $display("JOYSTICK: Read button 1 ($C061) = $%02X (sw0=%d, open_apple=%d, joystick_0[4]=%d)", {sw0, 7'b0000000}, sw0, open_apple, joystick_0[4]);
 `endif
             end
             12'h062: begin
-              io_dout <= {sw1, 7'b0000000};                      // SW1/Closed Apple (bit 7: 1=pressed)
 `ifdef DEBUG_JOYSTICK
               $display("JOYSTICK: Read button 2 ($C062) = $%02X (sw1=%d, closed_apple=%d, joystick_0[5]=%d)", {sw1, 7'b0000000}, sw1, closed_apple, joystick_0[5]);
 `endif
             end
-            12'h063: io_dout <= {sw2, 7'b0000000};                      // SW2 (bit 7: 1=pressed)
             12'h064: begin
-              io_dout <= {~paddle_timer_expired[0], 1'b0, ~AN3, 5'b00000}; // PADDL0 (bit 7: 1=still timing, 0=done) + AN3 (bit 5: 1=clear, 0=set)
               // $display("PDL0_READ: expired=%d paddle_input=%d", paddle_timer_expired[0], paddle_input[0]);
             end
             12'h065: begin
-              io_dout <= {~paddle_timer_expired[1], 7'b0000000}; // PADDL1 (bit 7: 1=still timing, 0=done)
               // $display("PDL1_READ: expired=%d paddle_input=%d", paddle_timer_expired[1], paddle_input[1]);
             end
-            12'h066: io_dout <= {~paddle_timer_expired[2], 7'b0000000}; // PADDL2 (bit 7: 1=still timing, 0=done)
-            12'h067: io_dout <= {~paddle_timer_expired[3], 7'b0000000}; // PADDL3 (bit 7: 1=still timing, 0=done)
-            12'h068: io_dout <= {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM};
-            12'h071, 12'h072, 12'h073, 12'h074,
-              12'h075, 12'h076, 12'h077, 12'h078,
-              12'h079, 12'h07a, 12'h07b, 12'h07c,
-              12'h07d, 12'h07e, 12'h07f:
-                io_dout <= din;
 
             /*****************************************************************************
              * Language Card Memory
@@ -2018,62 +2001,8 @@ wire [7:0] din =
 
   wire [7:0] HDD_DO;
 
-  // Combinational bypass for simple register reads - fixes timing issue where
-  // io_dout is registered but CPU reads combinationally. Without this bypass,
-  // reads to addresses like $C035 (shadow) would return stale/default values.
-  // This is analogous to the adb_read bypass but for simple internal registers.
-  // NOTE: key_keys is combinationally available for status reads
-  wire simple_reg_read = IO & ~we & (
-    addr_bef[7:0] == 8'h35 |  // $C035 - Shadow register
-    addr_bef[7:0] == 8'h36 |  // $C036 - Speed register (CYAREG)
-    addr_bef[7:0] == 8'h29 |  // $C029 - NEWVIDEO
-    addr_bef[7:0] == 8'h68 |  // $C068 - State register
-    // Softswitch status reads $C011-$C01F (bit 7 = flag, bits 6:0 = key_keys)
-    addr_bef[7:0] == 8'h11 |  // $C011 - LCRAM2 (Bank select)
-    addr_bef[7:0] == 8'h12 |  // $C012 - RDROM
-    addr_bef[7:0] == 8'h13 |  // $C013 - RAMRD
-    addr_bef[7:0] == 8'h14 |  // $C014 - RAMWRT
-    addr_bef[7:0] == 8'h15 |  // $C015 - INTCXROM
-    addr_bef[7:0] == 8'h16 |  // $C016 - ALTZP
-    addr_bef[7:0] == 8'h17 |  // $C017 - SLOTC3ROM
-    addr_bef[7:0] == 8'h18 |  // $C018 - STORE80
-    addr_bef[7:0] == 8'h19 |  // $C019 - VBL
-    addr_bef[7:0] == 8'h1a |  // $C01A - TEXTG
-    addr_bef[7:0] == 8'h1b |  // $C01B - MIXG
-    addr_bef[7:0] == 8'h1c |  // $C01C - PAGE2
-    addr_bef[7:0] == 8'h1d |  // $C01D - HIRES
-    addr_bef[7:0] == 8'h1e |  // $C01E - ALTCHARSET
-    addr_bef[7:0] == 8'h1f |  // $C01F - EIGHTYCOL
-    addr_bef[7:4] == 4'h7     // $C07x ROM
-  );
-
-  // Combinational mux for simple register data
-  wire [7:0] simple_reg_data =
-    (addr_bef[7:0] == 8'h35) ? shadow :
-    (addr_bef[7:0] == 8'h36) ? CYAREG :
-    (addr_bef[7:0] == 8'h29) ? NEWVIDEO :
-    (addr_bef[7:0] == 8'h68) ? {ALTZP,PAGE2,RAMRD,RAMWRT,RDROM,LCRAM2,ROMBANK,INTCXROM} :
-    // Softswitch status reads: bit 7 = flag, bits 6:0 = key_keys
-    (addr_bef[7:0] == 8'h11) ? {LCRAM2, key_keys} :
-    (addr_bef[7:0] == 8'h12) ? {~RDROM, key_keys} :
-    (addr_bef[7:0] == 8'h13) ? {RAMRD, key_keys} :
-    (addr_bef[7:0] == 8'h14) ? {RAMWRT, key_keys} :
-    (addr_bef[7:0] == 8'h15) ? {INTCXROM, key_keys} :
-    (addr_bef[7:0] == 8'h16) ? {ALTZP, key_keys} :
-    (addr_bef[7:0] == 8'h17) ? {SLOTC3ROM, key_keys} :
-    (addr_bef[7:0] == 8'h18) ? {STORE80, key_keys} :
-    (addr_bef[7:0] == 8'h19) ? {mega2_vbl, key_keys} :   // IIgs RDVBL (Tech Note #40): bit 7 = 1 in VBL
-    (addr_bef[7:0] == 8'h1a) ? {TEXTG, key_keys} :
-    (addr_bef[7:0] == 8'h1b) ? {MIXG, key_keys} :
-    (addr_bef[7:0] == 8'h1c) ? {PAGE2, key_keys} :
-    (addr_bef[7:0] == 8'h1d) ? {HIRES_MODE, key_keys} :
-    (addr_bef[7:0] == 8'h1e) ? {ALTCHARSET, key_keys} :
-    (addr_bef[7:0] == 8'h1f) ? {EIGHTYCOL, key_keys} :
-    (addr_bef[7:4] == 4'h7)  ? din :
-    8'h00;
-
-  // CPU data input mux: prioritize simple reg reads, then ADB reads (combinational), then IWM, then general I/O
-  wire [7:0] cpu_din = IO ? (simple_reg_read ? simple_reg_data : (adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
+  // CPU data input mux: prioritize ADB reads (combinational), then IWM, then general I/O
+  wire [7:0] cpu_din = IO ? ((adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
 `ifdef DEBUG_VERBOSE
   // Debug: log every C026 read showing what cpu_din resolves to
   always @(posedge CLK_14M) begin
