@@ -1464,9 +1464,17 @@ module flux_drive (
                         // IMPORTANT: Only generate FLUX_TRANSITION after drive is up to speed (drive_ready).
                         // Do not suppress the first bit-cell; that drops a bit and shifts byte alignment.
                         // weak_bit_active injects random flux in weak-bit areas (4+ consecutive zeros).
-                        if (TRACK_LOADED && (TRACK_BIT_COUNT > 0) &&
-                            (current_bit || (weak_bit_active && !current_bit && lfsr[3:0] < 4'd5)) &&
-                            drive_ready && !WRITE_MODE) begin
+                        // TRACK_BIT_COUNT == 0 means this TMAP entry is FF (unrecorded
+                        // track). On real 5.25" hardware an unformatted track still
+                        // generates magnetic noise, so the IWM shifts in random bytes;
+                        // without that, games that step past the last recorded track
+                        // (e.g. Apple-Oids / Chip Out Woz-a-Day) spin forever waiting
+                        // for bit 7 of $C0EC. Synthesize noise from the LFSR at a
+                        // ~31% transition rate — same knob the weak-bit path uses.
+                        if (TRACK_LOADED && drive_ready && !WRITE_MODE &&
+                            ((TRACK_BIT_COUNT > 0 &&
+                              (current_bit || (weak_bit_active && !current_bit && lfsr[3:0] < 4'd5)))
+                             || (TRACK_BIT_COUNT == 0 && lfsr[3:0] < 4'd8))) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef DEBUG_VERBOSE
                             if (flux_count_debug < 50) begin

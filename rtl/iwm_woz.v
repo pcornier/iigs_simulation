@@ -710,7 +710,12 @@ module iwm_woz (
     // Drive is active when motor is spinning, 5.25" mode, and disk ready
     wire drive525_active = motor_spinning && !is_35_inch && DISK_READY[0];
 
-    wire drive525_track_loaded = DISK_READY[0] && (WOZ_TRACK1_BIT_COUNT > 0);
+    // TRACK_LOADED must stay asserted even when the current track has
+    // bit_count == 0 (empty TMAP entry). flux_drive synthesizes LFSR
+    // noise on empty tracks to mimic the random flux that real drives
+    // pick up from unformatted regions; gating that path on bit_count
+    // would wedge games that step past the last recorded track.
+    wire drive525_track_loaded = DISK_READY[0];
 
     flux_drive drive525 (
         .IS_35_INCH(1'b0),
