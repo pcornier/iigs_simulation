@@ -1558,7 +1558,16 @@ module flux_drive (
                         end else begin
                             if (zero_run_count < 8'd255)
                                 zero_run_count <= zero_run_count + 8'd1;
-                            if (zero_run_count >= 8'd3)
+                            // Threshold of 7+ matches Clemens/GSplus behaviour
+                            // more closely: typical Apple II sync patterns
+                            // (FF with 10-bit cells) already contain 2-3
+                            // consecutive zero bits. A low threshold (3)
+                            // corrupts legitimate gap data on some 13-sector
+                            // and copy-protected disks — notably the
+                            // Cyclotron WOZ-a-Day capture whose track 0
+                            // begins with a 4-bit zero run that is part of
+                            // the real bitstream, not weak bits.
+                            if (zero_run_count >= 8'd7)
                                 weak_bit_active <= 1'b1;
                         end
 
