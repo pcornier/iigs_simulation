@@ -1474,7 +1474,7 @@ module flux_drive (
                         if (TRACK_LOADED && drive_ready && !WRITE_MODE &&
                             ((TRACK_BIT_COUNT > 0 &&
                               (current_bit || (weak_bit_active && !current_bit && lfsr[3:0] < 4'd5)))
-                             || (TRACK_BIT_COUNT == 0 && lfsr[3:0] < 4'd8))) begin
+                             || (TRACK_BIT_COUNT == 0 && lfsr[3:0] < 4'd5))) begin
                             FLUX_TRANSITION <= 1'b1;
 `ifdef DEBUG_VERBOSE
                             if (flux_count_debug < 50) begin
