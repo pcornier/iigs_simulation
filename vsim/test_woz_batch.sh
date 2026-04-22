@@ -237,7 +237,15 @@ run_one_disk() {
   else
     png_size=0
     hash=""
-    status=CRASH
+    # rc 124 / 137 = watchdog killed the sim (SIGTERM/SIGKILL from gtimeout)
+    # before it reached the screenshot frame. That's a TIMEOUT, not a CRASH
+    # — the sim was still running, just hadn't caught up with the frame
+    # counter yet. CRASH means Vemu exited on its own with no PNG.
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+      status=TIMEOUT
+    else
+      status=CRASH
+    fi
   fi
 
   # Serialize writes: dedupe screenshot, append CSV row, bump progress counter.
