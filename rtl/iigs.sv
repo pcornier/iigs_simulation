@@ -821,9 +821,8 @@ module iigs
     wire vgc_any_pending = (vgc_scan_pending | vgc_1sec_pending);
 
     always_comb begin: io_read
-        io_dout = din; // TODO: Handle video data for floating bus
+        io_dout = video_data;
         case (addr[11:0])
-          12'h046: io_dout = irq_pending[7:0];
           12'h011: io_dout = {LCRAM2, 7'h00};
           12'h012: io_dout = {~RDROM, 7'h00};
           12'h013: io_dout = {RAMRD, 7'h00};
@@ -874,17 +873,15 @@ module iigs
           12'h038, 12'h039, 12'h03a, 12'h03b:
             io_dout = scc_dout_reg;
           12'h041: io_dout = INTEN;
+          12'h046: io_dout = irq_pending[7:0];
           12'h047: io_dout = 8'h00;
-          12'h058: io_dout = 'h0; // some kind of soft switch?
-          12'h05a: io_dout = 'h0; // some kind of soft switch?
-          12'h05d: io_dout = 'h0; // some kind of soft switch?
-          12'h061: io_dout = {sw0, 7'b0000000};
-          12'h062: io_dout = {sw1, 7'b0000000};
-          12'h063: io_dout = {sw2, 7'b0000000};
-          12'h064: io_dout = {~paddle_timer_expired[0], 1'b0, ~AN3, 5'b00000};
-          12'h065: io_dout = {~paddle_timer_expired[1], 7'b0000000};
-          12'h066: io_dout = {~paddle_timer_expired[2], 7'b0000000};
-          12'h067: io_dout = {~paddle_timer_expired[3], 7'b0000000};
+          12'h061: io_dout = {sw0, video_data[6:0]};
+          12'h062: io_dout = {sw1, video_data[6:0]};
+          12'h063: io_dout = {sw2, video_data[6:0]};
+          12'h064: io_dout = {~paddle_timer_expired[0], video_data[6:0]};
+          12'h065: io_dout = {~paddle_timer_expired[1], video_data[6:0]};
+          12'h066: io_dout = {~paddle_timer_expired[2], video_data[6:0]};
+          12'h067: io_dout = {~paddle_timer_expired[3], video_data[6:0]};
           12'h068: io_dout = {ALTZP,PAGE2,RAMRD,RAMWRT,
                                RDROM,LCRAM2,ROMBANK,INTCXROM};
         endcase // case (addr[11:0])
