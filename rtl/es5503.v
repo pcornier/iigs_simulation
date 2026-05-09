@@ -185,12 +185,6 @@ module es5503
 		  if ((current_osc != 5'd0) && (current_osc[0] == 1'd0) && (r_control[current_osc - 1][1] == 1'b0))
 		    accumulator[current_osc - 1] <= 32'h0;
 
-		  // AM occurs when the current oscillator is odd and not 31,
-		  // and the mode is 2
-		  if ((current_osc != 5'd31) && (current_osc[0] == 1'd1) && (r_control[current_osc][2:1] == 2'd2))
-		    // Our data becomes next osc's volume instead of being played
-		    r_volume[next_osc] <= r_sample_data[current_osc] ^ 8'h80;
-
 		  // Swap occurs when the mode is 3 for both even and odd
 		  if (r_control[current_osc][2:1] == 2'd3) begin
 		     r_control[current_osc ^ 5'h01][0] <= 1'b0;   // Swap occurs even if partner is halted
@@ -208,8 +202,12 @@ module es5503
 	    end // if (accumulator_wrapped || r_sample_data[current_osc] == 8'h00)
 
 	    // Output sample update
-	    if (r_control[current_osc][2:1] == 2'd2 && current_osc[0] == 1'd1)
-	      sound_out <= 16'h0000; // AM mode; no sample playback
+	    if (r_control[current_osc][2:1] == 2'd2 && current_osc[0] == 1'd1) begin
+	       // AM mode; no sample playback, just set the partner's volume
+	       sound_out <= 16'h0000;
+	       if (current_osc != 5'd31) // Oscillator 31 has no partner for AM
+		 r_volume[next_osc] <= r_sample_data[current_osc] ^ 8'h80;
+	    end
 	    else // All other modes
 	      sound_out <= $signed(r_sample_data[current_osc] ^ 8'h80) *
 			   $signed({8'b0, r_volume[current_osc]});
