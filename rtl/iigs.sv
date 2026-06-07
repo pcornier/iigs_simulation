@@ -350,8 +350,7 @@ module iigs
   // All-bank shadow: When CYAREG[4]=1, I/O space appears in banks 02-7F too
   wire all_bank_io = CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7f);
   assign IO =  ~EXTERNAL_IO & addr_bef[15:8] == 8'hC0 &
-               ((((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io) |
-                ((bank_bef == 8'hfc | bank_bef == 8'hfd | bank_bef == 8'hfe | bank_bef == 8'hff) & we)); // ROM: only writes
+               (((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io);
 
   // IWM device select ($C0E0-$C0EF)
   wire iwm_device_select = IO & (cpu_addr[7:4] == 4'hE);
