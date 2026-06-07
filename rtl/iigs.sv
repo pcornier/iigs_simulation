@@ -471,7 +471,7 @@ module iigs
   wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
   // SHR shadow bit 3: When 0, entire $2000-$9FFF shadows (master enable for SHR mode)
   // When bit 3=1, HGR bits 1-2 control $2000-$5FFF, and $6000-$9FFF does not shadow
-  wire shr_master_shadow = ~shadow[3] && (page >= 4'h2 && page <= 4'h9);     // $2000-$9FFF when bit3=0
+  wire shr_master_shadow = ~shadow[3] && (addr_bus[23:16] == 8'h01) && (page >= 4'h2 && page <= 4'h9);     // $2000-$9FFF when bit3=0
   wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
 
   // Memory Controller - Clean systematic approach
