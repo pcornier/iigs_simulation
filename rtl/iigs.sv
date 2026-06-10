@@ -2486,13 +2486,11 @@ wire ready_out;
             .host_addr(snd_addr),
             .host_data_in(snd_din),
             .host_data_out(snd_dout),
-            .sound_out(AUDIO_L),
+            .sound_out_l(AUDIO_L),
+            .sound_out_r(AUDIO_R),
             .irq(snd_irq),
             .speaker_state(speaker_state)
             );
-
-  // Stereo output - mono for now (both channels same)
-  assign AUDIO_R = AUDIO_L;
 
   // SCC (Serial Communications Controller) - Zilog 8530
   // Apple IIgs port assignment:
