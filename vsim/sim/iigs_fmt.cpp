@@ -370,27 +370,33 @@ static int parse_nib_sector(const uint8_t *d, int len, uint8_t *out256, int *tra
 	return 0;
 }
 
+// Parse one 6656-byte NIB track into a 4096-byte DOS-order track. Returns the
+// number of sectors recovered.
+static int nib_track_to_dsk_track(const uint8_t *nt, uint8_t *dt)
+{
+	int got = 0, pos = 0;
+	while (pos < A2_NIB_TRACK_SIZE - 400) {
+		uint8_t sec[A2_SECTOR_SIZE];
+		int tr, s;
+		if (parse_nib_sector(nt + pos, A2_NIB_TRACK_SIZE - pos, sec, &tr, &s)) {
+			if (s >= 0 && s < A2_SECTORS_PER_TRACK) {
+				memcpy(dt + soft_interleave[s] * A2_SECTOR_SIZE, sec, A2_SECTOR_SIZE);
+				got++;
+			}
+			pos += BYTES_PER_NIB_SECTOR;
+		} else {
+			pos++;
+		}
+	}
+	return got;
+}
+
 int a2_nib_to_dsk(uint8_t *dsk, const uint8_t *nib)
 {
 	int ok = 1;
 	for (int t = 0; t < A2_TRACKS_525; t++) {
-		const uint8_t *nt = nib + (size_t)t * A2_NIB_TRACK_SIZE;
-		uint8_t *dt = dsk + (size_t)t * A2_TRACK_SIZE;
-		int got = 0;
-		int pos = 0;
-		while (pos < A2_NIB_TRACK_SIZE - 400) {
-			uint8_t sec[A2_SECTOR_SIZE];
-			int tr, s;
-			if (parse_nib_sector(nt + pos, A2_NIB_TRACK_SIZE - pos, sec, &tr, &s)) {
-				if (s >= 0 && s < A2_SECTORS_PER_TRACK) {
-					memcpy(dt + soft_interleave[s] * A2_SECTOR_SIZE, sec, A2_SECTOR_SIZE);
-					got++;
-				}
-				pos += BYTES_PER_NIB_SECTOR;
-			} else {
-				pos++;
-			}
-		}
+		int got = nib_track_to_dsk_track(nib + (size_t)t * A2_NIB_TRACK_SIZE,
+		                                 dsk + (size_t)t * A2_TRACK_SIZE);
 		if (got < A2_SECTORS_PER_TRACK) ok = 0;
 	}
 	return ok;
@@ -519,6 +525,36 @@ int a2_woz525_to_dsk(uint8_t *dsk, const uint8_t *woz, size_t woz_size)
 		memcpy(nib + (size_t)t * A2_NIB_TRACK_SIZE, woz + off, A2_NIB_TRACK_SIZE);
 	}
 	return a2_nib_to_dsk(dsk, nib);
+}
+
+// Decode a single 5.25" track from a WOZ into dsk (143360) at track*4096.
+int a2_woz525_decode_track(const uint8_t *woz, size_t woz_size, int track, uint8_t *dsk)
+{
+	if (woz_disk_type(woz, woz_size) != 1) return 0;
+	const uint8_t *trks = woz_find_chunk(woz, woz_size, "TRKS", NULL);
+	if (!trks || track < 0 || track >= A2_TRACKS_525) return 0;
+	const uint8_t *e = trks + track * 8;
+	uint16_t start_block = rd_le16(e + 0);
+	uint16_t block_cnt   = rd_le16(e + 2);
+	if (block_cnt == 0) return 0;
+	size_t off = (size_t)start_block * A2_BLOCK_SIZE;
+	if (off + A2_NIB_TRACK_SIZE > woz_size) return 0;
+	return nib_track_to_dsk_track(woz + off, dsk + (size_t)track * A2_TRACK_SIZE);
+}
+
+// Map a WOZ file LBA (512-block index) to its track index, or -1 (header/unmapped).
+int a2_woz_track_for_lba(const uint8_t *woz, size_t woz_size, uint32_t lba)
+{
+	const uint8_t *trks = woz_find_chunk(woz, woz_size, "TRKS", NULL);
+	if (!trks) return -1;
+	for (int t = 0; t < 160; t++) {
+		const uint8_t *e = trks + t * 8;
+		uint16_t sb = rd_le16(e + 0);
+		uint16_t bc = rd_le16(e + 2);
+		if (bc == 0) continue;
+		if (lba >= sb && lba < (uint32_t)sb + bc) return t;
+	}
+	return -1;
 }
 
 // ===========================================================================
@@ -798,55 +834,59 @@ static int frame_track(const uint8_t *bits, uint32_t bit_count, uint8_t *out, in
 	return n;
 }
 
-int a2_woz35_to_po(uint8_t *po, const uint8_t *woz, size_t woz_size)
+// Decode a single 3.5" track nt into po (819200). Reports the ProDOS block range
+// written via *base_block / *block_count. Returns the number of sectors decoded.
+int a2_woz35_decode_track(const uint8_t *woz, size_t woz_size, int nt, uint8_t *po,
+                          int *base_block, int *block_count)
 {
 	init_from_gcr6();
-	if (woz_disk_type(woz, woz_size) != 2) return 0;
+	if (nt < 0 || nt >= NT35) return 0;
 	const uint8_t *trks = woz_find_chunk(woz, woz_size, "TRKS", NULL);
 	if (!trks) return 0;
 
+	const uint8_t *e = trks + nt * 8;
+	uint16_t start_block = rd_le16(e + 0);
+	uint16_t blk_cnt     = rd_le16(e + 2);
+	uint32_t bit_count   = rd_le32(e + 4);
+	if (blk_cnt == 0 || bit_count == 0) return 0;
+	size_t off = (size_t)start_block * A2_BLOCK_SIZE;
+	if (off + (size_t)blk_cnt * A2_BLOCK_SIZE > woz_size) return 0;
+
 	static uint8_t bytes[20 * 1024];
-	int placed = 0;
+	int n = frame_track(woz + off, bit_count, bytes, sizeof(bytes));
+	int base = base_block_of_track(nt);
+	int want = sectors_per_region_35[region_of_track(nt)];
+	int got = 0;
 
-	for (int nt = 0; nt < NT35; nt++) {
-		const uint8_t *e = trks + nt * 8;
-		uint16_t start_block = rd_le16(e + 0);
-		uint16_t block_cnt   = rd_le16(e + 2);
-		uint32_t bit_count   = rd_le32(e + 4);
-		if (block_cnt == 0 || bit_count == 0) continue;
-		size_t off = (size_t)start_block * A2_BLOCK_SIZE;
-		if (off + (size_t)block_cnt * A2_BLOCK_SIZE > woz_size) return 0;
-
-		int n = frame_track(woz + off, bit_count, bytes, sizeof(bytes));
-		int base = base_block_of_track(nt);
-		int region = region_of_track(nt);
-		int want = sectors_per_region_35[region];
-		int got = 0;
-
-		int i = 0;
-		while (i + 3 < n && got < want) {
-			if (bytes[i] == 0xd5 && bytes[i + 1] == 0xaa && bytes[i + 2] == 0xad) {
-				// data field: skip mark(3) + spare(1), then 699 GCR bytes
-				int dpos = i + 4;
-				if (dpos + 699 > n) break;
-				// recover the sector number from the preceding address field is
-				// unnecessary: sectors are emitted in physical order; but decode
-				// the spare byte (logical sector) to place correctly.
-				uint8_t lsec = un62(bytes[i + 3]);
-				if (lsec < (uint8_t)want) {
-					uint8_t sec[512];
-					if (decode_data_35(bytes + dpos, sec)) {
-						memcpy(po + (size_t)(base + lsec) * 512, sec, 512);
-						got++;
-					}
+	int i = 0;
+	while (i + 3 < n && got < want) {
+		if (bytes[i] == 0xd5 && bytes[i + 1] == 0xaa && bytes[i + 2] == 0xad) {
+			int dpos = i + 4;                        // skip mark(3) + spare(1)
+			if (dpos + 699 > n) break;
+			uint8_t lsec = un62(bytes[i + 3]);        // logical sector from spare byte
+			if (lsec < (uint8_t)want) {
+				uint8_t sec[512];
+				if (decode_data_35(bytes + dpos, sec)) {
+					memcpy(po + (size_t)(base + lsec) * 512, sec, 512);
+					got++;
 				}
-				i = dpos + 699;
-			} else {
-				i++;
 			}
+			i = dpos + 699;
+		} else {
+			i++;
 		}
-		if (got >= want) placed += got;
 	}
+	if (base_block)  *base_block = base;
+	if (block_count) *block_count = want;
+	return got;
+}
+
+int a2_woz35_to_po(uint8_t *po, const uint8_t *woz, size_t woz_size)
+{
+	if (woz_disk_type(woz, woz_size) != 2) return 0;
+	int placed = 0;
+	for (int nt = 0; nt < NT35; nt++)
+		placed += a2_woz35_decode_track(woz, woz_size, nt, po, NULL, NULL);
 	return placed == (A2_35_IMAGE_SIZE / 512) ? 1 : 0;
 }
 

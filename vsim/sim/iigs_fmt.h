@@ -113,6 +113,15 @@ int    a2_woz525_to_dsk(uint8_t *dsk, const uint8_t *woz, size_t woz_size);
 size_t a2_po_to_woz35(uint8_t *woz, size_t woz_cap, const uint8_t *po);
 int    a2_woz35_to_po(uint8_t *po, const uint8_t *woz, size_t woz_size);
 
+// ---- per-track decode + LBA mapping (for floppy write-back) ----
+// Map a WOZ file LBA (512-block index) to its track index, or -1 (header/unmapped).
+int a2_woz_track_for_lba(const uint8_t *woz, size_t woz_size, uint32_t lba);
+// 3.5": decode one track into po (819200); reports the ProDOS block range written.
+int a2_woz35_decode_track(const uint8_t *woz, size_t woz_size, int track, uint8_t *po,
+                          int *base_block, int *block_count);
+// 5.25": decode one track into dsk (143360) at track*4096 (16 sectors, DOS order).
+int a2_woz525_decode_track(const uint8_t *woz, size_t woz_size, int track, uint8_t *dsk);
+
 #ifdef __cplusplus
 }
 #endif
