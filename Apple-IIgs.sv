@@ -205,7 +205,7 @@ localparam CONF_STR = {
 	"S3,WOZDSKDO PO NIB2MG,WOZ 5.25;",
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
-	"OB,ROM Version,ROM3,ROM1;",
+	"OB,ROM Version,ROM1,ROM3;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -339,7 +339,7 @@ wire reset = RESET | ~locked | warm_reset_trigger | cold_reset_trigger | buttons
 wire cold_reset = RESET | ~locked | cold_reset_trigger;
 
 wire selftest_override = status[10];
-wire rom_select = status[11];  // 0=ROM3, 1=ROM1
+wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 
 // Detect ROM version change and trigger cold reset
 reg rom_select_prev;
