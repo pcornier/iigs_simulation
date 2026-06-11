@@ -30,6 +30,9 @@
 #include "sim_audio.h"
 #include "sim_input.h"
 #include "sim_clock.h"
+#include "iigs_fmt.h"      // shared Apple IIgs disk-format codec
+#include <unistd.h>
+#include <vector>
 // parallel_clemens.h removed
 
 #define FMT_HEADER_ONLY
@@ -4030,6 +4033,72 @@ std::string disk_image2 = "";  // HDD unit 1 (--disk2)
 std::string woz_image = "";  // WOZ disk image (flux-based)
 int woz_mount_index = -1;     // Auto-detected: 4=5.25", 5=3.5"
 
+// Convert a non-WOZ floppy image (.po/.dsk/.do/.nib/.2mg) to a temporary WOZ
+// using the shared codec (iigs_fmt), so --woz accepts any floppy format. If the
+// file is already a WOZ (or can't be converted), the original path is returned.
+static std::string prepareFloppyImage(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return path;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n <= 0) { fclose(f); return path; }
+    std::vector<uint8_t> raw(n);
+    if (fread(raw.data(), 1, n, f) != (size_t)n) { fclose(f); return path; }
+    fclose(f);
+
+    if (woz_disk_type(raw.data(), raw.size()) > 0) return path;   // already WOZ
+
+    const char* dot = strrchr(path.c_str(), '.');
+    const char* ext = dot ? dot + 1 : nullptr;
+    DiskClass cls = iigs_classify(raw.data(), raw.size(), ext);
+
+    std::vector<uint8_t> woz;
+    size_t wn = 0;
+
+    if (cls == DC_FLOPPY_35) {
+        const uint8_t* pay = raw.data();
+        size_t plen = raw.size();
+        TwoMG m; DC42 d;
+        if (twomg_parse(raw.data(), raw.size(), &m)) { pay = raw.data() + m.data_offset; plen = m.data_len; }
+        else if (dc42_parse(raw.data(), raw.size(), &d)) { pay = raw.data() + 84; plen = d.data_size; }
+        if (plen != A2_35_IMAGE_SIZE) return path;
+        woz.resize(2 * 1024 * 1024);
+        wn = a2_po_to_woz35(woz.data(), woz.size(), pay);
+    } else if (cls == DC_FLOPPY_525) {
+        const uint8_t* pay = raw.data();
+        size_t plen = raw.size();
+        int order_prodos = 0, order_nib = 0;
+        TwoMG m;
+        if (twomg_parse(raw.data(), raw.size(), &m)) { pay = raw.data() + m.data_offset; plen = m.data_len; order_prodos = (m.format == 1); order_nib = (m.format == 2); }
+        else if (raw.size() == A2_NIB_IMAGE_SIZE) order_nib = 1;
+        else if (ext && !strcasecmp(ext, "po")) order_prodos = 1;
+        std::vector<uint8_t> dsk(A2_525_IMAGE_SIZE);
+        if (order_nib) {
+            if (plen != A2_NIB_IMAGE_SIZE || !a2_nib_to_dsk(dsk.data(), pay)) return path;
+        } else {
+            if (plen != A2_525_IMAGE_SIZE) return path;
+            if (order_prodos) a2_prodos_to_dos(dsk.data(), pay);
+            else              memcpy(dsk.data(), pay, A2_525_IMAGE_SIZE);
+        }
+        woz.resize(512 * 1024);
+        wn = a2_dsk_to_woz525(woz.data(), woz.size(), dsk.data());
+    } else {
+        return path;   // not a convertible floppy
+    }
+    if (!wn) return path;
+
+    char tmpl[] = "/tmp/sim_floppy_XXXXXX.woz";
+    int fd = mkstemps(tmpl, 4);
+    if (fd < 0) return path;
+    ssize_t wrote = write(fd, woz.data(), wn);
+    close(fd);
+    if (wrote != (ssize_t)wn) return path;
+    printf("Converted floppy %s -> %s (%zu-byte WOZ)\n", path.c_str(), tmpl, wn);
+    fflush(stdout);
+    return std::string(tmpl);
+}
+
 // Returns 4 for 5.25", 5 for 3.5", -1 on error
 static int detectWozType(const char* filepath) {
     FILE *f = fopen(filepath, "rb");
@@ -4394,7 +4463,7 @@ void show_help() {
 	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
 	printf("  --disk <filename>             Use specified HDD image (slot 7 unit 0, no disk mounted by default)\n");
 	printf("  --disk2 <filename>            Use specified HDD image for slot 7 unit 1\n");
-	printf("  --woz <filename>              Use specified WOZ disk image (auto-detects 5.25\" vs 3.5\")\n");
+	printf("  --woz <filename>              Floppy image: .woz, or .po/.dsk/.do/.nib/.2mg (auto-converted to WOZ)\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
 	printf("  --dump-vcd-after <frame>      Start dumping vsim.vcd after a frame number\n");
@@ -4651,7 +4720,8 @@ int main(int argc, char** argv, char** env) {
             printf("Using HDD unit 1 image: %s\n", disk_image2.c_str());
             i++; // Skip the next argument since it's the filename
         } else if (strcmp(argv[i], "--woz") == 0 && i + 1 < argc) {
-            woz_image = argv[i + 1];
+            // Accept any floppy format: convert .po/.dsk/.do/.nib/.2mg to WOZ.
+            woz_image = prepareFloppyImage(argv[i + 1]);
             i++;
             woz_mount_index = detectWozType(woz_image.c_str());
             if (woz_mount_index < 0) woz_mount_index = 5;  // Default to 3.5"
@@ -5403,10 +5473,10 @@ int main(int argc, char** argv, char** env) {
 			ImGuiFileDialog::Instance()->Close();
 		}
 
-		// File dialog for 3.5" WOZ mount
+		// File dialog for 3.5" WOZ mount (any floppy format, converted to WOZ)
 		if (ImGuiFileDialog::Instance()->Display("MountWOZ35")) {
 			if (ImGuiFileDialog::Instance()->IsOk()) {
-				std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+				std::string path = prepareFloppyImage(ImGuiFileDialog::Instance()->GetFilePathName());
 				int wozType = detectWozType(path.c_str());
 				if (wozType == 5 || wozType == -1) {
 					blockdevice.MountDisk(path, 5);
@@ -5417,10 +5487,10 @@ int main(int argc, char** argv, char** env) {
 			ImGuiFileDialog::Instance()->Close();
 		}
 
-		// File dialog for 5.25" WOZ mount
+		// File dialog for 5.25" WOZ mount (any floppy format, converted to WOZ)
 		if (ImGuiFileDialog::Instance()->Display("MountWOZ525")) {
 			if (ImGuiFileDialog::Instance()->IsOk()) {
-				std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+				std::string path = prepareFloppyImage(ImGuiFileDialog::Instance()->GetFilePathName());
 				int wozType = detectWozType(path.c_str());
 				if (wozType == 4 || wozType == -1) {
 					blockdevice.MountDisk(path, 4);
