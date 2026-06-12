@@ -10,7 +10,8 @@ module sound
     input [1:0]       host_addr,
     input [7:0]       host_data_in,
     output [7:0]      host_data_out,
-    output [15:0]     sound_out,
+    output [15:0]     sound_out_l,
+    output [15:0]     sound_out_r,
     output [3:0]      ca,
     output            irq,
     // Apple II speaker input
@@ -30,17 +31,29 @@ module sound
    wire              ram_select;
    wire              osc_en;
    wire [15:0]       doc_sound_out;
-   wire [15:0]       iir_sound_out;
+   wire [15:0]       iir_sound_out_l;
+   wire [15:0]       iir_sound_out_r;
 
    assign glu_data_in = ram_select ? ram_data_out : doc_data_out;
    assign ram_addr    = osc_en ? doc_addr_out[15:0] : glu_addr_out;
 
-   wire signed [15:0] iir_boosted = iir_sound_out <<< 2;
+   wire signed [15:0] iir_boosted_l = iir_sound_out_l <<< 2;
+   wire signed [15:0] iir_boosted_r = iir_sound_out_r <<< 2;
 
    // TODO: Better speaker click modeling; for now just toggle a bit like the IIe core
    wire signed [15:0] speaker_audio = speaker_state ? 16'sh0800 : -16'h0800;
 
-   assign sound_out = iir_boosted + speaker_audio;
+   assign sound_out_l = iir_boosted_l + speaker_audio;
+   assign sound_out_r = iir_boosted_r + speaker_audio;
+
+   reg [15:0] doc_sound_l;
+   reg [15:0] doc_sound_r;
+
+   // Demux stereo
+   always @(posedge CLK_14M) if (osc_en) begin
+      doc_sound_l <= ca[0] ? doc_sound_out : 16'd0;
+      doc_sound_r <= ca[0] ? 16'd0 : doc_sound_out;
+   end
 
    // BUGFIX: forward ph0_en into soundglu so doc_enable is clocked correctly
    soundglu glu
@@ -85,31 +98,35 @@ module sound
       .irq(irq),
       .osc_en(osc_en));
 
-   // TODO: This filter is from the MegaDrive core. Should be
-   // reasonable for modeling the internal speaker in mono, but needs
-   // to be replaced with a more LiteSound-like filter for stereo.
+   // In stereo mode, the filter needs to run two cycles per sample period
+   reg osc_en_d;
+   wire iir_ce = osc_en | osc_en_d;
 
-   //  8KHz 2tap
+   always @(posedge CLK_14M) osc_en_d <= osc_en;
+
+   // 10khz 1st + AA, fs=894886
    IIR_filter
      #(
        .use_params(1),
-       .stereo(0),
-       .coeff_x (0.0000943),
-       .coeff_x0(2),
-       .coeff_x1(1),
-       .coeff_x2(0),
-       .coeff_y0(-1.98992552008492529225),
-       .coeff_y1( 0.98997601394542067421),
-       .coeff_y2(0))
+       .stereo(1),
+       .coeff_x (0.00138604585989953941),
+       .coeff_x0(3),
+       .coeff_x1(3),
+       .coeff_x2(1),
+       .coeff_y0(-2.79476671867831694129),
+       .coeff_y1( 2.61357669738641673618),
+       .coeff_y2(-0.81781102634857016920))
    psg_iir
      (
       .clk(CLK_14M),
       .reset(reset),
 
-      .ce(osc_en),
+      .ce(iir_ce),
       .sample_ce(1),
 
-      .input_l(doc_sound_out),
-      .output_l(iir_sound_out));
+      .input_l(doc_sound_l),
+      .input_r(doc_sound_r),
+      .output_l(iir_sound_out_l),
+      .output_r(iir_sound_out_r));
 
 endmodule

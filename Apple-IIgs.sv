@@ -28,7 +28,7 @@ assign HDMI_BOB_DEINT = 0;
 
 assign AUDIO_S = 1;
 // AUDIO_R now comes from iigs module (was hardcoded to 0)
-assign AUDIO_MIX = 3;
+assign AUDIO_MIX = 1;
 
 assign LED_DISK = 0;
 assign LED_POWER = 0;

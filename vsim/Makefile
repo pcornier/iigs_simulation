@@ -17,6 +17,9 @@ V_DEFINE = +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim
 # with `make TRACE=1` when you need --dump-vcd-after.
 ifeq ($(TRACE),1)
 V_DEFINE += --trace
+CXX_DEFINE += -DVM_TRACE_VCD=1
+else
+CXX_DEFINE += -DVM_TRACE_VCD=0
 endif
 # Sound implementation switch:
 #   make SOUND=stub   -> builds with +define+SOUND_STUB
