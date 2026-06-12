@@ -271,6 +271,7 @@ iigs iigs (
 	// Floppy motor status
 	.floppy_motor_on(floppy_motor_on),
 	.floppy35_motor_on(floppy35_motor_on),
+	.floppy35_eject(floppy35_eject),
 	.top_addr(addr_bus),
 	.rom_bankaddr(rom_bankaddr),
 	.top_din(sdram_dout),
@@ -502,6 +503,8 @@ wire [15:0] WOZ_TRACK1_BIT_WR_ADDR;  // Write address (latched)
 // Floppy motor state (for dirty track flush on motor-off)
 wire        floppy_motor_on;
 wire        floppy35_motor_on;
+wire        floppy35_eject;       // 3.5" drive 1 GS/OS eject pulse (from iigs)
+reg         ejected35 = 1'b0;     // latched: 3.5" disk ejected via OS, cleared on re-mount
 
 wire [3:0] DISK_READY;
 
@@ -542,7 +545,12 @@ reg         woz_ctrl_525_remount_pending = 0;
 
 always @(posedge clk_sys) begin
 	img_mounted2_d <= img_mounted[2];
+	// 3.5" eject latch (mirrors MacLC clearing its inserted flag): a GS/OS eject
+	// drops DISK_READY[2] so the drive reports "no disk" and the Finder removes
+	// the icon. Re-mounting the image from the OSD clears the latch and re-inserts.
+	if (floppy35_eject) ejected35 <= 1'b1;
 	if (~img_mounted2_d & img_mounted[2]) begin
+		ejected35 <= 1'b0;
 		if (woz_ctrl_mount) begin
 			// Already mounted: force unmount first, then remount next cycle
 			woz_ctrl_mount <= 0;
@@ -585,7 +593,7 @@ assign WOZ_TRACK1_FLUX_TOTAL_TICKS = woz_ctrl_525_flux_total_ticks;
 
 assign DISK_READY[0] = woz_ctrl_525_disk_mounted;
 assign DISK_READY[1] = 1'b0;
-assign DISK_READY[2] = woz_ctrl_disk_mounted;
+assign DISK_READY[2] = woz_ctrl_disk_mounted && !ejected35;  // eject latch drops presence
 assign DISK_READY[3] = 1'b0;
 
 woz_floppy_controller #(

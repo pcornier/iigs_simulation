@@ -51,6 +51,7 @@ module flux_drive (
 
     // Internal state for parent-level sense computation (Verilator eval order workaround)
     output wire        DISK_SWITCHED_OUT,    // disk_switched flag (1=normal, 0=switched)
+    output reg         EJECT_REQ,            // 1-cycle pulse on GS/OS Sony eject command
     output wire        STEP_BUSY_OUT,        // 1=stepping in progress
     output wire        STEP_DIR_OUT,         // step direction readback
     output wire        MOTOR_ON_SENSE_OUT,   // motor on for sense readback
@@ -678,7 +679,9 @@ module flux_drive (
             prev_disk_mounted <= 1'b0;
             first_mount_done <= 1'b0;
             step_busy_cnt <= 18'd0;
+            EJECT_REQ <= 1'b0;
         end else begin
+            EJECT_REQ <= 1'b0;   // default low; pulsed only on the eject command below
             if (step_busy_cnt != 18'd0)
                 step_busy_cnt <= step_busy_cnt - 18'd1;
 
@@ -835,10 +838,14 @@ module flux_drive (
 `endif
                 end
                 if (sony_ctl == 4'h7) begin
-                    // Start eject: treat as disk removed (best-effort)
-                    // Real hardware would unload; in sim we don't hot-unmount here.
+                    // Start eject (GS/OS drag-to-trash): pulse EJECT_REQ. The top
+                    // level latches it and drops DISK_READY[2], so DISK_MOUNTED
+                    // falls -> the drive reports "no disk" (sense_35 = ~DISK_MOUNTED)
+                    // and the removal edge above sets disk_switched. Re-mounting
+                    // from the OSD clears the latch and re-inserts. (Mirrors MacLC.)
+                    EJECT_REQ <= 1'b1;
 `ifdef DEBUG_VERBOSE
-                    $display("FLUX_DRIVE[%0d]: cmd eject on (not implemented)", DRIVE_ID);
+                    $display("FLUX_DRIVE[%0d]: cmd eject -> EJECT_REQ pulse", DRIVE_ID);
 `endif
                 end
             end

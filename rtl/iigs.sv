@@ -132,6 +132,9 @@ module iigs
    output             floppy_motor_on,
    output             floppy35_motor_on,
 
+   // 3.5" drive 1 GS/OS eject pulse (drag-to-trash) -> top-level eject latch
+   output             floppy35_eject,
+
    // Keyboard-triggered reset outputs
    output        keyboard_reset,      // Ctrl+F11 was pressed - trigger warm reset
    output        keyboard_cold_reset, // Ctrl+OpenApple+F11 was pressed - trigger cold reset
@@ -2415,7 +2418,8 @@ wire ready_out;
       .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
       // Motor status for clock slowdown
       .FLOPPY_MOTOR_ON(floppy_motor_on),
-      .FLOPPY35_MOTOR_ON(floppy35_motor_on)
+      .FLOPPY35_MOTOR_ON(floppy35_motor_on),
+      .EJECT_35(floppy35_eject)
   );
   // Internal wires not used with flux-based IWM
   assign TRACK3 = 7'd0;

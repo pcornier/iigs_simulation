@@ -279,6 +279,7 @@ iigs  iigs(
         // Floppy motor status (for dirty track flush on motor-off)
         .floppy_motor_on(floppy_motor_on),
         .floppy35_motor_on(floppy35_motor_on),
+        .floppy35_eject(),     // 3.5" eject pulse: FPGA-only (no eject latch in vsim)
 
         // Audio outputs
         .AUDIO_L(AUDIO_L),

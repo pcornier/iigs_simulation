@@ -74,7 +74,10 @@ module iwm_woz (
     output          FLOPPY_MOTOR_ON,
 
     // 3.5" drive motor status (for dirty track flush in woz_floppy_controller)
-    output          FLOPPY35_MOTOR_ON
+    output          FLOPPY35_MOTOR_ON,
+
+    // 3.5" drive 1: GS/OS eject pulse (drag-to-trash) -> top-level eject latch
+    output          EJECT_35
 );
 
     //=========================================================================
@@ -445,6 +448,7 @@ module iwm_woz (
     wire [15:0] drive35_bram_addr;
     // Internal state from drive35 for parent-level sense computation
     wire        drive35_disk_switched;
+    wire        drive35_eject;        // 3.5" drive 1 eject command pulse
     wire        drive35_step_busy;
     wire        drive35_step_dir;
     wire        drive35_motor_on_sense;
@@ -506,6 +510,7 @@ module iwm_woz (
         .WRITE_PROTECT(drive35_wp),
         .SENSE(drive35_sense),
         .DISK_SWITCHED_OUT(drive35_disk_switched),
+        .EJECT_REQ(drive35_eject),
         .STEP_BUSY_OUT(drive35_step_busy),
         .STEP_DIR_OUT(drive35_step_dir),
         .MOTOR_ON_SENSE_OUT(drive35_motor_on_sense),
@@ -656,6 +661,7 @@ module iwm_woz (
         .WRITE_PROTECT(drive35_2_wp),
         .SENSE(drive35_2_sense),
         .DISK_SWITCHED_OUT(drive35_2_disk_switched),
+        .EJECT_REQ(),                     // 2nd 3.5" drive is empty
         .STEP_BUSY_OUT(drive35_2_step_busy),
         .STEP_DIR_OUT(drive35_2_step_dir),
         .MOTOR_ON_SENSE_OUT(drive35_2_motor_on_sense),
@@ -739,6 +745,7 @@ module iwm_woz (
         .WRITE_PROTECT(drive525_wp),
         .SENSE(drive525_sense),
         .DISK_SWITCHED_OUT(),              // Not used for 5.25"
+        .EJECT_REQ(),                      // 5.25" has no eject mechanism
         .STEP_BUSY_OUT(),
         .STEP_DIR_OUT(),
         .MOTOR_ON_SENSE_OUT(),
@@ -1188,6 +1195,7 @@ module iwm_woz (
     // 3.5" drive motor spinning state (from flux_drive Sony motor logic)
     // Used by woz_floppy_controller to trigger dirty track flush on motor-off
     assign FLOPPY35_MOTOR_ON = drive35_motor_spinning;
+    assign EJECT_35 = drive35_eject;
 
 `ifdef DEBUG_VERBOSE
     // Debug: Monitor state changes
