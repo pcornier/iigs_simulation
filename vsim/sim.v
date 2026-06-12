@@ -276,6 +276,15 @@ iigs  iigs(
         // Caps Lock LED (unused in vsim)
         .capslock(),
 
+        // PRAM persistence (NVRAM) -- not exercised in vsim; boot on $readmemh
+        // defaults. (The save engine lives in the FPGA top, Apple-IIgs.sv.)
+        .pram_load_wr(1'b0),
+        .pram_load_addr(8'h00),
+        .pram_load_data(8'h00),
+        .pram_save_addr(8'h00),
+        .pram_save_data(),
+        .pram_wr_stb(),
+
         // Floppy motor status (for dirty track flush on motor-off)
         .floppy_motor_on(floppy_motor_on),
         .floppy35_motor_on(floppy35_motor_on),

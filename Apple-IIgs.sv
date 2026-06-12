@@ -52,6 +52,7 @@ localparam CONF_STR = {
 	"S1,HDVPO 2MG;",
 	"S2,WOZPO 2MG,WOZ 3.5;",
 	"S3,WOZDSKDO PO NIB2MG,WOZ 5.25;",
+	"SC4,NVR,Mount PRAM;",
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
 	"OB,ROM Version,ROM1,ROM3;",
@@ -59,6 +60,7 @@ localparam CONF_STR = {
 
 	"R0,Warm Reset;",
 	"R1,Cold Reset;",
+	"R[12],Clear PRAM;",
 	"JA,Fire 1,Fire 2,Fire 3;",
 	"jn,A|P,B,Y;",
 	"jp,Y|P,B,Y;",
@@ -69,18 +71,59 @@ wire forced_scandoubler;
 wire  [1:0] buttons;
 wire [127:0] status;
 
-wire [31:0] sd_lba[4];
-reg   [3:0] sd_rd;
-reg   [3:0] sd_wr;
-wire  [3:0] sd_ack;
+wire [31:0] sd_lba[5];
+reg   [4:0] sd_rd;
+reg   [4:0] sd_wr;
+wire  [4:0] sd_ack;
 wire  [8:0] sd_buff_addr;
 wire  [7:0] sd_buff_dout;
-wire  [7:0] sd_buff_din[4];
+wire  [7:0] sd_buff_din[5];
 wire        sd_buff_wr;
-wire  [3:0] img_mounted;
+wire  [4:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;    
 
+
+// =====================================================================
+// PRAM persistence (NVRAM) -- autosave to a mounted save image (slot 4).
+// Modeled on MacLC_MiSTer (same RTC/PRAM chip family as the IIgs).
+//   load  : when the PRAM image mounts (img_mounted[VD_PRAM], size>0)
+//   flush : when the OSD opens and PRAM changed since the last save
+//   clear : "Clear PRAM" (status[12]) -> zero PRAM, flush zeros, reboot
+// One 512B sector at LBA 0 holds the 256 PRAM bytes (rest padded). prtc.v
+// owns the canonical pram[]; we shuttle it through pram_buf via the
+// pram_load_*/pram_save_* ports. hps_io is WIDE=0 here, so sd_buff is one
+// byte per sd_buff_addr (no 16-bit packing). FSM is further below.
+// =====================================================================
+localparam [2:0] VD_PRAM = 3'd4;          // PRAM save image -> hps_io slot 4
+
+reg        pram_load_wr;
+reg  [7:0] pram_load_addr, pram_load_data, pram_save_addr;
+wire [7:0] pram_save_data;                // from prtc.v via iigs
+wire       pram_wr_stb;                   // from prtc.v via iigs: firmware PRAM write
+
+reg        pram_rd, pram_wr_req;
+wire       pram_ack = sd_ack[VD_PRAM];
+assign     sd_lba[VD_PRAM] = 32'd0;       // single 512B sector at LBA 0
+
+reg  [7:0] pram_buf[0:255];               // staging buffer <-> SD sector
+assign     sd_buff_din[VD_PRAM] = (sd_buff_addr < 9'd256) ? pram_buf[sd_buff_addr[7:0]] : 8'h00;
+
+reg        pram_ena;                       // a save image is mounted (size>0)
+reg        pram_dirty;                     // PRAM changed since last save
+reg        pram_rst_after;                 // pulse reset after the current save
+reg        pram_load_pending, pram_flush_pending, pram_clr_pending;
+reg        old_pack, old_osd, old_mnt4, old_clrpram;
+reg        pram_ready = 1'b0;              // -> cold reset gate (loaded / no image / timed out)
+reg        pram_force_reset = 1'b0;        // "Clear PRAM" -> cold reset pulse
+reg [31:0] pram_rdy_cnt;
+reg  [6:0] pram_rst_hold;
+
+localparam [3:0] P_IDLE=0, P_LD_RD=1, P_LD_DAT=2, P_LD_CPY=3,
+                 P_FILL=4, P_SV_WR=5, P_SV_DAT=6, P_CLR=7, P_RST=8;
+reg  [3:0] pst;
+reg  [8:0] pcnt;
+wire       pram_clear_req = status[12];
 
 wire [32:0] TIMESTAMP;
 wire [15:0] joystick_0;
@@ -99,7 +142,7 @@ wire [7:0] ioctl_dout;
 wire [15:0] ioctl_index;
 reg ioctl_wait = 0;
 
-hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
+hps_io #(.CONF_STR(CONF_STR),.VDNUM(5)) hps_io
 (
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
@@ -185,7 +228,11 @@ wire capslock_led;
 wire warm_reset_trigger = status[0] | keyboard_reset;
 // ioctl_download: hold the machine in cold reset while ROM is uploading so
 // CPU SDRAM traffic can't collide with the upload channel
-wire cold_reset_trigger = status[1] | keyboard_cold_reset | rom_switch_reset | ioctl_download;
+// ~pram_ready holds cold reset at power-on until the NVRAM save image has been
+// streamed into pram[] (or no image / backstop timeout), so the ROM reads valid
+// battery RAM (boot slot) before it runs. pram_force_reset is the "Clear PRAM"
+// reboot pulse. Both come from the PRAM save engine below.
+wire cold_reset_trigger = status[1] | keyboard_cold_reset | rom_switch_reset | ioctl_download | pram_force_reset | ~pram_ready;
 wire reset = RESET | ~locked | warm_reset_trigger | cold_reset_trigger | buttons[1];
 
 // cold_reset is 1 for power-on (RESET/~locked) or explicit cold reset or ROM switch, 0 for warm reset
@@ -303,7 +350,15 @@ iigs iigs (
 	// Keyboard-triggered reset outputs (Ctrl+F11, Ctrl+OpenApple+F11)
 	.keyboard_reset(keyboard_reset),
 	.keyboard_cold_reset(keyboard_cold_reset),
-	.capslock(capslock_led)
+	.capslock(capslock_led),
+
+	// PRAM persistence (NVRAM) <-> save engine
+	.pram_load_wr(pram_load_wr),
+	.pram_load_addr(pram_load_addr),
+	.pram_load_data(pram_load_data),
+	.pram_save_addr(pram_save_addr),
+	.pram_save_data(pram_save_data),
+	.pram_wr_stb(pram_wr_stb)
 );
 
 wire [23:0] addr_bus;
@@ -462,6 +517,121 @@ always @(*) begin
        sd_wr[2] = woz_sd_wr;
        sd_rd[3] = woz_sd_525_rd;
        sd_wr[3] = woz_sd_525_wr;
+       sd_rd[4] = pram_rd;       // PRAM NVRAM save image (slot 4)
+       sd_wr[4] = pram_wr_req;
+end
+
+// =====================================================================
+// PRAM persistence FSM (NVRAM autosave) -- runs on clk_sys (== CLK_14M).
+// SD handshake mirrors the HDD/WOZ path: drop rd/wr on `ack` rising, the
+// sector completes on `ack` falling. See the declarations block above and
+// MacLC_MiSTer for the reference implementation.
+// =====================================================================
+always @(posedge clk_sys) begin
+	if (~locked) begin
+		pst <= P_IDLE; pram_rd <= 0; pram_wr_req <= 0; pram_load_wr <= 0;
+		pram_ena <= 0; pram_dirty <= 0; pram_force_reset <= 0; pram_rst_after <= 0;
+		pram_load_pending <= 0; pram_flush_pending <= 0; pram_clr_pending <= 0;
+		old_pack <= 0; old_osd <= 0; old_mnt4 <= 0; old_clrpram <= 0; pram_rst_hold <= 0;
+		pram_ready <= 0; pram_rdy_cnt <= 0;
+	end else begin
+		old_pack     <= pram_ack;
+		old_osd      <= OSD_STATUS;
+		old_mnt4     <= img_mounted[VD_PRAM];
+		old_clrpram  <= pram_clear_req;
+		pram_load_wr <= 1'b0;                        // default low; pulsed in copy/clear
+
+		// PRAM SD-read capture (only while HPS services our slot)
+		if (pram_ack && sd_buff_wr && sd_buff_addr < 9'd256)
+			pram_buf[sd_buff_addr[7:0]] <= sd_buff_dout;
+
+		// firmware PRAM writes mark the image dirty
+		if (pram_wr_stb) pram_dirty <= 1'b1;
+
+		// event latches
+		if (img_mounted[VD_PRAM] && !old_mnt4) begin
+			pram_ena <= (img_size != 0);
+			if (img_size != 0) pram_load_pending <= 1'b1; // load -> P_LD_CPY asserts pram_ready
+			else               pram_ready        <= 1'b1; // no image: release the boot gate now
+		end
+		if (OSD_STATUS && !old_osd && pram_dirty && pram_ena) pram_flush_pending <= 1'b1;
+		if (pram_clear_req && !old_clrpram)                   pram_clr_pending   <= 1'b1;
+
+		// PRAM-ready boot gate. We hold cold reset only briefly: if the HPS
+		// reports slot-4 mount status quickly (real file -> load, or size==0),
+		// the load/mount handler asserts pram_ready directly. Otherwise this
+		// short backstop releases boot. Unlike the Mac, the IIgs $readmemh
+		// defaults carry a VALID checksum, so booting on them does NOT make the
+		// ROM wipe PRAM -- a later (auto or manual) mount still live-loads pram[]
+		// and the saved settings apply on the next reset. The old multi-second
+		// hold just showed a long black screen on cold boot when no NVR mounts,
+		// so keep this short (~0.5s @ 14.318 MHz).
+		if (!pram_ready) begin
+			if (pram_rdy_cnt >= 32'd7_200_000) pram_ready <= 1'b1;
+			else pram_rdy_cnt <= pram_rdy_cnt + 1'b1;
+		end
+
+		// stretch the cold-reset pulse so the reset logic latches it
+		if (pram_force_reset) begin
+			if (pram_rst_hold == 0) pram_force_reset <= 1'b0;
+			else pram_rst_hold <= pram_rst_hold - 1'b1;
+		end
+
+		case (pst)
+		P_IDLE:
+			if (pram_clr_pending) begin
+				pram_clr_pending <= 0; pcnt <= 0; pst <= P_CLR;
+			end else if (pram_load_pending) begin
+				pram_load_pending <= 0; pram_rd <= 1'b1; pst <= P_LD_RD;
+			end else if (pram_flush_pending) begin
+				pram_flush_pending <= 0; pram_rst_after <= 0; pcnt <= 0; pst <= P_FILL;
+			end
+
+		// ---- LOAD: SD sector -> pram_buf -> prtc pram[] ----
+		P_LD_RD:  if (pram_ack) begin pram_rd <= 1'b0; pst <= P_LD_DAT; end
+		P_LD_DAT: if (old_pack && !pram_ack) begin pcnt <= 0; pst <= P_LD_CPY; end
+		P_LD_CPY: begin
+			pram_load_wr   <= 1'b1;
+			pram_load_addr <= pcnt[7:0];
+			pram_load_data <= pram_buf[pcnt[7:0]];
+			if (pcnt == 9'd255) begin pram_dirty <= 0; pram_ena <= 1; pram_ready <= 1'b1; pst <= P_IDLE; end
+			else pcnt <= pcnt + 1'b1;
+		end
+
+		// ---- SAVE: prtc pram[] -> pram_buf -> SD sector ----
+		P_FILL: begin
+			pram_save_addr <= pcnt[7:0];                 // prtc returns data next cycle
+			if (pcnt != 0) pram_buf[pcnt[7:0] - 8'd1] <= pram_save_data;
+			if (pcnt == 9'd256) pst <= P_SV_WR;
+			else pcnt <= pcnt + 1'b1;
+		end
+		P_SV_WR: begin
+			pram_wr_req <= 1'b1;
+			if (pram_ack) begin pram_wr_req <= 1'b0; pst <= P_SV_DAT; end
+		end
+		P_SV_DAT: if (old_pack && !pram_ack) begin
+			pram_dirty <= 0;
+			if (pram_rst_after) begin pram_rst_after <= 0; pst <= P_RST; end
+			else pst <= P_IDLE;
+		end
+
+		// ---- Clear PRAM: zero pram[] + buffer, flush zeros, then reboot ----
+		P_CLR: begin
+			pram_load_wr   <= 1'b1;
+			pram_load_addr <= pcnt[7:0];
+			pram_load_data <= 8'h00;
+			pram_buf[pcnt[7:0]] <= 8'h00;
+			if (pcnt == 9'd255) begin
+				if (pram_ena) begin pram_rst_after <= 1; pst <= P_SV_WR; end
+				else pst <= P_RST;
+			end else pcnt <= pcnt + 1'b1;
+		end
+		P_RST: begin
+			pram_force_reset <= 1'b1; pram_rst_hold <= 7'd127; pst <= P_IDLE;
+		end
+		default: pst <= P_IDLE;
+		endcase
+	end
 end
 
 wire fd_disk_1;

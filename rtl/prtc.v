@@ -12,7 +12,17 @@ module prtc(
   output reg onesecond_irq,
   output reg qtrsecond_irq,
   input rw,
-  input strobe // must be high for one clock enable(cen) only!
+  input strobe, // must be high for one clock enable(cen) only!
+  // PRAM persistence (NVRAM) ports -- driven by the save engine in Apple-IIgs.sv.
+  // pram[] is the canonical battery RAM; the engine streams it to/from an SD
+  // save image. These run regardless of `reset` so a load can complete while
+  // the machine is held in cold reset during boot.
+  input            pram_load_wr,    // 1 = write one byte into pram[] (SD -> pram)
+  input      [7:0] pram_load_addr,
+  input      [7:0] pram_load_data,
+  input      [7:0] pram_save_addr,  // read address for the save path
+  output reg [7:0] pram_save_data,  // registered pram[] read (pram -> SD)
+  output reg       pram_wr_stb      // 1-cycle pulse on any firmware PRAM write
 );
 
 reg old_strobe;
@@ -125,6 +135,14 @@ reg [31:0] timestamp_prev;
 reg clock_initialized;
 
 always @(posedge CLK_14M) begin
+
+  // PRAM persistence ports run regardless of `reset` so the SD save engine can
+  // load pram[] while the machine is held in cold reset during boot. pram[] is
+  // written only from this always block (load here + protocol/checksum below),
+  // so it stays single-driver.
+  pram_wr_stb    <= 1'b0;                   // default: no firmware write this cycle
+  pram_save_data <= pram[pram_save_addr];   // registered read for the save path
+  if (pram_load_wr) pram[pram_load_addr] <= pram_load_data;
 
   if (reset) begin
     // Initialize all registers on reset
@@ -371,6 +389,7 @@ end
                        prtc_txn_count, clk_reg1, c033, pram[clk_reg1]);
 `endif
               pram[clk_reg1] <= c033;
+              pram_wr_stb <= 1'b1;   // firmware PRAM write -> mark NVRAM dirty
             end
           end
 

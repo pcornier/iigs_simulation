@@ -137,7 +137,16 @@ module iigs
    output        keyboard_cold_reset, // Ctrl+OpenApple+F11 was pressed - trigger cold reset
 
    // Keyboard LED state for MiSTer HPS PS/2 LED passthrough
-   output        capslock             // Caps Lock state (1 = Caps Lock on)
+   output        capslock,            // Caps Lock state (1 = Caps Lock on)
+
+   // PRAM persistence (NVRAM) -- pass-through to prtc, wired to the save
+   // engine in Apple-IIgs.sv
+   input            pram_load_wr,
+   input      [7:0] pram_load_addr,
+   input      [7:0] pram_load_data,
+   input      [7:0] pram_save_addr,
+   output     [7:0] pram_save_data,
+   output           pram_wr_stb
 
 );
 
@@ -2525,7 +2534,13 @@ wire ready_out;
             .onesecond_irq(onesecond_irq),
             .qtrsecond_irq(qtrsecond_irq),
             .rw(prtc_rw),
-            .strobe(prtc_strobe)
+            .strobe(prtc_strobe),
+            .pram_load_wr(pram_load_wr),
+            .pram_load_addr(pram_load_addr),
+            .pram_load_data(pram_load_data),
+            .pram_save_addr(pram_save_addr),
+            .pram_save_data(pram_save_data),
+            .pram_wr_stb(pram_wr_stb)
             );
 
   // Hardware-accurate IWM with WOZ/flux-based disk interface
