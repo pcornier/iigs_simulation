@@ -167,8 +167,7 @@ assign USER_OUT = '1;
 assign UART_DTR = UART_DSR;
 
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;  
-assign SDRAM_CKE = 1;
+assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
 
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
@@ -248,6 +247,7 @@ wire ioctl_wr;
 wire [26:0] ioctl_addr;
 wire [7:0] ioctl_dout;
 wire [15:0] ioctl_index;
+reg ioctl_wait = 0;
 
 hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 (
@@ -296,7 +296,8 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_dout(ioctl_dout),
-	.ioctl_index(ioctl_index)
+	.ioctl_index(ioctl_index),
+	.ioctl_wait(ioctl_wait)
 
 );
 
@@ -332,7 +333,9 @@ wire capslock_led;
 // Combine all reset sources
 // Include ~locked to hold reset until PLL is stable (critical for FPGA)
 wire warm_reset_trigger = status[0] | keyboard_reset;
-wire cold_reset_trigger = status[1] | keyboard_cold_reset | rom_switch_reset;
+// ioctl_download: hold the machine in cold reset while ROM is uploading so
+// CPU SDRAM traffic can't collide with the upload channel
+wire cold_reset_trigger = status[1] | keyboard_cold_reset | rom_switch_reset | ioctl_download;
 wire reset = RESET | ~locked | warm_reset_trigger | cold_reset_trigger | buttons[1];
 
 // cold_reset is 1 for power-on (RESET/~locked) or explicit cold reset or ROM switch, 0 for warm reset
@@ -454,138 +457,113 @@ iigs iigs (
 );
 
 wire [23:0] addr_bus;
-wire [23:0] sdram_addr;
-wire [7:0] sdram_din;
 wire [1:0] rom_bankaddr;
 wire [7:0] iigs_dout;
-wire [7:0] sdram_dout;
 wire we;
 wire fastram_ce;
 wire rom_ce;
-wire fast_clk;
-wire fast_clk_delayed;
-wire fast_clk_delayed_mem;
 
 // ROM3 (256KB) loaded at FC0000 via boot.rom  (ioctl_index[15:6]==0)
 // ROM1 (128KB) loaded at F80000 via boot1.rom (ioctl_index[15:6]==1)
 wire rom3_loading = ioctl_download && (ioctl_index[15:6] == 10'd0);
-wire rom1_loading = ioctl_download && (ioctl_index[15:6] != 10'd0);
 
-assign sdram_addr = rom3_loading                  ? {6'b111111, ioctl_addr[17:0]} :
-                    rom1_loading                  ? {7'b1111100, ioctl_addr[16:0]} :
+// CPU byte address into the 16MB SDRAM map (fast RAM low, ROM at top)
+wire [23:0] cpu_sdram_addr =
                     (rom_ce & ~we & ~rom_select)  ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
                     (rom_ce & ~we &  rom_select)  ? {7'b1111100, rom_bankaddr[0], addr_bus[15:0]} :
                     {1'b0, addr_bus[22:0]};
 
-assign sdram_din = ioctl_download ? ioctl_dout : iigs_dout;
-logic [7:0] ram_data;
-/*
-dpram #(.widthad_a(23),.prefix("fast")) fastram
-(
-        .clock_a(clk_sys),
-        .address_a( addr_bus ),
-        .data_a(iigs_dout),
-        .q_a(ram_data),
-        .wren_a(we & fastram_ce),
-        .ce_a(fastram_ce)
-);
-wire ch0_busy = 1'b0;
-*/
+// SDRAM write channel (ch0, highest priority): commit the closing cycle's
+// write at the phi2 edge, sampling address/data just before the bus moves
+// on -- the same point in the cycle where the real 65816 bus latches write
+// data at the PHI2 fall. This matters for the HDD DMA engine, whose
+// combinational DMA_ADDR advances at the phi2 edge while its data pipeline
+// (sector BRAM + registered readback) lags by a cycle: address and data
+// only describe the same byte at the END of the window. Writes go on the
+// higher-priority channel so the read of the following CPU cycle can never
+// be served ahead of them (write-then-read-same-address hazard).
+reg         wr_req = 0;
+wire        wr_ack;
+reg  [24:1] wr_addr;
+reg         wr_wrl, wr_wrh;
+reg  [15:0] wr_din;
 
+// SDRAM read channel (ch1): launch one clk_sys cycle after the phi2 edge,
+// once the new cycle's address has settled. The req/ack round trip through
+// the 114MHz controller completes in 2-3 clk_sys cycles, so read data is
+// registered here well before the next phi2 pulse samples it through the
+// CPU's D_IN mux.
+reg         rd_req = 0;
+wire        rd_ack;
+reg  [24:1] rd_addr;
+reg         rd_bsel;
+wire [15:0] rd_dout;
+reg  [7:0]  sdram_dout;
 
-wire ch0_busy;
-wire fastram_datafromramback;
-/*
+reg phi2_d;
+always @(posedge clk_sys) begin
+	phi2_d <= phi2;
+
+	if (phi2 & we & fastram_ce) begin
+		wr_addr <= {2'b00, addr_bus[22:1]};
+		wr_din  <= {iigs_dout, iigs_dout};
+		wr_wrl  <= ~addr_bus[0];
+		wr_wrh  <=  addr_bus[0];
+		wr_req  <= ~wr_req;
+	end
+
+	if (phi2_d & ~we & (fastram_ce | rom_ce)) begin
+		rd_addr <= {1'b0, cpu_sdram_addr[23:1]};
+		rd_bsel <= cpu_sdram_addr[0];
+		rd_req  <= ~rd_req;
+	end
+
+	// rd_dout transitions only while a read is in flight and is stable from
+	// ack onward, at least a full clk_sys cycle before the CPU consumes it
+	sdram_dout <= rd_bsel ? rd_dout[15:8] : rd_dout[7:0];
+end
+
+// SDRAM upload channel (ch2): HPS ROM upload, throttled via ioctl_wait
+reg         up_req = 0;
+wire        up_ack;
+reg  [24:1] up_addr;
+reg         up_wrl, up_wrh;
+reg  [15:0] up_din;
+
+wire [23:0] ioctl_sdram_addr = rom3_loading ? {6'b111111, ioctl_addr[17:0]}
+                                            : {7'b1111100, ioctl_addr[16:0]};
+always @(posedge clk_sys) begin
+	if (ioctl_wr & ioctl_download) begin
+		up_addr    <= {1'b0, ioctl_sdram_addr[23:1]};
+		up_din     <= {ioctl_dout, ioctl_dout};
+		up_wrl     <= ~ioctl_sdram_addr[0];
+		up_wrh     <=  ioctl_sdram_addr[0];
+		up_req     <= ~up_req;
+		ioctl_wait <= 1;
+	end
+	else if (up_req == up_ack) ioctl_wait <= 0;
+end
 sdram sdram
 (
-	.*,
+	.SDRAM_DQ(SDRAM_DQ),
+	.SDRAM_A(SDRAM_A),
+	.SDRAM_DQML(SDRAM_DQML),
+	.SDRAM_DQMH(SDRAM_DQMH),
+	.SDRAM_BA(SDRAM_BA),
+	.SDRAM_nCS(SDRAM_nCS),
+	.SDRAM_nWE(SDRAM_nWE),
+	.SDRAM_nRAS(SDRAM_nRAS),
+	.SDRAM_nCAS(SDRAM_nCAS),
+	.SDRAM_CLK(SDRAM_CLK),
+	.SDRAM_CKE(SDRAM_CKE),
+
 	.init(~locked),
 	.clk(clk_mem),
-	.addr({2'b00, addr_bus}),
-	.wtbt(0),
-	.dout(iigs_dout),
-	.din(iigs_dout),
-	.rd(phi2 & ~we & fastram_ce),
-	.we(phi2 & we & fastram_ce),
-	.ready()
+
+	.addr0(wr_addr), .wrl0(wr_wrl), .wrh0(wr_wrh), .din0(wr_din), .dout0(), .req0(wr_req), .ack0(wr_ack),
+	.addr1(rd_addr), .wrl1(1'b0), .wrh1(1'b0), .din1(16'd0), .dout1(rd_dout), .req1(rd_req), .ack1(rd_ack),
+	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack)
 );
-*/
-/*
-  sdram sdram
-  (
-  	.*,  // Connect all SDRAM_* signals automatically
-  	.init(~locked),
-  	.clk(clk_mem),
-
-  	// Channel 0: CPU fast RAM
-	.ch0_addr({2'b00, addr_bus}),  // Pad to 25 bits
-	.ch0_rd(phi2 & ~we & fastram_ce),
-	.ch0_wr(phi2 & we & fastram_ce),
-	.ch0_din(iigs_dout),
-	.ch0_dout(iigs_dout),
-	.ch0_busy(ch0_busy),
-
-  	// Channel 1: Video system (if needed)
-  	.ch1_addr(25'h0),    // Unused for now
-  	.ch1_rd(1'b0),
-  	.ch1_wr(1'b0),
-  	.ch1_din(8'h00),
-  	.ch1_dout(),         // Unconnected
-  	.ch1_busy(),         // Unconnected
-
-  	// Channel 2: Future expansion
-  	.ch2_addr(25'h0),    // Unused
-  	.ch2_rd(1'b0),
-  	.ch2_wr(1'b0),
-  	.ch2_din(8'h00),
-  	.ch2_dout(),         // Unconnected
-  	.ch2_busy()          // Unconnected
-  );
-  */
-
- sdram sdram
-  (
-	.sd_clk         ( SDRAM_CLK                ),
-	.sd_data        ( SDRAM_DQ                 ),
-	.sd_addr        ( SDRAM_A                  ),
-	.sd_dqm         ( {SDRAM_DQMH, SDRAM_DQML} ),
-	.sd_cs          ( SDRAM_nCS                ),
-	.sd_ba          ( SDRAM_BA                 ),
-	.sd_we          ( SDRAM_nWE                ),
-	.sd_ras         ( SDRAM_nRAS               ),
-	.sd_cas         ( SDRAM_nCAS               ),
-
-  	.init(~locked),
-  	.clk_8x(clk_mem),
-  	.clk(clk_sys),
-
-  	// Channel 0: CPU fast RAM
-	.addr(sdram_addr),
-	.oe((phi2 & ~we & (fastram_ce | rom_ce))),
-	.we(((phi2 & we & fastram_ce) | ioctl_wr)),
-	.din(sdram_din),
-	.dout(sdram_dout),
-	.ds(2'b11)
-  );
-
-/*
-
-//wire ch0_busy = 1'b0;
-
-bram #(.widthad_a(15)) slowram
-(
-        .clock_a(clk_sys),
-        .address_a(addr_bus),
-        .data_a(iigs_dout),
-        .q_a(fastram_datafromramback),
-        .wren_a(we & fastram_ce),
-`ifdef VERILATOR
-        .ce_a(fastram_ce),
-`else
-		  .enable_a(fastram_ce)
-`endif
-);
-*/
 /*
 reg ce_pix;
 always @(posedge clk_vid) begin
