@@ -545,10 +545,18 @@ reg         woz_ctrl_525_remount_pending = 0;
 
 always @(posedge clk_sys) begin
 	img_mounted2_d <= img_mounted[2];
-	// 3.5" eject latch (mirrors MacLC clearing its inserted flag): a GS/OS eject
-	// drops DISK_READY[2] so the drive reports "no disk" and the Finder removes
-	// the icon. Re-mounting the image from the OSD clears the latch and re-inserts.
-	if (floppy35_eject) ejected35 <= 1'b1;
+	// 3.5" eject (mirrors MacLC clearing its inserted flag): a GS/OS eject must
+	// make the drive look like a *clean empty drive*, not a half-mounted one --
+	// otherwise GS/OS keeps polling/retrying the still-"mounted" image and the CPU
+	// stalls (periodic cursor freeze). So we both (a) latch ejected35 to drop
+	// DISK_READY[2] immediately, and (b) unmount the woz controller so
+	// woz_ctrl_disk_mounted -> 0 and its track state resets. Re-mounting the image
+	// from the OSD clears the latch and re-inserts.
+	if (floppy35_eject) begin
+		ejected35 <= 1'b1;
+		woz_ctrl_mount <= 1'b0;            // full unmount: controller disk_mounted -> 0
+		woz_ctrl_remount_pending <= 1'b0;
+	end
 	if (~img_mounted2_d & img_mounted[2]) begin
 		ejected35 <= 1'b0;
 		if (woz_ctrl_mount) begin
