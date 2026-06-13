@@ -180,6 +180,10 @@ always @(posedge CLK_14M) begin
 end
 
 wire clk_sys=CLK_14M;
+// 3.5" eject latch (mirrors Apple-IIgs.sv) so the sim reproduces the FPGA eject
+// behavior and the existing WOZ/disk probes can show what GS/OS does afterward.
+wire        floppy35_eject;
+reg         ejected35 = 1'b0;
 iigs  iigs(
         .reset(reset),
         .cold_reset(cold_reset),
@@ -212,7 +216,7 @@ iigs  iigs(
     // Mounted-media bitmap to IWM (pad to 4 bits)
     // [0] = 5.25" WOZ media mounted, [1] = 0, [2] = 3.5" WOZ media mounted, [3] = 0
     // Drive-mechanism presence is modeled separately inside iwm_woz.
-    .DISK_READY({1'b0, woz_ctrl_disk_mounted, 1'b0, woz_ctrl_525_disk_mounted}),
+    .DISK_READY({1'b0, woz_ctrl_disk_mounted && !ejected35, 1'b0, woz_ctrl_525_disk_mounted}),
 
     .WOZ_TRACK3(WOZ_TRACK3),
     .WOZ_TRACK3_BIT_ADDR(WOZ_TRACK3_BIT_ADDR),
@@ -279,7 +283,7 @@ iigs  iigs(
         // Floppy motor status (for dirty track flush on motor-off)
         .floppy_motor_on(floppy_motor_on),
         .floppy35_motor_on(floppy35_motor_on),
-        .floppy35_eject(),     // 3.5" eject pulse: FPGA-only (no eject latch in vsim)
+        .floppy35_eject(floppy35_eject),   // drives the eject latch below (mirrors FPGA)
 
         // Audio outputs
         .AUDIO_L(AUDIO_L),
@@ -400,8 +404,17 @@ reg         woz_ctrl_change = 0;
 always @(posedge clk_sys) begin
     img_mounted5_d <= img_mounted[5];
 
+    // 3.5" eject (mirrors Apple-IIgs.sv): drop presence + unmount controller so the
+    // drive looks like a clean empty drive to GS/OS; a re-mount clears the latch.
+    if (floppy35_eject) begin
+        ejected35 <= 1'b1;
+        woz_ctrl_mount <= 1'b0;
+        woz_ctrl_remount_pending <= 1'b0;
+    end
+
     // Detect rising edge of img_mounted[5]
     if (~img_mounted5_d & img_mounted[5]) begin
+        ejected35 <= 1'b0;
         if (woz_ctrl_mount) begin
             // Already mounted: force unmount first, then remount next cycle
             woz_ctrl_mount <= 0;
