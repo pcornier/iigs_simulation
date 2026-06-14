@@ -101,6 +101,7 @@ module iwm_flux (
     input  wire [7:0]  SP_RD_DATA,      // Data from SmartPort device
     input  wire        SP_BSY,          // SmartPort device /BSY state
     output wire        SP_REQ,          // CA1 (REQ) state for SmartPort device
+    input  wire        CBUS_ENABLE2,    // External SmartPort/C-Bus enable2 path
 
     // Debug
     output wire [7:0]  DEBUG_RSH,       // Read shift register (for debug)
@@ -151,6 +152,7 @@ module iwm_flux (
     reg        rd_latched_valid;   // Latched a valid data byte during this read
     reg [7:0]  rd_data_latched;    // Byte value observed by CPU during PHI2-high
     reg        rd_from_completion; // FIX: True if rd_data_latched was updated from mid-cycle byte completion
+    reg [1:0]  cbus_handshake_ctr; // KEGS-style open-chain handshake cadence
     reg        prev_cen;           // CEN (PHI2) edge detect
     // CPU access tracking (read OR write) for MAME-like async_update scheduling
     reg        access_in_progress;    // Any IWM access captured during this PHI2-high bus cycle
@@ -511,6 +513,7 @@ module iwm_flux (
             rd_was_data_reg <= 1'b0;
             rd_data_latched <= 8'h00;
             rd_from_completion <= 1'b0;
+            cbus_handshake_ctr <= 2'd0;
             prev_cen       <= 1'b0;
             access_in_progress <= 1'b0;
             access_q7_latched  <= 1'b0;
@@ -1731,6 +1734,11 @@ module iwm_flux (
             // SmartPort write capture: route data writes to SmartPort device
             SP_WR_STROBE <= 1'b0; // Default: no strobe
             SP_RD_STROBE <= 1'b0;
+            if (!CBUS_ENABLE2) begin
+                cbus_handshake_ctr <= 2'd0;
+            end else if (RD && CEN && immediate_q7 && !immediate_q6) begin
+                cbus_handshake_ctr <= cbus_handshake_ctr + 2'd1;
+            end
 `ifdef DEBUG_VERBOSE
             // Debug: log ALL writes to Q6=1,Q7=1 when motor is active (both SP and non-SP)
             if (WR && CEN && immediate_q7 && immediate_q6 && ADDR[0] && MOTOR_ACTIVE) begin
@@ -2001,7 +2009,8 @@ module iwm_flux (
     // Note: data_ready is NOT in the status register - it's only relevant for
     //       determining when to read the DATA register (Q6=0, Q7=0)
     wire motor_status_bit = MOTOR_ACTIVE;
-    wire [7:0] status_reg = {SENSE_BIT, 1'b0, motor_status_bit, SW_MODE[4:0]};
+    wire status_sense_bit = CBUS_ENABLE2 ? 1'b1 : SENSE_BIT;
+    wire [7:0] status_reg = {status_sense_bit, 1'b0, motor_status_bit, SW_MODE[4:0]};
 
     // Write handshake register (MAME: m_whd, initialized to 0xBF).
     // SmartPort boot code uses $C08C in two different ways:
@@ -2010,6 +2019,7 @@ module iwm_flux (
     // Keep the true low 7 bits from m_whd, but force bit7 high in SmartPort mode
     // so empty-drive enumeration can start without breaking the later bit6 poll.
     wire [7:0] handshake_reg = smartport_mode ? {1'b1, m_whd[6:0]} : m_whd;
+    wire [7:0] cbus_handshake_reg = (cbus_handshake_ctr == 2'd3) ? 8'h80 : 8'hC0;
     // Only the IWM register window ($C0E8-$C0EF, ADDR[3]=1) may consume disk bytes.
     // Phase accesses ($C0E0-$C0E7) are control strobes for both 5.25" and 3.5" paths.
     // Letting 3.5" phase reads acknowledge data corrupts AppleDisk/Sony control flows:
@@ -2045,10 +2055,11 @@ module iwm_flux (
     always @(*) begin
         case ({immediate_q7, immediate_q6})
             // SmartPort: when device is sending a response, override data register
-            2'b00: data_out_mux = (smartport_mode && SP_RD_DATA_VALID) ? SP_RD_DATA :
+            2'b00: data_out_mux = CBUS_ENABLE2 ? 8'hFF :
+                                  (smartport_mode && SP_RD_DATA_VALID) ? SP_RD_DATA :
                                   (motor_data_ok ? data_out_data : idle_data_reg);
             2'b01: data_out_mux = status_reg;
-            2'b10: data_out_mux = handshake_reg;
+            2'b10: data_out_mux = CBUS_ENABLE2 ? cbus_handshake_reg : handshake_reg;
             2'b11: data_out_mux = 8'hFF;
         endcase
     end

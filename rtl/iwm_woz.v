@@ -904,6 +904,37 @@ module iwm_woz (
     // we expose the raw internal C-Bus busy signal, GS/OS can wedge in the
     // "wait for BSY to go high" loop before boot completes.
     wire smartport_mode_sense = (!immediate_mode[3]) && immediate_mode[1];
+    wire cbus_enable2_raw = smartport_mode_sense && motor_phase[1] && motor_phase[3];
+
+    // External C-Bus enable2 leaves CA1 and LSTRB asserted, while Sony commands can
+    // pass briefly through the same phase combination. Filter for a sustained state.
+    //
+    // The ROM lowers REQ at the end of a packet but does not always clear CA1/LSTRB
+    // immediately. Treat that REQ low edge as the end of the open-chain transaction
+    // so later Sony/AppleDisk reads are not trapped in the external C-Bus mux.
+    reg [3:0] cbus_enable2_cnt;
+    reg       cbus_enable2_blocked;
+    always @(posedge CLK_14M or posedge RESET) begin
+        if (RESET) begin
+            cbus_enable2_cnt <= 4'd0;
+            cbus_enable2_blocked <= 1'b0;
+        end else begin
+            if (!cbus_enable2_raw) begin
+                cbus_enable2_blocked <= 1'b0;
+            end else if (cpu_access_edge && (access_phase1 || access_phase3) && bus_addr[0]) begin
+                cbus_enable2_blocked <= 1'b0;
+            end else if (cpu_access_edge && access_phase0 && !bus_addr[0] && cbus_enable2_cnt[3]) begin
+                cbus_enable2_blocked <= 1'b1;
+            end
+
+            if (!cbus_enable2_raw || cbus_enable2_blocked) begin
+                cbus_enable2_cnt <= 4'd0;
+            end else if (cbus_enable2_cnt != 4'hf) begin
+                cbus_enable2_cnt <= cbus_enable2_cnt + 4'd1;
+            end
+        end
+    end
+    wire cbus_enable2 = cbus_enable2_cnt[3];
     wire        sp_wr_strobe;
     wire [7:0]  sp_wr_data;
     wire        sp_rd_strobe;
@@ -1171,6 +1202,7 @@ module iwm_woz (
         .SP_RD_DATA(sp_rd_data),
         .SP_BSY(sp_bsy),
         .SP_REQ(sp_req),
+        .CBUS_ENABLE2(cbus_enable2),
         .DEBUG_RSH(),
         .DEBUG_STATE()
     );
