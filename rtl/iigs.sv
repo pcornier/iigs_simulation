@@ -809,9 +809,8 @@ module iigs
                    (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f && !shadow[6]);
 
     // IO read (handle only io_dout, and only here)
-    wire vgc_scan_pending = (VGCINT[5] & VGCINT[1]);
-    wire vgc_1sec_pending = (VGCINT[6] & VGCINT[2]);
-    wire vgc_any_pending = (vgc_scan_pending | vgc_1sec_pending);
+    wire vgc_any_pending = ((VGCINT[5] & VGCINT[1]) |
+                            (VGCINT[6] & VGCINT[2]));
 
     always_comb begin: io_read
         io_dout = video_data;
@@ -848,9 +847,8 @@ module iigs
           //  bit5: scanline pending
           //  bit2: 1-sec enable
           //  bit1: scanline enable
-          12'h023: io_dout = {vgc_any_pending, vgc_1sec_pending,
-                              vgc_scan_pending, 2'b00,
-                              VGCINT[2], VGCINT[1], 1'b0};
+          12'h023: io_dout = {vgc_any_pending, VGCINT[6:5], 2'b00,
+                              VGCINT[2:1], 1'b0};
           12'h029: io_dout = NEWVIDEO;
           12'h02a: io_dout = 'h0; // from gsplus
           12'h02b: io_dout = C02BVAL; // from gsplus
@@ -1409,7 +1407,7 @@ module iigs
               // Pending when status bit set AND enable bit set
 `ifdef DEBUG_VERBOSE
               $display("READ C023 (VGC IRQ ctrl/status): any=%0d 1sec_pend=%0d scan_pend=%0d en1s=%0d ensl=%0d RAW_VGCINT=%02x -> %02h",
-                       vgc_any_pending, vgc_1sec_pending, vgc_scan_pending, VGCINT[2], VGCINT[1], VGCINT, io_dout);
+                       vgc_any_pending, VGCINT[6], VGCINT[5], VGCINT[2], VGCINT[1], VGCINT, io_dout);
 `endif
             end
 
