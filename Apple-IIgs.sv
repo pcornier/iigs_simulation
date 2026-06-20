@@ -202,6 +202,7 @@ wire rom_switch_reset = (rom_select != rom_select_prev);
 wire phi2;
 wire phi0;
 wire clk_7M;
+wire drive35_eject_req;
 
 iigs iigs (
 	.reset(reset),
@@ -271,6 +272,7 @@ iigs iigs (
 	// Floppy motor status
 	.floppy_motor_on(floppy_motor_on),
 	.floppy35_motor_on(floppy35_motor_on),
+	.drive35_eject_req(drive35_eject_req),
 	.top_addr(addr_bus),
 	.rom_bankaddr(rom_bankaddr),
 	.top_din(sdram_dout),
@@ -542,7 +544,10 @@ reg         woz_ctrl_525_remount_pending = 0;
 
 always @(posedge clk_sys) begin
 	img_mounted2_d <= img_mounted[2];
-	if (~img_mounted2_d & img_mounted[2]) begin
+	if (drive35_eject_req) begin
+		woz_ctrl_mount <= 1'b0;
+		woz_ctrl_remount_pending <= 1'b0;
+	end else if (~img_mounted2_d & img_mounted[2]) begin
 		if (woz_ctrl_mount) begin
 			// Already mounted: force unmount first, then remount next cycle
 			woz_ctrl_mount <= 0;

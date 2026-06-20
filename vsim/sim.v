@@ -279,6 +279,7 @@ iigs  iigs(
         // Floppy motor status (for dirty track flush on motor-off)
         .floppy_motor_on(floppy_motor_on),
         .floppy35_motor_on(floppy35_motor_on),
+        .drive35_eject_req(drive35_eject_req),
 
         // Audio outputs
         .AUDIO_L(AUDIO_L),
@@ -377,6 +378,7 @@ assign sd_buff_din[2] = 8'h00;
 // Floppy motor state from IWM (for dirty track flush on motor-off)
 wire floppy_motor_on;
 wire floppy35_motor_on;
+wire drive35_eject_req;
 
 // 3.5" WOZ controller outputs
 wire        woz_ctrl_disk_mounted;
@@ -400,7 +402,10 @@ always @(posedge clk_sys) begin
     img_mounted5_d <= img_mounted[5];
 
     // Detect rising edge of img_mounted[5]
-    if (~img_mounted5_d & img_mounted[5]) begin
+    if (drive35_eject_req) begin
+        woz_ctrl_mount <= 1'b0;
+        woz_ctrl_remount_pending <= 1'b0;
+    end else if (~img_mounted5_d & img_mounted[5]) begin
         if (woz_ctrl_mount) begin
             // Already mounted: force unmount first, then remount next cycle
             woz_ctrl_mount <= 0;

@@ -60,6 +60,7 @@ module flux_drive (
     output wire        MOTOR_SPINNING,  // Physical motor state (includes spindown)
     output wire        DRIVE_READY,     // Drive is ready (motor at speed after spinup)
     output wire [6:0]  TRACK,           // Current track number (head position)
+    output reg         EJECT_REQ,       // Pulses when the Sony eject command removes media
 
     // Track data interface (SD block or BRAM)
     // For initial testing, uses direct BRAM interface like apple_drive.v
@@ -674,11 +675,14 @@ module flux_drive (
             step_direction_slot <= 2'b00;  // Default: toward higher tracks (matches MAME m_dir=0)
             prev_lstrb <= 1'b0;            // No strobe active initially
             sony_motor_on <= 1'b0;         // Default: motor off
+            EJECT_REQ <= 1'b0;
             disk_switched <= 1'b1;  // Normal at reset; mount/unmount edge detection (below) handles real changes
             prev_disk_mounted <= 1'b0;
             first_mount_done <= 1'b0;
             step_busy_cnt <= 18'd0;
         end else begin
+            EJECT_REQ <= 1'b0;
+
             if (step_busy_cnt != 18'd0)
                 step_busy_cnt <= step_busy_cnt - 18'd1;
 
@@ -819,6 +823,17 @@ module flux_drive (
 `endif
                     end
 
+                    4'hD: begin
+                        // Eject disk. The host/menu image selection is separate; this
+                        // pulse asks the core-local media-present latch to go empty.
+                        sony_motor_on <= 1'b0;
+                        disk_switched <= 1'b0;
+                        EJECT_REQ <= 1'b1;
+`ifdef DEBUG_VERBOSE
+                        $display("FLUX_DRIVE[%0d]: cmd eject disk", DRIVE_ID);
+`endif
+                    end
+
                     default: begin
 `ifdef DEBUG_VERBOSE
                         $display("FLUX_DRIVE[%0d]: cmd %01x (unhandled)", DRIVE_ID, sony_ctl);
@@ -835,10 +850,13 @@ module flux_drive (
 `endif
                 end
                 if (sony_ctl == 4'h7) begin
-                    // Start eject: treat as disk removed (best-effort)
-                    // Real hardware would unload; in sim we don't hot-unmount here.
+                    // Some local nibble-order paths have historically reached this
+                    // value for eject. Treat it the same as the ROM's $0D command.
+                    sony_motor_on <= 1'b0;
+                    disk_switched <= 1'b0;
+                    EJECT_REQ <= 1'b1;
 `ifdef DEBUG_VERBOSE
-                    $display("FLUX_DRIVE[%0d]: cmd eject on (not implemented)", DRIVE_ID);
+                    $display("FLUX_DRIVE[%0d]: cmd eject disk (legacy ctl=7)", DRIVE_ID);
 `endif
                 end
             end
