@@ -783,13 +783,12 @@ always @(posedge CLK_14M) begin
       $display("ADB: PS2 KEY EVENT: key=%03h down=%0d", ps2_key[8:0], ps2_key[9]);
 `endif
       
-      // Handle Caps Lock — each host-side event (one per physical tap on
-      // Mac SDL, or a press/release on other platforms) represents one
-      // physical activation of the caps-lock latch. Synthesize a full
-      // ADB press+release pair for each event so the diag ADB keyboard
-      // test sees both halves. Toggle caps_lock_state so the case-shift
-      // and capslock LED output track the latch.
-      if (ps2_key[8:0] == 9'h058) begin
+      // Handle Caps Lock on the physical key-down edge only. MiSTer PS/2
+      // input reports both press and release, so toggling on every event
+      // would immediately cancel the latch when the key is released.
+      // Synthesize a full ADB press+release pair for each activation so
+      // the diag ADB keyboard test sees both halves.
+      if (ps2_key[8:0] == 9'h058 && ps2_key[9]) begin
         caps_lock_state <= ~caps_lock_state;
         capslock <= ~caps_lock_state;
         if (device_data_pending[2] == 8'h00) begin
