@@ -131,6 +131,7 @@ module iigs
    // Floppy motor status (for dirty track flush on motor-off)
    output             floppy_motor_on,
    output             floppy35_motor_on,
+   output             drive35_eject_req,
 
    // Keyboard-triggered reset outputs
    output        keyboard_reset,      // Ctrl+F11 was pressed - trigger warm reset
@@ -2413,7 +2414,8 @@ wire ready_out;
       .WOZ_TRACK1_BIT_WR_ADDR(WOZ_TRACK1_BIT_WR_ADDR),
       // Motor status for clock slowdown
       .FLOPPY_MOTOR_ON(floppy_motor_on),
-      .FLOPPY35_MOTOR_ON(floppy35_motor_on)
+      .FLOPPY35_MOTOR_ON(floppy35_motor_on),
+      .DRIVE35_EJECT_REQ(drive35_eject_req)
   );
   // Internal wires not used with flux-based IWM
   assign TRACK3 = 7'd0;

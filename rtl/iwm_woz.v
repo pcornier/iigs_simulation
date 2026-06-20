@@ -74,7 +74,10 @@ module iwm_woz (
     output          FLOPPY_MOTOR_ON,
 
     // 3.5" drive motor status (for dirty track flush in woz_floppy_controller)
-    output          FLOPPY35_MOTOR_ON
+    output          FLOPPY35_MOTOR_ON,
+
+    // 3.5" drive 1 software eject request
+    output          DRIVE35_EJECT_REQ
 );
 
     //=========================================================================
@@ -453,6 +456,7 @@ module iwm_woz (
     wire [7:0]  drive35_write_byte;
     wire        drive35_write_we;
     wire [15:0] drive35_write_addr;
+    wire        drive35_eject_req;
 
     // 3.5" drives must NOT use the 5.25" inertia-managed motor_spinning signal.
     // The IIgs ROM (Sony driver) can toggle DISK35 during command boundaries, and
@@ -513,6 +517,7 @@ module iwm_woz (
         .MOTOR_SPINNING(drive35_motor_spinning),
         .DRIVE_READY(drive35_ready),
         .TRACK(drive35_track),
+        .EJECT_REQ(drive35_eject_req),
         .BIT_POSITION(drive35_bit_position),
         .BIT_TIMER_OUT(drive35_bit_timer),
         .TRACK_BIT_COUNT(WOZ_TRACK3_BIT_COUNT),
@@ -663,6 +668,7 @@ module iwm_woz (
         .MOTOR_SPINNING(drive35_2_motor_spinning),
         .DRIVE_READY(drive35_2_ready),
         .TRACK(),
+        .EJECT_REQ(),
         .BIT_POSITION(),
         .BIT_TIMER_OUT(),               // Unconnected for empty drive
         .TRACK_BIT_COUNT(32'd0),
@@ -746,6 +752,7 @@ module iwm_woz (
         .MOTOR_SPINNING(drive525_motor_spinning),
         .DRIVE_READY(drive525_ready),
         .TRACK(drive525_track_7bit),
+        .EJECT_REQ(),
         .BIT_POSITION(drive525_bit_position),
         .BIT_TIMER_OUT(drive525_bit_timer),
         .TRACK_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
@@ -1220,6 +1227,7 @@ module iwm_woz (
     // 3.5" drive motor spinning state (from flux_drive Sony motor logic)
     // Used by woz_floppy_controller to trigger dirty track flush on motor-off
     assign FLOPPY35_MOTOR_ON = drive35_motor_spinning;
+    assign DRIVE35_EJECT_REQ = drive35_eject_req;
 
 `ifdef DEBUG_VERBOSE
     // Debug: Monitor state changes

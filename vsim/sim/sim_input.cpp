@@ -600,16 +600,15 @@ void SimInput::Read() {
 	if (!headless) {
 		// Caps Lock: macOS SDL delivers the latch as a transient scancode
 		// blip that polling typically misses, but SDL_GetModState() &
-		// KMOD_CAPS reflects the actual latched LED state reliably.
-		// Track that separately and synthesize a PS/2 caps-lock event on
-		// each toggle. The scancode loop below explicitly skips scancode
-		// 57 so we don't double-emit.
+		// KMOD_CAPS reflects latch transitions reliably. Synthesize one
+		// PS/2 key-down activation per toggle; adb.v owns the IIgs latch
+		// state and ignores the matching physical key-up edge.
 		static int caps_mod_last = -1;
 		int caps_mod_now = (SDL_GetModState() & KMOD_CAPS) ? 1 : 0;
 		if (caps_mod_last == -1) caps_mod_last = caps_mod_now;
 		if (caps_mod_last != caps_mod_now) {
 			const unsigned int CAPSLOCK_PS2 = 0x58;
-			SimInput_PS2KeyEvent evt(57, caps_mod_now, false, CAPSLOCK_PS2);
+			SimInput_PS2KeyEvent evt(57, true, false, CAPSLOCK_PS2);
 			keyEvents.push(evt);
 			caps_mod_last = caps_mod_now;
 			if (m_keyboardState_last && m_keyboardStateCount > 57) {
