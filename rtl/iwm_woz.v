@@ -51,6 +51,7 @@ module iwm_woz (
 
     // WOZ Track bit interface for 5.25" drive 1
     output [5:0]    WOZ_TRACK1,
+    output [8:0]    WOZ_TRACK1_QTRACK,   // Full quarter-track head position (half-track seeks)
     output [15:0]   WOZ_TRACK1_BIT_ADDR,
     input  [7:0]    WOZ_TRACK1_BIT_DATA,
     input  [31:0]   WOZ_TRACK1_BIT_COUNT,
@@ -705,6 +706,7 @@ module iwm_woz (
     wire        drive525_ready;
     wire [6:0]  drive525_track_7bit;
     wire [5:0]  drive525_track = drive525_track_7bit[5:0];
+    wire [8:0]  drive525_qtrack;        // Full quarter-track head position
     wire [16:0] drive525_bit_position;
     wire [5:0]  drive525_bit_timer;     // Bit timer for IWM window sync
     wire [15:0] drive525_bram_addr;
@@ -752,6 +754,7 @@ module iwm_woz (
         .MOTOR_SPINNING(drive525_motor_spinning),
         .DRIVE_READY(drive525_ready),
         .TRACK(drive525_track_7bit),
+        .HEAD_QTRACK(drive525_qtrack),
         .EJECT_REQ(),
         .BIT_POSITION(drive525_bit_position),
         .BIT_TIMER_OUT(drive525_bit_timer),
@@ -779,6 +782,7 @@ module iwm_woz (
     );
 
     assign WOZ_TRACK1 = drive525_track;
+    assign WOZ_TRACK1_QTRACK = drive525_qtrack;
     assign WOZ_TRACK1_BIT_ADDR = drive525_bram_addr;
 
     // Route write outputs to module ports

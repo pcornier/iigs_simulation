@@ -60,6 +60,7 @@ module flux_drive (
     output wire        MOTOR_SPINNING,  // Physical motor state (includes spindown)
     output wire        DRIVE_READY,     // Drive is ready (motor at speed after spinup)
     output wire [6:0]  TRACK,           // Current track number (head position)
+    output wire [8:0]  HEAD_QTRACK,     // Full quarter-track head position (for half-track seeks)
     output reg         EJECT_REQ,       // Pulses when the Sony eject command removes media
 
     // Track data interface (SD block or BRAM)
@@ -437,6 +438,7 @@ module flux_drive (
     assign MOTOR_SPINNING = motor_spinning;
     assign DRIVE_READY = drive_ready;           // Ready after 2 rotation spinup
     assign TRACK = head_phase[8:2];             // Quarter-track to full track
+    assign HEAD_QTRACK = head_phase;            // Full quarter-track resolution head position
     assign BIT_POSITION = bit_position;
     assign BIT_TIMER_OUT = bit_timer;           // Export for IWM window synchronization
 

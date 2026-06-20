@@ -157,6 +157,19 @@ wire        woz_ctrl_ready;
 
 // 5.25" drive 1 WOZ bit interface
 wire [5:0]  WOZ_TRACK1;           // Track number being read
+wire [8:0]  WOZ_TRACK1_QTRACK;    // Full quarter-track head position (half-track seeks)
+// 5.25" TMAP index from the head position, at quarter-track resolution.
+// This drive model's head coordinate sits +2 quarter-tracks above the WOZ TMAP
+// convention (4am/Applesauce): e.g. the loader energizes PH3 for half-track 27
+// (track 13.5, TMAP index 54) but the head model rests at quarter-track 56.
+// Subtracting 2 aligns the head with the TMAP index so half-track copy
+// protection (Lode Runner stores track 14 at index 54/58) reads the real track
+// instead of the empty whole-track slot. For whole-track rests (head_phase
+// congruent to 2 mod 4) this yields exactly the old (head>>2)*4 index, so normal
+// disks are unaffected.
+wire [7:0]  woz_track1_id = (WOZ_TRACK1_QTRACK >= 9'd2)
+                            ? (WOZ_TRACK1_QTRACK[7:0] - 8'd2)
+                            : 8'd0;
 wire [15:0] WOZ_TRACK1_BIT_ADDR;  // Byte address in track bit buffer (16-bit for FLUX)
 wire [7:0]  WOZ_TRACK1_BIT_DATA;  // Byte from track bit buffer
 wire [31:0] WOZ_TRACK1_BIT_COUNT; // Total bits in track
@@ -232,6 +245,7 @@ iigs  iigs(
 
     // WOZ bit interface for 5.25" drive 1
     .WOZ_TRACK1(WOZ_TRACK1),
+    .WOZ_TRACK1_QTRACK(WOZ_TRACK1_QTRACK),
     .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
     .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
     .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
@@ -550,7 +564,7 @@ woz_floppy_controller #(
     .img_size(img_size),
 
     // Drive Interface
-    .track_id({WOZ_TRACK1[5:0], 2'b00}),  // Full track * 4 = quarter-track TMAP index for 5.25"
+    .track_id(woz_track1_id),          // Quarter-track TMAP index (half-track aware; see woz_track1_id)
     .ready(),                          // Not connected (5.25" uses DISK_READY[0])
     .disk_mounted(woz_ctrl_525_disk_mounted),
     .busy(woz_ctrl_525_busy),
