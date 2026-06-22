@@ -101,3 +101,37 @@ timing fidelity that only real silicon exposes. Steps A1–A2 are cheap enough t
 You can build/flash/probe; this analysis was done where that wasn't possible. Start at A1–A2
 (symptom + confirm the bitstream has `74e3dfd`). Don't re-patch `track_id` — it's already correct
 and identical to the working sim; changing it will likely break the sim without fixing the board.
+
+## RESOLUTION (2026-06-21) — it works on the FPGA; there was no RTL bug
+
+Lode Runner **boots to gameplay on real hardware** with the deployed bitstream (built from this
+branch, contains `74e3dfd`). Verified over USB Blaster JTAG + MiSTer remote: the protected disk
+loads and runs identically to the sim (same level/score/attract animation). Reaching gameplay means
+the half-track + weak-bit copy protection **passes on silicon** — the `track_id = qtrack − 2` fix is
+correct on FPGA, exactly as predicted here.
+
+The earlier "fails on FPGA" symptom was a **disk-mount / launch artifact, not an RTL fault**: the
+`.woz` was never actually getting mounted, so the boot ROM found no startup device (blue
+"Check startup device!" screen) and the protected read never even happened. The lead suspicion
+above (timing closure / track-load latency) was a false trail — moot once the disk actually mounts.
+
+How to launch it remotely (for future regression on hardware), via `/dev/MiSTer_cmd`:
+- `load_core <mgl>` re-execs MiSTer and runs the MGL menu-navigation state machine, which mounts
+  `type="s"` SD images and can also issue a `<reset>`. Two gotchas that cost time here:
+  1. **MGL `<file>` `path` must be absolute** (leading `/`). A relative path is resolved against
+     `HomeDir()` = the core's games dir (`/media/fat/games/<core>`), so `games/Apple-IIgs/x.woz`
+     gets doubled to `…/games/Apple-IIgs/games/Apple-IIgs/x.woz`, the file isn't found, and the
+     mount **silently** fails (`menu.cpp` "F/S option not found -> deactivate mgl").
+  2. The IIgs 5.25 boot is one-shot, and the MGL mounts the disk *after* the cold-boot scan, so the
+     MGL needs a trailing `<reset>` to re-scan with the disk present.
+- Working MGL (5.25" = slot index 3, `type="s"`):
+  ```xml
+  <mistergamedescription>
+   <rbf>Apple-IIgs</rbf>
+   <file path="/media/fat/games/Apple-IIgs/Lode Runner.woz" delay="2" type="s" index="3" />
+   <reset delay="3" hold="1" />
+  </mistergamedescription>
+  ```
+
+Bottom line: **no SignalTap and no RTL change were needed.** The fix is correct and shipped; this
+doc's pre-resolution hypotheses are retained above only for historical context.
