@@ -2278,7 +2278,8 @@ wire ready_out;
                              (irq_pending[4] & INTEN[4]) |  // bit 4: QSEC (gated by enable)
                              (irq_pending[3] & INTEN[3]) |  // bit 3: VBL (gated by enable)
                              |(irq_pending[2:1])        |  // bits 2-1: VGC interrupts (bit 0 is aggregator)
-                             snd_irq;                      // sound/DOC interrupt (not in C046 INTFLAG)
+                             snd_irq                    |  // sound/DOC interrupt (not in C046 INTFLAG)
+                             adb_kbd_srq_irq;              // ADB keyboard SRQ (autopoll-off; cleared by TALK-R0 drain)
 
 
   always @(posedge CLK_14M)
@@ -2286,10 +2287,14 @@ wire ready_out;
       if (phi2)
         begin
           //$display("ready_out %x bank %x cpu_addr %x  addr_bus %x cpu_din %x dout %x cpu_we_n %x aux %x LCRAM2 %x RDROM %x LC_WE %x cpu_irq %x akd %x cpu_vpb %x RAMRD %x RDROM %x, iwm_strobe %x iwm_dout %x io_dout %x",ready_out,bank,cpu_addr,addr_bus,cpu_din,dout,cpu_we_n,aux,LCRAM2,RDROM,LC_WE,cpu_irq,key_anykeydown,cpu_vpb,RAMRD,RDROM,iwm_strobe,iwm_dout,io_dout);
-          // to debug interrupts:
+          // to debug interrupts: (gated off — fires every phi2 when cpu_irq is
+          // level-high from VGC scanline ints and floods stdout. Re-enable with
+          // DEBUG_IRQ if needed.)
+`ifdef DEBUG_IRQ
           if (cpu_irq)
             $display("cpu_irq %x VBL(any=%0d,1s=%0d,sl=%0d,en1s=%0d,ensl=%0d) INTEN=%02h INTFLAG=%02h VGCINT=%02h snd_irq %0d", cpu_irq,
                      (VGCINT[7]), (VGCINT[6]&VGCINT[2]), (VGCINT[5]&VGCINT[1]), VGCINT[2], VGCINT[1], INTEN, INTFLAG, VGCINT, snd_irq);
+`endif
         end
     end
 
@@ -2304,6 +2309,7 @@ wire ready_out;
 `endif
 
   wire adb_capslock;
+  wire adb_kbd_srq_irq;   // ADB keyboard SRQ interrupt (cleared via TALK-R0 drain in adb.v, not C047)
   assign capslock = adb_capslock;
   wire adb_open_apple, adb_closed_apple, adb_shift, adb_ctrl;
   wire adb_akd;
@@ -2333,6 +2339,7 @@ wire ready_out;
           .dout(),  // Unused - using dout_comb for same-cycle reads
           .dout_comb(adb_dout),  // Combinational output for CPU reads
           .irq(/* unused - ADB IRQ handled via registers */),
+          .kbd_srq_irq(adb_kbd_srq_irq),   // keyboard Service Request IRQ (autopoll-off raw events)
           .strobe(adb_strobe_mux),
           .capslock(adb_capslock),
           .ps2_key(ps2_key),

@@ -11,6 +11,7 @@ module adb(
   output reg [7:0] dout,
   output [7:0] dout_comb,  // Combinational output for same-cycle reads
   output irq,
+  output kbd_srq_irq,      // ADB keyboard Service Request interrupt (Wolf3D-style raw SRQ)
   input strobe,
   input [10:0] ps2_key,
   input [24:0] ps2_mouse,
@@ -160,6 +161,18 @@ wire data_irq = data_int & (pending_data > 0);
 wire mouse_irq = mouse_int & valid_mouse_data;
 wire kbd_irq = kbd_int & kbd_strobe;
 assign irq = data_irq | mouse_irq | kbd_irq;
+
+// ADB keyboard Service Request (SRQ) interrupt.
+// Wolfenstein 3D (and similar) disable keyboard autopoll via Set Modes (mode
+// bit 0) and install an _SRQPoll completion routine; they expect raw key
+// up/down events to arrive through ADB service-request interrupts rather than
+// $C000 polling. kbd_srq_pending is set when a key event occurs while keyboard
+// autopoll is OFF, and cleared when the host drains the events via TALK R0.
+// Gating on autopoll-off means normal/boot/Finder operation (autopoll ON) is
+// completely unaffected -> no regression to existing keyboard behavior.
+reg  kbd_srq_pending;
+wire kbd_autopoll_off = adb_mode[0];  // Set Modes bit0 = disable keyboard autopoll
+assign kbd_srq_irq = kbd_srq_pending;
 
 // ADB controller internal RAM using bram module
 reg [7:0] ram_addr;
@@ -566,9 +579,9 @@ always @(*) begin
     8'h27: begin  // $C027 - ADB Status
       if (rw) begin
         dout_comb_reg = {
-          valid_mouse_data | (pending_data > 0),  // bit 7: mouse data valid
+          valid_mouse_data,                        // bit 7: mouse data valid ONLY (see $C027 reg path)
           mouse_int,                               // bit 6: mouse interrupt enable
-          pending_data > 0 ? 1'b1 : 1'b0,         // bit 5: data valid
+          (pending_data > 0) | kbd_srq_pending,   // bit 5: data valid (cmd response or SRQ byte)
           data_int,                                // bit 4: data interrupt enable
           valid_kbd,                               // bit 3: keyboard data valid
           kbd_int,                                 // bit 2: keyboard interrupt enable
@@ -587,8 +600,7 @@ always @(*) begin
               else
                 dout_comb_reg = 8'h80;
             end else begin
-              dout_comb_reg = 8'h00;
-              if (pending_irq) dout_comb_reg = 8'b0001_0000;
+              dout_comb_reg = (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
             end
           end
           DATA: dout_comb_reg = data[7:0];
@@ -731,6 +743,7 @@ always @(posedge CLK_14M) begin
     // ADB R0 staging buffer
     kbd_r0_next <= 8'h00;
     kbd_r0_next_valid <= 1'b0;
+    kbd_srq_pending <= 1'b0;
 
     // Initialize modifier key states
     shift_down <= 1'b0;
@@ -779,6 +792,7 @@ always @(posedge CLK_14M) begin
     // PS/2 keyboard event processing
     // MiSTer toggles bit 10 on every key press/release - if toggle changed, it's a valid new event
     if (ps2_key[10] != ps2_key_toggle_prev) begin
+      $display("ADB_KEYEV: ps2=%03h down=%b adb_mode=%02h autopoll_off=%b", ps2_key[8:0], ps2_key[9], adb_mode, adb_mode[0]);
 `ifdef DEBUG_VERBOSE
       $display("ADB: PS2 KEY EVENT: key=%03h down=%0d", ps2_key[8:0], ps2_key[9]);
 `endif
@@ -889,6 +903,11 @@ always @(posedge CLK_14M) begin
             // fills. Route through the 1-deep staging buffer so a quick
             // release can't overwrite an un-consumed press.
             valid_kbd <= 1'b1;
+            // Raise keyboard SRQ for raw-event consumers (autopoll off).
+            if (kbd_autopoll_off) begin
+              kbd_srq_pending <= 1'b1;
+              $display("ADB_SRQ_SET: down key=%02h adb_mode=%02h", temp_apple_key, adb_mode);
+            end
             if (device_data_pending[2] == 8'h00) begin
               device_registers[2][0] <= {1'b0, temp_apple_key[6:0]};
               device_data_pending[2] <= 8'h01;
@@ -940,6 +959,8 @@ always @(posedge CLK_14M) begin
               kbd_r0_next_valid <= 1'b1;
             end
             valid_kbd <= 1'b1;
+            // Raise keyboard SRQ for raw-event consumers (autopoll off).
+            if (kbd_autopoll_off) kbd_srq_pending <= 1'b1;
 
             akd <= 1'b0;  // Clear any key down
           end
@@ -956,7 +977,11 @@ always @(posedge CLK_14M) begin
     // repeat forever. We also use `>=` (with modulo-16 wraparound) rather
     // than `==` so a missed cycle doesn't cost a full 60Hz-counter
     // rollover. `repeat_delay_vbl == 0` means "no repeat" per ADB config.
-    if (ps2_key_held && !reset_key_down &&
+    // Suppress ADB key auto-repeat when keyboard autopoll is OFF: SRQ raw-event
+    // consumers (Wolfenstein 3D) track held state from clean down/up transitions
+    // and a synthetic repeated "down" (with no intervening "up") desyncs that
+    // state machine. gsplus likewise does not auto-repeat in this mode.
+    if (ps2_key_held && !reset_key_down && !kbd_autopoll_off &&
         device_data_pending[2] == 8'h00 &&
         repeat_delay_vbl != 8'd0 &&
         ((hz60_count - repeat_vbl_target) < 16'h8000)) begin
@@ -1177,11 +1202,73 @@ always @(posedge CLK_14M) begin
           // The first C026 read returns the data directly
           state <= DATA;
         end
-        // Add other commands that need execution here if needed in future
+        // ----------------------------------------------------------------
+        // Microcontroller "register" commands. These MUST execute here in
+        // CMD_EXEC (the real completion path) using the bytes collected into
+        // cmd_data. Previously the handlers lived in a dead write-handler
+        // branch (cmd_len==0) that never ran because state transitions to
+        // CMD_EXEC first, so e.g. Set Modes never took effect and keyboard
+        // autopoll could never be disabled (breaking SRQ-based games like
+        // Wolfenstein 3D). Use cmd_data[7:0] for the last data byte (NOT din,
+        // which is stale by the time CMD_EXEC runs).
+        // ----------------------------------------------------------------
+        8'h04: begin
+          // SET MODES: OR mode bits into adb_mode (bit0=kbd autopoll off, bit1=mouse).
+          adb_mode <= cmd_data[7:0] | adb_mode;
+          $display("ADB_SETMODE: |=%02h -> mode=%02h (kbd_autopoll_off=%b)", cmd_data[7:0], cmd_data[7:0]|adb_mode, (cmd_data[7:0]|adb_mode)&8'h01);
+        end
+        8'h05: begin
+          // CLEAR MODES: clear requested mode bits.
+          adb_mode <= adb_mode & ~cmd_data[7:0];
+          $display("ADB_CLRMODE: &=~%02h -> mode=%02h", cmd_data[7:0], adb_mode & ~cmd_data[7:0]);
+        end
+        8'h06: begin
+          // SET CONFIG (3 bytes): byte1=addrs, byte3=repeat_info.
+          mouse_ctl_addr <= {4'd0, cmd_data[23:20]};
+          kbd_ctl_addr   <= {4'd0, cmd_data[19:16]};
+          repeat_info    <= cmd_data[7:0];
+          repeat_delay_vbl <= delay_to_vbl_count(cmd_data[6:4]);
+          repeat_rate_vbl  <= rate_to_vbl_count(cmd_data[3:0], 1'b0);
+        end
+        8'h07: begin
+          // SYNC: ROM1 = 4 bytes, ROM3 = 8 bytes.
+          if (initial_cmd_len == 4'd4) begin // ROM1
+            adb_mode       <= cmd_data[31:24];
+            mouse_ctl_addr <= {4'd0, cmd_data[23:20]};
+            kbd_ctl_addr   <= {4'd0, cmd_data[19:16]};
+            repeat_info    <= cmd_data[7:0];
+            repeat_delay_vbl <= delay_to_vbl_count(cmd_data[6:4]);
+            repeat_rate_vbl  <= rate_to_vbl_count(cmd_data[3:0], (cmd_data[31:24] & 8'h08) != 8'h00);
+          end else begin // ROM3 (8 bytes)
+            adb_mode       <= cmd_data[63:56];
+            mouse_ctl_addr <= {4'd0, cmd_data[55:52]};
+            kbd_ctl_addr   <= {4'd0, cmd_data[51:48]};
+            repeat_info    <= cmd_data[39:32];
+            char_set       <= cmd_data[23:16];
+            layout         <= cmd_data[15:8];
+            repeat_delay_vbl <= delay_to_vbl_count(cmd_data[38:36]);
+            repeat_rate_vbl  <= rate_to_vbl_count(cmd_data[35:32], (cmd_data[63:56] & 8'h08) != 8'h00);
+          end
+          $display("ADB_SYNC: mode=%02h", (initial_cmd_len==4'd4) ? cmd_data[31:24] : cmd_data[63:56]);
+        end
+        8'h08: begin
+          // WRITE MEM (2 bytes): addr=cmd_data[15:8], value=cmd_data[7:0].
+          if (cmd_data[15:8] < 8'h60) begin
+            ram_addr <= cmd_data[15:8];
+            ram_din  <= cmd_data[7:0];
+            ram_wen  <= 1'b1;
+          end
+        end
+        8'h11: ; // SEND KEYCODE DATA - accepted, no-op for now
+        8'h12: ; // ROM3-only, no-op
+        8'h13: ; // ROM3-only, no-op
         default: begin
-          // Unknown command or already handled inline
+          // Device LISTEN (cmd[1:0]==10, addr in cmd[7:4]): store register data.
+          if (cmd >= 8'h10 && cmd[1:0] == 2'b10 && device_present[cmd[7:4]]) begin
+            device_registers[cmd[7:4]][cmd[3:2]] <= cmd_data[15:8];
+          end
 `ifdef DEBUG_ADB
-          $display("ADB CMD EXEC: cmd=0x%02h not handled in exec block (may be handled inline)", cmd);
+          else $display("ADB CMD EXEC: cmd=0x%02h not handled", cmd);
 `endif
         end
       endcase
@@ -1226,17 +1313,16 @@ always @(posedge CLK_14M) begin
                 // bytes to follow. Matches Clemens ADB protocol exactly.
                 if (pending_data > 3'd0) begin
                   dout <= 8'h80 | {5'd0, pending_data - 3'd1};
-                  // Transition to DATA on read strobe rising edge.
-                  // Gate on cen (phi2) so the header value is stable when CPU samples.
-                  // Also check addr=$26 to prevent C027 strobes from consuming the header.
-                  if (cen & strobe & ~strobe_prev & (addr == 8'h26)) begin
-                    state <= DATA;
-                    cmd_response_ready <= 1'b0;
-`ifdef DEBUG_VERBOSE
-                    $display("ADB C026 HEADER->DATA: returning 0x%02h pending=%d",
-                             8'h80 | {5'd0, pending_data - 3'd1}, pending_data);
-`endif
-                  end
+                  // Mark that the response header was read while a read strobe is
+                  // active. The IDLE->DATA transition is performed on the strobe
+                  // FALLING edge (handler below), AFTER the CPU has latched the
+                  // header. The previous rising-edge transition gated on cen (phi2)
+                  // could silently miss when the strobe rising edge did not
+                  // coincide with cen, leaving C026 stuck returning the header
+                  // forever (e.g. the autopoll-off ADB-SRQ command-response path
+                  // the ROM IRQ handler at FF:BE67 / FC:DB30 walks). Falling-edge
+                  // delivery mirrors the working C024 mouse register mechanism.
+                  if (strobe & (addr == 8'h26)) c026_status_read_with_data <= 1'b1;
                 end else begin
                   dout <= 8'h80;  // Response received, no data
                   // Clear on rising edge only
@@ -1248,9 +1334,10 @@ always @(posedge CLK_14M) begin
                   end
                 end
               end else begin
-                // No command response - return 0x00 normally
-                dout <= 8'h00;
-                if (pending_irq) dout <= 8'b0001_0000;
+                // No command response - return SRQ status (bit 3) when a
+                // keyboard service request is pending, else 0x00. (bit 4 is the
+                // legacy pending_irq path.)
+                dout <= (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
                 // No debug here - too noisy
               end
             end
@@ -1430,6 +1517,45 @@ always @(posedge CLK_14M) begin
                     state <= IDLE;
                   end
                 end
+                // $C0-$CF: TALK register 0. Device = low nibble (gsplus/Clemens
+                // encoding: bits7-6=cmd(11=Talk), bits5-4=reg(00), bits3-0=device).
+                // $C2 = TALK keyboard(2) R0 — the read the ROM's ADB-SRQ handler
+                // (FC:D83A) issues when keyboard autopoll is off (Wolfenstein 3D).
+                // The IIgs keyboard returns TWO key bytes per R0 poll (the 2nd is
+                // $FF when only one key is queued); a 1-byte response encodes a
+                // header of $80 (count 0) and the ROM would read no key bytes.
+                8'hC0, 8'hC1, 8'hC2, 8'hC3, 8'hC4, 8'hC5, 8'hC6, 8'hC7,
+                8'hC8, 8'hC9, 8'hCA, 8'hCB, 8'hCC, 8'hCD, 8'hCE, 8'hCF: begin
+                  if (din[3:0] == 4'd2 && device_data_pending[2] > 8'd0) begin
+                    // TALK keyboard R0: byte0 = key event, byte1 = staged next
+                    // event or $FF. Consuming the queue drains the SRQ.
+                    data <= { 16'd0,
+                              (kbd_r0_next_valid ? kbd_r0_next : 8'hFF),
+                              device_registers[2][0] };
+                    pending_data <= 3'd2;
+                    cmd_response_ready <= 1'b1;
+                    if ((device_registers[2][0] & 8'h80) != 8'd0) valid_kbd <= 1'b0;
+                    device_data_pending[2] <= 8'h00;
+                    kbd_r0_next_valid <= 1'b0;
+                    if (kbd_srq_pending)
+                      $display("ADB_SRQ_DRAIN: TALK R0 key=%02h next=%02h",
+                               device_registers[2][0], (kbd_r0_next_valid ? kbd_r0_next : 8'hFF));
+                    kbd_srq_pending <= 1'b0;
+                    state <= IDLE;
+                  end else if (din[3:0] == 4'd3 && device_data_pending[3] > 8'd0) begin
+                    // TALK mouse R0: 2 bytes (reg0 = Y/button, reg1 = X).
+                    data <= { 16'd0, device_registers[3][1], device_registers[3][0] };
+                    pending_data <= 3'd2;
+                    cmd_response_ready <= 1'b1;
+                    device_data_pending[3] <= 8'h00;
+                    valid_mouse_data <= 1'b0;
+                    state <= IDLE;
+                  end else begin
+                    // No queued data / device not present: send NO response so the
+                    // firmware moves on to poll other devices (per gsplus).
+                    state <= IDLE;
+                  end
+                end
                 default: begin
 `ifdef DEBUG_ADB
                   $display("ADB WRITE C026 DEFAULT: din=0x%02h, cmd=0x%02h, din>=0x10=%d, din[1:0]=%b, state=%d", din, cmd, (din >= 8'h10), din[1:0], state);
@@ -1486,6 +1612,9 @@ always @(posedge CLK_14M) begin
                                 kbd_r0_next_valid <= 1'b0;
                               end else begin
                                 device_data_pending[2] <= 8'h00;
+                                // Keyboard event queue drained -> clear SRQ.
+                                if (kbd_srq_pending) $display("ADB_SRQ_DRAIN: TALK R0 final byte=%02h", device_registers[2][0]);
+                                kbd_srq_pending <= 1'b0;
                               end
                               if ((device_registers[2][0] & 8'h80) != 8'd0) valid_kbd <= 1'b0;  // Clear on key release
                             end else begin
@@ -1579,6 +1708,7 @@ always @(posedge CLK_14M) begin
               // If cmd_len is 0, this means we stored all bytes last cycle
               // Now execute the completed command
               else begin
+                $display("ADB_EXEC: cmd=%02h cmd_len=%0d din=%02h cmd_data=%016x", cmd, cmd_len, din, cmd_data);
 `ifdef DEBUG_ADB
                 $display("ADB CMD COMPLETE: cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
 `endif
@@ -1587,8 +1717,8 @@ always @(posedge CLK_14M) begin
                 data <= 32'h00000008;  // Restore SRQ status for IDLE reads
 
                 case (cmd)
-                  8'h04: adb_mode <= din | adb_mode;
-                  8'h05: adb_mode <= adb_mode & ~din;
+                  8'h04: begin adb_mode <= din | adb_mode; $display("ADB_SETMODE: |=%02h -> mode=%02h (kbd_autopoll_off=%b)", din, din|adb_mode, (din|adb_mode)&8'h01); end
+                  8'h05: begin adb_mode <= adb_mode & ~din; $display("ADB_CLRMODE: &=~%02h -> mode=%02h", din, adb_mode & ~din); end
                   8'h06: begin
                     // SET_CONFIG (0x06) - Configure ADB parameters (3 bytes)
                     // Byte 2: mouse_ctl_addr, kbd_ctl_addr
@@ -1793,10 +1923,20 @@ always @(posedge CLK_14M) begin
           // bit 2: Keyboard interrupt enable
           // bit 1: Mouse coordinate flag (0=X next, 1=Y next)
           // bit 0: Command full
+          // bit 7 (MOUSE_DATA) is mouse-data-only. It must NOT reflect a pending
+          // command/keyboard response: the ROM IRQ dispatcher (FF:BE31..BE3D)
+          // reads $C027 and treats bit7&bit6 as "mouse interrupt", so a command
+          // response (pending_data>0) or kbd SRQ leaking into bit7 makes the
+          // firmware misroute every ADB IRQ to the mouse handler and never drain
+          // the keyboard SRQ -> wedge. gsplus sets bit7 from mouse data only and
+          // signals response data via bit5 (DATA_VALID) instead.
+          // bit 5 (DATA_VALID) reflects a command response OR a pending keyboard
+          // SRQ so the firmware knows there's a byte to read at $C026 (gsplus:
+          // DATA_VALID set when interrupt_byte!=0 or data_pending>0).
           dout <= {
-            valid_mouse_data | (pending_data > 0),  // bit 7: mouse data OR command response
+            valid_mouse_data,      // bit 7: mouse data valid ONLY
             mouse_int,             // bit 6: mouse interrupt enable
-            pending_data > 0 ? 1'b1 : 1'b0,  // bit 5: Command/Data register contains valid data
+            (pending_data > 0) | kbd_srq_pending,  // bit 5: valid data (cmd response or SRQ byte)
             data_int,              // bit 4: data interrupt enable
             valid_kbd,             // bit 3: keyboard data valid
             kbd_int,               // bit 2: keyboard interrupt enable
@@ -1960,11 +2100,18 @@ always @(posedge CLK_14M) begin
       c024_was_read <= 1'b0;
     end
 
-    // NOTE: IDLE->DATA transition now happens immediately on rising edge (like KEGS)
-    // The falling edge handler is no longer needed - transition happens in the C026 read block
-    // Clear the flag if it was somehow set (shouldn't happen with new code)
+    // IDLE->DATA transition: on the strobe FALLING edge after the response
+    // header was read (flag set in the C026 IDLE read block). Doing this on the
+    // falling edge guarantees the CPU has already latched the header byte, and
+    // is robust to phi2/strobe-edge alignment (the rising-edge+cen approach
+    // could miss, stranding the response). Mirrors the C024 falling-edge handler.
     if (~strobe & strobe_prev & c026_status_read_with_data) begin
+      state <= DATA;
+      cmd_response_ready <= 1'b0;
       c026_status_read_with_data <= 1'b0;
+`ifdef DEBUG_ADB
+      $display("ADB C026 HEADER->DATA (falling): pending=%d data=%08h", pending_data, data);
+`endif
     end
 
     // Clear cmd_response_ready when no pending data (after status byte was read)

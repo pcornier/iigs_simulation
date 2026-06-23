@@ -373,6 +373,14 @@ bool writeLog(const char* line)
 	// Print to stdout unless in quiet mode
 	if (!quiet_mode) {
 		printf("%s\n",line);
+	} else if (top && VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending) {
+		// Even in quiet mode, capture the CPU trace while a keyboard SRQ is
+		// pending so we can see the firmware loop that fails to drain it.
+		static int srq_trace_count = 0;
+		if (srq_trace_count < 2000) {
+			srq_trace_count++;
+			printf("SRQTRACE: %s\n", line);
+		}
 	}
 
 	// Only do memory-intensive operations when debug_6502 is enabled
@@ -608,8 +616,17 @@ void DumpInstruction() {
 	// there is nothing that will consume the formatted instruction string.
 	// Formatting is expensive (fmt::format + std::string allocations) and happens
 	// on every CPU instruction, so skipping it when not needed is a big speedup.
-	if (quiet_mode && !debug_6502) {
+	if (quiet_mode && !debug_6502 &&
+	    !(top && VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending)) {
 		cpu_instruction_count++;
+		// PCSAMPLE: periodically log PBR:PC during the level phase to tell a live
+		// main loop (varied PCs across the game bank) from a wedge (few PCs).
+		if (top && video.count_frame >= 9000 && (cpu_instruction_count & 0x3FFF) == 0) {
+			printf("PCSAMPLE frame=%d %02X:%04X\n",
+			       video.count_frame,
+			       VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR,
+			       VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
+		}
 		return;
 	}
 
@@ -1277,12 +1294,12 @@ int verilate() {
                                 stk_rec_count++;
                             }
                         }
-                        // ADB command writes: log every write to $C026/C027 (any bank)
-                        // Narrow to PBR=FC (where the ADB command-send code lives)
+                        // ADB command writes: log writes to $C026/C027 while a
+                        // keyboard SRQ is pending (any bank).
                         if ((addr16 == 0xC026 || addr16 == 0xC027) &&
-                            (VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR == 0xFC)) {
+                            VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending) {
                             static int adb_w_count = 0;
-                            if (adb_w_count < 400) {
+                            if (adb_w_count < 6000) {
                                 adb_w_count++;
                                 unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                                 unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
@@ -1390,16 +1407,22 @@ int verilate() {
 						}
 #endif
                     } else if (vda && !we) {
-                        // ADB $C026/C027 reads from PBR=FC (command-send code)
+                        // ADB $C026/C027 reads (any bank, incl. IRQ-context).
+                        // Gate on kbd_srq_pending so we capture exactly what the
+                        // firmware reads while a keyboard SRQ is asserted.
                         if ((addr16 == 0xC026 || addr16 == 0xC027) &&
-                            (VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR == 0xFC)) {
+                            VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending) {
                             static int adb_r_count = 0;
-                            if (adb_r_count < 400) {
+                            if (adb_r_count < 6000) {
                                 adb_r_count++;
                                 unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                                 unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                                printf("ADB_R #%d: bank=%02X $%04X -> %02X at %02X:%04X frame=%d\n",
-                                       adb_r_count, bank, addr16, din, pbr_now, pc_now, video.count_frame);
+                                unsigned char crr = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__cmd_response_ready;
+                                unsigned char pd  = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__pending_data;
+                                unsigned char st  = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__state;
+                                unsigned int  dat = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__data;
+                                printf("ADB_R #%d: bank=%02X $%04X -> %02X at %02X:%04X frame=%d [SRQ=1 crr=%d pd=%d state=%d data=%08X]\n",
+                                       adb_r_count, bank, addr16, din, pbr_now, pc_now, video.count_frame, crr, pd, st, dat);
                             }
                         }
                         // Memory read - add timing debug for $BF00
@@ -4268,7 +4291,51 @@ void queue_key_string(const std::string& keys) {
     const unsigned int CAPSLOCK_SCANCODE = 0x58;  // PS/2 caps lock
     static bool capslock_led_on = false;
 
-    for (char c : keys) {
+    const unsigned int LALT_PS2 = 0x11;  // Left Alt = Open-Apple (Command)
+    for (size_t ci = 0; ci < keys.size(); ci++) {
+        char c = keys[ci];
+        // Special marker: 0x03 = Open-Apple (Command) + the following character.
+        // Drives GS/OS Finder keyboard shortcuts (e.g. Apple-O = Open).
+        if (c == 0x03 && ci + 1 < keys.size()) {
+            char combo = keys[++ci];
+            AsciiToPS2 m = ascii_to_ps2(combo);
+            if (m.scancode != 0xFF) {
+                input.keyEvents.push(SimInput_PS2KeyEvent(LALT_PS2, true, false, LALT_PS2));
+                input.keyEvents.push(SimInput_PS2KeyEvent(m.scancode, true, false, m.scancode));
+                input.keyEvents.push(SimInput_PS2KeyEvent(m.scancode, false, false, m.scancode));
+                input.keyEvents.push(SimInput_PS2KeyEvent(LALT_PS2, false, false, LALT_PS2));
+                printf("Queued Open-Apple+'%c' sequence\n", combo);
+            }
+            continue;
+        }
+        // Arrow keys: markers 0x04..0x07 -> extended PS/2 scancodes (press+release).
+        if (c >= 0x04 && c <= 0x07) {
+            unsigned int sc = (c == 0x04) ? 0x75 :   // Up
+                              (c == 0x05) ? 0x72 :   // Down
+                              (c == 0x06) ? 0x6b :   // Left
+                                            0x74;    // Right
+            input.keyEvents.push(SimInput_PS2KeyEvent(sc, true,  true, sc));
+            input.keyEvents.push(SimInput_PS2KeyEvent(sc, false, true, sc));
+            printf("Queued arrow key (ext scancode 0x%02x)\n", sc);
+            continue;
+        }
+        // Held-arrow markers: down-only 0x10..0x13, release-only 0x14..0x17
+        // for Up/Down/Left/Right. Lets a test hold a key down across frames
+        // (down at frame N, up at a later frame) for games that move/turn only
+        // while a key is held.
+        if (c >= 0x10 && c <= 0x17) {
+            unsigned int sc;
+            switch (c & 0x03) {
+                case 0: sc = 0x75; break;  // Up
+                case 1: sc = 0x72; break;  // Down
+                case 2: sc = 0x6b; break;  // Left
+                default: sc = 0x74; break; // Right
+            }
+            bool pressed = (c < 0x14);
+            input.keyEvents.push(SimInput_PS2KeyEvent(sc, pressed, true, sc));
+            printf("Queued held-arrow %s (ext scancode 0x%02x)\n", pressed ? "DOWN" : "UP", sc);
+            continue;
+        }
         // Special marker: 0x01 is used as "caps lock toggle" (one SDL-like
         // transition that flips the LED). We inject it here as a single
         // PS/2 event with pressed = new LED state.
@@ -4747,6 +4814,23 @@ int main(int argc, char** argv, char** env) {
                     else if (next == 'e') { processed_keys += '\x1b'; j++; }  // ESC key
                     else if (next == 'C') { processed_keys += (char)0x01; j++; }  // caps lock toggle
                     else if (next == 'R') { processed_keys += (char)0x02; j++; }  // Ctrl+F11 warm reset
+                    else if (next == 'o' && j + 2 < keys.length()) {
+                        // \oX = Open-Apple (Command) + following character X.
+                        // Used to drive GS/OS Finder (e.g. \oo = Apple-O "Open").
+                        processed_keys += (char)0x03; processed_keys += keys[j + 2]; j += 2;
+                    }
+                    // Arrow keys (extended PS/2 scancodes) for games like Wolf3D.
+                    else if (next == 'U') { processed_keys += (char)0x04; j++; }  // Up arrow
+                    else if (next == 'D') { processed_keys += (char)0x05; j++; }  // Down arrow
+                    else if (next == 'L') { processed_keys += (char)0x06; j++; }  // Left arrow
+                    else if (next == 'A') { processed_keys += (char)0x07; j++; }  // (A)rrow right
+                    // Held-arrow test markers (down-only / release-only) so games
+                    // that move while a key is HELD (e.g. Wolf3D) can be exercised:
+                    // \h = Up DOWN-only, \H = Up release-only.
+                    else if (next == 'h') { processed_keys += (char)0x10; j++; }  // Up arrow DOWN (hold)
+                    else if (next == 'H') { processed_keys += (char)0x14; j++; }  // Up arrow RELEASE
+                    else if (next == 'k') { processed_keys += (char)0x13; j++; }  // Right arrow DOWN (hold)
+                    else if (next == 'K') { processed_keys += (char)0x17; j++; }  // Right arrow RELEASE
                     else if (next == '\\') { processed_keys += '\\'; j++; }
                     else if (next == 'x' && j + 3 < keys.length()) {
                         // Handle \xNN hex escape sequences
