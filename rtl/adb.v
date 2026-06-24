@@ -172,13 +172,20 @@ assign irq = data_irq | mouse_irq | kbd_irq;
 // completely unaffected -> no regression to existing keyboard behavior.
 reg  kbd_srq_pending;
 wire kbd_autopoll_off = adb_mode[0];  // Set Modes bit0 = disable keyboard autopoll
-// SRQ to the CPU is the sticky kbd_srq_pending (set on a key event while autopoll
-// is off, cleared when the firmware drains via TALK R0). NOTE: do NOT derive this
-// from device_data_pending as a level signal — that can stay asserted while a key
-// event is queued-but-undrained and storms cpu_irq, which black-screens the FPGA
-// during game load (no such storm in sim). The byte-order fix below is what makes
-// held keys register; a clean down->hold->up needs no extra SRQ re-assertion.
-assign kbd_srq_irq = kbd_srq_pending;
+// ADB IRQ to the CPU while keyboard autopoll is off (Wolfenstein 3D SRQ path):
+//   (a) kbd_srq_pending  — a key transition is waiting (cleared by TALK R0), and
+//   (b) data_int & pending_data>0 — a TALK-R0 RESPONSE is waiting to be read.
+// (b) is the ADB "data" interrupt (data_irq, line ~160) which was computed but
+// never wired to cpu_irq, so the 2-byte keyboard response the firmware requests
+// via TALK R0 had nothing to prompt the firmware to read it -> the key never
+// reached the game and held keys didn't move. It self-clears when the firmware
+// reads the response (pending_data -> 0) and is gated on data_int (the firmware's
+// own enable) + autopoll-off, so it cannot fire during GS/OS boot or autopoll-on
+// use (regression-safe) and only after the firmware itself issues the TALK
+// (so it can't storm on a stale key-press at game load like the reverted
+// device_data_pending level-signal did).
+assign kbd_srq_irq = kbd_srq_pending |
+                     (kbd_autopoll_off & data_int & (pending_data > 3'd0));
 
 // ADB controller internal RAM using bram module
 reg [7:0] ram_addr;
