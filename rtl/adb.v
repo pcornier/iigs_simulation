@@ -172,16 +172,13 @@ assign irq = data_irq | mouse_irq | kbd_irq;
 // completely unaffected -> no regression to existing keyboard behavior.
 reg  kbd_srq_pending;
 wire kbd_autopoll_off = adb_mode[0];  // Set Modes bit0 = disable keyboard autopoll
-// The keyboard SRQ must stay asserted while ANY key event is still queued
-// (autopoll off), not just on the transition. A held key produces a single
-// "down" event; if the SRQ drops before the firmware TALK-R0 drains it, that
-// event waits for the NEXT key transition to be delivered (a full press is then
-// seen only at release) and held keys never register. Deriving "active" from
-// the queue keeps the firmware draining until the buffer is empty.
-wire kbd_srq_active = kbd_srq_pending |
-                      (kbd_autopoll_off &
-                       ((device_data_pending[2] != 8'd0) | kbd_r0_next_valid));
-assign kbd_srq_irq = kbd_srq_active;
+// SRQ to the CPU is the sticky kbd_srq_pending (set on a key event while autopoll
+// is off, cleared when the firmware drains via TALK R0). NOTE: do NOT derive this
+// from device_data_pending as a level signal — that can stay asserted while a key
+// event is queued-but-undrained and storms cpu_irq, which black-screens the FPGA
+// during game load (no such storm in sim). The byte-order fix below is what makes
+// held keys register; a clean down->hold->up needs no extra SRQ re-assertion.
+assign kbd_srq_irq = kbd_srq_pending;
 
 // ADB controller internal RAM using bram module
 reg [7:0] ram_addr;
@@ -590,7 +587,7 @@ always @(*) begin
         dout_comb_reg = {
           valid_mouse_data,                        // bit 7: mouse data valid ONLY (see $C027 reg path)
           mouse_int,                               // bit 6: mouse interrupt enable
-          (pending_data > 0) | kbd_srq_active,    // bit 5: data valid (cmd response or SRQ byte)
+          (pending_data > 0) | kbd_srq_pending,  // bit 5: data valid (cmd response or SRQ byte)
           data_int,                                // bit 4: data interrupt enable
           valid_kbd,                               // bit 3: keyboard data valid
           kbd_int,                                 // bit 2: keyboard interrupt enable
@@ -609,7 +606,7 @@ always @(*) begin
               else
                 dout_comb_reg = 8'h80;
             end else begin
-              dout_comb_reg = (kbd_srq_active ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
+              dout_comb_reg = (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
             end
           end
           DATA: dout_comb_reg = data[7:0];
@@ -895,16 +892,11 @@ always @(posedge CLK_14M) begin
             );
 
             // Track this key as held down for potential repeat. This must NOT be
-            // gated on having an ASCII char: arrow/keypad keys (no ASCII) are the
-            // movement keys for ADB-SRQ games, and they rely on auto-repeat to
-            // keep re-affirming the held key in the game's key-state table while
-            // autopoll is off (a held key is otherwise a single "down" that the
-            // SRQ path delivers only once). The IIe $C000 repeat path separately
-            // guards on held_iie_char != $FF, so non-ASCII keys only ADB-repeat.
-            if (is_repeatable_key(temp_apple_key)) begin
+            // Only ASCII keys auto-repeat (matches the IIe $C000 repeat path).
+            if (is_repeatable_key(temp_apple_key) && temp_iie_char != 8'hFF) begin
               ps2_key_held <= 1'b1;
               held_ps2_key <= ps2_key[8:0];  // Store PS/2 scancode
-              held_iie_char <= temp_iie_char;   // ASCII for the IIe repeat ($FF = none)
+              held_iie_char <= temp_iie_char;   // Store ASCII for repeat
 
               // Set initial repeat timer (first repeat after delay)
               repeat_vbl_target <= hz60_count + {8'd0, repeat_delay_vbl};
@@ -990,14 +982,11 @@ always @(posedge CLK_14M) begin
     // repeat forever. We also use `>=` (with modulo-16 wraparound) rather
     // than `==` so a missed cycle doesn't cost a full 60Hz-counter
     // rollover. `repeat_delay_vbl == 0` means "no repeat" per ADB config.
-    // ADB key auto-repeat. SRQ raw-event consumers (Wolfenstein 3D) read the
-    // keyboard one transition at a time and only deliver a queued event when the
-    // NEXT one arrives, so a held key (a single "down") would not register until
-    // release. The periodic repeat "down" keeps re-affirming the held key in the
-    // game's key-state table (and, via kbd_srq_active, keeps getting delivered),
-    // which is what makes held-key movement work. Repeat events carry the SAME
-    // keycode with bit7=0 (down), so they never spuriously clear the held state.
-    if (ps2_key_held && !reset_key_down &&
+    // ADB key auto-repeat (autopoll-on / IIe $C000 path only). Suppressed when
+    // keyboard autopoll is OFF: SRQ raw-event consumers track held state from
+    // clean down/up transitions, and the byte-order fix already lets a single
+    // held "down" register (its key-state slot stays set until the up event).
+    if (ps2_key_held && !reset_key_down && !kbd_autopoll_off &&
         device_data_pending[2] == 8'h00 &&
         repeat_delay_vbl != 8'd0 &&
         ((hz60_count - repeat_vbl_target) < 16'h8000)) begin
@@ -1351,7 +1340,7 @@ always @(posedge CLK_14M) begin
                 // No command response - return SRQ status (bit 3) when a
                 // keyboard service request is pending, else 0x00. (bit 4 is the
                 // legacy pending_irq path.)
-                dout <= (kbd_srq_active ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
+                dout <= (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
                 // No debug here - too noisy
               end
             end
@@ -1952,7 +1941,7 @@ always @(posedge CLK_14M) begin
           dout <= {
             valid_mouse_data,      // bit 7: mouse data valid ONLY
             mouse_int,             // bit 6: mouse interrupt enable
-            (pending_data > 0) | kbd_srq_active,   // bit 5: valid data (cmd response or SRQ byte)
+            (pending_data > 0) | kbd_srq_pending,  // bit 5: valid data (cmd response or SRQ byte)
             data_int,              // bit 4: data interrupt enable
             valid_kbd,             // bit 3: keyboard data valid
             kbd_int,               // bit 2: keyboard interrupt enable
