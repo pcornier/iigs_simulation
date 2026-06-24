@@ -153,7 +153,34 @@ bit7 fix; needs re-run after the falling-edge + TALK-R0 changes.
 Regression **re-run after all three fixes = 7 PASS / 1 FAIL** (WOZ Arkanoid only — the
 known pre-existing failure). All three ADB fixes are regression-clean.
 
-### Movement NOT yet working — a SEPARATE blocker (the SRQ is fixed)
+### Movement NOW WORKING — keyboard fully fixed (2026-06-23, later)
+
+**RESOLVED.** A single held movement key now turns/moves the player in the 3D level (verified:
+held keypad-6 → the 3D view rotates; `$08:f89c` = key-state[$58] reads `1` for all 50 polls
+during the hold). Two final root causes on top of the SRQ fixes above:
+
+1. **TALK-R0 byte order was reversed.** The IIgs keyboard reg0 word is `(key0<<8)|key1` and the
+   GLU presents it LOW byte first (gsplus `adb_response_packet`: `g_adb_data[0]=val&0xff`), so
+   the host reads the filler/2nd byte FIRST and the real key SECOND. We were returning the key
+   byte first, so Wolf3D's SRQ handler (`06:9636`) decoded the `$FF` filler as the keycode and
+   stored the wrong key-state slot (keycode `$7f/$80`), which the movement poll (`07:CCA0`,
+   reads `$08:f844+keycode`) never checks. Fixed in the `$C0-$CF` TALK-R0 handler: return
+   `{key in data[15:8], filler/next in data[7:0]}`.
+2. **Held keys need auto-repeat.** With autopoll off the SRQ delivers one event per transition
+   and only when the NEXT transition arrives, so a single held "down" never re-affirms the
+   key-state. Re-enabled ADB auto-repeat (removed the earlier autopoll-off suppression AND the
+   `temp_iie_char != $FF` gate so non-ASCII keypad/arrow movement keys repeat too); the periodic
+   repeat "down" keeps key-state[$58]=1 while held. Also added `kbd_srq_active` (assert SRQ while
+   any key event is queued) so queued events drain instead of waiting for the next keypress.
+
+Full fix chain (all in `rtl/adb.v` unless noted): C027 bit7 mouse-only (+bit5 SRQ); C026
+falling-edge IDLE→DATA delivery; `$C0-$CF` TALK-reg0 decode (device=low nibble, 2-byte kbd
+response); TALK-R0 byte order; `kbd_srq_active`; movement-key auto-repeat. Regression 7/1,
+ROM1+ROM3 boot. The historical investigation notes below are kept for context.
+
+----
+
+### (historical) Movement NOT yet working — a SEPARATE blocker (the SRQ is fixed)
 
 End-to-end run: game boots → all splashes advance (injected spaces) → enters the 3D level
 (FLOOR 1-1, HEALTH 100%) → injected Up/Right arrows are **delivered and drained** via the

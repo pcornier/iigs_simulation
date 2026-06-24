@@ -172,7 +172,16 @@ assign irq = data_irq | mouse_irq | kbd_irq;
 // completely unaffected -> no regression to existing keyboard behavior.
 reg  kbd_srq_pending;
 wire kbd_autopoll_off = adb_mode[0];  // Set Modes bit0 = disable keyboard autopoll
-assign kbd_srq_irq = kbd_srq_pending;
+// The keyboard SRQ must stay asserted while ANY key event is still queued
+// (autopoll off), not just on the transition. A held key produces a single
+// "down" event; if the SRQ drops before the firmware TALK-R0 drains it, that
+// event waits for the NEXT key transition to be delivered (a full press is then
+// seen only at release) and held keys never register. Deriving "active" from
+// the queue keeps the firmware draining until the buffer is empty.
+wire kbd_srq_active = kbd_srq_pending |
+                      (kbd_autopoll_off &
+                       ((device_data_pending[2] != 8'd0) | kbd_r0_next_valid));
+assign kbd_srq_irq = kbd_srq_active;
 
 // ADB controller internal RAM using bram module
 reg [7:0] ram_addr;
@@ -581,7 +590,7 @@ always @(*) begin
         dout_comb_reg = {
           valid_mouse_data,                        // bit 7: mouse data valid ONLY (see $C027 reg path)
           mouse_int,                               // bit 6: mouse interrupt enable
-          (pending_data > 0) | kbd_srq_pending,   // bit 5: data valid (cmd response or SRQ byte)
+          (pending_data > 0) | kbd_srq_active,    // bit 5: data valid (cmd response or SRQ byte)
           data_int,                                // bit 4: data interrupt enable
           valid_kbd,                               // bit 3: keyboard data valid
           kbd_int,                                 // bit 2: keyboard interrupt enable
@@ -600,7 +609,7 @@ always @(*) begin
               else
                 dout_comb_reg = 8'h80;
             end else begin
-              dout_comb_reg = (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
+              dout_comb_reg = (kbd_srq_active ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
             end
           end
           DATA: dout_comb_reg = data[7:0];
@@ -792,7 +801,6 @@ always @(posedge CLK_14M) begin
     // PS/2 keyboard event processing
     // MiSTer toggles bit 10 on every key press/release - if toggle changed, it's a valid new event
     if (ps2_key[10] != ps2_key_toggle_prev) begin
-      $display("ADB_KEYEV: ps2=%03h down=%b adb_mode=%02h autopoll_off=%b", ps2_key[8:0], ps2_key[9], adb_mode, adb_mode[0]);
 `ifdef DEBUG_VERBOSE
       $display("ADB: PS2 KEY EVENT: key=%03h down=%0d", ps2_key[8:0], ps2_key[9]);
 `endif
@@ -886,11 +894,17 @@ always @(posedge CLK_14M) begin
               caps_lock_state
             );
 
-            // Track this key as held down for potential repeat
-            if (is_repeatable_key(temp_apple_key) && temp_iie_char != 8'hFF) begin
+            // Track this key as held down for potential repeat. This must NOT be
+            // gated on having an ASCII char: arrow/keypad keys (no ASCII) are the
+            // movement keys for ADB-SRQ games, and they rely on auto-repeat to
+            // keep re-affirming the held key in the game's key-state table while
+            // autopoll is off (a held key is otherwise a single "down" that the
+            // SRQ path delivers only once). The IIe $C000 repeat path separately
+            // guards on held_iie_char != $FF, so non-ASCII keys only ADB-repeat.
+            if (is_repeatable_key(temp_apple_key)) begin
               ps2_key_held <= 1'b1;
               held_ps2_key <= ps2_key[8:0];  // Store PS/2 scancode
-              held_iie_char <= temp_iie_char;   // Store ASCII for repeat
+              held_iie_char <= temp_iie_char;   // ASCII for the IIe repeat ($FF = none)
 
               // Set initial repeat timer (first repeat after delay)
               repeat_vbl_target <= hz60_count + {8'd0, repeat_delay_vbl};
@@ -906,7 +920,6 @@ always @(posedge CLK_14M) begin
             // Raise keyboard SRQ for raw-event consumers (autopoll off).
             if (kbd_autopoll_off) begin
               kbd_srq_pending <= 1'b1;
-              $display("ADB_SRQ_SET: down key=%02h adb_mode=%02h", temp_apple_key, adb_mode);
             end
             if (device_data_pending[2] == 8'h00) begin
               device_registers[2][0] <= {1'b0, temp_apple_key[6:0]};
@@ -977,11 +990,14 @@ always @(posedge CLK_14M) begin
     // repeat forever. We also use `>=` (with modulo-16 wraparound) rather
     // than `==` so a missed cycle doesn't cost a full 60Hz-counter
     // rollover. `repeat_delay_vbl == 0` means "no repeat" per ADB config.
-    // Suppress ADB key auto-repeat when keyboard autopoll is OFF: SRQ raw-event
-    // consumers (Wolfenstein 3D) track held state from clean down/up transitions
-    // and a synthetic repeated "down" (with no intervening "up") desyncs that
-    // state machine. gsplus likewise does not auto-repeat in this mode.
-    if (ps2_key_held && !reset_key_down && !kbd_autopoll_off &&
+    // ADB key auto-repeat. SRQ raw-event consumers (Wolfenstein 3D) read the
+    // keyboard one transition at a time and only deliver a queued event when the
+    // NEXT one arrives, so a held key (a single "down") would not register until
+    // release. The periodic repeat "down" keeps re-affirming the held key in the
+    // game's key-state table (and, via kbd_srq_active, keeps getting delivered),
+    // which is what makes held-key movement work. Repeat events carry the SAME
+    // keycode with bit7=0 (down), so they never spuriously clear the held state.
+    if (ps2_key_held && !reset_key_down &&
         device_data_pending[2] == 8'h00 &&
         repeat_delay_vbl != 8'd0 &&
         ((hz60_count - repeat_vbl_target) < 16'h8000)) begin
@@ -1215,12 +1231,10 @@ always @(posedge CLK_14M) begin
         8'h04: begin
           // SET MODES: OR mode bits into adb_mode (bit0=kbd autopoll off, bit1=mouse).
           adb_mode <= cmd_data[7:0] | adb_mode;
-          $display("ADB_SETMODE: |=%02h -> mode=%02h (kbd_autopoll_off=%b)", cmd_data[7:0], cmd_data[7:0]|adb_mode, (cmd_data[7:0]|adb_mode)&8'h01);
         end
         8'h05: begin
           // CLEAR MODES: clear requested mode bits.
           adb_mode <= adb_mode & ~cmd_data[7:0];
-          $display("ADB_CLRMODE: &=~%02h -> mode=%02h", cmd_data[7:0], adb_mode & ~cmd_data[7:0]);
         end
         8'h06: begin
           // SET CONFIG (3 bytes): byte1=addrs, byte3=repeat_info.
@@ -1337,7 +1351,7 @@ always @(posedge CLK_14M) begin
                 // No command response - return SRQ status (bit 3) when a
                 // keyboard service request is pending, else 0x00. (bit 4 is the
                 // legacy pending_irq path.)
-                dout <= (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
+                dout <= (kbd_srq_active ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
                 // No debug here - too noisy
               end
             end
@@ -1527,19 +1541,22 @@ always @(posedge CLK_14M) begin
                 8'hC0, 8'hC1, 8'hC2, 8'hC3, 8'hC4, 8'hC5, 8'hC6, 8'hC7,
                 8'hC8, 8'hC9, 8'hCA, 8'hCB, 8'hCC, 8'hCD, 8'hCE, 8'hCF: begin
                   if (din[3:0] == 4'd2 && device_data_pending[2] > 8'd0) begin
-                    // TALK keyboard R0: byte0 = key event, byte1 = staged next
-                    // event or $FF. Consuming the queue drains the SRQ.
+                    // TALK keyboard R0: returns the keyboard reg0 word. The ADB GLU
+                    // presents it LOW byte first (gsplus adb_response_packet:
+                    // g_adb_data[0]=val&0xff), and the IIgs keyboard reg0 word is
+                    // (key0<<8)|key1 — so the host reads key1/filler FIRST, then the
+                    // actual key0 SECOND. data[7:0] is returned first, so put the
+                    // filler/next-event there and the live key in data[15:8].
+                    // (Reversing these makes the game decode the $FF filler as the
+                    // keycode and store the wrong key-table slot -> no kbd movement.)
                     data <= { 16'd0,
-                              (kbd_r0_next_valid ? kbd_r0_next : 8'hFF),
-                              device_registers[2][0] };
+                              device_registers[2][0],
+                              (kbd_r0_next_valid ? kbd_r0_next : 8'hFF) };
                     pending_data <= 3'd2;
                     cmd_response_ready <= 1'b1;
                     if ((device_registers[2][0] & 8'h80) != 8'd0) valid_kbd <= 1'b0;
                     device_data_pending[2] <= 8'h00;
                     kbd_r0_next_valid <= 1'b0;
-                    if (kbd_srq_pending)
-                      $display("ADB_SRQ_DRAIN: TALK R0 key=%02h next=%02h",
-                               device_registers[2][0], (kbd_r0_next_valid ? kbd_r0_next : 8'hFF));
                     kbd_srq_pending <= 1'b0;
                     state <= IDLE;
                   end else if (din[3:0] == 4'd3 && device_data_pending[3] > 8'd0) begin
@@ -1613,7 +1630,6 @@ always @(posedge CLK_14M) begin
                               end else begin
                                 device_data_pending[2] <= 8'h00;
                                 // Keyboard event queue drained -> clear SRQ.
-                                if (kbd_srq_pending) $display("ADB_SRQ_DRAIN: TALK R0 final byte=%02h", device_registers[2][0]);
                                 kbd_srq_pending <= 1'b0;
                               end
                               if ((device_registers[2][0] & 8'h80) != 8'd0) valid_kbd <= 1'b0;  // Clear on key release
@@ -1717,8 +1733,8 @@ always @(posedge CLK_14M) begin
                 data <= 32'h00000008;  // Restore SRQ status for IDLE reads
 
                 case (cmd)
-                  8'h04: begin adb_mode <= din | adb_mode; $display("ADB_SETMODE: |=%02h -> mode=%02h (kbd_autopoll_off=%b)", din, din|adb_mode, (din|adb_mode)&8'h01); end
-                  8'h05: begin adb_mode <= adb_mode & ~din; $display("ADB_CLRMODE: &=~%02h -> mode=%02h", din, adb_mode & ~din); end
+                  8'h04: begin adb_mode <= din | adb_mode; end
+                  8'h05: begin adb_mode <= adb_mode & ~din; end
                   8'h06: begin
                     // SET_CONFIG (0x06) - Configure ADB parameters (3 bytes)
                     // Byte 2: mouse_ctl_addr, kbd_ctl_addr
@@ -1936,7 +1952,7 @@ always @(posedge CLK_14M) begin
           dout <= {
             valid_mouse_data,      // bit 7: mouse data valid ONLY
             mouse_int,             // bit 6: mouse interrupt enable
-            (pending_data > 0) | kbd_srq_pending,  // bit 5: valid data (cmd response or SRQ byte)
+            (pending_data > 0) | kbd_srq_active,   // bit 5: valid data (cmd response or SRQ byte)
             data_int,              // bit 4: data interrupt enable
             valid_kbd,             // bit 3: keyboard data valid
             kbd_int,               // bit 2: keyboard interrupt enable

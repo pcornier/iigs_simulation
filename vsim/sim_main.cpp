@@ -373,14 +373,6 @@ bool writeLog(const char* line)
 	// Print to stdout unless in quiet mode
 	if (!quiet_mode) {
 		printf("%s\n",line);
-	} else if (top && VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending) {
-		// Even in quiet mode, capture the CPU trace while a keyboard SRQ is
-		// pending so we can see the firmware loop that fails to drain it.
-		static int srq_trace_count = 0;
-		if (srq_trace_count < 2000) {
-			srq_trace_count++;
-			printf("SRQTRACE: %s\n", line);
-		}
 	}
 
 	// Only do memory-intensive operations when debug_6502 is enabled
@@ -616,17 +608,8 @@ void DumpInstruction() {
 	// there is nothing that will consume the formatted instruction string.
 	// Formatting is expensive (fmt::format + std::string allocations) and happens
 	// on every CPU instruction, so skipping it when not needed is a big speedup.
-	if (quiet_mode && !debug_6502 &&
-	    !(top && VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending)) {
+	if (quiet_mode && !debug_6502) {
 		cpu_instruction_count++;
-		// PCSAMPLE: periodically log PBR:PC during the level phase to tell a live
-		// main loop (varied PCs across the game bank) from a wedge (few PCs).
-		if (top && video.count_frame >= 9000 && (cpu_instruction_count & 0x3FFF) == 0) {
-			printf("PCSAMPLE frame=%d %02X:%04X\n",
-			       video.count_frame,
-			       VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR,
-			       VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC);
-		}
 		return;
 	}
 
@@ -1294,19 +1277,6 @@ int verilate() {
                                 stk_rec_count++;
                             }
                         }
-                        // ADB command writes: log writes to $C026/C027 while a
-                        // keyboard SRQ is pending (any bank).
-                        if ((addr16 == 0xC026 || addr16 == 0xC027) &&
-                            VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending) {
-                            static int adb_w_count = 0;
-                            if (adb_w_count < 6000) {
-                                adb_w_count++;
-                                unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
-                                unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                                printf("ADB_W #%d: bank=%02X $%04X <- %02X at %02X:%04X frame=%d\n",
-                                       adb_w_count, bank, addr16, dout, pbr_now, pc_now, video.count_frame);
-                            }
-                        }
 #ifdef DEBUG_MVN
                         // Memory write - add MVN debug for Language Card area
                         if ((bank >= 0xFC || bank == 0x00) && addr16 >= 0xBF00) {
@@ -1407,24 +1377,6 @@ int verilate() {
 						}
 #endif
                     } else if (vda && !we) {
-                        // ADB $C026/C027 reads (any bank, incl. IRQ-context).
-                        // Gate on kbd_srq_pending so we capture exactly what the
-                        // firmware reads while a keyboard SRQ is asserted.
-                        if ((addr16 == 0xC026 || addr16 == 0xC027) &&
-                            VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__kbd_srq_pending) {
-                            static int adb_r_count = 0;
-                            if (adb_r_count < 6000) {
-                                adb_r_count++;
-                                unsigned short pc_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
-                                unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                                unsigned char crr = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__cmd_response_ready;
-                                unsigned char pd  = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__pending_data;
-                                unsigned char st  = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__state;
-                                unsigned int  dat = VERTOPINTERN->emu__DOT__iigs__DOT__adb__DOT__data;
-                                printf("ADB_R #%d: bank=%02X $%04X -> %02X at %02X:%04X frame=%d [SRQ=1 crr=%d pd=%d state=%d data=%08X]\n",
-                                       adb_r_count, bank, addr16, din, pbr_now, pc_now, video.count_frame, crr, pd, st, dat);
-                            }
-                        }
                         // Memory read - add timing debug for $BF00
 #ifdef DEBUG_MVN
                         if (bank == 0x00 && addr16 == 0xBF00) {
@@ -4336,6 +4288,16 @@ void queue_key_string(const std::string& keys) {
             printf("Queued held-arrow %s (ext scancode 0x%02x)\n", pressed ? "DOWN" : "UP", sc);
             continue;
         }
+        // Held numeric-keypad markers (NON-extended, so they map to KP keycodes
+        // — Wolf3D's PRIMARY movement scheme): 0x18=KP8(fwd) down, 0x19=KP8 up,
+        // 0x1A=KP6(turn-right) down, 0x1B=KP6 up.
+        if (c >= 0x18 && c <= 0x1B) {
+            unsigned int sc = (c < 0x1A) ? 0x75 : 0x74;  // KP8 or KP6
+            bool pressed = (c == 0x18) || (c == 0x1A);
+            input.keyEvents.push(SimInput_PS2KeyEvent(sc, pressed, false, sc));
+            printf("Queued held-keypad %s (scancode 0x%02x, non-ext)\n", pressed ? "DOWN" : "UP", sc);
+            continue;
+        }
         // Special marker: 0x01 is used as "caps lock toggle" (one SDL-like
         // transition that flips the LED). We inject it here as a single
         // PS/2 event with pressed = new LED state.
@@ -4831,6 +4793,10 @@ int main(int argc, char** argv, char** env) {
                     else if (next == 'H') { processed_keys += (char)0x14; j++; }  // Up arrow RELEASE
                     else if (next == 'k') { processed_keys += (char)0x13; j++; }  // Right arrow DOWN (hold)
                     else if (next == 'K') { processed_keys += (char)0x17; j++; }  // Right arrow RELEASE
+                    else if (next == 'f') { processed_keys += (char)0x18; j++; }  // KP8 forward DOWN (hold)
+                    else if (next == 'F') { processed_keys += (char)0x19; j++; }  // KP8 forward RELEASE
+                    else if (next == 'g') { processed_keys += (char)0x1A; j++; }  // KP6 turn-right DOWN (hold)
+                    else if (next == 'G') { processed_keys += (char)0x1B; j++; }  // KP6 turn-right RELEASE
                     else if (next == '\\') { processed_keys += '\\'; j++; }
                     else if (next == 'x' && j + 3 < keys.length()) {
                         // Handle \xNN hex escape sequences
