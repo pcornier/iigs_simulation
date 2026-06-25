@@ -1,5 +1,6 @@
 // Define DEBUG_ADB to enable verbose ADB debug output
 //`define DEBUG_ADB
+//`define DEBUG_DESKMGR
 
 module adb(
   input CLK_14M,
@@ -172,6 +173,15 @@ assign irq = data_irq | mouse_irq | kbd_irq;
 // completely unaffected -> no regression to existing keyboard behavior.
 reg  kbd_srq_pending;
 wire kbd_autopoll_off = adb_mode[0];  // Set Modes bit0 = disable keyboard autopoll
+
+// IIgs Ctrl-OpenApple-Esc -> Desk Manager (Control Panel CDA). On a real IIgs
+// this combo is NOT detected by software reading $C025 — the ADB GLU itself,
+// on Escape key-DOWN while Control+Command are held, sets bit 5 (0x20) of the
+// $C026 status byte and raises the ADB data interrupt. The firmware's ADB IRQ
+// handler reads $C026, sees 0x20, and enters the Desk Manager. (Matches gsplus
+// adb_key_event() and Clemens _clem_adb_glu_keyb_parse().) One-shot: cleared
+// when the firmware reads $C026.
+reg  desk_mgr_pending;
 // ADB IRQ to the CPU while keyboard autopoll is off (Wolfenstein 3D SRQ path):
 //   (a) kbd_srq_pending  — a key transition is waiting (cleared by TALK R0), and
 //   (b) data_int & pending_data>0 — a TALK-R0 RESPONSE is waiting to be read.
@@ -185,7 +195,11 @@ wire kbd_autopoll_off = adb_mode[0];  // Set Modes bit0 = disable keyboard autop
 // (so it can't storm on a stale key-press at game load like the reverted
 // device_data_pending level-signal did).
 assign kbd_srq_irq = kbd_srq_pending |
-                     (kbd_autopoll_off & data_int & (pending_data > 3'd0));
+                     (kbd_autopoll_off & data_int & (pending_data > 3'd0)) |
+                     // Ctrl-OA-Esc Desk Manager interrupt (autopoll-on desktop):
+                     // gated on data_int ($C027 DATA_INT enable) exactly like the
+                     // gsplus adb_add_data_int() path. Self-clears on $C026 read.
+                     (desk_mgr_pending & data_int);
 
 // ADB controller internal RAM using bram module
 reg [7:0] ram_addr;
@@ -594,7 +608,7 @@ always @(*) begin
         dout_comb_reg = {
           valid_mouse_data,                        // bit 7: mouse data valid ONLY (see $C027 reg path)
           mouse_int,                               // bit 6: mouse interrupt enable
-          (pending_data > 0) | kbd_srq_pending,  // bit 5: data valid (cmd response or SRQ byte)
+          (pending_data > 0) | kbd_srq_pending | desk_mgr_pending,  // bit 5: data valid (cmd response, SRQ byte, or Ctrl-OA-Esc desk-mgr)
           data_int,                                // bit 4: data interrupt enable
           valid_kbd,                               // bit 3: keyboard data valid
           kbd_int,                                 // bit 2: keyboard interrupt enable
@@ -613,7 +627,7 @@ always @(*) begin
               else
                 dout_comb_reg = 8'h80;
             end else begin
-              dout_comb_reg = (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
+              dout_comb_reg = (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00) | (desk_mgr_pending ? 8'h20 : 8'h00);
             end
           end
           DATA: dout_comb_reg = data[7:0];
@@ -757,6 +771,7 @@ always @(posedge CLK_14M) begin
     kbd_r0_next <= 8'h00;
     kbd_r0_next_valid <= 1'b0;
     kbd_srq_pending <= 1'b0;
+    desk_mgr_pending <= 1'b0;
 
     // Initialize modifier key states
     shift_down <= 1'b0;
@@ -907,6 +922,19 @@ always @(posedge CLK_14M) begin
               ctrl_down,
               caps_lock_state
             );
+
+            // IIgs Ctrl-OpenApple-Esc -> Desk Manager (Control Panel CDA).
+            // On Escape ($35) key-DOWN while Control+Command are held, the ADB
+            // GLU flags it for the firmware via $C026 bit5 + an ADB data IRQ
+            // (see desk_mgr_pending decl). Works in autopoll-ON (the desktop).
+            if (temp_apple_key == 8'h35 && ctrl_down && cmd_down) begin
+              desk_mgr_pending <= 1'b1;
+            end
+`ifdef DEBUG_DESKMGR
+            if (temp_apple_key == 8'h35)
+              $display("DESKMGR: Esc down ctrl=%0d cmd=%0d data_int=%0d -> set=%0d",
+                       ctrl_down, cmd_down, data_int, (ctrl_down && cmd_down));
+`endif
 
             // Track this key as held down for potential repeat. This must NOT be
             // Only ASCII keys auto-repeat (matches the IIe $C000 repeat path).
@@ -1356,8 +1384,17 @@ always @(posedge CLK_14M) begin
               end else begin
                 // No command response - return SRQ status (bit 3) when a
                 // keyboard service request is pending, else 0x00. (bit 4 is the
-                // legacy pending_irq path.)
-                dout <= (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00);
+                // legacy pending_irq path.) Bit 5 (0x20) signals a pending
+                // Ctrl-OA-Esc Desk Manager request; it is one-shot — cleared on
+                // this read so the firmware's IRQ handler sees it exactly once.
+                dout <= (kbd_srq_pending ? 8'h08 : 8'h00) | (pending_irq ? 8'h10 : 8'h00) | (desk_mgr_pending ? 8'h20 : 8'h00);
+`ifdef DEBUG_DESKMGR
+                if (desk_mgr_pending)
+                  $display("DESKMGR: C026 IDLE read while pending (strobe=%0d prev=%0d data_int=%0d) -> 0x20 delivered",
+                           strobe, strobe_prev, data_int);
+`endif
+                if (desk_mgr_pending & strobe & ~strobe_prev)
+                  desk_mgr_pending <= 1'b0;
                 // No debug here - too noisy
               end
             end
@@ -1958,7 +1995,7 @@ always @(posedge CLK_14M) begin
           dout <= {
             valid_mouse_data,      // bit 7: mouse data valid ONLY
             mouse_int,             // bit 6: mouse interrupt enable
-            (pending_data > 0) | kbd_srq_pending,  // bit 5: valid data (cmd response or SRQ byte)
+            (pending_data > 0) | kbd_srq_pending | desk_mgr_pending,  // bit 5: valid data (cmd response, SRQ byte, or Ctrl-OA-Esc desk-mgr)
             data_int,              // bit 4: data interrupt enable
             valid_kbd,             // bit 3: keyboard data valid
             kbd_int,               // bit 2: keyboard interrupt enable

@@ -4310,6 +4310,15 @@ void queue_key_string(const std::string& keys) {
             printf("Queued held-modifier %s (scancode 0x%02x, non-ext)\n", pressed ? "DOWN" : "UP", sc);
             continue;
         }
+        // Esc key tap (marker 0x22). \e maps here instead of raw 0x1B, which
+        // collides with the held-keypad RELEASE markers (0x18..0x1B). Sends Esc
+        // PS/2 scancode 0x76 (-> ADB $35) as a press+release.
+        if (c == 0x22) {
+            input.keyEvents.push(SimInput_PS2KeyEvent(0x76, true,  false, 0x76));
+            input.keyEvents.push(SimInput_PS2KeyEvent(0x76, false, false, 0x76));
+            printf("Queued Esc key tap (scancode 0x76)\n");
+            continue;
+        }
         // Special marker: 0x01 is used as "caps lock toggle" (one SDL-like
         // transition that flips the LED). We inject it here as a single
         // PS/2 event with pressed = new LED state.
@@ -4785,7 +4794,7 @@ int main(int argc, char** argv, char** env) {
                     if (next == 'n') { processed_keys += '\n'; j++; }
                     else if (next == 'r') { processed_keys += '\r'; j++; }
                     else if (next == 't') { processed_keys += '\t'; j++; }
-                    else if (next == 'e') { processed_keys += '\x1b'; j++; }  // ESC key
+                    else if (next == 'e') { processed_keys += (char)0x22; j++; }  // ESC key (marker 0x22; raw 0x1B collides with the held-keypad markers)
                     else if (next == 'C') { processed_keys += (char)0x01; j++; }  // caps lock toggle
                     else if (next == 'R') { processed_keys += (char)0x02; j++; }  // Ctrl+F11 warm reset
                     else if (next == 'o' && j + 2 < keys.length()) {
