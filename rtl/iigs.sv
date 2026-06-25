@@ -1921,12 +1921,14 @@ wire [7:0] din =
 `endif
 
   // DEBUG: Track what cpu_din is when CPU actually samples (phi2 high)
+`ifdef DEBUG_TEST0D
   always @(posedge CLK_14M) begin
     if (phi2 && ~we && (bank_bef == 8'hE0 || bank_bef == 8'hE1) && addr_bef >= 16'h6100 && addr_bef <= 16'h6105) begin
       $display("TEST0D_PHI2: bank_bef=%02x addr=%04x cpu_din=%02x slowram_dout=%02x din=%02x",
                bank_bef, addr_bef, cpu_din, slowram_dout, din);
     end
   end
+`endif
 
 `ifdef DEBUG_BANK
   // Debug: Detect when CPU receives default 0x80 value (potential unhandled I/O)
@@ -2004,6 +2006,7 @@ wire [7:0] din =
 `endif
 
   // Debug: Show what CPU actually receives from SCC registers
+`ifdef DEBUG_SCC
   always @(posedge CLK_14M) begin
     if (~we && addr >= 16'hC038 && addr <= 16'hC03B) begin
       $display("SCC_CPU_READ: addr=C%03X cpu_din=%02X io_dout=%02X IO=%b EXTERNAL_IO=%b din=%02X fastram_ce=%b slowram_ce=%b",
@@ -2013,6 +2016,7 @@ wire [7:0] din =
                (bank_bef == 8'h00 | bank_bef == 8'h01 | bank_bef == 8'he0 | bank_bef == 8'he1));
     end
   end
+`endif
 wire ready_out;
 
   // Debug: Monitor IRQ_N signal to CPU

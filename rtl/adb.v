@@ -868,17 +868,27 @@ always @(posedge CLK_14M) begin
 `endif
       end
 
-      // Process normal keys (not modifier keys, caps lock, or reset key).
+      // Process normal keys (not caps lock or reset key), and — when keyboard
+      // autopoll is OFF — also the modifier keys.
+      //
+      // A real ADB keyboard emits Register-0 make/break keycodes for the
+      // modifier keys (Control=$36, Command=$37, Shift=$38, Option=$3A) exactly
+      // like any other key; the $C025 modifier byte is maintained separately by
+      // the ADB GLU. Games that disable autopoll and read raw keycodes via SRQ
+      // (e.g. Wolfenstein 3D IIgs: Control=fire, Option=strafe, Shift=run) rely
+      // on those R0 events. So in autopoll-OFF mode we let modifiers generate R0
+      // keycodes too. In autopoll-ON mode we keep them OUT of R0 (state via
+      // $C025 only) to match the normal IIgs keyboard path and the ADB diag
+      // test. Modifiers have temp_iie_char==$FF so they never reach the IIe
+      // ASCII FIFO or the auto-repeat path regardless of mode.
+      //
       // Caps Lock (0x058) is handled above with a synthesized press+release
-      // pair — skip it here so we don't emit extra events.
-      // Skip the modifiers whose state is reflected via $C025 — they must NOT
-      // generate ADB Register 0 byte events (the diag ADB keyboard test counts
-      // those separately).
-      // Skip F11 (0x078) which is bound to the Apple Reset key combo.
-      if (ps2_key[8:0] != 9'h012 && ps2_key[8:0] != 9'h059 &&  // Shift
-          ps2_key[8:0] != 9'h014 && ps2_key[8:0] != 9'h114 &&  // Ctrl
-          ps2_key[8:0] != 9'h011 && ps2_key[8:0] != 9'h111 &&  // Alt
-          ps2_key[8:0] != 9'h11f && ps2_key[8:0] != 9'h127 &&  // Win/Menu
+      // pair — skip it here. F11 (0x078) is bound to the Apple Reset key combo.
+      if (((ps2_key[8:0] != 9'h012 && ps2_key[8:0] != 9'h059 &&  // Shift
+            ps2_key[8:0] != 9'h014 && ps2_key[8:0] != 9'h114 &&  // Ctrl
+            ps2_key[8:0] != 9'h011 && ps2_key[8:0] != 9'h111 &&  // Alt (Command)
+            ps2_key[8:0] != 9'h11f && ps2_key[8:0] != 9'h127)    // Win/Menu (Option)
+           || kbd_autopoll_off) &&
           ps2_key[8:0] != 9'h058 &&                             // Caps Lock
           ps2_key[8:0] != 9'h078) begin                         // F11 (Reset key)
         reg [7:0] temp_apple_key;

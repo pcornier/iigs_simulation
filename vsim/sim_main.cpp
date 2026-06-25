@@ -4298,6 +4298,18 @@ void queue_key_string(const std::string& keys) {
             printf("Queued held-keypad %s (scancode 0x%02x, non-ext)\n", pressed ? "DOWN" : "UP", sc);
             continue;
         }
+        // Held-modifier markers (combat tests + IIgs combos like Ctrl-OA-Esc):
+        //   0x1C = Left Ctrl    DOWN (fire),  0x1D = Left Ctrl    UP
+        //   0x1E = Left Shift   DOWN (run),   0x1F = Left Shift   UP
+        //   0x20 = Left Alt/Cmd DOWN (OA),    0x21 = Left Alt/Cmd UP
+        // Non-extended PS/2 scancodes; map to ADB Control($36)/Shift($38)/Cmd($37).
+        if (c >= 0x1C && c <= 0x21) {
+            unsigned int sc = (c < 0x1E) ? 0x14 : (c < 0x20 ? 0x12 : 0x11);  // LCtrl / LShift / LAlt
+            bool pressed = (c == 0x1C) || (c == 0x1E) || (c == 0x20);
+            input.keyEvents.push(SimInput_PS2KeyEvent(sc, pressed, false, sc));
+            printf("Queued held-modifier %s (scancode 0x%02x, non-ext)\n", pressed ? "DOWN" : "UP", sc);
+            continue;
+        }
         // Special marker: 0x01 is used as "caps lock toggle" (one SDL-like
         // transition that flips the LED). We inject it here as a single
         // PS/2 event with pressed = new LED state.
@@ -4797,6 +4809,12 @@ int main(int argc, char** argv, char** env) {
                     else if (next == 'F') { processed_keys += (char)0x19; j++; }  // KP8 forward RELEASE
                     else if (next == 'g') { processed_keys += (char)0x1A; j++; }  // KP6 turn-right DOWN (hold)
                     else if (next == 'G') { processed_keys += (char)0x1B; j++; }  // KP6 turn-right RELEASE
+                    else if (next == 'b') { processed_keys += (char)0x1C; j++; }  // Left Ctrl DOWN (fire, hold) — \C is taken by caps-lock
+                    else if (next == 'c') { processed_keys += (char)0x1D; j++; }  // Left Ctrl RELEASE
+                    else if (next == 'S') { processed_keys += (char)0x1E; j++; }  // Left Shift DOWN (run, hold)
+                    else if (next == 's') { processed_keys += (char)0x1F; j++; }  // Left Shift RELEASE
+                    else if (next == 'm') { processed_keys += (char)0x20; j++; }  // Open-Apple/Command DOWN (hold)
+                    else if (next == 'M') { processed_keys += (char)0x21; j++; }  // Open-Apple/Command RELEASE
                     else if (next == '\\') { processed_keys += '\\'; j++; }
                     else if (next == 'x' && j + 3 < keys.length()) {
                         // Handle \xNN hex escape sequences

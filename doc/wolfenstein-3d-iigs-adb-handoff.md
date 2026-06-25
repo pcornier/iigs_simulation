@@ -3,6 +3,46 @@
 Branch: **`adb-srq-wolf3d`** (off `master`). Work is **uncommitted in the working tree**:
 `rtl/adb.v`, `rtl/iigs.sv`, `vsim/sim_main.cpp`.
 
+---
+
+## LATEST (2026-06-25) — keyboard works on FPGA; Fire/Run/Strafe modifier fix
+
+**On real FPGA hardware the in-game keyboard works** (confirmed via the mrext
+`keyboard-raw` API + screenshots): Keypad 8/5/4/6 move/turn, Esc pauses. The
+earlier "in-game keys dead" reports were an **input-method mismatch** — Wolf3D
+moves on the **numeric keypad, not the arrow keys**. The deployed `bcb8248`
+data-IRQ fix is correct. Full key map: **`doc/wolfenstein-3d-iigs-controls.md`**.
+
+**New bug found + fixed: Fire (Control), Run (Shift), Strafe-modifier (Option)
+did nothing** because they are ADB *modifier* keys. A real ADB keyboard emits
+Register-0 make/break keycodes for modifiers ($36 Control, $37 Command, $38
+Shift, $3A Option) **as well as** maintaining the `$C025` modifier byte —
+confirmed against gsplus (`adb_kbd_reg0_data`/`adb_physical_key_update`) and
+Clemens, and the Apple "Guide to the Macintosh Family Hardware" keycode table.
+Our `rtl/adb.v` was *suppressing* modifier keycodes from Register 0 (only setting
+`$C025`), so movement (normal keypad keys) worked but Wolf3D's raw-SRQ reader
+never saw Fire/Run/Strafe.
+
+**Fix (`rtl/adb.v`, ~line 871):** in **autopoll-OFF** mode, let modifier keys flow
+through the normal keycode push so they generate R0 make/break + SRQ like a real
+keyboard. Autopoll-ON behavior is unchanged (modifiers stay out of R0, state via
+`$C025` only — matches the IIgs keyboard path and the ADB diag test). Modifiers
+have `temp_iie_char==$FF`, so they never touch the IIe ASCII FIFO or auto-repeat.
+
+Also gated several always-on sim `$display` blocks behind `ifdef`s so Wolf3D sim
+runs aren't buried in spam: `rtl/iigs.sv` SCC_CPU_READ (`DEBUG_SCC`) + TEST0D_PHI2
+(`DEBUG_TEST0D`), `rtl/hdd.v` READ-MIRROR / DMA WRITE / reg_command (`DEBUG_HDD`).
+
+Sim test markers added to `vsim/sim_main.cpp`: `\C`/`\c` = Left-Ctrl down/up
+(fire), `\S`/`\s` = Left-Shift down/up (run).
+
+**Status:** validating Fire in sim (held Control → key-state slot $36 set / AMMO
+drop), then regression + selftest (ROM1/ROM3), then FPGA rebuild for hardware
+test. The modifier change is the only synthesizable RTL change; the rest are
+sim-only debug gates.
+
+---
+
 ## TL;DR
 
 - **Goal:** make Wolfenstein 3D IIgs (1997 Logicware/Ninjaforce, by Eric Shepherd) playable. It

@@ -263,9 +263,11 @@ module hdd(
                   4'ha: D_OUT <= hdd_size[hdd_unit][15:8];
                   default: D_OUT <= 8'hFF;
                 endcase
+`ifdef DEBUG_HDD
                 $display("HDD CPU %s 00:%04h -> %02h (cmd=%02h unit=%02h blk=%04h mem=%04h sec_idx=%03d)",
                          "READ-MIRROR", {12'h0F0, A[3:0]}, D_OUT, reg_command, reg_unit,
                          {reg_block_h, reg_block_l}, {reg_mem_h, reg_mem_l}, a2_ram_addr);
+`endif
             end else if (IO_SELECT && RD) begin
                 // Directly drive slot ROM data only if any HDD unit is mounted
                 // Otherwise return $FF (empty slot) so boot search skips this slot
@@ -303,7 +305,9 @@ module hdd(
                                 begin
                                     // For GS/OS probes, report success by default
                                     // and pulse read/write strobes when appropriate.
+`ifdef DEBUG_HDD
 				    $display("HDD: reg_command %x",reg_command);
+`endif
                                     case (reg_command)
                                       PRODOS_COMMAND_STATUS: begin
                                         // Report mounted status as ok(0) or error(1) for current unit
@@ -467,7 +471,9 @@ bram #(.widthad_a(9)) sector_ram
     // Registered DMA readback
     always @(posedge CLK_14M) begin
         ram_do <= sector_dma_q;
+`ifdef DEBUG_HDD
         if (ram_we) $display("HDD DMA WRITE: sector_buf[%03h] <= %02h", hps_ram_addr, ram_di);
+`endif
     end
 
    rom #(8,8,"rtl/roms/hdd.hex") hddrom (
