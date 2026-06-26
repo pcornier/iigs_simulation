@@ -87,6 +87,7 @@ reg strobe_prev;  // Previous strobe value for edge detection
 reg rw_prev;      // Previous rw value to detect read->write transitions
 reg c024_was_read;  // Track if C024 was read on previous strobe (for falling edge handling)
 reg c026_status_read_with_data;  // Track if C026 status was read with pending data (for IDLE->DATA transition)
+reg deskmgr_read_with_pending;   // Track if C026 status was read while desk-mgr (0x20) pending (clear on strobe falling edge)
 reg data_last_byte_read;  // Flag: last DATA byte was output, waiting for strobe to fall before IDLE
 
 // Device configuration registers
@@ -673,6 +674,7 @@ always @(posedge CLK_14M) begin
     rw_prev <= 1'b1;  // Initialize to read (high) so first write is detected
     c024_was_read <= 1'b0;
     c026_status_read_with_data <= 1'b0;
+    deskmgr_read_with_pending <= 1'b0;
     data_last_byte_read <= 1'b0;
 
     // Initialize command processing registers
@@ -1393,8 +1395,14 @@ always @(posedge CLK_14M) begin
                   $display("DESKMGR: C026 IDLE read while pending (strobe=%0d prev=%0d data_int=%0d) -> 0x20 delivered",
                            strobe, strobe_prev, data_int);
 `endif
-                if (desk_mgr_pending & strobe & ~strobe_prev)
-                  desk_mgr_pending <= 1'b0;
+                // Defer the desk-mgr clear to the strobe FALLING edge (handler
+                // below). The CPU reads the combinational dout_comb, so clearing
+                // desk_mgr_pending on the rising edge raced the read and the CPU
+                // latched 0x00 -> the ROM IRQ handler (FF:BE67) saw no desk-mgr
+                // bit and never opened the Control Panel. Mirrors the cmd-response
+                // (c026_status_read_with_data) falling-edge mechanism.
+                if (desk_mgr_pending & strobe & (addr == 8'h26))
+                  deskmgr_read_with_pending <= 1'b1;
                 // No debug here - too noisy
               end
             end
@@ -2177,6 +2185,19 @@ always @(posedge CLK_14M) begin
     // This handles the case where there's no data to return after the status byte
     if (~strobe & strobe_prev & cmd_response_ready & (pending_data == 3'd0) & (state == IDLE)) begin
       cmd_response_ready <= 1'b0;
+    end
+
+    // Ctrl-OA-Esc desk-mgr byte (0x20): clear desk_mgr_pending on the strobe
+    // FALLING edge, AFTER the CPU has latched the combinational dout_comb=0x20.
+    // (Clearing on the rising edge raced the CPU read -> it latched 0x00 and the
+    // ROM ADB IRQ handler at FF:BE67 never saw the desk-mgr bit, so the Control
+    // Panel never opened.) Mirrors the c026_status_read_with_data handler above.
+    if (~strobe & strobe_prev & deskmgr_read_with_pending) begin
+      desk_mgr_pending <= 1'b0;
+      deskmgr_read_with_pending <= 1'b0;
+`ifdef DEBUG_DESKMGR
+      $display("DESKMGR: 0x20 consumed on strobe falling edge -> desk_mgr_pending cleared");
+`endif
     end
 
     // Update edge detection register on every cycle
