@@ -604,6 +604,15 @@ always @(*) begin
         end
       end
     end
+    8'h25: begin  // $C025 - Modifier Key Register
+      // Must be combinational: the registered `dout` default (above) can hold a
+      // stale value from a prior ADB read. The ROM's Ctrl-OA-Esc handler reads
+      // $C025 (FF:BE8E) immediately AFTER the $C026 desk-mgr read, so the stale
+      // dout still held 0x20 -> bit0 (shift) read as 0 and Ctrl-OA-SHIFT-Esc fell
+      // through to the Desk Accessories menu instead of the direct Control Panel.
+      if (rw)
+        dout_comb_reg = {cmd_down, option_down, 1'b0, 1'b0, c025[3], caps_lock_state, ctrl_down, shift_down};
+    end
     8'h27: begin  // $C027 - ADB Status
       if (rw) begin
         dout_comb_reg = {
@@ -934,8 +943,8 @@ always @(posedge CLK_14M) begin
             end
 `ifdef DEBUG_DESKMGR
             if (temp_apple_key == 8'h35)
-              $display("DESKMGR: Esc down ctrl=%0d cmd=%0d data_int=%0d -> set=%0d",
-                       ctrl_down, cmd_down, data_int, (ctrl_down && cmd_down));
+              $display("DESKMGR: Esc down ctrl=%0d cmd=%0d shift=%0d data_int=%0d -> set=%0d",
+                       ctrl_down, cmd_down, shift_down, data_int, (ctrl_down && cmd_down));
 `endif
 
             // Track this key as held down for potential repeat. This must NOT be
