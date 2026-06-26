@@ -725,6 +725,7 @@ module scc
 	assign rdata = rdata_mux;
 
 	// Debug: Log control register reads
+`ifdef DEBUG_SCC
 	always@(posedge clk) begin
 		if (cs && ~we && ~rs[1]) begin
 			$display("SCC_CTRL_READ: ch=%s rindex=%x rindex_latch=%x data=%02x (RR%d) rr0=%02x state=%d",
@@ -742,6 +743,7 @@ module scc
 				rs[0] ? "A" : "B", rdata_mux, rs[0] ? rx_queue_pos_a : rx_queue_pos_b);
 		end
 	end
+`endif
 	/* RR0 */
 	assign rr0_a = { 1'b0, /* Break */
 			 eom_latch_a, /* Tx Underrun/EOM - use latch instead of hardcoded 1 */
@@ -754,12 +756,14 @@ module scc
 			 };
 
 	// Debug: Show RR0 composition when reading from control register
+`ifdef DEBUG_SCC
 	always @(posedge clk) begin
 		if (cen && cs && !we && !rs[1] && rs[0] && rindex == 0) begin
 			$display("SCC_RR0_READ: ch=A rr0=%02x eom=%b tx_empty=%b rx_avail=%b (fifo_pos=%d)",
 			         rr0_a, eom_latch_a, tx_empty_latch_a, (rx_queue_pos_a > 0), rx_queue_pos_a);
 		end
 	end
+`endif
 	assign rr0_b = { 1'b0, /* Break */
 			 eom_latch_b, /* Tx Underrun/EOM - use latch instead of hardcoded 1 */
 			 1'b1, /* CTS - HARDCODED to 1 (no modem on channel B) */

@@ -1005,8 +1005,10 @@ module iigs
     // Handle SCC read response (same cycle pattern like other peripherals)
     if (scc_cs & ~we) begin
       scc_dout_reg <= scc_dout;
+`ifdef DEBUG_SCC
       $display("SCC_READ_RESPONSE: data=%02X scc_cs=%b ~we=%b addr=C%03X io_dout<=%02X addr_bef=%06X",
                scc_dout, scc_cs, ~we, addr[11:0], scc_dout, addr_bef);
+`endif
     end
 
     scc_cs <= 1'b0;
