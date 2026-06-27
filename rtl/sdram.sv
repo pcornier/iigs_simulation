@@ -27,7 +27,7 @@
 module sdram
 (
 	// interface to the MT48LC16M16 chip
-	inout  reg [15:0] SDRAM_DQ,   // 16 bit bidirectional data bus
+	inout      [15:0] SDRAM_DQ,   // 16 bit bidirectional data bus (driven via dq_oe/dq_out below)
 	output reg [12:0] SDRAM_A,    // 13 bit multiplexed address bus
 	output reg        SDRAM_DQML, // byte mask
 	output reg        SDRAM_DQMH, // byte mask
@@ -74,6 +74,12 @@ module sdram
 assign SDRAM_nCS = 0;
 assign SDRAM_CKE = 1;
 assign {SDRAM_DQMH,SDRAM_DQML} = SDRAM_A[12:11];
+
+// Bidirectional data bus driven by registered output + output-enable (standard SDRAM DQ
+// pattern; synthesizes to the same IO buffer as a registered inout, and is Verilator-safe).
+reg [15:0] dq_out;
+reg        dq_oe;
+assign SDRAM_DQ = dq_oe ? dq_out : 16'bzzzz_zzzz_zzzz_zzzz;
 
 localparam RASCAS_DELAY   = 4'd3; // tRCD>=20ns -> 3 cycles@114.5MHz
 localparam BURST_LENGTH   = 3'd0; // 0=1, 1=2, 2=4, 3=8, 7=full page
@@ -217,10 +223,10 @@ localparam CMD_LOAD_MODE       = 3'b000;
 always @(posedge clk) begin
 	if(state == STATE_START) SDRAM_BA <= (mode == MODE_NORMAL) ? ba : 2'b00;
 
-	SDRAM_DQ <= 'Z;
+	dq_oe <= 1'b0;
 	casex({active,we,mode,state})
 		{2'bXX, MODE_NORMAL, STATE_START}: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= active ? CMD_ACTIVE : CMD_AUTO_REFRESH;
-		{2'b11, MODE_NORMAL, STATE_CONT }: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE, SDRAM_DQ} <= {CMD_WRITE, data};
+		{2'b11, MODE_NORMAL, STATE_CONT }: begin {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_WRITE; dq_out <= data; dq_oe <= 1'b1; end
 		{2'b10, MODE_NORMAL, STATE_CONT }: {SDRAM_nRAS, SDRAM_nCAS, SDRAM_nWE} <= CMD_READ;
 
 		// init

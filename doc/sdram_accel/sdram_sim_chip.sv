@@ -24,6 +24,8 @@ module sdram_sim_chip #(
     parameter tRCD  = 3,
     parameter tRP   = 3,
     parameter tRC   = 8,
+    parameter RD_LAT= 2,         // delay-line tap so DQ is valid when the controller latches
+                                 // at STATE_READY. For this controller (RASCAS=3,CAS=3) = 2.
     parameter CHECK = 1          // 1 = enforce timing as $error; 0 = silent
 ) (
     input                   clk,
@@ -59,14 +61,13 @@ module sdram_sim_chip #(
     // programmed burst length from LOAD_MODE (a[2:0]: 0=>1,1=>2,2=>4,3=>8)
     reg [3:0] burst_len;
 
-    // ---- read pipeline: schedule DQ drive CAS cycles after READ ----
-    // each in-flight beat carries {valid, addr}
-    localparam PIPE = CAS + 2;
-    reg              rd_v   [0:PIPE-1];
-    reg [31:0]       rd_adr [0:PIPE-1];
-    reg [DW-1:0]     dq_out;
-    reg              dq_oe;
-    assign dq = dq_oe ? dq_out : {DW{1'bz}};
+    // ---- read return: combinational delay line. A read beat injects data at rd_val[RD_LAT];
+    // it shifts toward index 0 and is driven on DQ (combinationally) while rd_val[0] is high,
+    // so it is the stable pre-edge value the controller samples at STATE_READY.
+    localparam PIPE = RD_LAT + 2;
+    reg              rd_val [0:PIPE-1];
+    reg [DW-1:0]     rd_dat [0:PIPE-1];
+    assign dq = rd_val[0] ? rd_dat[0] : {DW{1'bz}};
 
     // burst counter for an in-progress READ/WRITE
     reg              burst_active;
@@ -81,35 +82,34 @@ module sdram_sim_chip #(
         flat = (b * (1<<ROWW) * (1<<COLW)) + (r * (1<<COLW)) + c;
     endfunction
 
+    // command decode is gated until the controller has actually driven the bus (a NOP seen).
+    // Sim tools power regs up to 0, which reads as a spurious 000=LOAD_MODE at t=0; the real
+    // controller returns to NOP (111) between commands very early, so this cleanly skips garbage.
+    reg cmd_en;
+
     integer i;
     initial begin
-        now = 0; burst_active = 0; dq_oe = 0; burst_len = 1;
+        now = 0; burst_active = 0; burst_len = 1; cmd_en = 0;
         for (i=0;i<BANKS;i=i+1) begin row_open[i]=0; t_active[i]=-1000; t_pre[i]=-1000; end
-        for (i=0;i<PIPE;i=i+1) rd_v[i]=0;
+        for (i=0;i<PIPE;i=i+1) rd_val[i]=0;
     end
 
     always @(posedge clk) begin
         now <= now + 1;
+        if (cmd == CMD_NOP) cmd_en <= 1'b1;
 
-        // ---------- advance read pipeline; drive DQ on the matured beat ----------
-        dq_oe <= 1'b0;
-        if (rd_v[0]) begin
-            dq_out <= mem[rd_adr[0]];
-            dq_oe  <= 1'b1;
-        end
-        for (i=0;i<PIPE-1;i=i+1) begin rd_v[i] <= rd_v[i+1]; rd_adr[i] <= rd_adr[i+1]; end
-        rd_v[PIPE-1] <= 0;
+        // ---------- advance read delay line ----------
+        for (i=0;i<PIPE-1;i=i+1) begin rd_val[i] <= rd_val[i+1]; rd_dat[i] <= rd_dat[i+1]; end
+        rd_val[PIPE-1] <= 0;
 
-        // ---------- continue an in-flight burst (beats after the first) ----------
+        // ---------- continue an in-flight burst (beats 2..N, only when burst_len>1) ----------
         if (burst_active) begin
             if (burst_we) begin
-                // WRITE burst beats land immediately, masked by DQM
                 if (!dqml) mem[flat(burst_ba,burst_row,burst_col)][7:0]  <= dq[7:0];
                 if (!dqmh) mem[flat(burst_ba,burst_row,burst_col)][15:8] <= dq[15:8];
             end else begin
-                // READ burst: schedule the beat CAS cycles out
-                rd_v  [CAS]   <= 1;
-                rd_adr[CAS]   <= flat(burst_ba,burst_row,burst_col);
+                rd_val[RD_LAT] <= 1;
+                rd_dat[RD_LAT] <= mem[flat(burst_ba,burst_row,burst_col)];
             end
             burst_col <= burst_col + 1'b1;
             burst_cnt <= burst_cnt - 1'b1;
@@ -120,6 +120,7 @@ module sdram_sim_chip #(
         end
 
         // ---------- command decode ----------
+        if (cmd_en)
         case (cmd)
         CMD_LMR: begin
             case (a[2:0]) 3'd0:burst_len<=1; 3'd1:burst_len<=2; 3'd2:burst_len<=4;
@@ -141,19 +142,27 @@ module sdram_sim_chip #(
                 $error("[sdram_sim_chip] %s with no open row, bank %0d",
                        (cmd==CMD_READ)?"READ":"WRITE", ba);
             if (CHECK && (now - t_active[ba] < tRCD)) $error("[sdram_sim_chip] tRCD violation");
-            // start a burst; column auto-increments each beat
-            burst_active  <= 1;
+            // beat 0 happens here; beats 2..N (reads only) continue in the burst block above.
             burst_we      <= (cmd==CMD_WRITE);
             burst_ba      <= ba;
             burst_row     <= open_row[ba];
-            burst_col     <= a[COLW-1:0] + ((cmd==CMD_WRITE)?0:0);
-            burst_cnt     <= (cmd==CMD_WRITE) ? 4'd1 : burst_len; // writes single (NO_WRITE_BURST)
-            burst_autopre <= a[10];   // A10 = auto-precharge
+            burst_col     <= a[COLW-1:0] + 1'b1;          // next column for beat 1
+            burst_autopre <= a[10];                        // A10 = auto-precharge
             if (cmd==CMD_WRITE) begin
+                // writes are single-location (NO_WRITE_BURST): no continuation
+                burst_active <= 0;
                 if (!dqml) mem[flat(ba,open_row[ba],a[COLW-1:0])][7:0]  <= dq[7:0];
                 if (!dqmh) mem[flat(ba,open_row[ba],a[COLW-1:0])][15:8] <= dq[15:8];
+                if (a[10]) begin row_open[ba] <= 0; t_pre[ba] <= now; end
             end else begin
-                rd_v[CAS] <= 1; rd_adr[CAS] <= flat(ba,open_row[ba],a[COLW-1:0]);
+                rd_val[RD_LAT] <= 1; rd_dat[RD_LAT] <= mem[flat(ba,open_row[ba],a[COLW-1:0])];
+                if (burst_len > 1) begin
+                    burst_active <= 1;
+                    burst_cnt    <= burst_len - 1'b1;       // remaining beats
+                end else begin
+                    burst_active <= 0;
+                    if (a[10]) begin row_open[ba] <= 0; t_pre[ba] <= now; end
+                end
             end
         end
 
@@ -183,6 +192,6 @@ module sdram_sim_chip #(
             CMD_REF:    n_refresh  <= n_refresh + 1;
             default: ;
         endcase
-        if (rd_v[0]) read_words <= read_words + 1;
+        if (rd_val[0]) read_words <= read_words + 1;
     end
 endmodule

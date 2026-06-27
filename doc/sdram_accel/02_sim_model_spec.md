@@ -6,9 +6,14 @@ latency, tRCD, tRC, refresh, burst, the req/ack round trip) simply doesn't exist
 CPU "works" in sim and then fails on real FPGA. Every claim in doc `01_*` about timing is
 therefore **unverifiable in the current sim**. This spec fixes that.
 
-Status: SPEC + RTL SKETCH. The deliverable is a behavioral SDRAM **chip** model plus the wiring
-to put the real controller in the loop. Lead implementation is pure SystemVerilog (Verilator
-compiles it directly — no DPI, no VHDL). A C++/DPI variant is described as an alternative.
+Status: PARTIALLY IMPLEMENTED + VERIFIED.
+- A **standalone Verilator testbench is built and passing**: `vsim/sdram_tb/` drives the REAL
+  `rtl/sdram.sv` against the behavioral chip model `sdram_sim_chip.sv`. Write/read-back
+  integrity passes across banks/rows/cols, single-word read accounting is correct, and the
+  chip model's timing assertions (tRCD/tRP/tRC/no-open-row/CAS-in-LMR) stay clean. See
+  "Results" at the end.
+- Full integration into the **main Vemu sim is NOT done** and is more invasive than first
+  thought — see "Main-sim integration: reality check" below.
 
 ---
 
@@ -152,6 +157,59 @@ req/ack toggles crossing CLK_14M↔clk_mem exactly as on HW so the CDC is exerci
   If chosen: expose `sdram_read(addr)`, `sdram_write(addr,data,be)` and a per-clock
   `sdram_tick(cmd,a,ba)` that returns DQ with modeled latency; keep the same assertions in C++.
 - **SystemVerilog** (this spec): compiles in Verilator, models timing, gives free
-  `assert`/`$error` timing checks, and lives next to the RTL. Recommended.
+  `assert`/`$error` timing checks, and lives next to the RTL. Recommended — and what the
+  standalone TB uses.
 
-See `doc/sdram_accel/sdram_sim_chip.sv` for the skeleton.
+See `doc/sdram_accel/sdram_sim_chip.sv` for the model.
+
+---
+
+## 7. Results — standalone testbench (`vsim/sdram_tb/`)
+
+Built and run with Verilator 5.044:
+```
+cd vsim/sdram_tb && ./build.sh && ./obj_dir/Vtb_sdram
+...
+[tb_sdram] counters: activate=44 read=22 write=22 refresh=3 read_words=22
+[tb_sdram] RESULT: 22 passed, 0 failed
+[tb_sdram] OK
+```
+Files:
+- `tb_sdram.sv` — clock + DUT (`rtl/sdram.sv`) + chip model; writes via ch0, reads via ch1
+  using the toggle req/ack handshake; checks write/read-back integrity and prints counters.
+- `altddio_out.v` — minimal Verilator stub for the Altera primitive `rtl/sdram.sv` instantiates.
+- `build.sh` — verilator `--binary --timing` build line.
+
+What this validated / fixed along the way:
+- One real change to `rtl/sdram.sv`: the bidirectional `SDRAM_DQ` was an `inout reg` driven by
+  a registered `<= 'Z`, which Verilator cannot elaborate. Converted to the standard, synthesis-
+  equivalent pattern: plain `inout` + registered `dq_out`/`dq_oe` + a continuous-assign
+  tristate. (Inert for the sim build — `sdram.sv` is only in the FPGA synth path via
+  `Apple-IIgs.sv` — and the full regression suite still passes.)
+- Chip-model fixes found *by running it*: (a) gate command decode until a NOP is seen (skip the
+  power-on `000`=LOAD_MODE garbage Verilator produces from zero-init regs); (b) read-return
+  alignment — replaced the registered `dq_out` with a combinational delay line tapped at
+  `RD_LAT` (=2 for this controller's RASCAS=3/CAS=3) so DQ is the stable value the controller
+  latches at STATE_READY; (c) the burst path issued a spurious extra beat for single-word
+  reads — now beat 0 is issued at the command and beats 2..N only when `burst_len>1`.
+
+## 8. Main-sim integration: reality check (NOT done)
+
+Putting the real controller into the *main* Vemu sim is more invasive than §4 implied:
+- `vsim/sim.v:195` ties **all clocks to CLK_14M** (`clk_sys=CLK_14M`; the core gets
+  CLK_28M/CLK_14M/clk_vid all equal). There is **no fast domain**. A real 114.5 MHz controller
+  needs a genuinely faster `clk_mem` (8× CLK_14M) toggled in `vsim/sim_main.cpp`'s eval loop —
+  which currently advances one CLK_14M per iteration. That loop rework touches video/audio/disk
+  timing and is the risky part.
+- The core uses a **flat, effectively combinational** memory interface: `sim.v:141`
+  `assign iigs_din = fastram_dout;` straight off the `dpram`. The req/ack SDRAM bridge lives in
+  `Apple-IIgs.sv` (the MiSTer top), which the sim does **not** instantiate. To use the real
+  controller the sim must replicate that bridge AND give the core a stall/ready (the doc-03
+  `RDY_IN` work), or it will sample read data before the controller delivers it.
+- ROM/disk images are loaded into the `dpram` C++ backing via ioctl; with the controller in the
+  loop they'd need to load through the controller's ch2 upload (or directly into the chip array).
+
+Recommended path given this: keep the **standalone TB as the controller/model unit test**
+(it already exercises burst, timing assertions, and counters). Defer full main-sim integration
+until the doc-01 burst controller + doc-03 stall exist, then do the clk_mem + bridge rework as
+its own focused change.
