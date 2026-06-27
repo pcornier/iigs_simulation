@@ -1,6 +1,8 @@
 # Handoff: SDRAM controller & CPU accelerator (ZipGS/TransWarp) feasibility
 
-## Status: RESEARCH ONLY. No code changed. This is a design/feasibility writeup.
+## Status: RESEARCH + DESIGN. No production RTL wired yet. Detailed designs and lint-clean
+## RTL sketches now exist under `doc/sdram_accel/` (see §6). Reference controllers are checked
+## in under `ref/sdram_refs/`. Branch: `feat/sdram-accelerator`.
 
 ## Goal
 Assess what it would take to add a CPU accelerator (run the 65C816 faster than the
@@ -168,11 +170,27 @@ Register/software interface for the accelerator itself (separate from the memory
 
 ---
 
-## 5. Pointers
+## 5. Design artifacts on this branch (`doc/sdram_accel/`)
+The recommendation above is worked out in detail in three design docs, each with a lint-clean
+(Verilator 5.044) RTL sketch. **All sketches are DESIGN ONLY — not wired, not synthesized, not
+tested.** Per doc 02 the sim model (c) must land before (b)/(speed) can be trusted on HW.
+
+- `01_burst_linebuffer_design.md` (b) + `sdram_cache.sv` — burst-8 read + clk_sys line buffer.
+  Includes the **mandatory address remap** finding (current mapping puts low addr bits on the
+  SDRAM row, which defeats bursts), coherency (CPU-write snoop only; video is on BRAM), and the
+  `RDY_IN` stall-on-miss.
+- `02_sim_model_spec.md` (c) + `sdram_sim_chip.sv` — put the REAL controller in the Verilator
+  sim behind a behavioral SDRAM chip model with timing assertions + measurement counters
+  (today's sim uses instant `dpram`, hiding all timing).
+- `03_speed_control_design.md` + `clock_divider_speed.sv` + `zipgs_regs.sv` — the speed layer:
+  variable clock-enable steps (2.86 / 7.16 / 14.3 MHz), ZipGS `$C059-$C05F` register interface,
+  and how a cache hit completes in the fast step while a miss stalls via `RDY_IN`.
+
+## 6. Pointers
 - Current controller: `rtl/sdram.sv`; integration `Apple-IIgs.sv:344-377`; sim model
   `vsim/sim.v:312-325`.
 - Clock/speed: `rtl/clock_divider.v`; CYAREG `rtl/iigs.sv:161,864,1149`; CPU CE
   `rtl/iigs.sv:2058-2075`, `rtl/65C816/P65C816.sv:117`.
-- References: `ref/sdram_refs/{neogeo,saturn,psx,n64}/`.
+- References (checked in): `ref/sdram_refs/{neogeo,saturn,psx,n64}/`.
 - Accelerator register semantics: `software_emulators/kegs/src/moremem.c` (ZipGS),
   `software_emulators/gsplus/src/moremem.c` (ZipGS + TransWarp).
