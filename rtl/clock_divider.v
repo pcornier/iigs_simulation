@@ -39,6 +39,8 @@ reg        cycle_is_refresh;   // Next cycle is a refresh (10-tick) cycle
 reg        clk_7M_div;         // 7M divider flip-flop
 reg [3:0]  ph2_gap_count;      // Ticks since last ph2_en (for debug tracking)
 reg        sync_aligned;       // First PHI0 boundary seen during sync wait
+reg [6:0]  scanline_ph0_ctr;   // PH0 cycles since scanline start (0..64); 65 PH0 cycles per scanline
+reg        fast_stretch;       // NTSC per-scanline stretch pending: add 2 ticks to the next fast cycle
 
 // Pipeline registers for clean PH2/PH0 synchronization (Option 3)
 reg [3:0] ph0_counter_prev;     // Previous cycle ph0_counter value
@@ -217,6 +219,8 @@ always @(posedge clk_14M) begin
         we_reg <= 1'b0;
         ph2_gap_count <= 4'd0;
         sync_aligned <= 1'b0;
+        scanline_ph0_ctr <= 7'd0;
+        fast_stretch <= 1'b0;
 `ifdef DEBUG_VERBOSE
         prev_slow <= 1'b0;
         prev_slowMem <= 1'b0;
@@ -245,7 +249,11 @@ always @(posedge clk_14M) begin
         slowMem <= 1'b0;
         if ( valid && (
              (bank == 8'hE0 || bank == 8'hE1) ||
-             ( (bank == 8'h00 || bank == 8'h01) && addr[15:8] == 8'hC0 &&
+             ( (bank == 8'h00 || bank == 8'h01) && addr[15:8] == 8'hC0 && !shadow[6] &&
+               // IOLC shadow gate: $C0xx in banks 00/01 is real I/O (slow) only when
+               // I/O+LanguageCard shadowing is enabled (shadow[6]=0). When inhibited
+               // (shadow[6]=1) it is plain fast RAM and must not incur a SYNC penalty.
+               // Matches gssquared is_iolc_shadowed(); normal operation has shadow[6]=0.
                !(
                  (addr == 16'hC02D && !we_reg) ||   // Slot ROM Select: read-fast, write-slow
                  (addr == 16'hC035) ||               // Shadow register: always fast
@@ -297,7 +305,21 @@ always @(posedge clk_14M) begin
             ph0_counter_next = 4'd0;
         end
         ph0_counter <= ph0_counter_next;
-        
+
+        // NTSC per-scanline stretch: count PH0 cycles (65 per scanline). On the
+        // 65th cycle boundary, flag a 2-tick stretch for the next fast CPU cycle
+        // so the CPU's effective scanline is 65*14+2 = 912 ticks -- matching the
+        // VGC's 912-tick line (HTOTAL=911) and gssquared's extra_per_scanline=2.
+        // This re-aligns the fast CPU with the video scanner over a frame.
+        if (ph0_counter == 4'd13) begin
+            if (scanline_ph0_ctr == 7'd64) begin
+                scanline_ph0_ctr <= 7'd0;
+                fast_stretch <= 1'b1;
+            end else begin
+                scanline_ph0_ctr <= scanline_ph0_ctr + 7'd1;
+            end
+        end
+
         if (ph0_counter_next < 4'd7) begin
             ph0_state <= 1'b0;
             ph0_en <= (ph0_counter_next == 4'd0);
@@ -363,20 +385,22 @@ always @(posedge clk_14M) begin
         ph2_counter <= ph2_counter + 1'b1;
 
         if (cycle_is_refresh) begin
-            // Refresh cycle: 10 ticks
-            if (ph2_counter >= 4'd9) begin
+            // Refresh cycle: 10 ticks (12 if it absorbs the per-scanline NTSC stretch)
+            if (ph2_counter >= (fast_stretch ? 4'd11 : 4'd9)) begin
                 ph2_counter <= 4'd0;
                 ph2_en <= 1'b1;
                 cycle_is_refresh <= 1'b0;
                 refresh_counter <= 4'd0;
+                fast_stretch <= 1'b0;       // stretch consumed
             end else begin
                 ph2_en <= 1'b0;
             end
         end else begin
-            // Normal fast cycle: 5 ticks
-            if (ph2_counter >= 4'd4) begin
+            // Normal fast cycle: 5 ticks (7 if it absorbs the per-scanline NTSC stretch)
+            if (ph2_counter >= (fast_stretch ? 4'd6 : 4'd4)) begin
                 ph2_counter <= 4'd0;
                 ph2_en <= 1'b1;
+                fast_stretch <= 1'b0;       // stretch consumed
                 // Decide next cycle:
                 if (is_rom_access) begin
                     refresh_counter <= 4'd0;    // ROM hides refresh
