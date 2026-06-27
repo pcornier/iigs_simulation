@@ -13,7 +13,8 @@ module video_timing(
   output reg mega2_vbl, // Legacy vblank state at $C019
 
   output [10:0] hpos,
-  output [9:0] vpos
+  output [9:0] vpos,
+  output [6:0] hchar    // Mega II horizontal counter for $C02F (TN.IIGS.039)
 
 );
 
@@ -22,6 +23,21 @@ assign vpos = vcount;
 
 reg [10:0] hcount;
 reg [9:0] vcount;
+
+// --- Mega II horizontal counter (per TN.IIGS.039 / $C02F) ---
+// The 7-bit horizontal counter reads the sequence $00, $40, $41, ... $7F (65
+// one-microsecond positions per line); active video is $58..$7F (40 columns).
+// We model it as a char index hidx (0..64) with a 0..13 pixel phase (hsub).
+// Encoding: index 0 -> $00, index n(1..64) -> $3F+n. Anchor: the active display
+// starts at char $58 (index 25) at pixel HACTIVE_PIX, so the index at pixel 0 is
+// 25 - HACTIVE_PIX/14. The 2-pixel NTSC line stretch (912 = 65*14 + 2) is absorbed
+// by the reset at the line boundary (the wrap char spans the line edge).
+localparam [10:0] HACTIVE_PIX = 11'd84;   // pixel where active display (char $58) begins
+// char index at pixel 0 = 25 (=$58) - HACTIVE_PIX/14 chars = 25 - 6 = 19
+localparam [6:0]  HIDX_AT_H0  = 7'd19;
+reg [6:0] hidx;
+reg [3:0] hsub;
+assign hchar = (hidx == 7'd0) ? 7'h00 : (7'h3F + hidx);
 
 
 //https://www.improwis.com/tables/video.webt
@@ -74,6 +90,22 @@ always @(posedge clk_vid) if (ce_pix) begin
     HBP: hsync <= 1;
     HWL: begin hblank <= 0; hcount <= 0; end
   endcase // case (hcount)
+
+  // Mega II horizontal counter: one char every 14 pixels; realign at the line
+  // boundary so the 2-pixel stretch is absorbed there (not in the active area).
+  if (hcount == HWL) begin
+    hidx <= HIDX_AT_H0;
+    hsub <= 4'd0;
+  end else if (hsub == 4'd13) begin
+    hsub <= 4'd0;
+    hidx <= (hidx == 7'd64) ? 7'd0 : hidx + 7'd1;
+  end else begin
+    hsub <= hsub + 4'd1;
+  end
+`ifdef DEBUG_HCHAR
+  if (vcount == 10'd300 && hsub == 4'd0)
+    $display("HCHAR: H=%0d hchar=%02x", hcount, hchar);
+`endif
 end
 
 always @(posedge clk_vid) if (ce_pix && hcount == HWL) begin

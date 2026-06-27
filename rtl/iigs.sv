@@ -183,6 +183,7 @@ module iigs
 
    logic [9:0]        H;
    logic [8:0]        V;
+   logic [6:0]        H_CHAR;  // Mega II horizontal counter ($C02F), per TN.IIGS.039
    
   logic [7:0]         bank_bef;
   logic [15:0]        addr_bef;
@@ -857,7 +858,7 @@ module iigs
           12'h02c: io_dout = 'h0; // from gsplus
           12'h02d: io_dout = SLTROMSEL;
           12'h02e: io_dout = V >> 1;
-          12'h02f: io_dout = {V[0], H[6:0]};
+          12'h02f: io_dout = {V[0], H_CHAR};  // VA (V[0]) + Mega II horiz counter, per TN.IIGS.039
           12'h031: io_dout = DISK35;
           12'h032: io_dout = VGCINT;
           12'h035: io_dout = shadow;
@@ -1854,7 +1855,8 @@ video_timing video_timing(
 .vblank(VBlank),
 .mega2_vbl(mega2_vbl),
 .hpos(H),
-.vpos(V)
+.vpos(V),
+.hchar(H_CHAR)
 );
 
 

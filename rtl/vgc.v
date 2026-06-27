@@ -39,10 +39,17 @@ localparam V_SCAN = 9'd256;       // Buffer line 0
 localparam BBE = V_SCAN + 9'd192; // bottom border (IIe)
 localparam BB = V_SCAN + 9'd200;  // bottom border (SHRG)
 localparam BT = 9'd499;           // top border start
-localparam BL = 10'd44;           // left border (SHRG)
-localparam BLE = 10'd84;          // left border (IIe)
-localparam BR = BL + 10'd640;     // right border (SHRG)
-localparam BRE = BLE + 10'd560;   // right border (IIe)
+
+// Horizontal layout, derived from the Mega II horizontal counter (TN.IIGS.039).
+// Active video = chars $58..$7F (40 columns). The Apple II active region is the
+// Mega II active area itself (40 chars * 14 px = 560 px); SHRG widens it by 40 px
+// each side (to 640 px), borrowing from the border. Single anchor: HACTIVE = the
+// pixel where char $58 (active video) begins -- matches video_timing.v HACTIVE_PIX.
+localparam HACTIVE = 10'd84;          // active display start (char $58)
+localparam BLE = HACTIVE;             // IIe active start  (= 84)
+localparam BRE = BLE + 10'd560;       // IIe active end    (= 644)
+localparam BL  = BLE - 10'd40;        // SHRG active start (= 44)
+localparam BR  = BL + 10'd640;        // SHRG active end   (= 684)
 
 assign video_addr = SHRG ? video_addr_shrg : video_addr_ii;
 // NEWVIDEO[6] controls CPU memory mapping for Double Hi-Res, but per the IIgs Hardware Reference,
