@@ -477,6 +477,11 @@ reg text_load_pending;      // Flag to load shift register when ROM data is read
 //
 //wire [2:0] chpos_y = V[2:0];
 reg [5:0] chram_x;
+// Anticipated column index for the dhires video address, 2 cycles ahead of chram_x
+// (see aux_bank_early). chram_x increments at xpos==4 (a16==0), one cycle too late for
+// the next column's aux-byte reload; chram_x_early increments at the aux_bank_early
+// column boundary so the address (column + bank) is settled before each reload.
+reg [5:0] chram_x_early;
 //wire [12:0] chram_y = BASEADDR;
 
 
@@ -634,6 +639,14 @@ assign ldps_load = (SHRG) ?
 
 reg [3:0] xpos;
 reg [16:0] aux;
+// Double-hi-res anticipated aux/main bank select for the video address. video_data
+// has a 1-cycle BRAM latency and the per-byte reload reads it ~1 cycle after the
+// aux[16] bank toggle (xpos==4), so the reload latches the stale aux byte into the
+// main slot -> the byte (mouse cursor / first character) displays twice. aux_bank_early
+// toggles 2 cycles sooner (xpos==2) and drives the dhires address only, so the main
+// byte is addressed early enough to settle before its reload. aux[16] still drives the
+// chram_x increment cadence unchanged.
+reg aux_bank_early;
 always @(posedge clk_vid) 
 begin
    if (ce_pix)
@@ -663,10 +676,14 @@ begin
 			if (H == BLE-4) begin
 				if (EIGHTYCOL) begin
 					chram_x <= 0;
+					chram_x_early <= 0;
 					aux[16] <= 1'b1;
+					aux_bank_early <= 1'b1;
 				end else begin
 					chram_x <= 0;
+					chram_x_early <= 0;
 					aux <= 0;
+					aux_bank_early <= 1'b0;
 				end
 			end else if (H == (BLE-1)) begin
 				// Pre-load the shift register at H=71 so first pixel is ready at H=72
@@ -801,6 +818,16 @@ begin
 		end
 
 		if (EIGHTYCOL) begin
+		  if (xpos=='d2) begin
+		    // Anticipated bank toggle for the dhires video address (see aux_bank_early
+		    // declaration): 2 cycles ahead of aux[16] so the next byte settles in time.
+		    aux_bank_early <= ~aux_bank_early;
+		    // Advance the anticipated column at the main->aux boundary (abe==0 about to
+		    // flip to 1), 2 cycles before chram_x, so the next column's aux byte is
+		    // addressed in time for its reload.
+		    if (aux_bank_early == 1'b0)
+		      chram_x_early <= chram_x_early + 1'b1;
+		  end
 		  if (xpos=='d4) begin
 		    // Pre-fetch: advance memory 1 cycle earlier for sync ROM timing
 		    // This gives memory 1 cycle to respond, then ROM 1 cycle
@@ -857,7 +884,7 @@ begin
 // Apple II TEXT: active display H=72-631 (560 pixels), V=16-207 (192 lines)
 // Apple II GFX:  active display H=77-636 (560 pixels), V=16-207 (192 lines)
 // SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
-if ((!SHRG && GR && ((H < (dhires_mode ? BLE : (BLE+5)) || H > (BRE+4)) || (V < V_SCAN || V >= BBE))) ||
+if ((!SHRG && GR && ((H < (dhires_mode ? BLE : (BLE+5)) || H > (dhires_mode ? (BRE-2) : (BRE+4))) || (V < V_SCAN || V >= BBE))) ||
     (!SHRG && !GR && ((H < BLE || H >= BRE) || (V < V_SCAN || V >= BBE))) ||
     (SHRG && ((H < (BL+1) || H >= BR || V < V_SCAN || V >= BB))))  // SHRG: 33px left border (mem latency), 639px active
 begin
@@ -917,12 +944,12 @@ wire GR = ~(TEXTG | mixed_mode_active);
 
 // Apple II address generation using lineaddr() function with clamped coordinates
 wire [15:0] lineaddr_result = lineaddr({2'b0, apple_ii_y_clamped});
-wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + {17'b0, chram_x};
+wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + {17'b0, (dhires_mode ? chram_x_early : chram_x)};
 
 // 80-column modes (text80 and double hi-res) need aux memory bank switching
 wire text80_mode = (!GR & EIGHTYCOL);
 wire dhires_mode = (GR & HIRES_MODE & EIGHTYCOL & !AN3);  // Double Hi-Res mode
-wire use_aux_bank = (text80_mode | dhires_mode) & aux[16];
+wire use_aux_bank = (text80_mode | dhires_mode) & (dhires_mode ? aux_bank_early : aux[16]);
 wire [22:0] video_addr_ii = use_aux_bank ? video_addr_ii_base + 23'h10000 : video_addr_ii_base;
 
 // Character Y position within 8-pixel character cell (using clamped coordinates)
