@@ -360,11 +360,18 @@ always @(*) begin
         // The dhires_mode monochrome rendering was breaking games like 8bit-Slicks
         // that run in standard HIRES but with EIGHTYCOL left set by menu software.
         // True DHIRES color (16-color) mode would need different handling.
-        if (dhires_mode && DHRG_MONO) begin
-            // Color processing bypassed by NEWVIDEO[5]; simple 1bpp monochrome
-            apple2_r = apple2_shift_reg[0] ? 8'hff : 8'h00;
-            apple2_g = apple2_shift_reg[0] ? 8'hff : 8'h00;
-            apple2_b = apple2_shift_reg[0] ? 8'hff : 8'h00;
+        if (dhires_mode) begin
+            // True double-hi-res (hires+80col+AN3=0, e.g. A2Desktop): render raw 1bpp
+            // pixels straight from graphics_pixel rather than NTSC color artifacting.
+            // Matches GSSquared and gives a crisp left edge: the apple2_shift_reg artifact
+            // window is a 6-deep delay line that fills from the left border (zeros), so
+            // tapping it at the first byte yields a transient that mangled fine 1px
+            // features (the A2Desktop mouse cursor / first character). graphics_pixel is
+            // the real pixel with no fill transient. Programs that run hires+80col but
+            // with AN3=1 (e.g. 8bit-Slicks) have dhires_mode=0 and keep color artifacting.
+            apple2_r = graphics_pixel ? 8'hff : 8'h00;
+            apple2_g = graphics_pixel ? 8'hff : 8'h00;
+            apple2_b = graphics_pixel ? 8'hff : 8'h00;
         end
         else if (consistent_tint) begin
             // Regular hires with consistent tint: display color using basis vectors
@@ -850,7 +857,7 @@ begin
 // Apple II TEXT: active display H=72-631 (560 pixels), V=16-207 (192 lines)
 // Apple II GFX:  active display H=77-636 (560 pixels), V=16-207 (192 lines)
 // SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
-if ((!SHRG && GR && ((H < (BLE+5) || H > (BRE+4)) || (V < V_SCAN || V >= BBE))) ||
+if ((!SHRG && GR && ((H < (dhires_mode ? BLE : (BLE+5)) || H > (BRE+4)) || (V < V_SCAN || V >= BBE))) ||
     (!SHRG && !GR && ((H < BLE || H >= BRE) || (V < V_SCAN || V >= BBE))) ||
     (SHRG && ((H < (BL+1) || H >= BR || V < V_SCAN || V >= BB))))  // SHRG: 33px left border (mem latency), 639px active
 begin
