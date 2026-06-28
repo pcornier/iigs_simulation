@@ -5,22 +5,40 @@ the SDRAM ACTIVATE+CAS over a multi-word burst and serving most CPU fetches from
 local line buffer, *without* replacing the controller's existing toggle req/ack shell (the
 clock-domain crossing that already works — see `rtl/sdram.sv:46-48`).
 
-Status: DESIGN + **MEASURED PROTOTYPE**. A standalone burst-read controller
-(`doc/sdram_accel/sdram_burst.sv`) implements the §0 address remap + burst-8 read and is
-verified against the chip model in `vsim/sdram_tb/tb_burst.sv`. The line-buffer/cache
-(`sdram_cache.sv`) and the integration into the production `rtl/sdram.sv` are still design only.
+Status: DESIGN + **MEASURED, END-TO-END PROTOTYPE**. The full read path is built and verified
+against the chip model in the TB harness: CPU fetch model → `sdram_cache.sv` (line buffer) →
+`sdram_burst.sv` (burst-8 controller, with the §0 address remap) → `sdram_sim_chip.sv`.
+Integration into the production `rtl/sdram.sv` + main Vemu sim is still design only (doc-02 §8).
 
-### Measured result (cycles/word, sequential reads, chip model timing)
+### Measured: raw burst vs single-word (sequential, chip-model timing)
 | controller | cycles/word | notes |
 |---|---|---|
 | single-word (production `rtl/sdram.sv`) | **9.00** | one ACTIVATE+CAS+precharge per word (its 9-state round) |
 | burst-8 prototype (`sdram_burst.sv`)    | **2.37** | ~19 cycles per 8-word line; **3.8× faster** |
 
-Both pass full read-back integrity with zero timing-assertion failures. At 114.5 MHz that is
-~78.6 ns/word → ~20.7 ns/word. A 14.3 MHz CPU cycle is 70 ns, so single-word (78.6 ns) cannot
-sustain 14 MHz but a burst line-fill (amortized ~21 ns/word, 7 of 8 words served from the line
-buffer) comfortably can — confirming this doc's premise. Reproduce:
-`cd vsim/sdram_tb && ./build_burst.sh && ./obj_dir/Vtb_burst` (and `./build.sh && ./obj_dir/Vtb_sdram` for the baseline).
+### Measured: full accelerator path (cache + burst), SDRAM traffic per CPU read
+The number that matters — how much SDRAM bandwidth the CPU actually consumes once an 8-line /
+64-word buffer absorbs locality (`vsim/sdram_tb/tb_cache.sv`):
+
+| workload | hit rate | SDRAM cyc/word | vs 9.0 |
+|---|---|---|---|
+| cold stream (64 words, no reuse) | 87.5% | 2.37 | 3.8× less |
+| **hot loop (32-word body ×8)**   | 98.4% | **0.29** | **31× less** |
+| mixed (256 fetches, ~12% jumps)  | 88.2% | 2.22 | 4.1× less |
+| coherency (write-snoop of a cached line) | — | **PASS** | — |
+
+All pass with zero timing-assertion failures. Interpretation: at 114.5 MHz, single-word is
+~78.6 ns/word (can't sustain a 70 ns / 14.3 MHz CPU cycle); the burst+cache path serves hot
+code at a fraction of one SDRAM transaction per word, so a 14 MHz CPU is comfortably feasible —
+this doc's premise, now demonstrated. The write-snoop keeps cached lines coherent with CPU
+writes (self-modifying code / data writes), which is sufficient here because video scans out of
+BRAM, not SDRAM. Reproduce:
+```
+cd vsim/sdram_tb
+./build.sh       && ./obj_dir/Vtb_sdram    # single-word baseline (9.00)
+./build_burst.sh && ./obj_dir/Vtb_burst    # raw burst (2.37)
+./build_cache.sh && ./obj_dir/Vtb_cache    # full cache+burst path (table above)
+```
 
 ---
 
