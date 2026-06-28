@@ -1416,6 +1416,17 @@ module iigs
 `endif
             end
 
+            // C02F: reading HORIZCNT clears the VGC scanline interrupt status.
+            // Undocumented by Apple but verified on hardware (cf. MAME apple2gs HORIZCNT
+            // read -> clear_vgcint(~VGCINT_SCANLINE)). Mirror the $C032 write-to-clear:
+            // clear the scanline status bit (5), and the any-pending bit (7) if the
+            // 1-second interrupt (6) is not also pending.
+            12'h02f: begin
+              VGCINT[5] <= 1'b0;
+              if (VGCINT[6] == 1'b0)
+                VGCINT[7] <= 1'b0;
+            end
+
             // C028: ROMBANK register does not exist as a separate register on real Apple IIgs hardware.
             // See write section above for detailed explanation. Reads to C028 should also be unimplemented.
             // 12'h028: [REMOVED - does not exist on real hardware]
