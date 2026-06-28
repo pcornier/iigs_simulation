@@ -185,6 +185,18 @@ tested.** Per doc 02 the sim model (c) must land before (b)/(speed) can be trust
 - `03_speed_control_design.md` + `clock_divider_speed.sv` + `zipgs_regs.sv` — the speed layer:
   variable clock-enable steps (2.86 / 7.16 / 14.3 MHz), ZipGS `$C059-$C05F` register interface,
   and how a cache hit completes in the fast step while a miss stalls via `RDY_IN`.
+- `04_fpga_integration.md` — **production wiring + Quartus bring-up**. The burst+cache path is
+  folded into the FPGA build behind `` `ifdef ACCEL_SDRAM `` (default OFF = known-good path):
+  `rtl/sdram_burst.sv` (3-channel burst controller), `rtl/sdram_cache.sv` (line buffer), the
+  `Apple-IIgs.sv` read-bridge rewire, and `files.qip`. Verified in sim by
+  `vsim/sdram_tb/tb_accel.sv` (36/36, mirrors the real bridge); synthesis/timing/HW test are the
+  Quartus box's remaining job (enable `VERILOG_MACRO "ACCEL_SDRAM=1"`).
+
+### Verified prototypes / tests (all in `vsim/sdram_tb/`, Verilator)
+- `tb_sdram` — real `rtl/sdram.sv` vs chip model: single-word baseline 9.00 cyc/word.
+- `tb_burst` — `rtl/sdram_burst.sv`: 2.37 cyc/word (3.8×).
+- `tb_cache` — cache+burst locality: hot loop 0.29 cyc/word (31×), coherency PASS.
+- `tb_accel` — production controller+cache+bridge integration: 36/36 incl. coherency.
 
 ## 6. Pointers
 - Current controller: `rtl/sdram.sv`; integration `Apple-IIgs.sv:344-377`; sim model

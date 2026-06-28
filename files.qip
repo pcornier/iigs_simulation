@@ -34,6 +34,8 @@ set_global_assignment -name VERILOG_FILE rtl/iwm_drive.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/woz_track.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/woz_floppy_controller.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_burst.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_cache.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
 set_global_assignment -name VHDL_FILE rtl/dpram_bram.vhd
 set_global_assignment -name SYSTEMVERILOG_FILE Apple-IIgs.sv
