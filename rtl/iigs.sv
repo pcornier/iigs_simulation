@@ -1416,12 +1416,13 @@ module iigs
 `endif
             end
 
-            // C02F: reading HORIZCNT clears the VGC scanline interrupt status.
-            // Undocumented by Apple but verified on hardware (cf. MAME apple2gs HORIZCNT
-            // read -> clear_vgcint(~VGCINT_SCANLINE)). Mirror the $C032 write-to-clear:
-            // clear the scanline status bit (5), and the any-pending bit (7) if the
-            // 1-second interrupt (6) is not also pending.
-            12'h02f: begin
+            // C02E/C02F: reading VERTCNT *or* HORIZCNT clears the VGC scanline interrupt
+            // status. Undocumented by Apple but verified on hardware; MAME calls
+            // clear_vgcint(~VGCINT_SCANLINE) from BOTH the $C02E (VERTCNT) and $C02F
+            // (HORIZCNT) read handlers. clear_vgcint there clears the scanline status bit (5)
+            // and only clears the any-pending bit (7) when the 1-second status (6) is also
+            // clear -- so we mirror that exactly. The 1-second interrupt is left untouched.
+            12'h02e, 12'h02f: begin
               VGCINT[5] <= 1'b0;
               if (VGCINT[6] == 1'b0)
                 VGCINT[7] <= 1'b0;
