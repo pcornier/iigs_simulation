@@ -10,6 +10,8 @@
 module tb_sdram;
     reg clk = 0;
     always #5 clk = ~clk;          // 100 MHz-ish; absolute rate irrelevant for the model
+    integer cyc = 0;
+    always @(posedge clk) cyc = cyc + 1;
 
     // ---- controller <-> chip pins ----
     wire [15:0] SDRAM_DQ;
@@ -102,6 +104,21 @@ module tb_sdram;
             aa = 24'h020000 + i;
             dd = 16'h1000 + i[15:0];
             rd_chk(aa, dd);
+        end
+
+        // ---- measure: cycles to read 64 words one-at-a-time (single-word baseline) ----
+        begin : measure
+            integer c0, c1, k;
+            // prime the 64 cells
+            for (k = 0; k < 64; k = k + 1) wr(24'h030000 + k, 16'hE000 + k[15:0]);
+            c0 = cyc;
+            for (k = 0; k < 64; k = k + 1) begin
+                addr1 = 24'h030000 + k; req1 = ~req1;
+                @(posedge clk); while (ack1 !== req1) @(posedge clk);
+            end
+            c1 = cyc;
+            $display("[tb_sdram] SINGLE-WORD: %0d cycles for 64 words = %0d.%02d cycles/word",
+                     (c1-c0), (c1-c0)/64, (((c1-c0)*100)/64)%100);
         end
 
         $display("[tb_sdram] counters: activate=%0d read=%0d write=%0d refresh=%0d read_words=%0d",

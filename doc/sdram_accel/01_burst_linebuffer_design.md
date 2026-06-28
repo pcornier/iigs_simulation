@@ -5,10 +5,22 @@ the SDRAM ACTIVATE+CAS over a multi-word burst and serving most CPU fetches from
 local line buffer, *without* replacing the controller's existing toggle req/ack shell (the
 clock-domain crossing that already works — see `rtl/sdram.sv:46-48`).
 
-Status: DESIGN + RTL SKETCH. Not wired, not synthesized, not tested. The sim currently models
-fast RAM as instant-access `dpram` (`vsim/sim.v:312-325`) so RTL timing cannot be validated
-until the cycle-accurate model from doc `02_sim_model_spec.md` exists. **Do (c) before
-trusting (b) on hardware.**
+Status: DESIGN + **MEASURED PROTOTYPE**. A standalone burst-read controller
+(`doc/sdram_accel/sdram_burst.sv`) implements the §0 address remap + burst-8 read and is
+verified against the chip model in `vsim/sdram_tb/tb_burst.sv`. The line-buffer/cache
+(`sdram_cache.sv`) and the integration into the production `rtl/sdram.sv` are still design only.
+
+### Measured result (cycles/word, sequential reads, chip model timing)
+| controller | cycles/word | notes |
+|---|---|---|
+| single-word (production `rtl/sdram.sv`) | **9.00** | one ACTIVATE+CAS+precharge per word (its 9-state round) |
+| burst-8 prototype (`sdram_burst.sv`)    | **2.37** | ~19 cycles per 8-word line; **3.8× faster** |
+
+Both pass full read-back integrity with zero timing-assertion failures. At 114.5 MHz that is
+~78.6 ns/word → ~20.7 ns/word. A 14.3 MHz CPU cycle is 70 ns, so single-word (78.6 ns) cannot
+sustain 14 MHz but a burst line-fill (amortized ~21 ns/word, 7 of 8 words served from the line
+buffer) comfortably can — confirming this doc's premise. Reproduce:
+`cd vsim/sdram_tb && ./build_burst.sh && ./obj_dir/Vtb_burst` (and `./build.sh && ./obj_dir/Vtb_sdram` for the baseline).
 
 ---
 
