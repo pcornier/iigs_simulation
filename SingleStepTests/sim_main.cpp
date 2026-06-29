@@ -26,6 +26,7 @@ using json = nlohmann::json;
 #include <vector>
 #include <cstring>
 #include <algorithm>
+#include <map>
 
 // Simulation control
 // ------------------
@@ -41,6 +42,7 @@ namespace {
 	// --------------
 	Vsinglesteptests* top = NULL;
 	std::vector<uint8_t> ram;
+	std::vector<uint32_t> dirty;   // addresses touched since last test (for fast RAM reset)
 
 	bool get_ef() {
 		uint32_t pval = VERTOPINTERN->singlesteptests__DOT__cpu__DOT__P;
@@ -59,7 +61,7 @@ namespace {
 
 	void update_ram() {
 		top->cpu_din = ram[top->cpu_addr];
-		if (!top->cpu_we_n) ram[top->cpu_addr] = top->cpu_dout;
+		if (!top->cpu_we_n) { ram[top->cpu_addr] = top->cpu_dout; dirty.push_back(top->cpu_addr); }
 	}
 
 	void run_cycle(bool updateram=true) {
@@ -135,24 +137,21 @@ int main(int argc, char** argv, char** env) {
 
 	int passcount = 0;
 
+	// --- cycle-accuracy accumulators (per file) ---
+	long ntests = 0, state_ok = 0;
+	std::map<int,long> delta_hist;   // (actual_cycles - expected_cycles) -> count
+
 	for (auto& t : data ) {
 		const std::string testname = t["name"];
-		//std::cout << "Running test: " << testname << "\n";
 
-		// Synchronize to CPU opcode fetch
-		while (!VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VPA ||
-		       !VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VDA) {
+		// Synchronize to CPU opcode fetch (guarded: STP/WAI may have halted the CPU)
+		for (int sg = 0; sg < 300 &&
+		     (!VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VPA ||
+		      !VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VDA); ++sg) {
 			run_cycle();
 		}
 
         // Initialize CPU pre-execution state
-        if (testname.find(":") != std::string::npos) {
-            // no-op, keep existing format
-        }
-        std::cout << "TEST: " << testname
-                  << " init_s=0x" << std::hex << std::setw(4) << std::setfill('0') << (unsigned int)t["initial"]["s"]
-                  << " init_e=" << std::dec << (int)t["initial"]["e"]
-                  << "\n";
 		VERTOPINTERN->singlesteptests__DOT__cpu__DOT__PC = t["initial"]["pc"];
 		VERTOPINTERN->singlesteptests__DOT__cpu__DOT__SP = t["initial"]["s"];
 		VERTOPINTERN->singlesteptests__DOT__cpu__DOT__P   = t["initial"]["p"];
@@ -167,10 +166,14 @@ int main(int argc, char** argv, char** env) {
 			VERTOPINTERN->singlesteptests__DOT__cpu__DOT__P |= (1 << 8);
 		}
 
-		// Initialize RAM
-		std::fill(ram.begin(), ram.end(), 0x00);
+		// Initialize RAM: clear only the addresses touched by the previous test
+		// (and its writes), then load this test's initial bytes -- avoids a full
+		// 16 MB memset per test.
+		for (auto a : dirty) ram[a] = 0x00;
+		dirty.clear();
 		for (auto& r : t["initial"]["ram"]) {
 			ram[r[0]] = r[1];
+			dirty.push_back(r[0]);
 		}
 
 		// JMP to the opcode location
@@ -178,13 +181,26 @@ int main(int argc, char** argv, char** env) {
 		const uint32_t pbr = t["initial"]["pbr"];
 		jmp((pbr << 16) | pc);
 
-		// Run the test cycles
-		for (auto& c : t["cycles"]) {
-			// TODO: Check bus states
+		// --- Measure actual cycle count ---
+		// Cycle 1 is the test opcode fetch (after the forced JMP). Count cycles
+		// until the NEXT opcode fetch (VPA & VDA both high), which belongs to the
+		// following instruction and is NOT counted. Expected = len(cycles) from JSON.
+		const int expected = (int)t["cycles"].size();
+		// Make sure the bus is at the test instruction's opcode fetch (VPA & VDA).
+		for (int ag = 0; ag < 300 &&
+		     !(VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VPA &&
+		       VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VDA); ++ag)
 			run_cycle();
-		}
+		// Count cycles from this opcode fetch up to (and including the detection of)
+		// the NEXT opcode fetch == this instruction's cycle count.
+		int actual = 0, guard = 0;
+		do {
+			run_cycle(); actual++;
+		} while (!(VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VPA &&
+		           VERTOPINTERN->singlesteptests__DOT__cpu__DOT__VDA) && guard++ < 64);
+		delta_hist[actual - expected]++;
 
-		/* Check the final state */
+		/* Check the final state (at instruction completion = next opcode fetch) */
 		bool pass = true;
 		const bool ef = get_ef();
 		const bool xf = get_xf();
@@ -212,15 +228,22 @@ int main(int argc, char** argv, char** env) {
             pass &= check_result(testname, ram_field.str(), ram[r[0]], r[1]);
         }
 
-		if (pass) {
-			passcount++;
-		}
-		else {
-			finish();
-			std::exit(-1);
-		}
+		if (pass) { passcount++; state_ok++; }
+		ntests++;
 	}
-	std::cout << "Passed " << passcount << " tests in " << fname << "\n";
+
+	// --- Per-file summary line (parseable: one line per opcode/mode) ---
+	std::cout << "SUMMARY " << fname
+	          << " ntests=" << ntests
+	          << " stateOK=" << state_ok
+	          << " deltas=";
+	bool first = true;
+	for (auto& kv : delta_hist) {
+		if (!first) std::cout << ",";
+		std::cout << (kv.first >= 0 ? "+" : "") << kv.first << "x" << kv.second;
+		first = false;
+	}
+	std::cout << "\n";
 	finish();
 	return 0;
 }
