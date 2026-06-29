@@ -145,14 +145,28 @@ remaining suspect — consistent with the `cpu-speed-timing` note that the per-l
 "under-applies slightly." If our ticks-per-cycle differs from hardware/GSS even by a little, the
 CPU draws each char at a slightly-wrong beam position and the error compounds down the screen.
 
-**New Stage 2 (measurement-first):** compare **per-instruction tick consumption** vsim-vs-GSS
-for textfunk's draw loop. GSS's `gstrace` has a `cycle` (c_14M) column → `cycle[i+1]-cycle[i]`
-= ticks/instruction in GSS's (hardware-faithful) model. Get vsim's ticks/instruction (add
-`main_time` to `--beam-trace`, or count 14M edges between opcode fetches) and diff. The
-access-types where they disagree (sync length? refresh cadence? stretch placement?) are the
-bug. Fix the tick model to match, then re-check `$C02F → $48`. Only after the tick model is
-right does edge-alignment (if still needed) make sense.
-**Validate:** TEST 0B + speed test 5 + full regression + benchmark within ~1%.
+**Measurement round 2 (done) — what we learned:**
+- Added a 14M-tick column to `--beam-trace` (commit `220a7aa`) → can read ticks/cycle directly.
+- **textfunk draws via a PEA stack-blit**: `TCS` points the stack into shadowed text page 1
+  (`$0400-$07FF`), then a huge unrolled `PEA $xxxx` run pushes 2 bytes each down the buffer.
+  Every push is a **shadowed write = SYNC cycle**. Measured per-cycle ticks: fast=5, refresh=10,
+  and the SYNC push pairs run **~27 + 14 ticks** — **all within the FPI 14-27 spec.** So our
+  per-cycle tick *lengths* are correct; the suspect is the per-PEA tick *budget* (refresh
+  cadence / stretch) vs hardware.
+- **Re-tried Stage 2 (align SYNC to `ph0_stb_vid`) and SCREENSHOTTED it: still torn.** So
+  sync-to-video-edge alignment does **not** fix the render either. Reverted again.
+- GSS's `gstrace` `cycle` column is **CPU cycles, not ticks** (PEA shows Δcycle=5), so it can't
+  give a tick golden. Tried instrumenting GSS's `NClock` (`get_c14m()`, hook at
+  `base_6502.cpp:2145`) to emit ticks/instruction — hit a template/ccache build yak-shave
+  (string never landed in the binary); reverted GSS cleanly. **A working tick-golden still
+  needs this (or a VCD-level tick comparison).**
+
+**Status:** the cheap/obvious sim levers (sync edge-alignment, spec-checking tick lengths) are
+exhausted and the render is still torn. Remaining hypotheses, in order: (1) refresh-cadence /
+NTSC-stretch tick *budget* per PEA differs from hardware (needs the GSS tick golden to confirm);
+(2) the tearing is partly a **FASTSIM same-clock artifact** and textfunk may render better on
+real hardware (the 2× clock gives a real phase) — worth a board check before more sim tuning.
+**Validate any future fix:** TEST 0B + speed test 5 + full regression + benchmark within ~1%.
 
 ### Stage 3 — Retire the private CPU-side stretch
 Once SYNC aligns to the beam, the private `scanline_ph0_ctr` + `fast_stretch` regeneration in
