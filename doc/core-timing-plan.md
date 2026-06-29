@@ -127,14 +127,32 @@ Wire them up through `rtl/iigs.sv` to `clock_divider` (replace the dead `.stretc
 **Validate:** build + full regression must be byte-identical (nothing consumes the new ports
 yet). This isolates the wiring from the behavioral change.
 
-### Stage 2 — Drive SYNC alignment from the video PH0 edge
-In `rtl/clock_divider.v`, in the `slowMem`/`slow` paths, replace the alignment condition that
-currently uses the private `ph0_counter_next == 0` with the **video `ph0_edge`** (and the
-overlap/`M2SEL` window from `ph0_phase`). This is the core change — it makes every slow access
-end on the **beam's** PH0 boundary, matching GSS's `+(14 - video_cycle_14M_count)` and the FPI's
-M2SEL overlap.
-**Validate:** Stage-0 drift curve should collapse toward flat; TEST 0B + speed test 5 + full
-regression must pass; benchmark (`cpu-speed-timing` memory) must stay within ~1%.
+### Stage 2 — Drive SYNC alignment from the video PH0 edge — ❌ TRIED, FAILED, REVERTED
+Replaced the `slowMem` SYNC trigger `ph0_counter_next == 0` with `ph0_stb_vid`. Result:
+textfunk `$C02F` jitter got **worse** (1 char → 5 chars: $57-$5C), no move toward `$48`.
+**Why it was the wrong lever (key insight):** in the same-clock FASTSIM the CPU and video
+already advance on the *same* 14M edge, so they cannot drift in *phase* — aligning the SYNC
+*edge* to a video pulse just perturbs the cumulative tick accounting (it changed sync-cycle
+lengths, adding jitter). Reverted; `clock_divider.v` is back at the Stage-1 state (the
+`ph0_*_vid` inputs remain wired but unconsumed).
+
+**Re-diagnosis — it's a TICK-ACCOUNTING problem, not a phase-lock problem.** The tearing
+"worsens toward the center/bottom" = it **accumulates within a frame**. CPU and video co-tick;
+the beam ends up where the *cumulative 14M ticks* put it. Each instruction consumes ticks per
+our model (fast=5 / sync=14-27 / refresh=10 / +2 NTSC stretch per line). We **proved the cycle
+*count* is exact** (SingleStepTests) but the **ticks-per-cycle model is unverified** and is the
+remaining suspect — consistent with the `cpu-speed-timing` note that the per-line stretch
+"under-applies slightly." If our ticks-per-cycle differs from hardware/GSS even by a little, the
+CPU draws each char at a slightly-wrong beam position and the error compounds down the screen.
+
+**New Stage 2 (measurement-first):** compare **per-instruction tick consumption** vsim-vs-GSS
+for textfunk's draw loop. GSS's `gstrace` has a `cycle` (c_14M) column → `cycle[i+1]-cycle[i]`
+= ticks/instruction in GSS's (hardware-faithful) model. Get vsim's ticks/instruction (add
+`main_time` to `--beam-trace`, or count 14M edges between opcode fetches) and diff. The
+access-types where they disagree (sync length? refresh cadence? stretch placement?) are the
+bug. Fix the tick model to match, then re-check `$C02F → $48`. Only after the tick model is
+right does edge-alignment (if still needed) make sense.
+**Validate:** TEST 0B + speed test 5 + full regression + benchmark within ~1%.
 
 ### Stage 3 — Retire the private CPU-side stretch
 Once SYNC aligns to the beam, the private `scanline_ph0_ctr` + `fast_stretch` regeneration in
