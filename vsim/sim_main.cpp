@@ -231,6 +231,37 @@ bool headless = false;
 // --------------
 Vemu* top = NULL;
 
+// --- Stage 0: beam-position drift trace (lightweight, self-contained) ---
+// Logs one row per enabled CPU cycle within [beam_trace_start, beam_trace_end],
+// capturing the video beam position (V, H_CHAR) at the instant the CPU cycle
+// commits. Used to quantify CPU<->beam phase drift for beam-racing demos
+// (see doc/core-timing-plan.md, Stage 0). No per-row fflush -> cheap.
+static FILE* g_beam_csv = nullptr;
+static int beam_trace_start = -1;          // -1 = disabled
+static int beam_trace_end   = -1;          // inclusive; -1 = run to stop
+static unsigned long long g_beam_seq = 0ULL;
+static inline bool beam_trace_active(int frame) {
+    if (beam_trace_start < 0) return false;
+    if (frame < beam_trace_start) return false;
+    if (beam_trace_end >= 0 && frame > beam_trace_end) return false;
+    return true;
+}
+static void beam_trace_log(int frame, char phase, char type,
+                           unsigned pbr, unsigned pc, unsigned ir,
+                           unsigned bank, unsigned addr, unsigned data,
+                           unsigned vpos, unsigned hchar) {
+    if (!g_beam_csv) {
+        g_beam_csv = fopen("beam_trace.csv", "w");
+        if (!g_beam_csv) return;
+        fprintf(g_beam_csv, "gidx,frame,phase,type,pbr,pc,ir,bank,addr,data,V,HCHAR\n");
+    }
+    fprintf(g_beam_csv, "%llu,%d,%c,%c,%02X,%04X,%02X,%02X,%04X,%02X,%u,%u\n",
+            (unsigned long long)g_beam_seq++, frame, phase, type,
+            pbr & 0xFF, pc & 0xFFFF, ir & 0xFF, bank & 0xFF, addr & 0xFFFF,
+            data & 0xFF, vpos & 0x1FF, hchar & 0x7F);
+    if ((g_beam_seq & 0xFFFF) == 0) fflush(g_beam_csv);   // periodic safety flush
+}
+
 // CSV trace (Clemens-like) for per-access mapping and value comparison
 static FILE* g_vsim_trace_csv = nullptr;
 static unsigned long long g_vsim_seq = 0ULL;
@@ -1176,6 +1207,20 @@ int verilate() {
                     // Extract bank and address for memory tracking
                     unsigned char bank = (addr >> 16) & 0xFF;
                     unsigned short addr16 = addr & 0xFFFF;
+
+                    // --- Stage 0 beam-drift trace: sample (V,H_CHAR) at this CPU cycle ---
+                    if (beam_trace_active(video.count_frame)) {
+                        unsigned vpos  = VERTOPINTERN->emu__DOT__iigs__DOT__V;
+                        unsigned hchar = VERTOPINTERN->emu__DOT__iigs__DOT__H_CHAR;
+                        unsigned ir_b  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
+                        unsigned pbr_b = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
+                        unsigned pc_b  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
+                        char ph = (vpa && vda) ? 'F' : (vpa ? 'I' : (vda ? 'D' : 'x'));
+                        char ty = we ? 'W' : 'R';
+                        unsigned dat = we ? dout : din;
+                        beam_trace_log(video.count_frame, ph, ty, pbr_b, pc_b, ir_b,
+                                       bank, addr16, dat, vpos, hchar);
+                    }
 
                     // Read memory control state from hardware and feed into Clemens shadow mapper
                     unsigned char hw_RDROM   = VERTOPINTERN->emu__DOT__iigs__DOT__RDROM;
@@ -4516,6 +4561,7 @@ void show_help() {
 	printf("  --woz <filename>              Floppy image: .woz, or .po/.dsk/.do/.nib/.2mg (auto-converted to WOZ)\n");
 	printf("  --enable-csv-trace            Enable CSV memory trace logging (vsim_trace.csv)\n");
 	printf("  --dump-csv-after <frame>      Start dumping vsim_trace.csv after a frame number\n");
+	printf("  --beam-trace <start>[,<end>]  Log beam pos (V,H_CHAR) per CPU cycle -> beam_trace.csv\n");
 	printf("  --dump-vcd-after <frame>      Start dumping vsim.vcd after a frame number\n");
 	printf("  --send-keys <frame>:<keys>    Send keyboard input at specified frame\n");
 	printf("                                Can be specified multiple times\n");
@@ -4733,6 +4779,16 @@ int main(int argc, char** argv, char** env) {
 			dump_csv_after_frame = std::stoi(argv[i + 1]);
 			printf("CSV trace enabled, will start dumping at frame %d\n", dump_csv_after_frame);
 			i++; // Skip the next argument since it's the frame number
+		} else if (strcmp(argv[i], "--beam-trace") == 0 && i + 1 < argc) {
+			// --beam-trace <start>[,<end>]  -> beam_trace.csv (Stage 0 drift metric)
+			std::string a = argv[i + 1];
+			size_t comma = a.find(',');
+			beam_trace_start = std::stoi(a.substr(0, comma));
+			beam_trace_end   = (comma == std::string::npos) ? -1 : std::stoi(a.substr(comma + 1));
+			printf("Beam-position drift trace enabled: frames %d..%s -> beam_trace.csv\n",
+			       beam_trace_start,
+			       beam_trace_end < 0 ? "(stop)" : std::to_string(beam_trace_end).c_str());
+			i++; // consume the value
 		} else if (strcmp(argv[i], "--dump-vcd-after") == 0 && i + 1 < argc) {
 			dump_vcd_after_frame = std::stoi(argv[i + 1]);
 			printf("Will start dumping VCD at frame %d\n", dump_vcd_after_frame);
@@ -5158,6 +5214,7 @@ int main(int argc, char** argv, char** env) {
                // Stop at frame
                if (stop_at_frame_enabled && video.count_frame >= stop_at_frame) {
                    printf("Reached stop frame %d, exiting...\n", stop_at_frame);
+                   if (g_beam_csv) { fflush(g_beam_csv); fclose(g_beam_csv); g_beam_csv = nullptr; }
                    return 0;
                }
            }

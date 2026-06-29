@@ -182,8 +182,8 @@ module iigs
    parameter RAMSIZE = 128; // 16x64k = 1MB, max = 127x64k = 8MB
 
    logic [9:0]        H;
-   logic [8:0]        V;
-   logic [6:0]        H_CHAR;  // Mega II horizontal counter ($C02F), per TN.IIGS.039
+   logic [8:0]        V/*verilator public_flat*/;
+   logic [6:0]        H_CHAR/*verilator public_flat*/;  // Mega II horizontal counter ($C02F), per TN.IIGS.039
    
   logic [7:0]         bank_bef;
   logic [15:0]        addr_bef;
