@@ -240,6 +240,7 @@ static FILE* g_beam_csv = nullptr;
 static int beam_trace_start = -1;          // -1 = disabled
 static int beam_trace_end   = -1;          // inclusive; -1 = run to stop
 static unsigned long long g_beam_seq = 0ULL;
+static unsigned long long g_tick14 = 0ULL; // free-running 14M rising-edge counter (for ticks/cycle)
 static inline bool beam_trace_active(int frame) {
     if (beam_trace_start < 0) return false;
     if (frame < beam_trace_start) return false;
@@ -253,12 +254,12 @@ static void beam_trace_log(int frame, char phase, char type,
     if (!g_beam_csv) {
         g_beam_csv = fopen("beam_trace.csv", "w");
         if (!g_beam_csv) return;
-        fprintf(g_beam_csv, "gidx,frame,phase,type,pbr,pc,ir,bank,addr,data,V,HCHAR\n");
+        fprintf(g_beam_csv, "gidx,frame,phase,type,pbr,pc,ir,bank,addr,data,V,HCHAR,tick\n");
     }
-    fprintf(g_beam_csv, "%llu,%d,%c,%c,%02X,%04X,%02X,%02X,%04X,%02X,%u,%u\n",
+    fprintf(g_beam_csv, "%llu,%d,%c,%c,%02X,%04X,%02X,%02X,%04X,%02X,%u,%u,%llu\n",
             (unsigned long long)g_beam_seq++, frame, phase, type,
             pbr & 0xFF, pc & 0xFFFF, ir & 0xFF, bank & 0xFF, addr & 0xFFFF,
-            data & 0xFF, vpos & 0x1FF, hchar & 0x7F);
+            data & 0xFF, vpos & 0x1FF, hchar & 0x7F, g_tick14);
     if ((g_beam_seq & 0xFFFF) == 0) fflush(g_beam_csv);   // periodic safety flush
 }
 
@@ -1162,6 +1163,7 @@ int verilate() {
 
 		// Clock dividers
 		CLK_14M.Tick();
+		if (CLK_14M.IsRising()) g_tick14++;   // count 14M rising edges (beam-trace ticks/cycle)
 
 		// Set system clock in core
 		top->CLK_14M = CLK_14M.clk;
