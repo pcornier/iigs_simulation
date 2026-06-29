@@ -14,12 +14,23 @@ module video_timing(
 
   output [10:0] hpos,
   output [9:0] vpos,
-  output [6:0] hchar    // Mega II horizontal counter for $C02F (TN.IIGS.039)
+  output [6:0] hchar,   // Mega II horizontal counter for $C02F (TN.IIGS.039)
+
+  // PH0-phase export for the FPI/clock_divider (see doc/core-timing-plan.md).
+  // One Mega II char (14 pixels) == one PH0 period; hsub (0..13) IS the PH0
+  // phase, and a strobe at the first pixel of each char IS the PH0 boundary.
+  // These let the CPU clock slave its PH0/SYNC alignment to the real video
+  // beam position (incl. the per-line NTSC stretch the char counter absorbs),
+  // exactly as the real FPI "recreates PH0 from VGC STRETCH".
+  output [3:0] ph0_phase, // = hsub (0..13): sub-char pixel phase
+  output       ph0_stb    // 1-ce_pix strobe at the first pixel of each new char
 
 );
 
 assign hpos = hcount;
 assign vpos = vcount;
+assign ph0_phase = hsub;
+assign ph0_stb   = (hsub == 4'd0);
 
 reg [10:0] hcount;
 reg [9:0] vcount;

@@ -184,6 +184,8 @@ module iigs
    logic [9:0]        H;
    logic [8:0]        V/*verilator public_flat*/;
    logic [6:0]        H_CHAR/*verilator public_flat*/;  // Mega II horizontal counter ($C02F), per TN.IIGS.039
+   logic [3:0]        PH0_PHASE_VID;   // video PH0 sub-char phase (=hsub) for clock_divider slaving
+   logic              PH0_STB_VID;     // video PH0 boundary strobe (first pixel of each Mega II char)
    
   logic [7:0]         bank_bef;
   logic [15:0]        addr_bef;
@@ -1868,7 +1870,9 @@ video_timing video_timing(
 .mega2_vbl(mega2_vbl),
 .hpos(H),
 .vpos(V),
-.hchar(H_CHAR)
+.hchar(H_CHAR),
+.ph0_phase(PH0_PHASE_VID),
+.ph0_stb(PH0_STB_VID)
 );
 
 
@@ -2640,7 +2644,9 @@ clock_divider clk_div_inst (
     .valid(valid),
     .is_rom_access(rom_ce),
     .reset(reset),
-    .stretch(1'b0),  // TODO: Connect to VGC stretch signal
+    .stretch(1'b0),  // legacy unused stretch input (superseded by ph0_*_vid below)
+    .ph0_phase_vid(PH0_PHASE_VID),  // VGC/Mega II PH0 phase (Stage 1: wired, not yet consumed)
+    .ph0_stb_vid(PH0_STB_VID),      // VGC/Mega II PH0 boundary strobe
     .clk_14M_en(),
     .clk_7M_en(clk_7M_en),
     .ph0_en(ph0_en),

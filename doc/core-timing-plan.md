@@ -144,6 +144,17 @@ now *is* the video line length by construction.
 **Validate:** same gates as Stage 2; confirm 912-tick line is preserved by the video tap, not a
 CPU counter.
 
+> **FASTSIM caveat (found during Stage 1).** In the Verilator sim (`vsim/sim.v:195-202`)
+> `CLK_28M = CLK_14M = clk_vid = clk_sys` are the **same signal** and `ce_pix = 1'b1`, so the
+> CPU and video clocks collapse to one edge. Their relative phase is then set by Verilator's
+> eval order + reset alignment, **not** the hardware 2× relationship — adding *inert* wiring in
+> Stage 1 shifted textfunk's `$C02F` by 2 chars ($5A/$5B → $58/$59), proving the sim's absolute
+> CPU↔beam phase is partly a scheduling artifact. Consequence: (a) the Stage-1 "byte-identical"
+> gate is meaningless here — use the **regression suite** (non-beam titles) as the gate instead;
+> (b) once Stage 2 slaves SYNC to `ph0_stb_vid`, the phase becomes *defined by the video* and
+> this sensitivity disappears — that stability is itself a success signal; (c) absolute
+> calibration to GSS's `$48` is only meaningful **after** slaving makes the phase deterministic.
+
 ### Stage 4 — FPGA clock-domain hardening
 In sim (`FASTSIM`), `clk_14M == clk_vid == clk_sys` and `ce_pix==1`, so the new taps are
 same-domain and free. On the board, `clk_vid` (28M) and `clk_sys` (14M) are phase-locked 2×

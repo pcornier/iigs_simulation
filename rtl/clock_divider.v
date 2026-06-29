@@ -16,7 +16,15 @@ module clock_divider (
     input wire is_rom_access,          // True when accessing ROM (refresh hidden)
 
     input  wire        stretch,        // Stretch signal for extended cycles
-    
+
+    // PH0 phase/edge from the VGC/Mega II video timebase (video_timing.v).
+    // ph0_phase_vid = hsub (0..13, the PH0 sub-char phase); ph0_stb_vid pulses
+    // at the first pixel of each Mega II char (the PH0 boundary). Used to slave
+    // CPU PH0/SYNC alignment to the beam (see doc/core-timing-plan.md, Stage 2+).
+    // NOTE: connected but not yet consumed (Stage 1 = wiring only).
+    input  wire [3:0]  ph0_phase_vid,
+    input  wire        ph0_stb_vid,
+
     // Clock enables (active high for one 14M cycle)
     output reg         clk_14M_en,     // 14M enable (always high)
     output reg         clk_7M_en,      // 7M enable (~7.159 MHz)
