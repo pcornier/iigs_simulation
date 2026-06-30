@@ -307,26 +307,28 @@ always @(posedge clk_14M) begin
         clk_7M_div <= ~clk_7M_div;
         clk_7M_en <= ~clk_7M_div;  // Enable on rising edge of 7M
         
-        // PH0 generation (Apple II compatible 1MHz clock)
-        ph0_counter_next = ph0_counter + 1'b1;
-        if (ph0_counter == 4'd13) begin
+        // PH0 generation (Apple II compatible 1MHz clock).
+        // NTSC line stretch: a normal PH0 is 14 ticks (wrap at 13); the LAST (65th)
+        // PH0 of each scanline is a 16-tick "long cycle" (wrap at 15) so the CPU
+        // scanline = 64*14 + 16 = 912 ticks. Because slow-mode CPU cycles are gated
+        // by this PH0, this keeps the CPU locked to the 912-tick video line in SLOW
+        // mode too (the vsync spin), eliminating the per-frame drift that wobbled
+        // $C02F by 1 char. (Fast-mode cycles are not PH0-gated, so they still use the
+        // fast_stretch +2 below; the two are mutually exclusive per line by speed.)
+        if (ph0_counter == ((scanline_ph0_ctr == 7'd64) ? 4'd15 : 4'd13)) begin
             ph0_counter_next = 4'd0;
-        end
-        ph0_counter <= ph0_counter_next;
-
-        // NTSC per-scanline stretch: count PH0 cycles (65 per scanline). On the
-        // 65th cycle boundary, flag a 2-tick stretch for the next fast CPU cycle
-        // so the CPU's effective scanline is 65*14+2 = 912 ticks -- matching the
-        // VGC's 912-tick line (HTOTAL=911) and gssquared's extra_per_scanline=2.
-        // This re-aligns the fast CPU with the video scanner over a frame.
-        if (ph0_counter == 4'd13) begin
             if (scanline_ph0_ctr == 7'd64) begin
                 scanline_ph0_ctr <= 7'd0;
-                fast_stretch <= 1'b1;
+                // In fast mode, stretch a fast CPU cycle (+2). In slow/sync mode the
+                // 16-tick long PH0 above already supplies the stretch -> don't double.
+                if (!slow && !slowMem) fast_stretch <= 1'b1;
             end else begin
                 scanline_ph0_ctr <= scanline_ph0_ctr + 7'd1;
             end
+        end else begin
+            ph0_counter_next = ph0_counter + 1'b1;
         end
+        ph0_counter <= ph0_counter_next;
 
         if (ph0_counter_next < 4'd7) begin
             ph0_state <= 1'b0;
