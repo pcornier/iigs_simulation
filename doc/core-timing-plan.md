@@ -256,6 +256,35 @@ those against `$C02F` rather than guessing.
 
 ---
 
+## 4b. BREAKTHROUGH (2026-06-30): the tick budget already MATCHES GSS
+
+Got the GSS per-instruction **14M-tick golden** working (instrument `NClock.get_c14m()` at
+`software_emulators/gssquared/src/cpus/base_6502.cpp:2145`, env `GSS_C14M_LOG`; the earlier
+"string not in binary" was because the build outputs `build/GSSquared` and I was running the
+stale installed `build/bin/GSSquared` — `cmake --install` fixes it).
+
+**Result — our clock_divider tick model is CORRECT for textfunk's draw:**
+- textfunk's PEA stack-blit: **GSS = 56 ticks/PEA, sim ≈ 56 ticks/PEA** (27 sync + 14 sync + 3×5
+  fast fetch). Exact match. The blit tick budget is right.
+- The vsync spin (`CPX $2E` reading `$C02E`) runs in **SLOW mode** in GSS (42 ticks/instr ≈
+  3 cyc × 14) — the demo switches speed (`$C036`) for the timing-critical sync, then speeds up
+  for the blit.
+
+**Implication:** textfunk's garble is **NOT a tick-model error** (which is why the PH0-slave /
+any timing *shift* both failed AND broke Total Replay / GS/OS — those titles depend on the
+*current, correct* timing). The remaining difference is the **frame-sync alignment / video
+counter values** (`$C02E`/`$C02F`): GSS reads `$C02F=$48` (char 9), sim reads `$5A` (char 27).
+The demo is **adaptive** — it reads `$C02E`(V)/`$C02F`(H), computes targets + a `(C02F-2)&7`
+fine-align delay, and draws. If our `video_timing.v` V/H_CHAR counters differ from the Mega II
+hardware encoding (TN.IIGS.039) at a given beam position, the demo's computed alignment diverges
+→ the character-graphics land in wrong sub-cells → noise. **A video_timing.v counter fix does
+NOT touch CPU timing, so it should NOT break the CPU-timing-sensitive titles** — a much safer
+target than the clock_divider.
+
+**Next:** compare sim-vs-GSS `$C02E` spin values + `$C02F` at the read (is our V/H_CHAR
+encoding off, or just inconsistent with our own display?), then correct `video_timing.v`'s
+V/H_CHAR to the hardware encoding and re-check the textfunk render + regression.
+
 ## 5. One-line summary
 Replace the CPU's private, free-running PH0/stretch timebase with the VGC/Mega II horizontal
 position (one Mega II char = one PH0 period), and align every SYNC cycle to that beam-derived
