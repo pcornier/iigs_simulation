@@ -187,6 +187,30 @@ CPU counter.
 > this sensitivity disappears — that stability is itself a success signal; (c) absolute
 > calibration to GSS's `$48` is only meaningful **after** slaving makes the phase deterministic.
 
+### Stage 1.5 — Faithful dual-clock sim (IN PROGRESS) — needed because the sim over-amplifies
+**Why:** hardware shows textfunk *close-but-slightly-wrong*; the FASTSIM same-clock collapse
+*over-amplifies* that small CPU↔video phase error into full garble, so the sim can't guide the
+last-bit fix. We need a sim whose CPU↔video phase matches the board.
+
+**Done (behind `make FAITHFUL=1` → `+define+FAITHFUL_CLOCK`; default build untouched):** in
+`vsim/sim.v`, the `CLK_14M` input is treated as the 28.6 MHz master; derive `clk_sys = clk_28/2`
+(14.3 MHz), run video on `clk_vid = clk_28` (28.6 MHz) with `ce_pix` toggling on `clk_vid` —
+mirroring `Apple-IIgs.sv` (PLL `clk_28` + `clk_sys=clk_28/2`). Default (FASTSIM) path verified
+still renders textfunk (regression-clean).
+
+**Blocker found:** with the derived `clk_sys`, the CPU **crashes into a BRK loop at PC 0074**
+early in boot. Root cause: `vsim/sim_main.cpp` services the **C++ memory model** on the *input*
+clock (now 28 MHz) via `CLK_14M.IsRising()`/`if(CLK_14M.clk…)`, while the CPU now samples on the
+derived 14 MHz `clk_sys` → memory data arrives at the wrong phase → CPU executes garbage.
+
+**Remaining step (the fix):** the *two-clock* variant — keep `clk_sys = CLK_14M` input (memory
+stays in sync, boots) and add a **separate** 28 MHz `clk_vid` input. In `sim_main.cpp` run the
+master loop at 28 MHz: toggle `clk_vid` every iter, toggle `CLK_14M` every 2 iters (phase-
+aligned), `top->eval()` every iter, but keep the CPU/memory/IO servicing gated on `CLK_14M`
+edges and move **pixel capture** (`sim_main.cpp:3954`) + video to `clk_vid` edges. ~6-8 gated
+spots. Then re-run textfunk in faithful mode — success = it matches the board (close, not garbled),
+after which the actual timing fix (PH0-slave / stretch) can be iterated reliably in sim.
+
 ### Stage 4 — FPGA clock-domain hardening
 In sim (`FASTSIM`), `clk_14M == clk_vid == clk_sys` and `ce_pix==1`, so the new taps are
 same-domain and free. On the board, `clk_vid` (28M) and `clk_sys` (14M) are phase-locked 2×

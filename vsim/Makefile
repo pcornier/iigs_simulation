@@ -29,6 +29,13 @@ V_DEFINE += +define+SOUND_STUB
 endif
 V_DEFINE +=
 
+# Faithful dual-clock sim: `make FAITHFUL=1` drives video on a real 28.6MHz
+# clk_vid (2x the 14.3MHz CPU clock) with ce_pix gating, reproducing the
+# hardware CPU<->video phase (see doc/core-timing-plan.md). Default off (FASTSIM).
+ifeq ($(FAITHFUL),1)
+V_DEFINE += +define+FAITHFUL_CLOCK
+endif
+
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S), Darwin) #APPLE

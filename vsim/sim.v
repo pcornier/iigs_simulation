@@ -186,19 +186,38 @@ wire [7:0]  WOZ_TRACK1_BIT_DATA_IN;  // Write byte for 5.25" BRAM
 wire        WOZ_TRACK1_BIT_WE;       // Write enable for 5.25"
 wire [15:0] WOZ_TRACK1_BIT_WR_ADDR;  // Write address for 5.25" (latched)
 
+// --- System / video clock derivation ------------------------------------
+// FASTSIM (default): one collapsed clock -- the CLK_14M input drives clk_sys
+//   AND clk_vid, ce_pix=1. Fast, but the CPU<->video phase is a Verilator
+//   scheduling artifact (over-amplifies beam-racing timing error).
+// FAITHFUL_CLOCK: the CLK_14M *input* is driven at 28.6MHz by sim_main; derive
+//   the 14.3MHz system clock (clk_sys = clk_28/2) and run video on the full
+//   28.6MHz clk_vid with ce_pix gating -- mirroring Apple-IIgs.sv (PLL clk_28 +
+//   clk_sys=clk_28/2, ce_pix toggling on clk_vid). Reproduces the hardware
+//   CPU<->video phase so beam-racing timing is faithful.
+`ifdef FAITHFUL_CLOCK
+wire clk_28 = CLK_14M;            // input is the 28.6MHz master in faithful mode
+reg  clk_sys_div = 1'b0;
+always @(posedge clk_28) clk_sys_div <= ~clk_sys_div;
+wire clk_sys = clk_sys_div;       // 14.3MHz
+`else
+wire clk_sys = CLK_14M;           // collapsed 14.3MHz master (FASTSIM)
+wire clk_28  = CLK_14M;
+`endif
+wire clk_vid = clk_28;
+
 // Register stable_side to match BRAM timing - prevents 1-cycle glitches on side change
 reg woz3_stable_side_reg;
-always @(posedge CLK_14M) begin
+always @(posedge clk_sys) begin
     woz3_stable_side_reg <= WOZ_TRACK3_STABLE_SIDE;
 end
 
-wire clk_sys=CLK_14M;
 iigs  iigs(
         .reset(reset),
         .cold_reset(cold_reset),
-        .CLK_28M(clk_sys),
+        .CLK_28M(clk_28),
         .CLK_14M(clk_sys),
-        .clk_vid(clk_sys),
+        .clk_vid(clk_vid),
         .ce_pix(ce_pix),
         .timestamp(TIMESTAMP),//{33{1'b0}}),  // Add missing timestamp connection
         .floppy_wp(1'b1),  // Add missing floppy_wp
@@ -335,7 +354,12 @@ always @(posedge clk_sys) begin
 end
 
 `define FASTSIM 1
-`ifdef  FASTSIM
+`ifdef FAITHFUL_CLOCK
+// hardware-faithful: ce_pix toggles on clk_vid(28.6MHz) -> video advances at
+// 14.3MHz, phase-aligned to clk_sys exactly as Apple-IIgs.sv does.
+reg ce_pix = 1'b0;
+always @(posedge clk_vid) ce_pix <= ~ce_pix;
+`elsif FASTSIM
 wire ce_pix=1'b1;
 `else
 reg ce_pix;
