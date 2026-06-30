@@ -203,13 +203,27 @@ early in boot. Root cause: `vsim/sim_main.cpp` services the **C++ memory model**
 clock (now 28 MHz) via `CLK_14M.IsRising()`/`if(CLK_14M.clk…)`, while the CPU now samples on the
 derived 14 MHz `clk_sys` → memory data arrives at the wrong phase → CPU executes garbage.
 
-**Remaining step (the fix):** the *two-clock* variant — keep `clk_sys = CLK_14M` input (memory
-stays in sync, boots) and add a **separate** 28 MHz `clk_vid` input. In `sim_main.cpp` run the
-master loop at 28 MHz: toggle `clk_vid` every iter, toggle `CLK_14M` every 2 iters (phase-
-aligned), `top->eval()` every iter, but keep the CPU/memory/IO servicing gated on `CLK_14M`
-edges and move **pixel capture** (`sim_main.cpp:3954`) + video to `clk_vid` edges. ~6-8 gated
-spots. Then re-run textfunk in faithful mode — success = it matches the board (close, not garbled),
-after which the actual timing fix (PH0-slave / stretch) can be iterated reliably in sim.
+**Resolved differently — and a key negative result.** Instead of the boot-breaking derived
+`clk_sys`, the booting variant keeps `clk_sys = CLK_14M` and runs video on `clk_vid = ~clk_sys`
+(a defined half-cycle phase offset; `make FAITHFUL=1`). It **boots** — but the textfunk render is
+**byte-identical to FASTSIM** (md5 match). So **`clk_vid` phase has ZERO effect on the beam race.**
+
+**Why (important):** the CPU↔video memory race lives on the **14 MHz `clk_sys` domain**, not on
+`clk_vid`. The CPU writes shadowed E0/E1 RAM on `clk_sys`; the VGC's `ce_pix`-gated memory
+fetches are also `clk_sys`-rate. `clk_vid` (28 MHz) only times **pixel output**, which doesn't
+touch the race. Since the RTL is identical on sim and FPGA and a `clk_vid` phase change is a
+no-op, **the sim-vs-hardware over-amplification is NOT a clock-phase issue.**
+
+**Redirected hypothesis → the Mega II video-RAM is not time-multiplexed in the sim.** On real
+hardware the shared E0/E1 (Mega II) RAM is **time-shared within each PH0 cycle**: per the FPI
+paper, "the video scanner has control of the slow bus during the first half of each slow cycle
+when PH0 is **low**," and the CPU data buffer is "enabled on the second half … when PH0 is
+**high**." So the video read and the CPU shadow-write hit the shared RAM in **different PH0
+halves** — they never truly collide. If the sim resolves both in one Verilator settle (no PH0
+time-mux), the write/read ordering is a scheduling artifact → over-amplified garble on the 14 MHz
+domain. **Next: audit how E0/E1 (slow RAM) + the VGC fetch are modeled in the sim (`rtl/iigs.sv`
+slow-RAM port, `vgc.v` fetch, `sim.v`/`sim_bus`), and whether CPU-write vs VGC-read are PH0-half
+time-multiplexed as hardware does.** That, not the clock, is the likely amplifier.
 
 ### Stage 4 — FPGA clock-domain hardening
 In sim (`FASTSIM`), `clk_14M == clk_vid == clk_sys` and `ce_pix==1`, so the new taps are

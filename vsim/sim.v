@@ -195,16 +195,25 @@ wire [15:0] WOZ_TRACK1_BIT_WR_ADDR;  // Write address for 5.25" (latched)
 //   28.6MHz clk_vid with ce_pix gating -- mirroring Apple-IIgs.sv (PLL clk_28 +
 //   clk_sys=clk_28/2, ce_pix toggling on clk_vid). Reproduces the hardware
 //   CPU<->video phase so beam-racing timing is faithful.
-`ifdef FAITHFUL_CLOCK
-wire clk_28 = CLK_14M;            // input is the 28.6MHz master in faithful mode
-reg  clk_sys_div = 1'b0;
-always @(posedge clk_28) clk_sys_div <= ~clk_sys_div;
-wire clk_sys = clk_sys_div;       // 14.3MHz
-`else
-wire clk_sys = CLK_14M;           // collapsed 14.3MHz master (FASTSIM)
+// clk_sys (14.3MHz) drives the CPU/memory/system -- kept == CLK_14M in BOTH modes
+// so the C++ memory model (serviced on CLK_14M edges in sim_main) stays in sync
+// and the system boots. Only the VIDEO clock phase differs:
+//   FASTSIM        : clk_vid == clk_sys  -> video advances on the SAME edge as the
+//                    CPU (0 phase offset). The CPU<->video race is then a Verilator
+//                    scheduling artifact, which over-amplifies beam-racing error.
+//   FAITHFUL_CLOCK : clk_vid == ~clk_sys -> video advances on clk_sys's *negedge*,
+//                    a defined half-cycle CPU<->video phase offset. On hardware
+//                    video advances on ce_pix-gated clk_28 posedges, which (clk_28
+//                    being exactly 2x, phase-aligned clk_sys) land on clk_sys edges;
+//                    the negedge-phased case is this. Reproduces a real hardware
+//                    phase without a 2x eval rate.
+wire clk_sys = CLK_14M;
 wire clk_28  = CLK_14M;
+`ifdef FAITHFUL_CLOCK
+wire clk_vid = ~CLK_14M;
+`else
+wire clk_vid = CLK_14M;
 `endif
-wire clk_vid = clk_28;
 
 // Register stable_side to match BRAM timing - prevents 1-cycle glitches on side change
 reg woz3_stable_side_reg;
@@ -355,10 +364,9 @@ end
 
 `define FASTSIM 1
 `ifdef FAITHFUL_CLOCK
-// hardware-faithful: ce_pix toggles on clk_vid(28.6MHz) -> video advances at
-// 14.3MHz, phase-aligned to clk_sys exactly as Apple-IIgs.sv does.
-reg ce_pix = 1'b0;
-always @(posedge clk_vid) ce_pix <= ~ce_pix;
+// clk_vid is already 14.3MHz (= ~clk_sys), so ce_pix=1: video advances every
+// clk_vid posedge = every clk_sys negedge (the half-cycle phase offset).
+wire ce_pix=1'b1;
 `elsif FASTSIM
 wire ce_pix=1'b1;
 `else
