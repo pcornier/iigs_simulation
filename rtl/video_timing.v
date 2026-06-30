@@ -43,9 +43,18 @@ reg [9:0] vcount;
 // starts at char $58 (index 25) at pixel HACTIVE_PIX, so the index at pixel 0 is
 // 25 - HACTIVE_PIX/14. The 2-pixel NTSC line stretch (912 = 65*14 + 2) is absorbed
 // by the reset at the line boundary (the wrap char spans the line edge).
-localparam [10:0] HACTIVE_PIX = 11'd84;   // pixel where active display (char $58) begins
-// char index at pixel 0 = 25 (=$58) - HACTIVE_PIX/14 chars = 25 - 6 = 19
-localparam [6:0]  HIDX_AT_H0  = 7'd19;
+localparam [10:0] HACTIVE_PIX = 11'd84;   // pixel where active display begins
+// Mega II horizontal counter anchor. The Mega II H counter reads $00 at the line
+// boundary (horz=0) -- the same point where the vertical counter increments --
+// then $40..$7F across the line, exactly as GSS/hardware (get_hcounter, horz=0 at
+// the V-transition). Our V counter increments at the hcount wrap (hcount=HWL->0),
+// so hidx must be 0 at hcount=0 for $C02F to match hardware: a beam-racing demo
+// (textfunk) that reads $C02F right after the vsync spin then sees the same H_CHAR
+// hardware does (char 9 / $48), not 19 chars off. NOTE: hidx feeds ONLY the
+// $C02E/$C02F reads; the display uses vgc.v's separate chram_x, so this does not
+// move the picture. (Was 19, which put active display at $58 but mis-anchored the
+// counter vs the V-transition -> textfunk garble.)
+localparam [6:0]  HIDX_AT_H0  = 7'd0;
 reg [6:0] hidx;
 reg [3:0] hsub;
 assign hchar = (hidx == 7'd0) ? 7'h00 : (7'h3F + hidx);
