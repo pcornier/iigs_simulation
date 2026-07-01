@@ -8,6 +8,7 @@
 module emu (
 
         input CLK_14M,
+        input clk_vid_ext,     // DUALRATE: 28MHz video clock driven by sim_main (2x CLK_14M); unused otherwise
         input reset,
         input cold_reset,      // 1 = cold/power-on reset (full init), 0 = warm reset
         input soft_reset,
@@ -208,10 +209,20 @@ wire [15:0] WOZ_TRACK1_BIT_WR_ADDR;  // Write address for 5.25" (latched)
 //                    the negedge-phased case is this. Reproduces a real hardware
 //                    phase without a 2x eval rate.
 wire clk_sys = CLK_14M;
+`ifdef DUALRATE_CLOCK
+// True dual-rate: CPU/memory stay on CLK_14M (14.3MHz, serviced by sim_main as
+// usual -> no boot blocker); the VIDEO runs on clk_vid_ext, driven by sim_main at
+// 28.6MHz (2x, one extra eval per CPU half-cycle). This separates the VGC's
+// text-page BRAM read (clk_vid posedge) from the CPU write (clk_sys posedge) in
+// time, as on real hardware (clk_28 / clk_sys=/2), fixing the collapsed-clock
+// same-edge stale read that streaks textfunk's beam-raced tunnel center.
+wire clk_28  = clk_vid_ext;
+wire clk_vid = clk_vid_ext;
+`elsif FAITHFUL_CLOCK
 wire clk_28  = CLK_14M;
-`ifdef FAITHFUL_CLOCK
 wire clk_vid = ~CLK_14M;
 `else
+wire clk_28  = CLK_14M;
 wire clk_vid = CLK_14M;
 `endif
 
@@ -363,7 +374,14 @@ always @(posedge clk_sys) begin
 end
 
 `define FASTSIM 1
-`ifdef FAITHFUL_CLOCK
+`ifdef DUALRATE_CLOCK
+// clk_vid runs at 28.6MHz; gate the video pixel pipeline to a 14.3MHz enable
+// (/2 of clk_vid) so the pixel/char rate and frame timing are unchanged -- only
+// the BRAM-access phase relative to the CPU changes.
+reg ce_pix_div = 1'b0;
+always @(posedge clk_vid) ce_pix_div <= ~ce_pix_div;
+wire ce_pix = ce_pix_div;
+`elsif FAITHFUL_CLOCK
 // clk_vid is already 14.3MHz (= ~clk_sys), so ce_pix=1: video advances every
 // clk_vid posedge = every clk_sys negedge (the half-cycle phase offset).
 wire ce_pix=1'b1;

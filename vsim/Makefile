@@ -36,6 +36,15 @@ ifeq ($(FAITHFUL),1)
 V_DEFINE += +define+FAITHFUL_CLOCK
 endif
 
+# True dual-rate sim: `make DUALRATE=1` drives clk_vid_ext at 28.6MHz from sim_main
+# (2x the 14.3MHz CPU/memory clock, one extra eval per CPU half-cycle) so the VGC's
+# text-page BRAM read is separated in time from the CPU write -- fixing the
+# collapsed-clock beam-race streak (textfunk). Sets both the RTL define and a
+# C++ define so sim_main double-evals with clk_vid toggling.
+ifeq ($(DUALRATE),1)
+V_DEFINE += +define+DUALRATE_CLOCK -CFLAGS "-DDUALRATE"
+endif
+
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S), Darwin) #APPLE

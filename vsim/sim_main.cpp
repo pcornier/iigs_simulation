@@ -1177,7 +1177,19 @@ int verilate() {
 				input.BeforeEval();
 				bus.BeforeEval();
 			}
+#ifdef DUALRATE
+			// True dual-rate video: the CPU/memory clock (CLK_14M) is held constant
+			// across this pair of evals while clk_vid_ext completes one full cycle,
+			// giving the VGC a 28.6MHz clock (2x CLK_14M). The clk_vid POSEDGE (2nd
+			// eval) lands with CLK_14M stable, so the VGC's text-page BRAM read is
+			// separated in time from the CPU write (1st eval, on the CLK_14M edge) --
+			// matching hardware clk_28/clk_sys=/2 and killing the collapsed-clock
+			// same-edge stale read that streaks textfunk's tunnel center.
+			top->clk_vid_ext = 0; top->eval();
+			top->clk_vid_ext = 1; top->eval();
+#else
 			top->eval();
+#endif
 
 #if VM_TRACE_VCD
 			if (tfp && video.count_frame >= dump_vcd_after_frame)
