@@ -359,7 +359,12 @@ always @(posedge clk_14M) begin
 			ph2_en <= 1'b1;
 			ph2_counter <= 4'd0;
 			ph2_sync_pulse <= 1'b1;
-			refresh_counter <= 4'd0;
+			// Refresh cadence counts this slow cycle too (hidden here); see the
+			// slowMem note above.
+			if (refresh_counter >= 4'd8)
+				refresh_counter <= 4'd0;
+			else
+				refresh_counter <= refresh_counter + 4'd1;
 			cycle_is_refresh <= 1'b0;
 		end else begin
 			ph2_en <= 1'b0;
@@ -381,7 +386,15 @@ always @(posedge clk_14M) begin
 			ph2_en <= 1'b1;
 			ph2_counter <= 4'd0;
 			ph2_sync_pulse <= 1'b1;
-			refresh_counter <= 4'd0;
+			// RAM refresh is every 9th PH2 cycle (FPI). It is HIDDEN (no speed
+			// loss) in a sync/slow-bus cycle, but the sync cycle still COUNTS
+			// toward the cadence -- so a sync-heavy fast blit (e.g. textfunk's
+			// shadowed-write beam-race) still gets the right number of fast-RAM
+			// refresh cycles, keeping each screen-row block at exactly 912 clocks.
+			if (refresh_counter >= 4'd8)
+				refresh_counter <= 4'd0;   // 9th cycle: refresh absorbed by this sync
+			else
+				refresh_counter <= refresh_counter + 4'd1;
 			cycle_is_refresh <= 1'b0;
 		end else begin
 			ph2_en <= 1'b0;
