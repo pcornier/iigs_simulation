@@ -4366,6 +4366,16 @@ void queue_key_string(const std::string& keys) {
             printf("Queued Esc key tap (scancode 0x76)\n");
             continue;
         }
+        // Special marker: 0x0B = SPACE tap. A literal space char is 0x20, which
+        // collides with the Open-Apple-DOWN hold marker above, so the key-string
+        // builder rewrites literal spaces to 0x0B. Send PS/2 space (0x29 -> ADB $31)
+        // as a press+release so demos like textfunk ("SPC = Next") advance.
+        if (c == 0x0B) {
+            input.keyEvents.push(SimInput_PS2KeyEvent(0x29, true,  false, 0x29));
+            input.keyEvents.push(SimInput_PS2KeyEvent(0x29, false, false, 0x29));
+            printf("Queued Space key tap (scancode 0x29)\n");
+            continue;
+        }
         // Special marker: 0x01 is used as "caps lock toggle" (one SDL-like
         // transition that flips the LED). We inject it here as a single
         // PS/2 event with pressed = new LED state.
@@ -4889,9 +4899,11 @@ int main(int argc, char** argv, char** env) {
                         processed_keys += (char)strtol(hex, nullptr, 16);
                         j += 3;
                     }
+                    else if (keys[j] == ' ') { processed_keys += (char)0x0B; }  // literal space -> space-tap marker (0x20 is OA-hold)
                     else { processed_keys += keys[j]; }
                 } else {
-                    processed_keys += keys[j];
+                    if (keys[j] == ' ') processed_keys += (char)0x0B;  // literal space -> space-tap marker
+                    else processed_keys += keys[j];
                 }
             }
 
