@@ -346,12 +346,29 @@ reg  [15:0] wr_din;
 // the 114MHz controller completes in 2-3 clk_sys cycles, so read data is
 // registered here well before the next phi2 pulse samples it through the
 // CPU's D_IN mux.
+`ifdef ACCEL_SDRAM
+// Accelerator read path: burst-8 controller (rtl/sdram_burst.sv) + line buffer
+// (rtl/sdram_cache.sv). ch1 returns a 128-bit aligned line; the cache serves most CPU reads
+// with no SDRAM access. Default OFF -> the original single-word path below is used.
+wire        rd_req;
+wire        rd_ack;
+wire [24:1] rd_addr;
+reg         rd_bsel;
+wire [127:0] rd_line;
+reg  [7:0]  sdram_dout;
+wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce);
+wire [24:1] cache_addr  = {1'b0, cpu_sdram_addr[23:1]};
+wire [15:0] cache_data;
+wire        cache_ready, cache_stall;
+reg         snoop_stb;
+`else
 reg         rd_req = 0;
 wire        rd_ack;
 reg  [24:1] rd_addr;
 reg         rd_bsel;
 wire [15:0] rd_dout;
 reg  [7:0]  sdram_dout;
+`endif
 
 reg phi2_d;
 always @(posedge clk_sys) begin
@@ -365,6 +382,14 @@ always @(posedge clk_sys) begin
 		wr_req  <= ~wr_req;
 	end
 
+`ifdef ACCEL_SDRAM
+	// cache drives the read (cache_rd strobe + cache_addr are combinational above);
+	// latch the byte select at request, capture the returned word on cache_ready.
+	if (cache_rd) rd_bsel <= cpu_sdram_addr[0];
+	if (cache_ready) sdram_dout <= rd_bsel ? cache_data[15:8] : cache_data[7:0];
+	// snoop ch0 writes one cycle late, when wr_addr/wr_din hold the committed write
+	snoop_stb <= phi2 & we & fastram_ce;
+`else
 	if (phi2_d & ~we & (fastram_ce | rom_ce)) begin
 		rd_addr <= {1'b0, cpu_sdram_addr[23:1]};
 		rd_bsel <= cpu_sdram_addr[0];
@@ -374,6 +399,7 @@ always @(posedge clk_sys) begin
 	// rd_dout transitions only while a read is in flight and is stable from
 	// ack onward, at least a full clk_sys cycle before the CPU consumes it
 	sdram_dout <= rd_bsel ? rd_dout[15:8] : rd_dout[7:0];
+`endif
 end
 
 // SDRAM upload channel (ch2): HPS ROM upload, throttled via ioctl_wait
@@ -396,6 +422,32 @@ always @(posedge clk_sys) begin
 	end
 	else if (up_req == up_ack) ioctl_wait <= 0;
 end
+`ifdef ACCEL_SDRAM
+// ---- accelerator: burst-8 controller + line buffer (see doc/sdram_accel/) ----
+sdram_burst sdram
+(
+	.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
+	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
+	.SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE),
+	.init(~locked), .clk(clk_mem),
+	.addr0(wr_addr), .wrl0(wr_wrl), .wrh0(wr_wrh), .din0(wr_din), .dout0(), .req0(wr_req), .ack0(wr_ack),
+	.addr1(rd_addr), .wrl1(1'b0), .wrh1(1'b0), .din1(16'd0), .dout1(rd_line), .req1(rd_req), .ack1(rd_ack),
+	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack)
+);
+
+// Line buffer on the CPU read path. Runs in clk_sys; talks to ch1 via toggle req/ack (the
+// controller is in clk_mem). At native 2.8 MHz a miss (one ~19-cycle clk_mem burst) completes
+// well within a CPU cycle, so no CPU stall is needed; cache_stall is exposed for the future
+// higher clock steps (drive it into the CPU RDY at that point -- see doc/sdram_accel/03).
+sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) icache
+(
+	.clk(clk_sys), .reset(reset),
+	.cpu_addr(cache_addr), .cpu_rd(cache_rd), .cpu_data(cache_data),
+	.cpu_ready(cache_ready), .cpu_stall(cache_stall),
+	.wr_addr(wr_addr), .wr_data(wr_din), .wr_be({wr_wrh, wr_wrl}), .wr_stb(snoop_stb),
+	.mem_addr(rd_addr), .mem_req(rd_req), .mem_ack(rd_ack), .mem_line(rd_line)
+);
+`else
 sdram sdram
 (
 	.SDRAM_DQ(SDRAM_DQ),
@@ -417,6 +469,7 @@ sdram sdram
 	.addr1(rd_addr), .wrl1(1'b0), .wrh1(1'b0), .din1(16'd0), .dout1(rd_dout), .req1(rd_req), .ack1(rd_ack),
 	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack)
 );
+`endif
 /*
 reg ce_pix;
 always @(posedge clk_vid) begin
