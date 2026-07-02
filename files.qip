@@ -8,6 +8,7 @@ set_global_assignment -name VERILOG_FILE rtl/video_timing.v
 set_global_assignment -name VERILOG_FILE rtl/prtc.v
 set_global_assignment -name VERILOG_FILE rtl/rom.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vgc.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mmu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/iigs.sv
 set_global_assignment -name VERILOG_FILE rtl/soundglu.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/es5503.v

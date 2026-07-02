@@ -328,36 +328,9 @@ module iigs
   wire mem_clk;
   assign mem_clk = CLK_14M;
 
-  // Revert to simpler approach - let the system boot first
   wire slowram_we;
-  assign slowram_we = we && (
-    // For E0/E1 Language Card areas ($D000-$FFFF), require LC_WE
-    ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff) ? LC_WE :
-    // For all other slowram areas, allow normal writes
-    1'b1
-  );
   assign slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
   assign slotid = addr[11:8];
-
-
-
-  assign EXTERNAL_IO =    ((((bank_bef == 8'h0 || bank_bef == 8'h1) && !shadow[6]) || bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 'hc090 && addr_bef < 'hc100 && ~is_internal_io);
-
-  assign inhibit_cxxx = lcram2_sel | ((bank_bef == 8'h0 | bank_bef == 8'h1) & shadow[6]);
-
-// I/O space ($C000-$C0FF) mapping per Apple IIgs Hardware Reference:
-// - Banks E0/E1: I/O always accessible (no shadow register check)
-// - Banks 00/01: I/O accessible only when shadow[6]=0 (must be enabled for correct operation)
-// - ROM banks: Writes go to I/O, reads come from ROM
-// IMPORTANT: Use bank_bef (raw CPU view) not bank (translated), to match cpu_addr usage
-//
-// Old incorrect implementations:
-//wire IO = ~shadow[6] && addr[15:8] == 8'hc0 && (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1);
-//assign IO =  /*~RAMRD & ~RAMWRT &*/ ~EXTERNAL_IO &  ((~shadow[6] & addr[15:8] == 8'hC0) | (shadow[6] & addr[15:13] == 3'b110)) & (bank == 8'h0 | bank == 8'h1 | bank == 8'he0 | bank == 8'he1);
-  // All-bank shadow: When CYAREG[4]=1, I/O space appears in banks 02-7F too
-  wire all_bank_io = CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7f);
-  assign IO =  ~EXTERNAL_IO & addr_bef[15:8] == 8'hC0 &
-               (((bank_bef == 8'h00 | bank_bef == 8'h01) && !shadow[6]) | bank_bef == 8'he0 | bank_bef == 8'he1 | all_bank_io);
 
   // IWM device select ($C0E0-$C0EF)
   wire iwm_device_select = IO & (cpu_addr[7:4] == 4'hE);
@@ -399,218 +372,63 @@ module iigs
     end
   end
 
-  always_comb begin
-    lcram2_sel = 0;
-    
-    // E0/E1 Banks - Language Card Implementation (simplified/fixed)
-    if ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~RDROM) begin
-      lcram2_sel = 1;
-      if (aux && bank_bef == 8'he0) begin
-        addr_bus = addr_bef - 16'h1000 + 24'h10000;
-      end else begin
-        addr_bus = {bank_bef, 16'h0} + addr_bef - 16'h1000;
-      end
-    end
-    else if ((bank_bef == 8'he0 || bank_bef == 8'he1) && addr_bef >= 16'he000 && ~RDROM) begin
-      lcram2_sel = 1;
-      if (aux && bank_bef == 8'he0) begin
-        addr_bus = addr_bef + 24'h10000;
-      end else begin
-        addr_bus = {bank_bef, 16'h0} + addr_bef;
-      end
-    end
-    // Banks $00/$01 Language Card space - keep addresses in bank 00/01 space
-    // Shadow writes to E0/E1 slow RAM are handled in the memory controller
-    // Translation when LCRAM2=1 (Bank 1 selected per documentation naming)
-    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hdfff && LCRAM2 && ~shadow[6] && (~RDROM || (LC_WE && we))) begin
-      lcram2_sel = 1;
-      if (aux && bank_bef == 8'h00) begin
-        addr_bus = addr_bef - 16'h1000 + 24'h10000;
-      end else begin
-        addr_bus = {bank_bef, 16'h0000} + addr_bef - 16'h1000;
-      end
-    end
-    else if ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'he000 && ~RDROM && ~shadow[6]) begin
-      lcram2_sel = 1;
-      if (aux && bank_bef == 8'h00) begin
-        addr_bus = addr_bef + 24'h10000;
-      end else begin
-        addr_bus = {bank_bef, 16'h0000} + addr_bef;
-      end
-    end
-    else begin
-      // Default address translation
-      if (aux && (bank_bef == 8'h00 || bank_bef == 8'h01 || bank_bef == 8'he0 || bank_bef == 8'he1)) begin
-        addr_bus = addr_bef + 24'h10000;
-      end else if (bank_bef == 8'he1 && ~NEWVIDEO[0]) begin
-        // Bank latch disabled: E1 redirects to E0 (IIe memory model)
-        addr_bus = {8'he0, addr_bef};
-      end else if (aux && CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7e) && ~bank_bef[0]) begin
-        // All-bank shadow: aux redirects even bank (02, 04...) to odd bank (03, 05...)
-        addr_bus = {bank_bef | 8'h01, addr_bef};
-      end else begin
-        addr_bus = {bank_bef, addr_bef};  // Normal mapping (includes ROM code addresses $C000-$FFFF)
-      end
-    end
-  end
+  // ---------------------------------------------------------------------------
+  // MMU: logical -> physical address translation and memory decode.
+  // Pure combinational function of the logical address, R/W direction and
+  // soft-switch state; unit-tested standalone (see vsim/mmu_tb.cpp).
+  // ---------------------------------------------------------------------------
+  mmu #(.RAMSIZE(RAMSIZE)) mmu_inst (
+    .bank_log(bank_bef),
+    .addr_log(addr_bef),
+    .we(we),
+    .vpb_n(cpu_vpb),
+    .rom_select(rom_select),
 
-  // ============================================================================
-  // CLEAN SYSTEMATIC MEMORY CONTROLLER
-  // ============================================================================
-  
-  // Internal memory control signals
-  reg fastram_ce_int;
-  reg slowram_ce_int;
-  
-  // Assign outputs
-  assign fastram_ce = fastram_ce_int;
-  assign slowram_ce = slowram_ce_int;
-  
-  // Page and shadow detection helpers
-  wire [3:0] page = addr_bef[15:12];  // 16 pages per bank (256 bytes each)
-  
-  // Shadow region detection (when shadow bit = 0, shadowing is ACTIVE)
-  wire txt1_shadow  = ~shadow[0] && (page == 4'h0 && addr_bef[11:8] >= 4'h4 && addr_bef[11:8] <= 4'h7);  // $0400-$07FF
-  wire txt2_shadow  = rom_select ? 1'b0: ~shadow[5] && (page == 4'h0 && addr_bef[11:8] >= 4'h8 && addr_bef[11:8] <= 4'hB);  // $0800-$0BFF (ROM3+ only)
+    .LCRAM2(LCRAM2),
+    .RDROM(RDROM),
+    .LC_WE(LC_WE),
+    .shadow(shadow),
+    .ALTZP(ALTZP),
+    .RAMRD(RAMRD),
+    .RAMWRT(RAMWRT),
+    .STORE80(STORE80),
+    .PAGE2(PAGE2),
+    .HIRES_MODE(HIRES_MODE),
+    .bank_latch(NEWVIDEO[0]),
+    .shadow_all(CYAREG[4]),
+    .SLTROMSEL(SLTROMSEL),
 
-  wire hgr1_shadow  = ~shadow[1] && (page >= 4'h2 && page <= 4'h3);          // $2000-$3FFF
-  wire hgr2_shadow  = ~shadow[2] && (page >= 4'h4 && page <= 4'h5);          // $4000-$5FFF
-  // SHR shadow bit 3: When 0, entire $2000-$9FFF shadows (master enable for SHR mode)
-  // When bit 3=1, HGR bits 1-2 control $2000-$5FFF, and $6000-$9FFF does not shadow
-  wire shr_master_shadow = ~shadow[3] && (addr_bus[23:16] == 8'h01) && (page >= 4'h2 && page <= 4'h9);     // $2000-$9FFF when bit3=0
-  wire aux_disable  = shadow[4];   // When set, disable auxiliary shadowing for bank 01
+    .dbg_wdata(dout),
+    .dbg_cpu_addr(cpu_addr),
 
-  // Memory Controller - Clean systematic approach
-  always_comb begin
-    fastram_ce_int = 0;
-    slowram_ce_int = 0;
+    .addr_bus(addr_bus),
+    .aux(aux),
+    .lcram2_sel(lcram2_sel),
+    .inhibit_cxxx(inhibit_cxxx),
+    .IO(IO),
+    .EXTERNAL_IO(EXTERNAL_IO),
+    .is_internal_io(is_internal_io),
+    .is_internal(is_internal),
+    .fastram_ce(fastram_ce),
+    .slowram_ce(slowram_ce),
+    .slowram_we(slowram_we),
+    .rom1_ce(rom1_ce),
+    .rom2_ce(rom2_ce),
+    .romc_ce(romc_ce),
+    .romd_ce(romd_ce),
+    .slot_ce(slot_ce),
+    .slot_internalrom_ce(slot_internalrom_ce),
+    .rom_writethrough(rom_writethrough)
+  );
 
-    if (IO) begin
-      // I/O space - no RAM access
-      fastram_ce_int = 0;
-      slowram_ce_int = 0;
-    end else begin
-      case (bank_bef)
-        // Bank 00: Main memory with shadow regions
-        8'h00: begin
-          // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
-            fastram_ce_int = 0;
-            slowram_ce_int = 0;
-          end else if (txt1_shadow || txt2_shadow || shr_master_shadow || hgr1_shadow || hgr2_shadow) begin
-            // Shadowed regions: Enable BOTH for compatibility (fastram takes priority in mux)
-            // shr_master_shadow: When bit3=0, entire $2000-$9FFF shadows
-            // hgr*_shadow: When bit3=1, only HGR pages shadow based on bits 1-2
-            fastram_ce_int = 1; // Enable fastram (will be selected by priority mux)
-            slowram_ce_int = 1; // Also enable slowram (for proper shadow writes)
-`ifdef DEBUG_IO
-            if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
-              $display("SHADOW_WRITE: bank00 addr=%04x shadow=%02x txt1=%b txt2=%b shr=%b -> DUAL WRITE",
-                       addr_bef, shadow, txt1_shadow, txt2_shadow, shr_master_shadow);
-`endif
-          end else begin
-            fastram_ce_int = 1;  // Normal Bank 00 RAM (non-shadowed)
-`ifdef DEBUG_IO
-            if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
-              $display("NO_SHADOW: bank00 addr=%04x shadow=%02x txt1=%b txt2=%b shr=%b -> FASTRAM ONLY",
-                       addr_bef, shadow, txt1_shadow, txt2_shadow, shr_master_shadow);
-`endif
-          end
-        end
-
-        // Bank 01: Auxiliary memory with conditional shadow regions
-        8'h01: begin
-          // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
-          // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
-          if (RDROM && addr_bef >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
-            fastram_ce_int = 0;
-            slowram_ce_int = 0;
-          end else if (shr_master_shadow) begin
-            // SHR master shadow (bit3=0): entire $2000-$9FFF shadows to E1
-            fastram_ce_int = 1;  // Write to both Bank 01 (FASTRAM) and Bank E1 (SLOWRAM)
-            slowram_ce_int = 1;  // Dual write to E1 shadow bank
-          end else if (txt1_shadow || txt2_shadow) begin
-            // Text pages ALWAYS shadow in bank 01 (ignore aux_disable per documentation)
-            // Bit 4 only affects "auxiliary Hi-Res graphics pages", not text pages
-            fastram_ce_int = 1;
-            if (we) begin
-              slowram_ce_int = 1;
-`ifdef DEBUG_IO
-              $display("BANK01_SHADOW_WRITE: addr=%04x data=%02x slowram_addr=%05x txt1=%b txt2=%b shadow[0]=%b",
-                       addr_bef, dout, {1'b1, addr_bef[15:0]}, txt1_shadow, txt2_shadow, shadow[0]);
-`endif
-            end
-          end else if (!aux_disable && (hgr1_shadow || hgr2_shadow)) begin
-            // Hi-Res pages shadow only when aux_disable=0 (bit 4 controls this)
-            fastram_ce_int = 1;
-            if (we) begin
-              slowram_ce_int = 1;
-            end
-          end else begin
-            fastram_ce_int = 1;  // Normal Bank 01 RAM (including LC area)
-          end
-        end
-
-        // Banks E0/E1: Shadow memory - always SLOWRAM
-        8'hE0, 8'hE1: begin
-          slowram_ce_int = 1;
-`ifdef DEBUG_CURCYL
-          if (we && addr_bef == 16'h0F3A)
-            $display("E0E1_CURCYL_WRITE: bank=%02x addr=%04x data=%02x addr_bus=%06x aux=%b cpu_addr=%06x",
-                     bank_bef, addr_bef, cpu_dout, addr_bus, aux, cpu_addr);
-`endif
-`ifdef DEBUG_IO
-          if (addr_bef >= 16'h0400 && addr_bef <= 16'h07FF)
-            $display("SLOWRAM_DIRECT: bank%02x addr=%04x data=%02x we=%b slowram_addr=%05x bank[0]=%b addr_bus=%06x -> SLOWRAM",
-                     bank_bef, addr_bef, we ? dout : 8'hXX, we, {bank[0], addr}, bank[0], addr_bus);
-`endif
-        end
-        
-        // Banks FC-FF: ROM banks - writes should be discarded
-        8'hFC, 8'hFD, 8'hFE, 8'hFF: begin
-          // ROM is read-only: reads from ROM space, writes are discarded
-          // Do NOT enable fastram_ce or slowram_ce for ROM writes
-          // This prevents ROM selftest code from corrupting system memory
-          if (~we) begin
-            // ROM reads: access ROM space (handled by rom1_ce/rom2_ce signals)
-            fastram_ce_int = 0;
-            slowram_ce_int = 0;
-          end else begin
-            // ROM writes: discard (no memory access)
-            fastram_ce_int = 0;
-            slowram_ce_int = 0;
-          end
-        end
-        
-        // All other banks: Normal RAM (if within RAMSIZE)
-        // CYAREG bit 4 (shadow all banks): When set, video page writes in ANY bank shadow to E0/E1
-        default: begin
-          if ((bank_bef < RAMSIZE) && ~rom1_ce && ~rom2_ce) begin
-            fastram_ce_int = 1;
-            // CYAREG[4] = FPI shadow enable: shadow video pages from all banks to E0/E1
-            // Even banks shadow to E0, odd banks shadow to E1 (via bank[0] bit in slowram address)
-            // txt1_shadow, hgr*_shadow etc already include shadow register inhibit checks
-            if (CYAREG[4] && we) begin  // All banks when writing (bank[0] determines E0 vs E1)
-              // Check if address is in a shadowable video region
-              if (txt1_shadow || txt2_shadow || hgr1_shadow || hgr2_shadow || shr_master_shadow) begin
-                slowram_ce_int = 1;  // Enable shadow write to E0 (even) or E1 (odd)
-`ifdef DEBUG_IO
-                $display("FPI_SHADOW: bank%02x addr=%04x data=%02x -> E%d shadow (CYAREG[4]=1)",
-                         bank_bef, addr_bef, dout, bank_bef[0]);
-`endif
-              end
-            end
-          end
-        end
-      endcase
-    end
-  end
-
-  // ROM write-through for language card
-  assign rom_writethrough = ((bank_bef == 8'h00 || bank_bef == 8'h01) && addr_bef >= 16'hd000 && addr_bef <= 16'hffff && LC_WE && we);
 
 `ifdef DEBUG_BANK
+  // Local mirrors of mmu-internal decode helpers (debug display use only)
+  wire fastram_ce_int = fastram_ce;
+  wire slowram_ce_int = slowram_ce;
+  wire [3:0] page = addr_bef[15:12];
+  wire txt1_shadow = ~shadow[0] && (page == 4'h0 && addr_bef[11:8] >= 4'h4 && addr_bef[11:8] <= 4'h7);
+
   // Debug: C034 RTC access tracing (to catch address bus corruption)
   always @(posedge CLK_14M) begin
     // Monitor ALL C034 accesses to catch address bus corruption
@@ -781,39 +599,7 @@ module iigs
   reg [7:0] prev_shadow = 8'h00;
 `endif // DEBUG_BANK
 
-  // ROM chip-enable (original bank_bef-based decode with IIe-style windows)
-  assign romc_ce = bank_bef == 8'hfc;
-  assign romd_ce = bank_bef == 8'hfd;
-  assign rom1_ce = bank_bef == 8'hfe;
-  // Force ROM2 on IRQ/BRK vector fetch cycles (VPB low) to return correct vectors from ROM bank FF
-  wire vec_fetch_force_rom_ce = (~cpu_vpb) && (bank_bef == 8'h00) &&
-                                ((addr_bef == 16'hFFEE) || (addr_bef == 16'hFFEF) ||
-                                 (addr_bef == 16'hFFFE) || (addr_bef == 16'hFFFF));
-
-  // rom2_ce enables reading from ROM bank $FF
-  // Note: Per IIgs documentation, RDROM should only control language card ($D000-$FFFF).
-  // However, for compatibility, we keep the $C000-$CFFF behavior EXCEPT for slot ROM space
-  // ($C100-$C7FF) which must be controlled by INTCXROM/SLTROMSEL instead of RDROM.
-  // This allows slot card ROM (like SmartPort at $C7xx) to work correctly.
-  // When shadow[6]=1 (IOLC inhibit), $C000-$CFFF in banks 00/01 becomes RAM, not I/O or ROM
-  wire iolc_inhibit = shadow[6] && (bank_bef == 8'h00 || bank_bef == 8'h01);
-  assign rom2_ce = (bank_bef == 8'hff) || vec_fetch_force_rom_ce ||
-                   (bank_bef == 8'h0 & addr_bef >= 16'hd000 & addr_bef <= 16'hdfff && (RDROM|~VPB) && !shadow[6]) ||
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc000 & addr_bef < 16'hc100 && (RDROM|~VPB) && !shadow[6]) ||  // I/O ($C000-$C0FF) - only when IOLC not inhibited
-                   // $C800-$CFFF: slot expansion ROM. On real hardware this maps to
-                   // the expansion ROM of whichever slot most recently had $CN00
-                   // accessed (cleared by reading $CFFF). We don't model external slot
-                   // cards — every slot in this sim points at internal IIgs firmware —
-                   // so routing $C800-$CFFF to internal ROM unconditionally (when IOLC
-                   // is not inhibited) matches every observable behavior. Previously we
-                   // gated on (RDROM | ~VPB), which broke games that do JSR $C300 /
-                   // JMP $C803 with both RDROM=0 and INTCXROM=0 (e.g. A Mind Forever
-                   // Voyaging) — they'd read $C803 as RAM = 0x00 and BRK into the
-                   // monitor at frame ~430.
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc800 & addr_bef <= 16'hcfff && !shadow[6]) ||  // Expansion ($C800-$CFFF)
-                   // Note: $C100-$C7FF (slot ROM) deliberately NOT included here - handled by slot_internalrom_ce/slot_ce
-                   (bank_bef == 8'h0 & addr_bef >= 16'he000 &                     (RDROM|~VPB) && !shadow[6]) ||
-                   (bank_bef == 8'h0 & addr_bef >= 16'hc070 & addr_bef <= 16'hc07f && !shadow[6]);
+  // ROM chip enables (romc/romd/rom1/rom2) are decoded in mmu_inst above.
 
     // IO read (handle only io_dout, and only here)
     wire vgc_any_pending = ((VGCINT[5] & VGCINT[1]) |
@@ -1788,33 +1574,14 @@ module iigs
 `endif
 
 
-  // All-bank shadow: When CYAREG[4]=1, even banks (02-7E) act like bank 00 for RAMRD/RAMWRT
-  wire all_bank_shadow_even = CYAREG[4] && (bank_bef >= 8'h02 && bank_bef <= 8'h7e) && ~bank_bef[0];
-
-  always @(*)
-    begin: aux_ctrl
-      aux = 1'b0;
-      if ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && (addr_bef[15:9] == 7'b0000000 | addr_bef[15:14] == 2'b11))		// Page 00,01,C0-FF
-        aux = ALTZP;
-      else if ((bank_bef==0 || bank_bef==1 || bank_bef==8'he0 || bank_bef==8'he1) &&  addr_bef[15:10] == 6'b000001)		// Page 04-07
-        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&   ( (STORE80 & PAGE2) | ((~STORE80) & ((RAMRD & (~we)) | (RAMWRT & we))))));
-      else if (addr_bef[15:13] == 3'b001)		// Page 20-3F
-        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) &&    ((STORE80 & PAGE2 & HIRES_MODE) | (((~STORE80) | (~HIRES_MODE)) & ((RAMRD & (~we)) | (RAMWRT & we))))));
-      else if (all_bank_shadow_even)
-        // All-bank shadow: RAMRD/RAMWRT redirects even banks to odd banks
-        aux = ((RAMRD & ~we) | (RAMWRT & we));
-      else
-        aux = ((bank_bef==1 || (bank_bef==8'he1 && NEWVIDEO[0])) || ((bank_bef==0 || bank_bef==8'he0 || (bank_bef==8'he1 && ~NEWVIDEO[0])) && ((RAMRD & (~we)) | (RAMWRT & we))));
-    end
+// aux (main/aux select) and the slot decode now live in mmu_inst.
 
 assign rom_bankaddr = (rom2_ce | slot_internalrom_ce) ? 2'b11 : bank[1:0];
 
-//wire slot_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && ~is_internal;
-wire slot_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && ~is_internal && ~inhibit_cxxx;
-wire is_internal =   ~SLTROMSEL[addr[10:8]];
-wire is_internal_io =   ~SLTROMSEL[addr[6:4]];
-//wire slot_internalrom_ce =  bank == 8'h0 && addr >= 'hc400 && addr < 'hc800 && is_internal;
-wire slot_internalrom_ce =  (bank == 8'h0 || bank == 8'h1 || bank == 8'he0 || bank == 8'he1) && addr >= 'hc100 && addr < 'hc800 && is_internal && ~inhibit_cxxx;
+wire slot_ce;
+wire is_internal;
+wire is_internal_io;
+wire slot_internalrom_ce;
 
 // try to setup flags for traditional iie style slots
 reg [7:0]  device_select;
@@ -2647,8 +2414,8 @@ assign rom_ce = rom1_ce | rom2_ce | romc_ce | romd_ce | slot_internalrom_ce;
 clock_divider clk_div_inst (
     .clk_14M(CLK_14M),
     .cyareg(CYAREG),
-    .bank(bank),
-    .addr(addr),
+    .bank(bank),      // physical bank: aux-resolved, so E0/E1 (Mega II) cycles classify slow
+    .addr(addr_bef),  // logical address: soft-switch decode must not see the LC $Dxxx->$Cxxx A12 fold
     .shadow(shadow),
     .IO(IO),
     .we(we),
