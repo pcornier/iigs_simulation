@@ -45,6 +45,14 @@ ifeq ($(DUALRATE),1)
 V_DEFINE += +define+DUALRATE_CLOCK -CFLAGS "-DDUALRATE"
 endif
 
+# VGC text-page read logger: `make VGCTXT=1` logs each VGC text-page-1 fetch
+# (V,H,H_CHAR,addr) for beam-race analysis (textfunk). Debug only; remove when
+# the beam-race work is done. NOTE: touch a source file to force a rebuild --
+# make tracks timestamps, not define changes.
+ifeq ($(VGCTXT),1)
+V_DEFINE += +define+DEBUG_VGC_TXT
+endif
+
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S), Darwin) #APPLE

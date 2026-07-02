@@ -183,9 +183,11 @@ module iigs
 
    logic [9:0]        H;
    logic [8:0]        V/*verilator public_flat*/;
+   logic [8:0]        V_M2;            // Mega II CPU-visible vertical counter ($C02E/$C02F); leads V by the HBL-side 266px (see video_timing H_M2_WRAP)
    logic [6:0]        H_CHAR/*verilator public_flat*/;  // Mega II horizontal counter ($C02F), per TN.IIGS.039
    logic [3:0]        PH0_PHASE_VID;   // video PH0 sub-char phase (=hsub) for clock_divider slaving
    logic              PH0_STB_VID;     // video PH0 boundary strobe (first pixel of each Mega II char)
+   logic              LINE_STB_VID;    // video line-boundary strobe (hcount wrap) for PH0 grid anchoring
    
   logic [7:0]         bank_bef;
   logic [15:0]        addr_bef;
@@ -859,8 +861,8 @@ module iigs
           12'h02b: io_dout = C02BVAL; // from gsplus
           12'h02c: io_dout = 'h0; // from gsplus
           12'h02d: io_dout = SLTROMSEL;
-          12'h02e: io_dout = V >> 1;
-          12'h02f: io_dout = {V[0], H_CHAR};  // VA (V[0]) + Mega II horiz counter, per TN.IIGS.039
+          12'h02e: io_dout = V_M2 >> 1;
+          12'h02f: io_dout = {V_M2[0], H_CHAR};  // VA (V[0]) + Mega II horiz counter, per TN.IIGS.039
           12'h031: io_dout = DISK35;
           12'h032: io_dout = VGCINT;
           12'h035: io_dout = shadow;
@@ -1870,9 +1872,11 @@ video_timing video_timing(
 .mega2_vbl(mega2_vbl),
 .hpos(H),
 .vpos(V),
+.m2_vpos(V_M2),
 .hchar(H_CHAR),
 .ph0_phase(PH0_PHASE_VID),
-.ph0_stb(PH0_STB_VID)
+.ph0_stb(PH0_STB_VID),
+.line_stb(LINE_STB_VID)
 );
 
 
@@ -1880,6 +1884,13 @@ video_timing video_timing(
 
 wire [22:0] video_addr;
 wire [7:0] video_data;
+`ifdef DEBUG_VGC_TXT
+// Beam-race analysis (textfunk): log every VGC text-page-1 fetch near the
+// probe scanline so reads can be correlated against CPU writes (beam_trace).
+always @(posedge clk_vid) if (ce_pix && video_addr[16:0]>=17'h00400 && video_addr[16:0]<17'h00800
+                              && V>=10'd300 && V<=10'd305)
+   $display("VGCRD,%0d,%0d,%0d,%05x", V, H, H_CHAR, video_addr[16:0]);
+`endif
 // vbl_irq now handled internally in interrupt logic
   wire scanline_irq;
   wire vgc_vbl_irq_pulse;
@@ -2647,6 +2658,7 @@ clock_divider clk_div_inst (
     .stretch(1'b0),  // legacy unused stretch input (superseded by ph0_*_vid below)
     .ph0_phase_vid(PH0_PHASE_VID),  // VGC/Mega II PH0 phase (Stage 1: wired, not yet consumed)
     .ph0_stb_vid(PH0_STB_VID),      // VGC/Mega II PH0 boundary strobe
+    .line_stb_vid(LINE_STB_VID),    // VGC/Mega II line-boundary strobe (PH0 grid anchor)
     .clk_14M_en(),
     .clk_7M_en(clk_7M_en),
     .ph0_en(ph0_en),

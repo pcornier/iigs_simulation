@@ -24,6 +24,12 @@ module clock_divider (
     // NOTE: connected but not yet consumed (Stage 1 = wiring only).
     input  wire [3:0]  ph0_phase_vid,
     input  wire        ph0_stb_vid,
+    // Line-boundary strobe from video_timing (hcount wrap, where hsub/hidx
+    // realign and V increments). Used to anchor the CPU PH0 grid to the beam:
+    // once locked it coincides with the natural 65th-PH0 long-cycle wrap
+    // (both timebases are 912 ticks/line), so it only corrects the boot-time
+    // phase offset; PH0 periods stay regular afterwards.
+    input  wire        line_stb_vid,
 
     // Clock enables (active high for one 14M cycle)
     output reg         clk_14M_en,     // 14M enable (always high)
@@ -59,6 +65,39 @@ reg       slow_prev;            // Previous cycle slow state (to avoid assignmen
 reg       ph2_sync_pulse;       // Debug signal to show sync pulses in VCD
 reg       ph2_en_prev;          // Proper variable to track ph2_en changes
 reg       we_reg;              // Registered version of we signal to avoid timing races
+
+// PH0-to-beam anchoring is ON by default: the real FPI recreates PH0 from
+// 14M+STRETCH to match the Mega II PH0 (doc/fpi_timing.md), i.e. the CPU PH0
+// grid is phase-locked to the video beam. Overridable for A/B: +ph0_anchor=0.
+reg        ph0_anchor_en;
+// --- Debug/experiment knobs (sim-only, plusarg-gated, no-op by default) ---
+// +cpu_knob=N   : stall the CPU N 14M-ticks on the slow->fast base transition
+// +ph0_dbg=1    : print CPU-PH0 vs video-PH0 phase at slowMem sync fires
+reg [15:0] cpu_knob_val, knob_stall;
+reg        prev_slow_base;
+reg        ph0_dbg_en;
+reg [15:0] ph0_dbg_cnt;
+`ifdef SIMULATION
+integer knob_tmp, anchor_tmp, dbg_tmp;
+initial begin
+    knob_tmp = 0; anchor_tmp = 1; dbg_tmp = 0;
+    void'($value$plusargs("cpu_knob=%d", knob_tmp));
+    void'($value$plusargs("ph0_anchor=%d", anchor_tmp));
+    void'($value$plusargs("ph0_dbg=%d", dbg_tmp));
+    cpu_knob_val  = knob_tmp[15:0];
+    ph0_anchor_en = (anchor_tmp != 0);
+    ph0_dbg_en    = (dbg_tmp != 0);
+    ph0_dbg_cnt   = 16'd0;
+end
+`else
+// FPGA: anchor always on, debug knobs off (power-up register init)
+initial begin
+    ph0_anchor_en = 1'b1;
+    cpu_knob_val  = 16'd0;
+    ph0_dbg_en    = 1'b0;
+    ph0_dbg_cnt   = 16'd0;
+end
+`endif
 
 
 
@@ -229,6 +268,8 @@ always @(posedge clk_14M) begin
         sync_aligned <= 1'b0;
         scanline_ph0_ctr <= 7'd0;
         fast_stretch <= 1'b0;
+        knob_stall <= 16'd0;
+        prev_slow_base <= 1'b0;
 `ifdef DEBUG_VERBOSE
         prev_slow <= 1'b0;
         prev_slowMem <= 1'b0;
@@ -315,7 +356,16 @@ always @(posedge clk_14M) begin
         // mode too (the vsync spin), eliminating the per-frame drift that wobbled
         // $C02F by 1 char. (Fast-mode cycles are not PH0-gated, so they still use the
         // fast_stretch +2 below; the two are mutually exclusive per line by speed.)
-        if (ph0_counter == ((scanline_ph0_ctr == 7'd64) ? 4'd15 : 4'd13)) begin
+        if (ph0_anchor_en && line_stb_vid) begin
+            // Beam line boundary: (re)anchor the CPU PH0 grid to the video
+            // timebase. Once locked this fires on the SAME tick as the natural
+            // 65th-PH0 long-cycle wrap below (both timebases are 912 ticks per
+            // line), so after the one-time boot phase correction it is a
+            // structural no-op and PH0 periods stay perfectly regular.
+            ph0_counter_next = 4'd0;
+            scanline_ph0_ctr <= 7'd0;
+            if (!slow && !slowMem) fast_stretch <= 1'b1;
+        end else if (ph0_counter == ((scanline_ph0_ctr == 7'd64) ? 4'd15 : 4'd13)) begin
             ph0_counter_next = 4'd0;
             if (scanline_ph0_ctr == 7'd64) begin
                 scanline_ph0_ctr <= 7'd0;
@@ -386,6 +436,13 @@ always @(posedge clk_14M) begin
 			ph2_en <= 1'b1;
 			ph2_counter <= 4'd0;
 			ph2_sync_pulse <= 1'b1;
+			// +ph0_dbg=1: CPU-PH0 vs beam-PH0 phase at each sync fire
+			// (locked = equal; historical bug = phase_vid == ph0_counter+8 mod 14)
+			if (ph0_dbg_en && ph0_dbg_cnt < 16'd300) begin
+				$display("PH0DBG: ph0_ctr=%0d phase_vid=%0d scanline_ctr=%0d",
+				         ph0_counter, ph0_phase_vid, scanline_ph0_ctr);
+				ph0_dbg_cnt <= ph0_dbg_cnt + 16'd1;
+			end
 			// RAM refresh is every 9th PH2 cycle (FPI). It is HIDDEN (no speed
 			// loss) in a sync/slow-bus cycle, but the sync cycle still COUNTS
 			// toward the cadence -- so a sync-heavy fast blit (e.g. textfunk's
@@ -441,7 +498,20 @@ always @(posedge clk_14M) begin
         end
         ph2_sync_pulse <= 1'b0;
     end
-        
+
+        // +cpu_knob=N debug stall: on the slow->fast base-speed transition,
+        // hold the CPU N 14M ticks (ph2_en low, ph2_counter frozen). Beam-race
+        // lead calibration only; no-op at N=0. Must stay in this live path
+        // (NOT inside DEBUG_VERBOSE).
+        prev_slow_base <= slow;
+        if (prev_slow_base && !slow && cpu_knob_val != 16'd0)
+            knob_stall <= cpu_knob_val;
+        if (knob_stall != 16'd0) begin
+            knob_stall <= knob_stall - 16'd1;
+            ph2_en <= 1'b0;
+            ph2_counter <= ph2_counter;
+        end
+
 `ifdef DEBUG_VERBOSE
         if ((slow != prev_slow) || (slowMem != prev_slowMem)) begin
 `ifdef DEBUG_CLKDIV

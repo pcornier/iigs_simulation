@@ -22,15 +22,27 @@ module video_timing(
   // These let the CPU clock slave its PH0/SYNC alignment to the real video
   // beam position (incl. the per-line NTSC stretch the char counter absorbs),
   // exactly as the real FPI "recreates PH0 from VGC STRETCH".
+  output [9:0] m2_vpos,   // Mega II CPU-visible vertical counter for $C02E/$C02F:
+                          // = vcount, but increments at the Mega II wrap
+                          // (H_M2_WRAP) instead of the hcount wrap, so the
+                          // V-transition sits 25 chars before active display
+                          // exactly as hardware. Rendering keeps using vpos.
+
   output [3:0] ph0_phase, // = hsub (0..13): sub-char pixel phase
-  output       ph0_stb    // 1-ce_pix strobe at the first pixel of each new char
+  output       ph0_stb,   // 1-ce_pix strobe at the first pixel of each new char
+  output       line_stb   // 1-ce_pix strobe at the Mega II line wrap
+                          // (hcount==H_M2_WRAP, where hsub/hidx realign and the
+                          // CPU-visible V increments). Lets the FPI/clock_divider
+                          // anchor its PH0 grid to the beam's char grid.
 
 );
 
 assign hpos = hcount;
 assign vpos = vcount;
+assign m2_vpos = m2_v;
 assign ph0_phase = hsub;
 assign ph0_stb   = (hsub == 4'd0);
+assign line_stb  = (hcount == H_M2_WRAP);
 
 reg [10:0] hcount;
 reg [9:0] vcount;
@@ -55,8 +67,23 @@ localparam [10:0] HACTIVE_PIX = 11'd84;   // pixel where active display begins
 // move the picture. (Was 19, which put active display at $58 but mis-anchored the
 // counter vs the V-transition -> textfunk garble.)
 localparam [6:0]  HIDX_AT_H0  = 7'd0;
+// --- Mega II wrap position (hcount where H reads $00 and the CPU-visible V
+// increments). Per Sather/TN.IIGS.039 the H counter runs 25 HBL chars ($00,
+// $40..$57) after the wrap and THEN the 40 active chars ($58..$7F), i.e. the
+// V-transition is 25 chars (350px) BEFORE active display. Our active display
+// starts at hcount HACTIVE_PIX(84), so the wrap belongs at 84 - 350 + 912 =
+// 646, i.e. reset when hcount==645. (It was at the hcount wrap 911->0, only
+// 6 chars before the display -- that made every $C02E/$C02F-synced beam racer
+// run 19 chars (266 ticks) late relative to the beam: textfunk streak.)
+// hidx is still 0 at the wrap (HIDX_AT_H0=0), so the $C02F values seen at the
+// V-transition are unchanged (still match GSS/hardware, commit f2df82b).
+// NOTE: this moves ONLY the CPU-visible counters ($C02E/$C02F) and the PH0
+// grid anchor; rendering (vcount/hcount, SHR SCB prefetch, blanking) is
+// untouched.
+localparam [10:0] H_M2_WRAP = 11'd645;
 reg [6:0] hidx;
 reg [3:0] hsub;
+reg [9:0] m2_v;
 assign hchar = (hidx == 7'd0) ? 7'h00 : (7'h3F + hidx);
 
 
@@ -111,11 +138,15 @@ always @(posedge clk_vid) if (ce_pix) begin
     HWL: begin hblank <= 0; hcount <= 0; end
   endcase // case (hcount)
 
-  // Mega II horizontal counter: one char every 14 pixels; realign at the line
-  // boundary so the 2-pixel stretch is absorbed there (not in the active area).
-  if (hcount == HWL) begin
+  // Mega II horizontal counter: one char every 14 pixels; realign at the Mega
+  // II wrap (H_M2_WRAP) so the 2-pixel stretch is absorbed there (during HBL,
+  // not in the active area). The CPU-visible V (m2_v) increments at the same
+  // point, replicating vcount's advance 266px early; vcount itself catches up
+  // at the hcount wrap so the two stay one-line-phase-locked.
+  if (hcount == H_M2_WRAP) begin
     hidx <= HIDX_AT_H0;
     hsub <= 4'd0;
+    m2_v <= (vcount == V_END) ? V_LOAD : vcount + 10'd1;
   end else if (hsub == 4'd13) begin
     hsub <= 4'd0;
     hidx <= (hidx == 7'd64) ? 7'd0 : hidx + 7'd1;
