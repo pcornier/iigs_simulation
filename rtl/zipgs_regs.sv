@@ -108,7 +108,9 @@ module zipgs_regs (
       unlock    <= 3'd0;
       disabled  <= 1'b1;      // power-on: acceleration off (native machine)
       sp        <= 4'd0;      // 100% (of the enabled speed) once engaged
-      reg_c059  <= 8'h00;
+      reg_c059  <= 8'h5F;     // KEGS/GSplus power-on value: the Zip CDA renders
+                              // these bits as delay/follow-up checkmarks and an
+                              // all-zero register displays as nonsense settings
       reg_c05c  <= 8'h00;
       host_prev <= 3'd0;
     end else begin
