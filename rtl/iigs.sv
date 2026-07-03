@@ -2475,10 +2475,14 @@ zipgs_regs zipgs (
 // Zip cache-disable ($C059 bit 7) out to the SDRAM cache in the top level.
 assign cache_disable = zip_cache_disable;
 
-// Per-slot delay: a $Cn00-$CnFF slot-ROM access runs slow only when its
-// $C05C mask bit is set (slot number = addr[10:8]). Default mask 0 => all
-// slots fast, which is also the pre-Zip behavior at native speed.
-wire       slot_delay_this = slot_ce && zip_slot_delay[addr[10:8]];
+// Slot-ROM ($Cn00-$CnFF) timing when accelerated. Slots run at 1 MHz by
+// default -- the slot-7 SmartPort/HDD firmware (and slot ROM generally)
+// returns bad data if fetched at the accelerated rate, faulting the boot /
+// disk driver. The $C05C per-slot mask can only make a slot run at 1 MHz
+// (delay enabled); it cannot safely speed one up, so it never clears the
+// default-slow. (Making individual slots fast needs the slot-ROM fast path
+// debugged first -- tracked as future work.)
+wire       slot_delay_this = slot_ce;
 
 // Speed step for the clock divider: fast-cycle length = fast_thresh+1 ticks.
 // Only the fast cycle shortens; slow/sync (1 MHz) cycles are untouched, like
