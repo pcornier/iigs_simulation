@@ -315,6 +315,7 @@ iigs  iigs(
         .selftest_override(selftest_override),
         .host_speed(host_speed),
         .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
+        .mem_stall(1'b0),      // sim BRAM always meets the deadline
 
         .FLOPPY_WP(1'b1),
         

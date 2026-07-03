@@ -60,6 +60,7 @@ module sdram_burst #(
     assign SDRAM_DQ = dq_oe ? dq_out : 16'bzzzz_zzzz_zzzz_zzzz;
 
     reg [127:0] line;
+    reg [15:0]  dq_in;   // IO-cell input capture register (see burst-beat capture)
     assign dout0 = 16'd0;
     assign dout1 = line;
     assign dout2 = 16'd0;
@@ -78,6 +79,9 @@ module sdram_burst #(
     localparam [4:0] STATE_CONT  = STATE_START + RASCAS_DELAY;       // 4
     localparam [4:0] STATE_RDAT0 = STATE_CONT + CAS_LATENCY + 5'd1;  // 8
     localparam [4:0] STATE_RDATL = STATE_RDAT0 + 5'd7;               // 15
+    // dq_in adds one register stage: line-capture window is one state later
+    localparam [4:0] STATE_LDAT0 = STATE_RDAT0 + 5'd1;               // 9
+    localparam [4:0] STATE_LDATL = STATE_RDATL + 5'd1;               // 16
     localparam [4:0] STATE_LAST_RD = STATE_RDATL + 5'd3;            // 18 (tRP/tRC guard)
     localparam [4:0] STATE_LAST_WR = STATE_CONT  + 5'd4;            // 8  (tRC guard)
 
@@ -92,11 +96,13 @@ module sdram_burst #(
     reg [15:0] wdata = 0;
     reg  [1:0] wdqm = 0;
 
-    // refresh
-    reg [9:0] rfs_cnt = 0; reg rfs = 0;
+    // refresh: the counter only emits a one-cycle strobe; the rfs flag itself
+    // is owned by the access-manager block below (single driver for synthesis)
+    reg [9:0] rfs_cnt = 0; reg rfs = 0; reg rfs_set = 0;
     always @(posedge clk) begin
+        rfs_set <= 0;
         rfs_cnt <= rfs_cnt + 1'd1;
-        if (rfs_cnt == 10'd850) begin rfs <= 1; rfs_cnt <= 0; end
+        if (rfs_cnt == 10'd850) begin rfs_set <= 1; rfs_cnt <= 0; end
     end
 
     // init sequence
@@ -135,13 +141,24 @@ module sdram_burst #(
             end
         end
 
-        // capture burst read beats
-        if (mode == MODE_NORMAL && is_read && state >= STATE_RDAT0 && state <= STATE_RDATL)
-            line[ {(state - STATE_RDAT0), 4'b0} +: 16 ] <= SDRAM_DQ;
+        // arm the refresh flag after the dispatch logic so a set on the same
+        // cycle as a dispatch-clear re-arms for the next round
+        if (rfs_set) rfs <= 1;
+
+        // capture burst read beats from the registered DQ copy (one state after
+        // the bus beat). dq_in is a single plain register fed straight from the
+        // pins so the fitter can pack it into the IO-cell FAST_INPUT_REGISTER;
+        // letting SDRAM_DQ fan out to eight line registers through decode logic
+        // invalidated that assignment (see the fitter's "Ignoring invalid fast
+        // I/O register assignments" warning) and the fabric capture's routing
+        // skew produced scattered single-bit read errors on real hardware.
+        dq_in <= SDRAM_DQ;
+        if (mode == MODE_NORMAL && is_read && state >= STATE_LDAT0 && state <= STATE_LDATL)
+            line[ {(state - STATE_LDAT0), 4'b0} +: 16 ] <= dq_in;
 
         // completion acks
         if (mode == MODE_NORMAL && active) begin
-            if (is_read && state == STATE_RDATL) ack1 <= req1;
+            if (is_read && state == STATE_LDATL) ack1 <= req1;
             if (we && state == STATE_CONT) begin
                 if (serving == 2'd0) ack0 <= req0;
                 else                 ack2 <= req2;
@@ -156,6 +173,8 @@ module sdram_burst #(
     end
 
     // command + address output
+    // (Quartus 17 cannot bit-select a function call result, hence cur_col)
+    wire [8:0] cur_col = a_col(cur);
     always @(posedge clk) begin
         if (state == STATE_START) SDRAM_BA <= (mode == MODE_NORMAL) ? a_bank(cur) : 2'b00;
 
@@ -172,8 +191,8 @@ module sdram_burst #(
         if (mode == MODE_NORMAL) begin
             casex (state)
                 STATE_START: SDRAM_A <= a_row(cur);
-                STATE_CONT:  SDRAM_A <= we ? {wdqm, 2'b10, a_col(cur)}
-                                           : {2'b00, 2'b10, a_col(cur)[8:3], 3'b000};
+                STATE_CONT:  SDRAM_A <= we ? {wdqm, 2'b10, cur_col}
+                                           : {2'b00, 2'b10, cur_col[8:3], 3'b000};
                 default: ;
             endcase
         end

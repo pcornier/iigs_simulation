@@ -205,9 +205,11 @@ wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 `ifdef ACCEL_SDRAM
 wire [2:0] host_speed = status[14:12];
 wire accel_capable = 1'b1;
+wire mem_stall;   // driven by the icache (cache miss in flight)
 `else
 wire [2:0] host_speed = 3'd0;
 wire accel_capable = 1'b0;
+wire mem_stall = 1'b0;
 `endif
 
 // Detect ROM version change and trigger cold reset
@@ -219,6 +221,7 @@ wire phi2;
 wire phi0;
 wire clk_7M;
 wire drive35_eject_req;
+wire [7:0] iigs_r, iigs_g, iigs_b;
 
 iigs iigs (
 	.reset(reset),
@@ -232,9 +235,9 @@ iigs iigs (
 	.clk_7M(clk_7M),
 	.timestamp(TIMESTAMP),
 	.floppy_wp(1'b1),
-	.R(VGA_R),
-	.G(VGA_G),
-	.B(VGA_B),
+	.R(iigs_r),
+	.G(iigs_g),
+	.B(iigs_b),
 	.HBlank(hblank),
 	.VBlank(vblank),
 	.HS(hsync),
@@ -303,6 +306,7 @@ iigs iigs (
 	.selftest_override(selftest_override),
 	.host_speed(host_speed),
 	.accel_capable(accel_capable),
+	.mem_stall(mem_stall),
 
 	.FLOPPY_WP(1'b1),
 
@@ -378,6 +382,15 @@ wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce);
 wire [24:1] cache_addr  = {1'b0, cpu_sdram_addr[23:1]};
 wire [15:0] cache_data;
 wire        cache_ready, cache_stall;
+// Extend the stall through the cache_ready -> sdram_dout register stage: the
+// fill can land within ~4.5 clk_sys of the phi2 edge while the returned byte
+// only reaches sdram_dout one cycle after cache_ready. Without the extension
+// the CPU's next enable (5 clk_sys) can fall in that gap and sample the
+// previous read's byte (observed on hardware as PC = {FA,C0} from a stale
+// vector-low fetch).
+reg cache_ready_d;
+always @(posedge clk_sys) cache_ready_d <= cache_ready;
+assign mem_stall = cache_stall | cache_ready | cache_ready_d;
 reg         snoop_stb;
 `else
 reg         rd_req = 0;
@@ -465,6 +478,10 @@ sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) icache
 	.wr_addr(wr_addr), .wr_data(wr_din), .wr_be({wr_wrh, wr_wrl}), .wr_stb(snoop_stb),
 	.mem_addr(rd_addr), .mem_req(rd_req), .mem_ack(rd_ack), .mem_line(rd_line)
 );
+
+assign VGA_R = iigs_r;
+assign VGA_G = iigs_g;
+assign VGA_B = iigs_b;
 `else
 sdram sdram
 (
@@ -487,6 +504,10 @@ sdram sdram
 	.addr1(rd_addr), .wrl1(1'b0), .wrh1(1'b0), .din1(16'd0), .dout1(rd_dout), .req1(rd_req), .ack1(rd_ack),
 	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack)
 );
+
+assign VGA_R = iigs_r;
+assign VGA_G = iigs_g;
+assign VGA_B = iigs_b;
 `endif
 /*
 reg ce_pix;

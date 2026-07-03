@@ -76,6 +76,12 @@ module iigs
    // respond (like a real Zip with the acceleration jumper disabled).
    input              accel_capable,
 
+   // Memory-path stall (ACCEL_SDRAM cache miss in flight). Gated into the CPU
+   // RDY so a fill that cannot meet the current cycle's data deadline holds
+   // the CPU for whole ph2_en periods instead of letting it sample stale
+   // data. Tie 0 when the memory path always meets the native deadline.
+   input              mem_stall,
+
    // Floppy write-protect (sim global)
  input              floppy_wp,
    
@@ -1876,7 +1882,7 @@ wire ready_out;
               .CLK(CLK_14M),
               .RST_N(~reset),
               .CE(phi2),
-              .RDY_IN(~hdd_dma),
+              .RDY_IN(~hdd_dma & ~mem_stall),
               .NMI_N(1'b1),
               .IRQ_N(cpu_irq_n),
               .ABORT_N(1'b1),

@@ -119,3 +119,48 @@ cd vsim && make && ./regression.sh         # 8/8
 - `doc/sdram_accel/03_speed_control_design.md` — the clock-step / ZipGS speed layer (step 6).
 - `doc/sdram_accel/04_fpga_integration.md` — the FPGA wiring detail (this file's source material).
 - `ref/sdram_refs/` — NeoGeo/Saturn/PSX/N64 reference controllers used in the comparison.
+
+---
+
+## BRING-UP RESULTS (2026-07-03, on-hardware debug session)
+
+Executed on the Quartus box with the DE10-Nano rig. **The accelerator now boots
+GS/OS to the desktop on real hardware at native speed** (`ACCEL_SDRAM=1` +
+`mem_stall` wired). Three hardware-only bugs were found and fixed — none were
+visible in the module-level Verilator TBs:
+
+1. **Quartus syntax/semantics** (sim-only constructs): bit-select of a function
+   call (`a_col(cur)[8:3]` -> `cur_col` wire) and `rfs` driven from two always
+   blocks (now a strobe + single owner). Verilator accepted both.
+2. **DQ capture skew — scattered single-bit read errors** (reset vector read
+   $FA63 instead of $FA62): letting SDRAM_DQ fan out to eight `line` registers
+   through decode logic invalidated the `FAST_INPUT_REGISTER` qsf assignment
+   (see the fitter's "Ignoring invalid fast I/O register assignments" warning),
+   so DQ was captured in fabric with routing skew. Fixed with a dedicated
+   `dq_in` register fed straight from the pins (IO-cell packable); the line
+   demux now runs one state later (STATE_LDAT0/LDATL).
+3. **Miss latency exceeds the native data deadline** — the doc above claims "no
+   CPU stall is wired and none is needed" at 2.8 MHz; that is WRONG. A miss is
+   ~7 clk_sys end to end (strobe+1, cache FSM+1, 19-cycle burst=2.4, ack CDC,
+   ready, byte-mux register), but the CPU samples 5 clk_sys after the phi2
+   edge — it read the *previous* read's byte (observed as PC={62,C1} from a
+   stale vector fetch). Fix: `cache_stall` -> iigs `mem_stall` -> `RDY_IN`,
+   extended by `cache_ready | cache_ready_d` to cover the sdram_dout register
+   stage.
+
+Debug methodology that worked (SignalTap .stp hand-authoring failed Q17's
+validation; `quartus_stp --enable` -> warning 262004): a temporary on-screen
+debug overlay in Apple-IIgs.sv latching fill addresses / CPU-visible
+{addr,byte} pairs and rendering them as pixel blocks decoded from HDMI
+screenshots (scratchpad decode_overlay.py).
+
+### Remaining before OSD speeds work on hardware
+At 2-tick (7.16 MHz) cycles even cache HITS miss the deadline: hit data reaches
+`sdram_dout` at phi2+3 but the next enable is phi2+2, and the stall itself
+registers too late to suppress that enable (verified on hardware: black screen
+with the speed config applied; machine executes but samples stale bytes).
+**The hit path must return combinationally** (the cache's `data` array is
+already async-read; expose comb hit data + a comb `hit_now` into the byte mux)
+before un-gating `accel_capable` for OSD speeds. Until then the committed
+default keeps `ACCEL_SDRAM` off (bit-identical known-good path); the accel
+build is one qsf macro away and is hardware-validated at native.
