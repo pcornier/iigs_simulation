@@ -57,17 +57,31 @@ module zipgs_regs (
 
     output wire       zip_unlocked, // 1 = $C058-$C05F are Zip registers
     output wire       accel_en,     // 1 = acceleration engaged
-    output reg  [2:0] speed_code    // 0 = native .. 4 = 14.32 MHz
+    output wire [2:0] speed_code,   // 0 = native .. 4 = 14.32 MHz
+
+    // Zip cache control ($C059 bit 7): 1 = disable the read cache (every CPU
+    // read goes to memory; used for self-modifying code / cache coherency
+    // escapes). Only meaningful while accelerating.
+    output wire       cache_disable,
+
+    // Per-slot delay mask ($C05C bits 7..1, one per slot 1..7): 1 = that slot's
+    // $Cn00 space runs at 1 MHz (delay enabled) when accelerating. Bit 0 is the
+    // speaker delay (handled elsewhere). Default 0 => all slots fast.
+    output wire [7:0] slot_delay
 );
 
   reg [2:0] unlock;
   reg       disabled;      // $C05B bit 4 (1 = acceleration off)
   reg [3:0] sp;            // Zip speed nibble: 0 = 100% .. 15 = 6.25%
+  reg [2:0] speed_reg;     // actual clock step 0..4 (both control paths write it)
   reg [7:0] reg_c059;
   reg [7:0] reg_c05c;
 
   assign zip_unlocked = (unlock >= 3'd4);
   assign accel_en     = ~disabled;
+  assign speed_code   = disabled ? 3'd0 : speed_reg;
+  assign cache_disable = ~disabled & reg_c059[7];
+  assign slot_delay    = reg_c05c;
 
   // 1.024 ms-period toggle for $C05B bit 7, matching KEGS ((dcycs>>9)&1 =
   // 512 us half-period): 512 us x 14.31818 MHz = 7331 ticks. The Zip CDA
@@ -76,10 +90,10 @@ module zipgs_regs (
   reg [12:0] ms_ctr;
   reg        ms_toggle;
 
-  // Zip percentage -> our clock-enable steps. The accelerator's rated speed
-  // ("100%") is 7.16 MHz: the 14.32 MHz single-tick step needs a cache with
-  // stall-on-miss (see doc/sdram_accel/) before it is honest, so speed code 4
-  // is reserved and everything clamps to code 3 for now.
+  // Zip speed percentage nibble -> our clock-enable steps. The card's rated
+  // "100%" (nibble 0) is 7.16 MHz (code 3) -- the 8 MHz-class ZipGS speed.
+  // Software cannot request the 14.32 MHz overclock (code 4); that is an
+  // OSD-only step above the card's spec (see the host path below).
   //   sp 0..8     ->  7.16 MHz (code 3)   (>= 50% of rated)
   //   sp 9..10    ->  4.77 MHz (code 2)
   //   sp 11..12   ->  3.58 MHz (code 1)
@@ -90,15 +104,14 @@ module zipgs_regs (
                  (s <= 4'd12) ? 3'd1 : 3'd0;
   endfunction
 
-  // Canonical Zip speed nibble for each host step, so software reading $C05A
-  // after an OSD change sees a value that maps back to the same step.
-  function automatic [3:0] code_to_sp(input [2:0] c);
-    code_to_sp = (c >= 3'd3) ? 4'd0  :   // 7.16 MHz = 100% of rated speed
-                 (c == 3'd2) ? 4'd10 :
-                 (c == 3'd1) ? 4'd12 : 4'd15;
+  // Display nibble for the OSD steps, so the Zip CDA's setting line reads
+  // sensibly after an OSD change. 7.16 and 14.32 both show as 100% (the card
+  // has no ">100%" representation for the overclock).
+  function automatic [3:0] host_to_sp(input [2:0 ] h);
+    host_to_sp = (h >= 3'd3) ? 4'd0  :   // 7.16 / 14.32 -> 100%
+                 (h == 3'd2) ? 4'd5  :   // 4.77 -> ~66%
+                               4'd8;     // 3.58 -> 50%
   endfunction
-
-  always_comb speed_code = disabled ? 3'd0 : sp_to_code(sp);
 
   // Host change detection: host_prev resets to 0 (native), so a non-zero
   // boot-time value (sim --speed flag) applies on the first cycle after reset.
@@ -115,20 +128,25 @@ module zipgs_regs (
       unlock    <= 3'd0;
       disabled  <= 1'b1;      // power-on: acceleration off (native machine)
       sp        <= 4'd0;      // 100% (of the enabled speed) once engaged
+      speed_reg <= 3'd0;
       reg_c059  <= 8'h5F;     // KEGS/GSplus power-on value: the Zip CDA renders
                               // these bits as delay/follow-up checkmarks and an
                               // all-zero register displays as nonsense settings
-      reg_c05c  <= 8'h00;
+      reg_c05c  <= 8'h00;     // all slots fast, no speaker delay
       host_prev <= 3'd0;
     end else begin
       // --- host (OSD / CLI) side ------------------------------------------
+      // OSD host_speed IS the clock step directly (0..4), so the OSD can reach
+      // the 14.32 MHz overclock (step 4) that software cannot.
       if (host_speed != host_prev) begin
         host_prev <= host_speed;
         if (host_speed == 3'd0) begin
-          disabled <= 1'b1;
+          disabled  <= 1'b1;
+          speed_reg <= 3'd0;
         end else begin
-          disabled <= 1'b0;
-          sp       <= code_to_sp(host_speed);
+          disabled  <= 1'b0;
+          speed_reg <= host_speed;
+          sp        <= host_to_sp(host_speed);
         end
       end
 
@@ -143,7 +161,10 @@ module zipgs_regs (
             else if (zip_unlocked)               disabled <= 1'b1;
           end
           3'h3: if (zip_unlocked) disabled <= 1'b0;              // $C05B: enable
-          3'h5: if (zip_unlocked) sp       <= wr_data[7:4];      // $C05D: speed
+          3'h5: if (zip_unlocked) begin                          // $C05D: speed
+            sp        <= wr_data[7:4];
+            speed_reg <= sp_to_code(wr_data[7:4]);
+          end
           3'h1: if (zip_unlocked) reg_c059 <= {wr_data[7:3], reg_c059[2:0]};
           3'h0: if (zip_unlocked) reg_c059 <= reg_c059 & 8'h04;  // $C058
           3'h4: if (zip_unlocked) reg_c05c <= wr_data;           // $C05C

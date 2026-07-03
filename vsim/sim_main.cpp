@@ -4585,7 +4585,7 @@ void show_help() {
 	printf("  --cold-reset-at-frame <frame> Trigger cold reset at specified frame\n");
 	printf("  --rom <1|3|rom1|rom3>         Select ROM version (default: rom3)\n");
 	printf("  --selftest                    Enable self-test mode\n");
-	printf("  --speed <step|MHz>            CPU accelerator speed: 0-3 or 2.8/3.6/4.8/7.2 (MHz).\n");
+	printf("  --speed <step|MHz>            CPU accelerator speed: 0-4 or 2.8/3.6/4.8/7.2/14.3 (MHz).\n");
 	printf("                                Fast cycles only; I/O + banks E0/E1 stay 1 MHz (ZipGS-style).\n");
 	printf("                                Shares state with the ZipGS $C058-$C05F software interface.\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
@@ -4858,10 +4858,7 @@ int main(int argc, char** argv, char** env) {
 			else if (strcmp(sv, "1") == 0 || strncmp(sv, "3.5", 3) == 0 || strncmp(sv, "3.6", 3) == 0) host_speed = 1;
 			else if (strcmp(sv, "2") == 0 || strncmp(sv, "4.7", 3) == 0 || strncmp(sv, "4.8", 3) == 0) host_speed = 2;
 			else if (strcmp(sv, "3") == 0 || strncmp(sv, "7.1", 3) == 0 || strncmp(sv, "7.2", 3) == 0) host_speed = 3;
-			else if (strcmp(sv, "4") == 0 || strncmp(sv, "14", 2) == 0 || strcmp(sv, "max") == 0) {
-				host_speed = 3;
-				printf("Note: 14.3 MHz needs the SDRAM cache + stall-on-miss (not yet wired); clamping to 7.16 MHz\n");
-			}
+			else if (strcmp(sv, "4") == 0 || strncmp(sv, "14", 2) == 0 || strcmp(sv, "max") == 0) host_speed = 4;
 			else {
 				fprintf(stderr, "Invalid --speed value '%s' (use 0-4, native, max, or MHz: 2.8/3.6/4.8/7.2/14.3)\n", sv);
 				return 1;

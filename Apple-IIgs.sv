@@ -55,7 +55,7 @@ localparam CONF_STR = {
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
 	"OB,ROM Version,ROM1,ROM3;",
-	"O[14:12],CPU Speed,2.8 MHz,3.6 MHz,4.8 MHz,7.2 MHz;",
+	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz,14.3 MHz;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -202,6 +202,7 @@ wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 // SDRAM path either (an un-stalled fetch at short cycles is silent
 // corruption). Once the burst+cache build (ACCEL_SDRAM) is validated on
 // hardware with cache_stall wired to the CPU, both gates open.
+wire cache_disable;   // ZipGS $C059 bit 7 -> sdram_cache bypass
 `ifdef ACCEL_SDRAM
 wire [2:0] host_speed = status[14:12];
 wire accel_capable = 1'b1;
@@ -328,7 +329,8 @@ iigs iigs (
 	// Keyboard-triggered reset outputs (Ctrl+F11, Ctrl+OpenApple+F11)
 	.keyboard_reset(keyboard_reset),
 	.keyboard_cold_reset(keyboard_cold_reset),
-	.capslock(capslock_led)
+	.capslock(capslock_led),
+	.cache_disable(cache_disable)
 );
 
 wire [23:0] addr_bus;
@@ -471,7 +473,7 @@ sdram_burst sdram
 // higher clock steps (drive it into the CPU RDY at that point -- see doc/sdram_accel/03).
 sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) icache
 (
-	.clk(clk_sys), .reset(reset),
+	.clk(clk_sys), .reset(reset), .cache_off(cache_disable),
 	.cpu_addr(cache_addr), .cpu_rd(cache_rd), .cpu_data(cache_data),
 	.cpu_ready(cache_ready), .cpu_stall(cache_stall),
 	.hit_now(cache_hit_now), .cpu_data_now(cache_data_now),

@@ -24,6 +24,7 @@ module sdram_cache #(
 ) (
     input                       clk,        // clk_sys (28.6 MHz)
     input                       reset,
+    input                       cache_off,  // 1 = ZipGS cache-disable: every read fetches (no stale hit)
 
     // ---- CPU read port ----
     input      [ADDR_W:1]       cpu_addr,   // word address of the requested read
@@ -68,7 +69,11 @@ module sdram_cache #(
     reg [TAGW-1:0]          tag  [LINES-1:0];
     reg                     valid[LINES-1:0];
 
-    wire hit = valid[c_idx] && (tag[c_idx] == c_tag);
+    // cache_off (ZipGS $C059 bit 7) forces a miss on every read so the CPU
+    // always gets fresh memory data -- a coherency escape for self-modifying
+    // code the write-snoop can't cover. The fill still populates the line, but
+    // hit_now stays low so nothing is served from a possibly-stale copy.
+    wire hit = valid[c_idx] && (tag[c_idx] == c_tag) && !cache_off;
     assign hit_now      = hit;
     assign cpu_data_now = data[c_idx][{c_word,4'b0} +: 16];
 

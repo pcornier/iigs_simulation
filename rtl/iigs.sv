@@ -159,7 +159,10 @@ module iigs
    output        keyboard_cold_reset, // Ctrl+OpenApple+F11 was pressed - trigger cold reset
 
    // Keyboard LED state for MiSTer HPS PS/2 LED passthrough
-   output        capslock             // Caps Lock state (1 = Caps Lock on)
+   output        capslock,            // Caps Lock state (1 = Caps Lock on)
+
+   // ZipGS C/D cache-disable ($C059 bit 7): 1 = bypass the SDRAM read cache
+   output        cache_disable
 
 );
 
@@ -2446,6 +2449,8 @@ wire       zip_unlocked;
 wire       zip_accel_en;
 wire [2:0] zip_speed_code;
 wire [7:0] zip_rdata;
+wire       zip_cache_disable;
+wire [7:0] zip_slot_delay;
 // One write strobe per CPU I/O write to $C058-$C05F (phi2 = one pulse per CPU
 // cycle, same pattern as the $C030 speaker toggle). IO already excludes
 // EXTERNAL_IO and non-I/O banks.
@@ -2462,8 +2467,18 @@ zipgs_regs zipgs (
     .host_speed(host_speed),
     .zip_unlocked(zip_unlocked),
     .accel_en(zip_accel_en),
-    .speed_code(zip_speed_code)
+    .speed_code(zip_speed_code),
+    .cache_disable(zip_cache_disable),
+    .slot_delay(zip_slot_delay)
 );
+
+// Zip cache-disable ($C059 bit 7) out to the SDRAM cache in the top level.
+assign cache_disable = zip_cache_disable;
+
+// Per-slot delay: a $Cn00-$CnFF slot-ROM access runs slow only when its
+// $C05C mask bit is set (slot number = addr[10:8]). Default mask 0 => all
+// slots fast, which is also the pre-Zip behavior at native speed.
+wire       slot_delay_this = slot_ce && zip_slot_delay[addr[10:8]];
 
 // Speed step for the clock divider: fast-cycle length = fast_thresh+1 ticks.
 // Only the fast cycle shortens; slow/sync (1 MHz) cycles are untouched, like
@@ -2482,7 +2497,7 @@ clock_divider clk_div_inst (
     .addr(addr_bef),  // logical address: soft-switch decode must not see the LC $Dxxx->$Cxxx A12 fold
     .fast_thresh(fast_thresh),
     .dma_active(hdd_dma),
-    .slot_access(slot_ce),
+    .slot_access(slot_delay_this),
     .zipregs_fast(zip_unlocked),
     .shadow(shadow),
     .IO(IO),

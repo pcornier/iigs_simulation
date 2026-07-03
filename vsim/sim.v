@@ -336,6 +336,9 @@ iigs  iigs(
         // Caps Lock LED (unused in vsim)
         .capslock(),
 
+        // ZipGS cache-disable (no SDRAM cache in sim; observe only)
+        .cache_disable(),
+
         // Floppy motor status (for dirty track flush on motor-off)
         .floppy_motor_on(floppy_motor_on),
         .floppy35_motor_on(floppy35_motor_on),
