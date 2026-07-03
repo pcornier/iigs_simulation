@@ -69,9 +69,12 @@ module zipgs_regs (
   assign zip_unlocked = (unlock >= 3'd4);
   assign accel_en     = ~disabled;
 
-  // ~1 ms toggle for $C05B bit 7 (14.318 MHz / 2^14 ~= 874 Hz half-period)
-  reg [13:0] ms_ctr;
-  wire       ms_toggle = ms_ctr[13];
+  // 1.024 ms-period toggle for $C05B bit 7, matching KEGS ((dcycs>>9)&1 =
+  // 512 us half-period): 512 us x 14.31818 MHz = 7331 ticks. The Zip CDA
+  // calibrates its speed measurement against this bit, so the period must be
+  // exact or the reported MHz scales with the error.
+  reg [12:0] ms_ctr;
+  reg        ms_toggle;
 
   // Zip percentage -> our clock-enable steps. The accelerator's rated speed
   // ("100%") is 7.16 MHz: the 14.32 MHz single-tick step needs a cache with
@@ -102,7 +105,11 @@ module zipgs_regs (
   reg [2:0] host_prev;
 
   always @(posedge clk) begin
-    ms_ctr <= ms_ctr + 14'd1;
+    if (ms_ctr == 13'd7330) begin
+      ms_ctr    <= 13'd0;
+      ms_toggle <= ~ms_toggle;
+    end else
+      ms_ctr <= ms_ctr + 13'd1;
 
     if (reset) begin
       unlock    <= 3'd0;

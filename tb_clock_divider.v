@@ -37,6 +37,7 @@ clock_divider dut (
     .fast_thresh(4'd4),
     .dma_active(1'b0),
     .slot_access(1'b0),
+    .zipregs_fast(1'b0),
     .IO(IO),
     .clk_14M_en(clk_14M_en),
     .clk_7M_en(clk_7M_en),

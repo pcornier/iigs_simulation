@@ -2483,6 +2483,7 @@ clock_divider clk_div_inst (
     .fast_thresh(fast_thresh),
     .dma_active(hdd_dma),
     .slot_access(slot_ce),
+    .zipregs_fast(zip_unlocked),
     .shadow(shadow),
     .IO(IO),
     .we(we),

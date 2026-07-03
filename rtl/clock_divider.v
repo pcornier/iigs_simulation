@@ -32,6 +32,14 @@ module clock_divider (
     // as before.
     input  wire        slot_access,
 
+    // 1 = the ZipGS register file is unlocked: $C058-$C05F accesses are the
+    // accelerator's own registers and respond at full speed on a real card
+    // (the Zip CDA's speed measurement polls $C05B in a tight loop; classifying
+    // those reads as 1 MHz I/O makes it report ~1.2 MHz however fast the
+    // machine runs). While locked they are the annunciators and keep their
+    // authentic sync timing.
+    input  wire        zipregs_fast,
+
     input  wire        stretch,        // Stretch signal for extended cycles
 
     // PH0 phase/edge from the VGC/Mega II video timebase (video_timing.v).
@@ -79,7 +87,10 @@ wire [3:0] eff_thresh = dma_active ? 4'd4 : fast_thresh;
 // path holds while this is set until the registered slowMem takes over. At
 // the native 5-tick cycle the decision point is 3 ticks after registration,
 // so the hold can never trigger and native timing is bit-identical.
-wire slow_class_now = valid && (
+// $C058-$C05F while the Zip registers are unlocked: on-card, full speed
+wire zipreg_access = zipregs_fast && (addr[15:3] == 13'b1100000001011);
+
+wire slow_class_now = valid && !zipreg_access && (
      (slot_access && fast_thresh != 4'd4) ||
      (bank == 8'hE0 || bank == 8'hE1) ||
      ( (bank == 8'h00 || bank == 8'h01) && addr[15:8] == 8'hC0 && !shadow[6] &&
@@ -349,7 +360,7 @@ always @(posedge clk_14M) begin
         // During internal CPU cycles (VPA=VDA=0), address bus is invalid;
         // internal cycles are always fast (no memory access occurring).
         slowMem <= 1'b0;
-        if ( valid && (
+        if ( valid && !zipreg_access && (
              (slot_access && fast_thresh != 4'd4) ||
              (bank == 8'hE0 || bank == 8'hE1) ||
              ( (bank == 8'h00 || bank == 8'h01) && addr[15:8] == 8'hC0 && !shadow[6] &&
