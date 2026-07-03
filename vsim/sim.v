@@ -314,6 +314,7 @@ iigs  iigs(
         .ps2_mouse(ps2_mouse),
         .selftest_override(selftest_override),
         .host_speed(host_speed),
+        .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
 
         .FLOPPY_WP(1'b1),
         

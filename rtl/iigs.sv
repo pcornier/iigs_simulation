@@ -68,6 +68,14 @@ module iigs
    // 4 = 14.32 MHz.
    input [2:0]        host_speed,
 
+   // 1 = the memory path can sustain accelerated fast cycles (simulator BRAM,
+   // or FPGA ACCEL_SDRAM burst+cache build). 0 = clamp the machine to native
+   // regardless of what the OSD or ZipGS software requests: the plain
+   // single-word SDRAM path cannot complete a fetch inside a 2-tick cycle,
+   // and an un-stalled miss is silent corruption. The ZipGS registers still
+   // respond (like a real Zip with the acceleration jumper disabled).
+   input              accel_capable,
+
    // Floppy write-protect (sim global)
  input              floppy_wp,
    
@@ -2454,7 +2462,9 @@ zipgs_regs zipgs (
 // Speed step for the clock divider: fast-cycle length = fast_thresh+1 ticks.
 // Only the fast cycle shortens; slow/sync (1 MHz) cycles are untouched, like
 // a real ZipGS/TWGS (I/O and Mega II accesses stay at stock speed).
-wire [3:0] fast_thresh = (zip_accel_en && zip_speed_code != 3'd0)
+// accel_capable gates BOTH control paths (OSD and ZipGS software): on a
+// memory path that cannot sustain short cycles this must never leave native.
+wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0)
                          ? (4'd4 - {1'b0, zip_speed_code})
                          : 4'd4;
 

@@ -61,9 +61,12 @@ All three are no-ops at the native step — native timing is bit-identical
   latency has zero slack; the CPU must stall on misses. That is the
   `ACCEL_SDRAM` burst+cache work (doc/sdram_accel/) — once `cache_stall` is
   wired to the CPU's RDY_IN, unclamp speed code 4 in `rtl/zipgs_regs.sv`.
-- **FPGA**: the OSD control is gated to `ACCEL_SDRAM` builds because the
-  plain single-word SDRAM controller cannot sustain >2.86 MHz fetches.
-  Bring-up order in HANDOFF_quartus_accelerator.md.
+- **FPGA**: `accel_capable` (0 unless built with `ACCEL_SDRAM`) hard-gates
+  the speed mux inside iigs.sv, so neither the OSD nor ZipGS software can
+  over-clock the plain single-word SDRAM path (an un-stalled fetch at short
+  cycles is silent corruption). The Zip registers still respond, like a real
+  card with the acceleration jumper off. Bring-up order in
+  HANDOFF_quartus_accelerator.md.
 - $C05C per-slot delay semantics are stored but not yet applied (we slow all
   external-slot accesses when accelerated, which matches Zip defaults).
 - A TransWarp GS detection shim (fake 'TWGS' vector table at $BC/FF00 +

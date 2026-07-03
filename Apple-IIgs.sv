@@ -197,14 +197,17 @@ wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 
 // OSD CPU speed (shares state with the ZipGS $C058-$C05F software interface):
 // 0 = native 2.86 MHz, 1 = 3.58, 2 = 4.77, 3 = 7.16, 4 = 14.32.
+// accel_capable also hard-gates the ZipGS *software* path inside iigs.sv, so
+// period software unlocking the Zip registers cannot over-clock the plain
+// SDRAM path either (an un-stalled fetch at short cycles is silent
+// corruption). Once the burst+cache build (ACCEL_SDRAM) is validated on
+// hardware with cache_stall wired to the CPU, both gates open.
 `ifdef ACCEL_SDRAM
 wire [2:0] host_speed = status[14:12];
+wire accel_capable = 1'b1;
 `else
-// The plain single-word SDRAM path cannot sustain a CPU faster than native
-// (a fetch takes longer than a 7 MHz cycle), so the OSD selection is forced
-// to native until the burst+cache path (ACCEL_SDRAM, with cache_stall wired
-// to the CPU) is validated on hardware. The simulator honors all speeds.
 wire [2:0] host_speed = 3'd0;
+wire accel_capable = 1'b0;
 `endif
 
 // Detect ROM version change and trigger cold reset
@@ -299,6 +302,7 @@ iigs iigs (
 	.ps2_mouse(ps2_mouse),
 	.selftest_override(selftest_override),
 	.host_speed(host_speed),
+	.accel_capable(accel_capable),
 
 	.FLOPPY_WP(1'b1),
 
