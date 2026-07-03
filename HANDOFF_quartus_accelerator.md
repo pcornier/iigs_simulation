@@ -154,13 +154,21 @@ debug overlay in Apple-IIgs.sv latching fill addresses / CPU-visible
 {addr,byte} pairs and rendering them as pixel blocks decoded from HDMI
 screenshots (scratchpad decode_overlay.py).
 
-### Remaining before OSD speeds work on hardware
-At 2-tick (7.16 MHz) cycles even cache HITS miss the deadline: hit data reaches
-`sdram_dout` at phi2+3 but the next enable is phi2+2, and the stall itself
-registers too late to suppress that enable (verified on hardware: black screen
-with the speed config applied; machine executes but samples stale bytes).
-**The hit path must return combinationally** (the cache's `data` array is
-already async-read; expose comb hit data + a comb `hit_now` into the byte mux)
-before un-gating `accel_capable` for OSD speeds. Until then the committed
-default keeps `ACCEL_SDRAM` off (bit-identical known-good path); the accel
-build is one qsf macro away and is hardware-validated at native.
+### RESOLVED: combinational hit path (same session)
+At 2-tick (7.16 MHz) cycles even cache HITS missed the deadline with the
+registered return path. Fixed: sdram_cache exposes `hit_now`/`cpu_data_now`
+(combinational through the async-read arrays), the CPU read byte is muxed
+combinationally, the stall is simply `reading && !hit_now` (a miss's fill
+raises hit_now and the comb byte is already valid — correct at every step),
+and the HDD DMA engine is paced by `~mem_stall` (it does not honor CPU RDY
+and its fast-RAM reads use the same cache path — this also fixes a latent
+stale-read hazard on disk-WRITE DMA at native).
+
+**Hardware-validated: GS/OS 6.0.1 boots to the desktop at 7.16 MHz** (OSD
+"CPU Speed" / status[14:12]); at 30s wall-clock the 7.16 boot shows the fully
+loaded desktop where native is still drawing icons. Timing closed
+(worst setup slack +0.262 ns).
+
+The committed default still keeps `ACCEL_SDRAM` off pending the full
+regression title set on hardware (only GS/OS boot exercised so far, disk
+reads only). Enable = one qsf line: VERILOG_MACRO "ACCEL_SDRAM=1".

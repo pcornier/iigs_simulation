@@ -2266,7 +2266,7 @@ wire ready_out;
     // Legacy slot-7 HDD (supports 4 units)
     hdd hdd(
         .CLK_14M(CLK_14M),
-        .phi0(phi2),    // Gate on CPU clock (ph2_en) not raw ph0 to prevent double-fire during sync waits
+        .phi0(phi2 & ~mem_stall),    // Gate on CPU clock (ph2_en), held during memory-path stalls: the DMA engine does not honor CPU RDY, and its fast-RAM reads go through the same (possibly missing) cache path
         .IO_SELECT(io_select[7]),
         .DEVICE_SELECT(device_select[7]),
         //.IO_SELECT(1'b0),

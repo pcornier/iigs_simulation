@@ -375,22 +375,25 @@ reg  [15:0] wr_din;
 wire        rd_req;
 wire        rd_ack;
 wire [24:1] rd_addr;
-reg         rd_bsel;
 wire [127:0] rd_line;
-reg  [7:0]  sdram_dout;
 wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce);
 wire [24:1] cache_addr  = {1'b0, cpu_sdram_addr[23:1]};
 wire [15:0] cache_data;
+wire        cache_hit_now;
+wire [15:0] cache_data_now;
+// CPU read byte, fully combinational through the cache (valid when
+// cache_hit_now; the stall below holds the CPU until then). Meets the data
+// deadline at every speed step — the old registered sdram_dout landed at
+// phi2+3 minimum, which is past the sample point below 5-tick cycles.
+wire [7:0]  sdram_dout  = cpu_sdram_addr[0] ? cache_data_now[15:8] : cache_data_now[7:0];
 wire        cache_ready, cache_stall;
-// Extend the stall through the cache_ready -> sdram_dout register stage: the
-// fill can land within ~4.5 clk_sys of the phi2 edge while the returned byte
-// only reaches sdram_dout one cycle after cache_ready. Without the extension
-// the CPU's next enable (5 clk_sys) can fall in that gap and sample the
-// previous read's byte (observed on hardware as PC = {FA,C0} from a stale
-// vector-low fetch).
-reg cache_ready_d;
-always @(posedge clk_sys) cache_ready_d <= cache_ready;
-assign mem_stall = cache_stall | cache_ready | cache_ready_d;
+// Stall rule with the combinational hit path: hold the CPU whenever the
+// current cycle reads fast RAM / ROM and the cache does not (yet) hit. A miss
+// launches its fill from the cache_rd strobe (independent of the stall), the
+// fill lands, hit_now rises, the stall drops and the comb byte is already
+// valid — correct at every clock-enable step with no registered-latency
+// races. Sampled synchronously by the CPU's RDY, so comb glitches are fine.
+assign mem_stall = ~we & (fastram_ce | rom_ce) & ~cache_hit_now;
 reg         snoop_stb;
 `else
 reg         rd_req = 0;
@@ -414,10 +417,6 @@ always @(posedge clk_sys) begin
 	end
 
 `ifdef ACCEL_SDRAM
-	// cache drives the read (cache_rd strobe + cache_addr are combinational above);
-	// latch the byte select at request, capture the returned word on cache_ready.
-	if (cache_rd) rd_bsel <= cpu_sdram_addr[0];
-	if (cache_ready) sdram_dout <= rd_bsel ? cache_data[15:8] : cache_data[7:0];
 	// snoop ch0 writes one cycle late, when wr_addr/wr_din hold the committed write
 	snoop_stb <= phi2 & we & fastram_ce;
 `else
@@ -475,6 +474,7 @@ sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) icache
 	.clk(clk_sys), .reset(reset),
 	.cpu_addr(cache_addr), .cpu_rd(cache_rd), .cpu_data(cache_data),
 	.cpu_ready(cache_ready), .cpu_stall(cache_stall),
+	.hit_now(cache_hit_now), .cpu_data_now(cache_data_now),
 	.wr_addr(wr_addr), .wr_data(wr_din), .wr_be({wr_wrh, wr_wrl}), .wr_stb(snoop_stb),
 	.mem_addr(rd_addr), .mem_req(rd_req), .mem_ack(rd_ack), .mem_line(rd_line)
 );

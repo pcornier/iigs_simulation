@@ -32,6 +32,16 @@ module sdram_cache #(
     output reg                  cpu_ready,  // 1 = cpu_data valid this cycle (hit, or fill done)
     output                      cpu_stall,  // 1 = miss in progress; drive CPU RDY_IN low with this
 
+    // Combinational read port: data for the CURRENT cpu_addr, valid whenever
+    // hit_now=1. This is the CPU-facing path that meets the data deadline at
+    // every clock-enable step (the registered cpu_data/cpu_ready pair above
+    // lands 1-2 clk after the strobe, which is too late below 5-tick cycles
+    // and is kept only for compatibility/debug). After a miss's fill lands,
+    // hit_now rises and the same port serves the fill data — so the stall
+    // rule at the top level is simply: reading && !hit_now.
+    output                      hit_now,
+    output     [15:0]           cpu_data_now,
+
     // ---- CPU write snoop (ch0 write-through happens elsewhere; we only watch it) ----
     input      [ADDR_W:1]       wr_addr,
     input      [15:0]           wr_data,
@@ -59,6 +69,8 @@ module sdram_cache #(
     reg                     valid[LINES-1:0];
 
     wire hit = valid[c_idx] && (tag[c_idx] == c_tag);
+    assign hit_now      = hit;
+    assign cpu_data_now = data[c_idx][{c_word,4'b0} +: 16];
 
     // miss FSM
     localparam S_IDLE = 1'b0, S_FILL = 1'b1;
