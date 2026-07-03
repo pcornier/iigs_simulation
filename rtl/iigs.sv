@@ -2464,6 +2464,7 @@ zipgs_regs zipgs (
     .wr_data(dout),
     .rd_addr(addr_bef[2:0]),
     .rd_data(zip_rdata),
+    .mtr_slow(~CYAREG[7]),
     .host_speed(host_speed),
     .zip_unlocked(zip_unlocked),
     .accel_en(zip_accel_en),

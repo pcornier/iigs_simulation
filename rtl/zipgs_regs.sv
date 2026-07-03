@@ -49,6 +49,12 @@ module zipgs_regs (
     input  wire [2:0] rd_addr,      // addr[2:0] of the read being decoded
     output reg  [7:0] rd_data,
 
+    // Motherboard speed switch is slow (CYAREG[7]==0). ZipDA forces this right
+    // before its speed self-test, so it's the arming condition for exposing the
+    // 1 ms clock on $C05A bit 7. When fast (normal operation) $C05A bit 7 is the
+    // clean speed-nibble top bit that Control Panel cdevs read.
+    input  wire       mtr_slow,
+
     // Host (OSD / CLI) speed control. Applied whenever the value changes
     // (and once out of reset), so a mid-session OSD change takes effect.
     //   0 = native (acceleration disabled), 1 = 3.58, 2 = 4.77, 3 = 7.16 MHz
@@ -178,13 +184,17 @@ module zipgs_regs (
   //
   // $C05A: the real ZipDA CDA's speed self-test uses $C05A BIT 7 as its 1 ms
   // timebase (LDA $C05A / BPL edge-wait loop at $14b7 in the CDA), not $C05B
-  // bit 7 as the register FAQ / KEGS document. We put the toggle there so the
-  // measurement completes and reads the true accelerated speed; the speed
-  // nibble is carried in $C05A[6:4] for the setting line.
+  // bit 7 as the register FAQ / KEGS document. But bit 7 is also the top of the
+  // speed nibble that Control Panel cdevs read to detect/report the card, so a
+  // permanently-toggling bit 7 makes them see a garbage state ("Zip OFF").
+  // Expose the 1 ms clock on bit 7 ONLY while the motherboard is in slow mode
+  // (mtr_slow) -- ZipDA clears $C036 right before measuring, so this is exactly
+  // its measurement window; normal reads return the clean speed nibble {sp,$F}.
   always_comb begin
     case (rd_addr)
       3'h1:    rd_data = reg_c059;                              // $C059
-      3'h2:    rd_data = {ms_toggle, sp[2:0], 4'hF};            // $C05A (bit7=1ms clk)
+      3'h2:    rd_data = mtr_slow ? {ms_toggle, sp[2:0], 4'hF}  // $C05A: 1ms clk (measuring)
+                                  : {sp, 4'hF};                 //        clean speed nibble
       3'h3:    rd_data = {ms_toggle, 1'b1, 1'b0, disabled, 4'h0}; // $C05B
       3'h4:    rd_data = reg_c05c;                              // $C05C
       default: rd_data = 8'h00;                                 // $C058/5D/5E/5F
