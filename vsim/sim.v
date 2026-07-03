@@ -61,6 +61,10 @@ module emu (
         // Self-test mode override
         input selftest_override,
 
+        // CPU speed control (--speed flag): 0=native 2.86MHz .. 4=14.32MHz.
+        // Shares state with the ZipGS $C058-$C05F software interface.
+        input [2:0] host_speed,
+
         // ROM selection: 0=ROM3, 1=ROM1
         input rom_select/*verilator public_flat*/,
 
@@ -309,6 +313,7 @@ iigs  iigs(
         .ps2_key(ps2_key),
         .ps2_mouse(ps2_mouse),
         .selftest_override(selftest_override),
+        .host_speed(host_speed),
 
         .FLOPPY_WP(1'b1),
         

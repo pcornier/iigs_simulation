@@ -129,6 +129,7 @@ V_SRC = \
 	$(RTL)/scc8530.v \
 	$(RTL)/scc_iigs_wrapper.v \
 	$(RTL)/mmu.sv \
+	$(RTL)/zipgs_regs.sv \
 	$(RTL)/iigs.sv
 
 

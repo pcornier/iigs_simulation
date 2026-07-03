@@ -55,6 +55,7 @@ localparam CONF_STR = {
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
 	"OB,ROM Version,ROM1,ROM3;",
+	"O[14:12],CPU Speed,2.8 MHz,3.6 MHz,4.8 MHz,7.2 MHz;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -194,6 +195,18 @@ wire cold_reset = RESET | ~locked | cold_reset_trigger;
 wire selftest_override = status[10];
 wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 
+// OSD CPU speed (shares state with the ZipGS $C058-$C05F software interface):
+// 0 = native 2.86 MHz, 1 = 3.58, 2 = 4.77, 3 = 7.16, 4 = 14.32.
+`ifdef ACCEL_SDRAM
+wire [2:0] host_speed = status[14:12];
+`else
+// The plain single-word SDRAM path cannot sustain a CPU faster than native
+// (a fetch takes longer than a 7 MHz cycle), so the OSD selection is forced
+// to native until the burst+cache path (ACCEL_SDRAM, with cache_stall wired
+// to the CPU) is validated on hardware. The simulator honors all speeds.
+wire [2:0] host_speed = 3'd0;
+`endif
+
 // Detect ROM version change and trigger cold reset
 reg rom_select_prev;
 always @(posedge clk_sys) rom_select_prev <= rom_select;
@@ -285,6 +298,7 @@ iigs iigs (
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
 	.selftest_override(selftest_override),
+	.host_speed(host_speed),
 
 	.FLOPPY_WP(1'b1),
 

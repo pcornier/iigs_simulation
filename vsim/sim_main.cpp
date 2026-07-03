@@ -186,6 +186,10 @@ static inline void hdd_ring_record(unsigned char pbr, unsigned short pc, unsigne
 // ROM version selection (0=ROM3, 1=ROM1, default ROM3)
 int initial_rom_select = 0;
 
+// --speed CPU speed step (shared state with the ZipGS $C058-$C05F interface):
+// 0=native 2.86MHz, 1=3.58, 2=4.77, 3=7.16, 4=14.32
+int host_speed = 0;
+
 // Self-test mode support
 bool selftest_mode = false;
 bool selftest_override_active = false;
@@ -1161,6 +1165,9 @@ int verilate() {
 		// Set self-test override signal to hardware
 		top->selftest_override = selftest_override_active ? 1 : 0;
 
+		// CPU speed step (--speed). Level signal; zipgs_regs applies it on change.
+		top->host_speed = host_speed;
+
 		// Clock dividers
 		CLK_14M.Tick();
 		if (CLK_14M.IsRising()) g_tick14++;   // count 14M rising edges (beam-trace ticks/cycle)
@@ -1287,8 +1294,8 @@ int verilate() {
                                 unsigned char pbr_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                                 unsigned short pc_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                                 unsigned char dbr_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
-                                unsigned char fastram_ce_pa = VERTOPINTERN->emu__DOT__iigs__DOT__fastram_ce_int;
-                                unsigned char slowram_ce_pa = VERTOPINTERN->emu__DOT__iigs__DOT__slowram_ce_int;
+                                unsigned char fastram_ce_pa = VERTOPINTERN->emu__DOT__fastram_ce;
+                                unsigned char slowram_ce_pa = VERTOPINTERN->emu__DOT__iigs__DOT__slowram_ce;
                                 unsigned char ir_pa = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
                                 parm_access_count++;
                                 printf("PARM_ACCESS #%d: %s bank=%02X addr=%04X data=%02X "
@@ -4578,6 +4585,9 @@ void show_help() {
 	printf("  --cold-reset-at-frame <frame> Trigger cold reset at specified frame\n");
 	printf("  --rom <1|3|rom1|rom3>         Select ROM version (default: rom3)\n");
 	printf("  --selftest                    Enable self-test mode\n");
+	printf("  --speed <step|MHz>            CPU accelerator speed: 0-3 or 2.8/3.6/4.8/7.2 (MHz).\n");
+	printf("                                Fast cycles only; I/O + banks E0/E1 stay 1 MHz (ZipGS-style).\n");
+	printf("                                Shares state with the ZipGS $C058-$C05F software interface.\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
 	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
 	printf("  --disk <filename>             Use specified HDD image (slot 7 unit 0, no disk mounted by default)\n");
@@ -4839,6 +4849,26 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--quiet") == 0) {
 			quiet_mode = true;
 			printf("Quiet mode enabled - CPU instruction trace suppressed\n");
+		} else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
+			// Accelerator speed step (shared with the ZipGS software interface):
+			// accepts a step number 0-4 or a MHz value.
+			const char *sv = argv[i + 1];
+			static const char *speed_mhz[5] = {"2.86", "3.58", "4.77", "7.16", "14.32"};
+			if      (strcmp(sv, "0") == 0 || strncmp(sv, "2.8", 3) == 0 || strcmp(sv, "native") == 0) host_speed = 0;
+			else if (strcmp(sv, "1") == 0 || strncmp(sv, "3.5", 3) == 0 || strncmp(sv, "3.6", 3) == 0) host_speed = 1;
+			else if (strcmp(sv, "2") == 0 || strncmp(sv, "4.7", 3) == 0 || strncmp(sv, "4.8", 3) == 0) host_speed = 2;
+			else if (strcmp(sv, "3") == 0 || strncmp(sv, "7.1", 3) == 0 || strncmp(sv, "7.2", 3) == 0) host_speed = 3;
+			else if (strcmp(sv, "4") == 0 || strncmp(sv, "14", 2) == 0 || strcmp(sv, "max") == 0) {
+				host_speed = 3;
+				printf("Note: 14.3 MHz needs the SDRAM cache + stall-on-miss (not yet wired); clamping to 7.16 MHz\n");
+			}
+			else {
+				fprintf(stderr, "Invalid --speed value '%s' (use 0-4, native, max, or MHz: 2.8/3.6/4.8/7.2/14.3)\n", sv);
+				return 1;
+			}
+			printf("CPU speed: step %d (%s MHz fast cycles; I/O and Mega II stay 1 MHz)\n",
+			       host_speed, speed_mhz[host_speed]);
+			i++;
         } else if (strcmp(argv[i], "--headless") == 0) {
             headless = true;
         } else if (strcmp(argv[i], "--disk") == 0 && i + 1 < argc) {

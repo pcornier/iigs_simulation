@@ -15,6 +15,23 @@ module clock_divider (
     input wire valid,                  // VPA|VDA: bus cycle is valid (address bus meaningful)
     input wire is_rom_access,          // True when accessing ROM (refresh hidden)
 
+    // Fast-cycle length in CLK_14M ticks minus one (accelerator speed step).
+    // 4 = native 5-tick / 2.864 MHz; 3 = 3.58; 2 = 4.77; 1 = 7.16; 0 = 14.32.
+    // Only the FAST cycle shortens: slow (1 MHz) and sync (I/O, E0/E1,
+    // shadowed-video writes) cycles are untouched, like a real ZipGS/TWGS.
+    input  wire [3:0]  fast_thresh,
+
+    // Bus-master DMA in progress (HDD): DMA data paths are registered and
+    // tuned for the native 5-tick cycle, so DMA cycles always run at native
+    // pace regardless of the accelerator step (the CPU is held anyway).
+    input  wire        dma_active,
+
+    // External-slot access ($C100-$C7FF slot card space, mmu slot_ce). When
+    // accelerated these drop to a sync (1 MHz) cycle like a real ZipGS with
+    // its default slot-delay configuration; at native they stay fast exactly
+    // as before.
+    input  wire        slot_access,
+
     input  wire        stretch,        // Stretch signal for extended cycles
 
     // PH0 phase/edge from the VGC/Mega II video timebase (video_timing.v).
@@ -48,6 +65,42 @@ module clock_divider (
 reg [3:0]  clk_14M_counter;    // 14M cycle counter
 reg [3:0]  ph0_counter;        // PH0 cycle counter (0-13 for full cycle)
 reg [3:0]  ph2_counter;        // PH2 cycle counter
+
+// Effective fast threshold: DMA cycles always run at the native pace
+// (registered DMA data paths need the 5-tick window).
+wire [3:0] eff_thresh = dma_active ? 4'd4 : fast_thresh;
+
+// Combinational mirror of the registered slowMem classification below (keep
+// the two in sync; this one uses `we` where the registered one uses we_reg).
+// Purpose: at accelerated speeds a 2-tick fast cycle ends on the SAME edge
+// the registered slowMem lands, so a slow-classified access would complete
+// as a fast cycle before it can be rerouted to a sync cycle (observed as the
+// slot-7 HDD C7xx ROM probe reading stale bytes at 7.16 MHz). The fast-fire
+// path holds while this is set until the registered slowMem takes over. At
+// the native 5-tick cycle the decision point is 3 ticks after registration,
+// so the hold can never trigger and native timing is bit-identical.
+wire slow_class_now = valid && (
+     (slot_access && fast_thresh != 4'd4) ||
+     (bank == 8'hE0 || bank == 8'hE1) ||
+     ( (bank == 8'h00 || bank == 8'h01) && addr[15:8] == 8'hC0 && !shadow[6] &&
+       !(
+         (addr == 16'hC02D && !we) ||
+         (addr == 16'hC035) ||
+         (addr == 16'hC036) ||
+         (addr == 16'hC037) ||
+         (addr == 16'hC068 && !we) ||
+         (addr >= 16'hC071 && addr <= 16'hC07F)
+       )
+     ) ||
+     (we && (bank == 8'h00 || bank == 8'h01) &&
+        (
+            (addr >= 16'h0400 && addr <= 16'h07FF && ~shadow[0]) ||
+            (addr >= 16'h0800 && addr <= 16'h0BFF && ~shadow[5]) ||
+            (addr >= 16'h2000 && addr <= 16'h3FFF && ~shadow[1] && !(bank == 8'h01 && shadow[4])) ||
+            (addr >= 16'h4000 && addr <= 16'h5FFF && ~shadow[2] && !(bank == 8'h01 && shadow[4])) ||
+            (addr >= 16'h2000 && addr <= 16'h9FFF && bank == 8'h01 && ~shadow[3])
+        )
+     ));
 reg [3:0]  refresh_counter;    // Refresh cycle counter (every 9th cycle)
 reg        cycle_is_refresh;   // Next cycle is a refresh (10-tick) cycle
 reg        clk_7M_div;         // 7M divider flip-flop
@@ -297,6 +350,7 @@ always @(posedge clk_14M) begin
         // internal cycles are always fast (no memory access occurring).
         slowMem <= 1'b0;
         if ( valid && (
+             (slot_access && fast_thresh != 4'd4) ||
              (bank == 8'hE0 || bank == 8'hE1) ||
              ( (bank == 8'h00 || bank == 8'h01) && addr[15:8] == 8'hC0 && !shadow[6] &&
                // IOLC shadow gate: $C0xx in banks 00/01 is real I/O (slow) only when
@@ -476,8 +530,13 @@ always @(posedge clk_14M) begin
                 ph2_en <= 1'b0;
             end
         end else begin
-            // Normal fast cycle: 5 ticks (7 if it absorbs the per-scanline NTSC stretch)
-            if (ph2_counter >= (fast_stretch ? 4'd6 : 4'd4)) begin
+            // Normal fast cycle: eff_thresh+1 ticks (5 at native), +2 if it
+            // absorbs the per-scanline NTSC stretch. DMA always native pace.
+            // At accelerated speeds, hold the fire while the current access
+            // classifies slow (slow_class_now) so the registered slowMem can
+            // reroute it to a sync cycle — see the comment at slow_class_now.
+            if (ph2_counter >= (fast_stretch ? (eff_thresh + 4'd2) : eff_thresh)
+                && !(slow_class_now && eff_thresh != 4'd4)) begin
                 ph2_counter <= 4'd0;
                 ph2_en <= 1'b1;
                 fast_stretch <= 1'b0;       // stretch consumed
@@ -485,7 +544,12 @@ always @(posedge clk_14M) begin
                 if (is_rom_access) begin
                     refresh_counter <= 4'd0;    // ROM hides refresh
                     cycle_is_refresh <= 1'b0;
-                end else if (refresh_counter >= 4'd8) begin
+                end else if (refresh_counter >= 4'd8 && fast_thresh == 4'd4) begin
+                    // RAM-refresh penalty models the FPI's DRAM refresh steal and
+                    // only applies at the native 5-tick cycle. Accelerated steps
+                    // model a ZipGS/TWGS-style cache in front of RAM, which hides
+                    // refresh (and the accelerated timing is not FPI-authentic
+                    // anyway).
                     cycle_is_refresh <= 1'b1;   // Next is refresh (10-tick)
                     refresh_counter <= 4'd0;
                 end else begin

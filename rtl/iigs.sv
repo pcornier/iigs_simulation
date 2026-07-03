@@ -62,6 +62,12 @@ module iigs
    // Self-test mode override
  input              selftest_override,
 
+   // Host (MiSTer OSD / simulator --speed) CPU speed control. Shares state
+   // with the ZipGS $C058-$C05F software interface (see rtl/zipgs_regs.sv):
+   // 0 = native 2.86 MHz (accelerator off), 1 = 3.58, 2 = 4.77, 3 = 7.16,
+   // 4 = 14.32 MHz.
+   input [2:0]        host_speed,
+
    // Floppy write-protect (sim global)
  input              floppy_wp,
    
@@ -642,6 +648,13 @@ module iigs
           //  bit1: scanline enable
           12'h023: io_dout = {vgc_any_pending, VGCINT[6:5], 2'b00,
                               VGCINT[2:1], 1'b0};
+          // ZipGS registers overlay $C058-$C05F once unlocked (see
+          // rtl/zipgs_regs.sv). Locked reads keep the default behavior
+          // (annunciator soft switches / floating bus).
+          12'h058, 12'h059, 12'h05a, 12'h05b,
+          12'h05c, 12'h05d, 12'h05e, 12'h05f:
+            if (zip_unlocked) io_dout = zip_rdata;
+
           12'h029: io_dout = NEWVIDEO;
           12'h02a: io_dout = 'h0; // from gsplus
           12'h02b: io_dout = C02BVAL; // from gsplus
@@ -993,8 +1006,8 @@ module iigs
             12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
             12'h056: begin $display("**LORES %x",0);HIRES_MODE<=1'b0; end // LORES - turn off hi-res
             12'h057: begin $display("**HIRES %x",1);HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
-            12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
-            12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
+            12'h05e: begin if (!zip_unlocked) begin $display("**CLRAN3"); AN3<=1'b0; end end  // CLRAN3 (annunciator only while ZipGS locked)
+            12'h05f: begin if (!zip_unlocked) begin $display("**SETAN3"); AN3<=1'b1; end end  // SETAN3 (annunciator only while ZipGS locked)
 `else
             12'h050: begin TEXTG<=1'b0;end
             12'h051: begin TEXTG<=1'b1;end
@@ -1004,8 +1017,8 @@ module iigs
             12'h055: begin PAGE2<=1'b1; end
             12'h056: begin HIRES_MODE<=1'b0; end // LORES - turn off hi-res
             12'h057: begin HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
-            12'h05e: begin AN3<=1'b0; end  // CLRAN3
-            12'h05f: begin AN3<=1'b1; end  // SETAN3
+            12'h05e: begin if (!zip_unlocked) AN3<=1'b0; end  // CLRAN3 (annunciator only while ZipGS locked)
+            12'h05f: begin if (!zip_unlocked) AN3<=1'b1; end  // SETAN3 (annunciator only while ZipGS locked)
 `endif
             // $C068: bit0 stays high during boot sequence, why?
             // if bit0=1 it means that internal ROM at SCx00 is selected
@@ -1271,8 +1284,8 @@ module iigs
             12'h055: begin $display("**PAGE2 %x",1);PAGE2<=1'b1; end
             12'h056: begin $display("**LORES %x",0);HIRES_MODE<=1'b0; end // LORES - turn off hi-res
             12'h057: begin $display("**HIRES %x",1);HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
-            12'h05e: begin $display("**CLRAN3"); AN3<=1'b0; end  // CLRAN3
-            12'h05f: begin $display("**SETAN3"); AN3<=1'b1; end  // SETAN3
+            12'h05e: begin if (!zip_unlocked) begin $display("**CLRAN3"); AN3<=1'b0; end end  // CLRAN3 (annunciator only while ZipGS locked)
+            12'h05f: begin if (!zip_unlocked) begin $display("**SETAN3"); AN3<=1'b1; end end  // SETAN3 (annunciator only while ZipGS locked)
 `else
             12'h050: begin TEXTG<=1'b0;end
             12'h051: begin TEXTG<=1'b1;end
@@ -1282,8 +1295,8 @@ module iigs
             12'h055: begin PAGE2<=1'b1; end
             12'h056: begin HIRES_MODE<=1'b0; end // LORES - turn off hi-res
             12'h057: begin HIRES_MODE<=1'b1; end // HIRES - turn on hi-res
-            12'h05e: begin AN3<=1'b0; end  // CLRAN3
-            12'h05f: begin AN3<=1'b1; end  // SETAN3
+            12'h05e: begin if (!zip_unlocked) AN3<=1'b0; end  // CLRAN3 (annunciator only while ZipGS locked)
+            12'h05f: begin if (!zip_unlocked) AN3<=1'b1; end  // SETAN3 (annunciator only while ZipGS locked)
 `endif
             // Joystick/Paddle I/O
             12'h061: begin
@@ -2410,12 +2423,50 @@ wire ready_out;
 // ROM access signal: refresh penalty is hidden during ROM reads
 assign rom_ce = rom1_ce | rom2_ce | romc_ce | romd_ce | slot_internalrom_ce;
 
+// ---------------------------------------------------------------------------
+// ZipGS accelerator registers ($C058-$C05F overlay, KEGS semantics) + host
+// (OSD / --speed) control. Both set the same state, so software reading the
+// Zip registers always agrees with the host-selected speed and vice versa.
+// ---------------------------------------------------------------------------
+wire       zip_unlocked;
+wire       zip_accel_en;
+wire [2:0] zip_speed_code;
+wire [7:0] zip_rdata;
+// One write strobe per CPU I/O write to $C058-$C05F (phi2 = one pulse per CPU
+// cycle, same pattern as the $C030 speaker toggle). IO already excludes
+// EXTERNAL_IO and non-I/O banks.
+wire       zip_wr_stb = IO && we && phi2 && (addr_bef[7:3] == 5'b01011);
+
+zipgs_regs zipgs (
+    .clk(CLK_14M),
+    .reset(reset),
+    .wr_stb(zip_wr_stb),
+    .wr_addr(addr_bef[2:0]),
+    .wr_data(dout),
+    .rd_addr(addr_bef[2:0]),
+    .rd_data(zip_rdata),
+    .host_speed(host_speed),
+    .zip_unlocked(zip_unlocked),
+    .accel_en(zip_accel_en),
+    .speed_code(zip_speed_code)
+);
+
+// Speed step for the clock divider: fast-cycle length = fast_thresh+1 ticks.
+// Only the fast cycle shortens; slow/sync (1 MHz) cycles are untouched, like
+// a real ZipGS/TWGS (I/O and Mega II accesses stay at stock speed).
+wire [3:0] fast_thresh = (zip_accel_en && zip_speed_code != 3'd0)
+                         ? (4'd4 - {1'b0, zip_speed_code})
+                         : 4'd4;
+
 // Clock divider instance
 clock_divider clk_div_inst (
     .clk_14M(CLK_14M),
     .cyareg(CYAREG),
     .bank(bank),      // physical bank: aux-resolved, so E0/E1 (Mega II) cycles classify slow
     .addr(addr_bef),  // logical address: soft-switch decode must not see the LC $Dxxx->$Cxxx A12 fold
+    .fast_thresh(fast_thresh),
+    .dma_active(hdd_dma),
+    .slot_access(slot_ce),
     .shadow(shadow),
     .IO(IO),
     .we(we),
