@@ -55,7 +55,7 @@ localparam CONF_STR = {
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
 	"OB,ROM Version,ROM1,ROM3;",
-	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz,14.3 MHz;",
+	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -203,8 +203,13 @@ wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 // corruption). Once the burst+cache build (ACCEL_SDRAM) is validated on
 // hardware with cache_stall wired to the CPU, both gates open.
 wire cache_disable;   // ZipGS $C059 bit 7 -> sdram_cache bypass
+// Hardware speed cap: 7.16 MHz (step 3) is the fastest step validated on the
+// board. The 14.32 MHz 1-tick step (step 4) passes static timing but has a
+// cycle-level race under load (crashes into self-test); it stays sim-only
+// until the posted-write / miss-stall path is hardened at 1 tick. Clamp
+// defensively even though the OSD menu no longer offers step 4.
 `ifdef ACCEL_SDRAM
-wire [2:0] host_speed = status[14:12];
+wire [2:0] host_speed = (status[14:12] > 3'd3) ? 3'd3 : status[14:12];
 wire accel_capable = 1'b1;
 wire mem_stall;   // driven by the icache (cache miss in flight)
 `else
