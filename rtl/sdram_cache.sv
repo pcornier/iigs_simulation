@@ -69,11 +69,14 @@ module sdram_cache #(
     reg [TAGW-1:0]          tag  [LINES-1:0];
     reg                     valid[LINES-1:0];
 
-    // cache_off (ZipGS $C059 bit 7) forces a miss on every read so the CPU
-    // always gets fresh memory data -- a coherency escape for self-modifying
-    // code the write-snoop can't cover. The fill still populates the line, but
-    // hit_now stays low so nothing is served from a possibly-stale copy.
-    wire hit = valid[c_idx] && (tag[c_idx] == c_tag) && !cache_off;
+    // NOTE: cache_off (ZipGS $C059 bit 7 "cache disable") is currently a no-op.
+    // Forcing hit=0 on every read wedged the CPU: mem_stall = reading &&
+    // !hit_now, so with hit_now stuck low the RDY never releases (the fill lands
+    // but hit_now never rises). The write-snoop already keeps cached lines
+    // coherent with CPU writes, so leaving the cache enabled is correct; the
+    // "cache disable" checkbox is cosmetic until a proper bypass-and-serve path
+    // is added. cache_off is intentionally unused.
+    wire hit = valid[c_idx] && (tag[c_idx] == c_tag);
     assign hit_now      = hit;
     assign cpu_data_now = data[c_idx][{c_word,4'b0} +: 16];
 
