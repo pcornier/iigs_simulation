@@ -83,19 +83,33 @@ module sdram_cache #(
     reg [IDXW-1:0]   fill_idx;
     reg [TAGW-1:0]   fill_tag;
     reg [LW-1:0]     fill_word;
-    reg              mem_ack_d;
+
+    // mem_ack toggles in the controller's clk_mem (114.5 MHz) domain; bring it
+    // into clk_sys through a 2-FF synchronizer before edge-detecting it. The
+    // previous single-FF sample compared a registered copy against the raw
+    // async signal, so a metastable capture could see a false or missed edge
+    // and corrupt the fill -- harmless at 2.8 MHz (loose timing) but the cause
+    // of intermittent boot crashes at 7.16 MHz. mem_line[127:0] is held stable
+    // by the controller until the next request, so it is safe to sample when
+    // the synchronized edge fires. (Flagged in HANDOFF_quartus_accelerator.md.)
+    reg mem_ack_s1, mem_ack_s2, mem_ack_d;
 
     assign cpu_stall = (fsm == S_FILL);
 
     integer i;
     always @(posedge clk) begin
         cpu_ready <= 1'b0;
-        mem_ack_d <= mem_ack;
+        mem_ack_s1 <= mem_ack;
+        mem_ack_s2 <= mem_ack_s1;
+        mem_ack_d  <= mem_ack_s2;
 
         if (reset) begin
             for (i = 0; i < LINES; i = i + 1) valid[i] <= 1'b0;
             fsm     <= S_IDLE;
             mem_req <= 1'b0;
+            mem_ack_s1 <= 1'b0;
+            mem_ack_s2 <= 1'b0;
+            mem_ack_d  <= 1'b0;
         end else begin
             // ---- write snoop: keep any cached copy coherent (write-through update) ----
             // (the actual SDRAM write is issued by the existing ch0 path in Apple-IIgs.sv)
@@ -126,7 +140,7 @@ module sdram_cache #(
                 end
             end
             S_FILL: begin
-                if (mem_ack_d != mem_ack) begin       // controller delivered the line
+                if (mem_ack_d != mem_ack_s2) begin    // synchronized ack edge: line delivered
                     data [fill_idx] <= mem_line;
                     tag  [fill_idx] <= fill_tag;
                     valid[fill_idx] <= 1'b1;
