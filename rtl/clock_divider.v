@@ -204,7 +204,17 @@ end
 // MAME gates slow mode by (m_motors_active & (m_speed & 0x0f)), so we do the same:
 // - waitforC0XY tracks motor state unconditionally
 // - cyareg[N] bit gates whether that motor forces slow mode
-wire slow_request = (cyareg[7] == 1'b0) ||
+// A real ZipGS/TWGS overrides the motherboard speed switch: with the
+// accelerator engaged the CPU runs fast regardless of $C036 bit 7 (CYAREG[7]).
+// Software slows the machine through the Zip's own registers or by disabling
+// the card, NOT by clearing CYAREG[7]. This matters beyond cosmetics — the
+// Zip CDA's speed self-test literally clears CYAREG[7] before measuring
+// (expecting the card to stay fast), and any title that briefly drops to
+// 1 MHz via $C036 would otherwise lose acceleration. accel_active is
+// (fast_thresh != native); when native the term is unchanged, so the default
+// machine is bit-identical.
+wire accel_active = (fast_thresh != 4'd4);
+wire slow_request = (cyareg[7] == 1'b0 && !accel_active) ||
                    (waitforC0C8 && cyareg[0]) ||
                    (waitforC0D8 && cyareg[1]) ||
                    (waitforC0E8 && cyareg[2]) ||

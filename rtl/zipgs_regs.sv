@@ -154,10 +154,16 @@ module zipgs_regs (
   end
 
   // Combinational read data (only meaningful while unlocked; the caller muxes)
+  //
+  // $C05A: the real ZipDA CDA's speed self-test uses $C05A BIT 7 as its 1 ms
+  // timebase (LDA $C05A / BPL edge-wait loop at $14b7 in the CDA), not $C05B
+  // bit 7 as the register FAQ / KEGS document. We put the toggle there so the
+  // measurement completes and reads the true accelerated speed; the speed
+  // nibble is carried in $C05A[6:4] for the setting line.
   always_comb begin
     case (rd_addr)
       3'h1:    rd_data = reg_c059;                              // $C059
-      3'h2:    rd_data = {sp, 4'hF};                            // $C05A
+      3'h2:    rd_data = {ms_toggle, sp[2:0], 4'hF};            // $C05A (bit7=1ms clk)
       3'h3:    rd_data = {ms_toggle, 1'b1, 1'b0, disabled, 4'h0}; // $C05B
       3'h4:    rd_data = reg_c05c;                              // $C05C
       default: rd_data = 8'h00;                                 // $C058/5D/5E/5F
