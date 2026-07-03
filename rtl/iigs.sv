@@ -10,6 +10,10 @@
 // Define DEBUG_IRQ to enable verbose interrupt debug output
 // `define DEBUG_IRQ
 
+// Define DEBUG_FLOATBUS to log floating-bus reads ($C05A, Zip locked) with the
+// beam position -- for vaporlock / floating-bus video accuracy work.
+// `define DEBUG_FLOATBUS
+
 module iigs
   (
    input              reset,
@@ -1687,6 +1691,14 @@ wire [7:0] video_data;
 always @(posedge clk_vid) if (ce_pix && video_addr[16:0]>=17'h00400 && video_addr[16:0]<17'h00800
                               && V>=10'd300 && V<=10'd305)
    $display("VGCRD,%0d,%0d,%0d,%05x", V, H, H_CHAR, video_addr[16:0]);
+`endif
+`ifdef DEBUG_FLOATBUS
+// Log every floating-bus read ($C05A while the Zip is locked) with the beam
+// position and the video byte we return, to diagnose vaporlock accuracy.
+always @(posedge CLK_14M) begin
+  if (phi2 && ~we && IO && addr_bef[7:0] == 8'h5A && ~zip_unlocked)
+    $display("FBUS V=%0d H=%0d HCHAR=%0d vaddr=%05x vdata=%02x", V, H, H_CHAR, video_addr[16:0], video_data);
+end
 `endif
 // vbl_irq now handled internally in interrupt logic
   wire scanline_irq;
