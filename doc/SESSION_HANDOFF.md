@@ -81,28 +81,25 @@ arekkusu's FLOATBUS test in `vsim/FloatBus_260213/`. **Run at NATIVE speed only*
 (the accelerator's $C036 override breaks the cycle-exact 1 MHz timing — which
 is correct behavior; the test is a good turbo regression).
 
-**Current state — GOOD, better than reference emulators.** The vaporlock locks,
-the capture is aligned and recognizable ("APPLE", the logo, "VAPOR 60 HZ"),
-active video is accurate. Clemens returns 0 for all blanking and lists
-vaporlock as broken; ours produces a real locked capture. `video_addr` tracks
-the beam correctly (the test's beacon bytes appear at the addresses it wrote).
+**Current state — modes 1,2,4,5,7,8 pass ALL spot checks.** Two root causes
+were found and fixed, and they were NOT the ones this section previously
+described (the old text and the old fix spec are preserved only in git
+history; `doc/floatbus-hbl-fix.md` now has the corrected analysis):
 
-**What fails:** all modes fail **spot #1** (capture column 63 = HBL region) and
-the other blanking/SHR-corner spots (#3-8). We return active HGR bytes during
-HBL instead of the Mega II off-screen scan values.
-
-**The fix is fully specified in `doc/floatbus-hbl-fix.md`** — the Sather-exact
-scanner address formula (verified against gssquared
-`src/devices/displaypp/VideoScannerII.cpp`), the display/textfunk-safe
-implementation approach, and the guards. Summary of the next step:
-- During HBL (non-SHR Apple II modes only), set `video_addr_ii` to the Sather
-  HBL address (`A6toA3 = (0x68 + (hcount&0x38) + V3V4V3V4) & 0x78` etc.).
-- Derive `hcount` from the **rendering** H (HACTIVE_PIX=84), **NOT** the $C02F
-  counter (the textfunk fix `8f5394d` moved that counter to 25-char HBL but
-  left rendering; mixing them reintroduces the skew — this is the trap).
-- Display blanks during HBL so the picture can't change; SHR prefetch is a
-  separate branch; textfunk beam-races off active + $C02E/$C02F. Safe by
-  construction, but verify with the guards.
+1. **RDVBL ($C019) edge was 266px late** (`rtl/video_timing.v`): the flag
+   flipped at the line boundary (hcount==HWL) instead of at the Mega II
+   counter wrap (H_M2_WRAP, where m2_v increments). On IIgs the FLOATBUS
+   sync is pure RDVBL cycle-counting, so our whole capture was phase-shifted
+   ~19 chars — spot #1 (col 63,row 11) is really ACTIVE col 38 of line 11
+   ($2CA6=$3E for HGR p1), not an HBL cell.
+2. **IIgs blanking = open bus, not scan bytes** (`rtl/iigs.sv`): the Mega II
+   refreshes slow RAM during HBL/VBL and drives nothing; a floating-bus read
+   returns the CPU's own last bus byte (operand $C0 of `LDA $C05A`, $5A for
+   the DP form — the test's `MG2gs` routine). Implemented as `m2_bus_driven`
+   window (II modes: V∈[256,448) ∧ H∈[84,644); SHR: V∈[256,456)) +
+   `cpu_last_bus` register. The Sather HBL scan address (old plan) is real
+   IIe behavior but UNOBSERVABLE on a IIgs — implemented, verified
+   display-safe, then removed as dead logic.
 
 **GUARDS (both must hold at every commit):**
 1. **textfunk** — `cd vsim && ./obj_dir/Vemu --disk textfunk.po --screenshot 438
@@ -120,11 +117,11 @@ implementation approach, and the guards. Summary of the next step:
 floating-bus read with beam position + returned byte; `DEBUG_FBSPOT` logs the
 test's per-mode spot-check results. Both in `rtl/iigs.sv`, off by default.
 
-**After spot #1 (HBL):** VBL spots (#3 — $C05A should read 0 / the VBL scan
-value in vblank), then the SHR corner/palette/SCB spots (#5,#7,#8 — those tap
-the SHR SCB/palette prefetch, which is our separate `video_addr_shrg` branch).
-Expected values are all embedded in `FLOATBUS.S` (`expct1`, `expct2`, and the
-commented #3-#8 tables).
+**Remaining:** (a) modes 3/6/B are **PAL tests** (the shell pokes LANGSEL
+$C02B bit4=50Hz; sysHZ=$85 confirmed) — blocked on implementing 50Hz/PAL
+video timing, a separate feature; (b) SHR spots #7/#8 need the SCB+palette
+prefetch modeled in late HBL; (c) capture-cell↔beam mapping and per-spot
+notes are in `doc/floatbus-hbl-fix.md`.
 
 ---
 
@@ -138,10 +135,9 @@ md5sum screenshot_frame_0438.png   # expect 7abff109f80d62083437e1c379389fb5
 # floatbus (needs FloatBus_260213/FloatBus_260213.po copied to vsim/floatbus.po):
 ./obj_dir/Vemu --disk floatbus.po --stop-at-frame 400 --screenshot 390
 ```
-Regression: `./regression.sh` (7/8; the WOZ 3.5" Arkanoid FAIL is pre-existing
-from before this branch and unrelated).
+Regression: `./regression.sh` (8/8 — the long-standing WOZ 3.5" Arkanoid FAIL was
+resolved by the RDVBL edge fix, 2026-07-04).
 
 ## Pre-existing baggage (not ours)
-- `regression.sh` WOZ 3.5" Arkanoid FAIL predates this branch.
 - `output_files/`, `obj_dir_mmu/`, `db/`, screenshots, `scratchpad/` are build
   artifacts — consider `.gitignore` before merging to master.

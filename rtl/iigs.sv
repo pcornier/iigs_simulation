@@ -636,8 +636,21 @@ module iigs
     wire vgc_any_pending = ((VGCINT[5] & VGCINT[1]) |
                             (VGCINT[6] & VGCINT[2]));
 
+    // Floating bus: the Mega II drives scanned video data onto the bus only
+    // while inside the active display window. During HBL and VBL it performs
+    // slow-RAM refresh and drives nothing, so a floating-bus read returns the
+    // byte the CPU itself left on the bus -- its own operand fetch ($C0 for
+    // LDA $C05A, $5A for the direct-page form). Verified by arekkusu's
+    // FLOATBUS blanking spot checks ("MG2gs": MegaII refresh cycles).
+    reg  [7:0] cpu_last_bus;
+    wire m2_bus_driven;
+
+    // Known gap: in 80-column text the real floating bus shows the MAIN
+    // byte of the current column (aux/main interleave is invisible at
+    // 1MHz), but our text80 sub-fetch pipeline does not expose it at the
+    // CPU sample point -- FLOATBUS mode 9 (TXT2+COL80) trips on this.
     always_comb begin: io_read
-        io_dout = video_data;
+        io_dout = m2_bus_driven ? video_data : cpu_last_bus;
         case (addr[11:0])
           12'h011: io_dout = {LCRAM2, 7'h00};
           12'h012: io_dout = {~RDROM, 7'h00};
@@ -1689,6 +1702,7 @@ video_timing video_timing(
 
 wire [22:0] video_addr;
 wire [7:0] video_data;
+
 `ifdef DEBUG_VGC_TXT
 // Beam-race analysis (textfunk): log every VGC text-page-1 fetch near the
 // probe scanline so reads can be correlated against CPU writes (beam_trace).
@@ -1716,6 +1730,16 @@ always @(posedge CLK_14M) begin
     $display("FBSPOT   FAIL spot=%02x", dout);
   if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h0303)
     $display("FBSPOT   actual=%02x", dout);
+  // Temp: watch the snap store into capture cell (63,11) = $4050+63*262+11
+  // (spot #1) to pin the beam position of that capture phase.
+  if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h80D5)
+    $display("FBCELL 63x11 dout=%02x V=%0d H=%0d", dout, V, H);
+  // Temp: watch sysHZ ($3CB): $06=NTSC, $85=PAL -- one write per syncBeam.
+  if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h03CB)
+    $display("FBHZ sysHZ=%02x V=%0d H=%0d", dout, V, H);
+  // Temp: watch the test-phase arg ($300): 128=unpk, 0=snap, 64=test, 1=pack.
+  if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h0300)
+    $display("FBARG phase=%02x V=%0d H=%0d", dout, V, H);
 end
 `endif
 // vbl_irq now handled internally in interrupt logic
@@ -1767,6 +1791,20 @@ wire [7:0] din =
 
   // CPU data input mux: prioritize ADB reads (combinational), then IWM, then general I/O
   wire [7:0] cpu_din = IO ? ((adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
+
+  // Mega II bus-drive window (see io_read): video data is driven during the
+  // 40 active chars (the VGC fetches all 160 SHR bytes in that window too, 4
+  // per cycle) of the active rows -- 192 for Apple II modes, 200 for SHR.
+  // Everything else is refresh -> open bus. (Real SHR hardware also drives
+  // SCB+palette fetches in late HBL -- FLOATBUS spots #7/#8 -- not yet
+  // modeled; our VGC prefetches those elsewhere in the line.)
+  assign m2_bus_driven = (H >= 10'd84) && (H < 10'd644) &&
+                         (V >= 9'd256) && (V < (NEWVIDEO[7] ? 9'd456 : 9'd448));
+
+  // Last byte the CPU transferred on its data bus (operand fetches included):
+  // the value a floating-bus read sees when the Mega II is not driving.
+  always @(posedge CLK_14M) if (phi2) cpu_last_bus <= we ? dout : cpu_din;
+
 `ifdef DEBUG_VERBOSE
   // Debug: log every C026 read showing what cpu_din resolves to
   always @(posedge CLK_14M) begin
