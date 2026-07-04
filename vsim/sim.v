@@ -315,6 +315,7 @@ iigs  iigs(
         .selftest_override(selftest_override),
         .host_speed(host_speed),
         .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
+        .zip_regs_en(1'b1),    // ZipGS software interface always present in sim
         .mem_stall(1'b0),      // sim BRAM always meets the deadline
 
         .FLOPPY_WP(1'b1),

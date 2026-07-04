@@ -56,6 +56,7 @@ localparam CONF_STR = {
 	"OA,Force Self Test,OFF,ON;",
 	"OB,ROM Version,ROM1,ROM3;",
 	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz;",
+	"O[15],ZipGS Registers,Enabled,Disabled;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -197,26 +198,23 @@ wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 
 // OSD CPU speed (shares state with the ZipGS $C058-$C05F software interface):
 // 0 = native 2.86 MHz, 1 = 3.58, 2 = 4.77, 3 = 7.16, 4 = 14.32.
-// accel_capable also hard-gates the ZipGS *software* path inside iigs.sv, so
-// period software unlocking the Zip registers cannot over-clock the plain
-// SDRAM path either (an un-stalled fetch at short cycles is silent
-// corruption). Once the burst+cache build (ACCEL_SDRAM) is validated on
-// hardware with cache_stall wired to the CPU, both gates open.
+// The burst+cache SDRAM path (formerly the ACCEL_SDRAM compile option) is
+// always built in; it was hardware-validated at 7.16 MHz (2-FF mem_ack
+// synchronizer fix). Default OSD speed is native 2.8 MHz.
 wire cache_disable;   // ZipGS $C059 bit 7 -> sdram_cache bypass
 // Hardware speed cap: 7.16 MHz (step 3) is the fastest step validated on the
 // board. The 14.32 MHz 1-tick step (step 4) passes static timing but has a
 // cycle-level race under load (crashes into self-test); it stays sim-only
 // until the posted-write / miss-stall path is hardened at 1 tick. Clamp
 // defensively even though the OSD menu no longer offers step 4.
-`ifdef ACCEL_SDRAM
 wire [2:0] host_speed = (status[14:12] > 3'd3) ? 3'd3 : status[14:12];
 wire accel_capable = 1'b1;
 wire mem_stall;   // driven by the icache (cache miss in flight)
-`else
-wire [2:0] host_speed = 3'd0;
-wire accel_capable = 1'b0;
-wire mem_stall = 1'b0;
-`endif
+// OSD "ZipGS Registers": 0 = Enabled (default, a ZipGS is present and period
+// software can drive it), 1 = Disabled (stock IIgs: the $C058-$C05F unlock
+// sequence is ignored; the OSD CPU Speed above still works as a host-only
+// turbo with no software-visible footprint).
+wire zip_regs_en = ~status[15];
 
 // Detect ROM version change and trigger cold reset
 reg rom_select_prev;
@@ -312,6 +310,7 @@ iigs iigs (
 	.selftest_override(selftest_override),
 	.host_speed(host_speed),
 	.accel_capable(accel_capable),
+	.zip_regs_en(zip_regs_en),
 	.mem_stall(mem_stall),
 
 	.FLOPPY_WP(1'b1),
@@ -375,10 +374,9 @@ reg  [15:0] wr_din;
 // the 114MHz controller completes in 2-3 clk_sys cycles, so read data is
 // registered here well before the next phi2 pulse samples it through the
 // CPU's D_IN mux.
-`ifdef ACCEL_SDRAM
 // Accelerator read path: burst-8 controller (rtl/sdram_burst.sv) + line buffer
 // (rtl/sdram_cache.sv). ch1 returns a 128-bit aligned line; the cache serves most CPU reads
-// with no SDRAM access. Default OFF -> the original single-word path below is used.
+// with no SDRAM access.
 wire        rd_req;
 wire        rd_ack;
 wire [24:1] rd_addr;
@@ -402,14 +400,6 @@ wire        cache_ready, cache_stall;
 // races. Sampled synchronously by the CPU's RDY, so comb glitches are fine.
 assign mem_stall = ~we & (fastram_ce | rom_ce) & ~cache_hit_now;
 reg         snoop_stb;
-`else
-reg         rd_req = 0;
-wire        rd_ack;
-reg  [24:1] rd_addr;
-reg         rd_bsel;
-wire [15:0] rd_dout;
-reg  [7:0]  sdram_dout;
-`endif
 
 reg phi2_d;
 always @(posedge clk_sys) begin
@@ -423,20 +413,8 @@ always @(posedge clk_sys) begin
 		wr_req  <= ~wr_req;
 	end
 
-`ifdef ACCEL_SDRAM
 	// snoop ch0 writes one cycle late, when wr_addr/wr_din hold the committed write
 	snoop_stb <= phi2 & we & fastram_ce;
-`else
-	if (phi2_d & ~we & (fastram_ce | rom_ce)) begin
-		rd_addr <= {1'b0, cpu_sdram_addr[23:1]};
-		rd_bsel <= cpu_sdram_addr[0];
-		rd_req  <= ~rd_req;
-	end
-
-	// rd_dout transitions only while a read is in flight and is stable from
-	// ack onward, at least a full clk_sys cycle before the CPU consumes it
-	sdram_dout <= rd_bsel ? rd_dout[15:8] : rd_dout[7:0];
-`endif
 end
 
 // SDRAM upload channel (ch2): HPS ROM upload, throttled via ioctl_wait
@@ -459,7 +437,6 @@ always @(posedge clk_sys) begin
 	end
 	else if (up_req == up_ack) ioctl_wait <= 0;
 end
-`ifdef ACCEL_SDRAM
 // ---- accelerator: burst-8 controller + line buffer (see doc/sdram_accel/) ----
 sdram_burst sdram
 (
@@ -489,33 +466,6 @@ sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) icache
 assign VGA_R = iigs_r;
 assign VGA_G = iigs_g;
 assign VGA_B = iigs_b;
-`else
-sdram sdram
-(
-	.SDRAM_DQ(SDRAM_DQ),
-	.SDRAM_A(SDRAM_A),
-	.SDRAM_DQML(SDRAM_DQML),
-	.SDRAM_DQMH(SDRAM_DQMH),
-	.SDRAM_BA(SDRAM_BA),
-	.SDRAM_nCS(SDRAM_nCS),
-	.SDRAM_nWE(SDRAM_nWE),
-	.SDRAM_nRAS(SDRAM_nRAS),
-	.SDRAM_nCAS(SDRAM_nCAS),
-	.SDRAM_CLK(SDRAM_CLK),
-	.SDRAM_CKE(SDRAM_CKE),
-
-	.init(~locked),
-	.clk(clk_mem),
-
-	.addr0(wr_addr), .wrl0(wr_wrl), .wrh0(wr_wrh), .din0(wr_din), .dout0(), .req0(wr_req), .ack0(wr_ack),
-	.addr1(rd_addr), .wrl1(1'b0), .wrh1(1'b0), .din1(16'd0), .dout1(rd_dout), .req1(rd_req), .ack1(rd_ack),
-	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack)
-);
-
-assign VGA_R = iigs_r;
-assign VGA_G = iigs_g;
-assign VGA_B = iigs_b;
-`endif
 /*
 reg ce_pix;
 always @(posedge clk_vid) begin

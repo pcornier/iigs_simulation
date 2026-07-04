@@ -84,6 +84,12 @@ module iigs
    // respond (like a real Zip with the acceleration jumper disabled).
    input              accel_capable,
 
+   // 1 = the ZipGS $C058-$C05F software interface is present (OSD "ZipGS
+   // Registers"). 0 = stock IIgs: the unlock sequence is ignored and the
+   // registers never overlay the annunciators, but host_speed above still
+   // works -- an OSD-only turbo with no software-visible footprint.
+   input              zip_regs_en,
+
    // Memory-path stall (ACCEL_SDRAM cache miss in flight). Gated into the CPU
    // RDY so a fill that cannot meet the current cycle's data deadline holds
    // the CPU for whole ph2_en periods instead of letting it sample stale
@@ -2513,7 +2519,7 @@ assign rom_ce = rom1_ce | rom2_ce | romc_ce | romd_ce | slot_internalrom_ce;
 // (OSD / --speed) control. Both set the same state, so software reading the
 // Zip registers always agrees with the host-selected speed and vice versa.
 // ---------------------------------------------------------------------------
-wire       zip_unlocked;
+wire       zip_unlocked_raw;
 wire       zip_accel_en;
 wire [2:0] zip_speed_code;
 wire [7:0] zip_rdata;
@@ -2521,8 +2527,13 @@ wire       zip_cache_disable;
 wire [7:0] zip_slot_delay;
 // One write strobe per CPU I/O write to $C058-$C05F (phi2 = one pulse per CPU
 // cycle, same pattern as the $C030 speaker toggle). IO already excludes
-// EXTERNAL_IO and non-I/O banks.
-wire       zip_wr_stb = IO && we && phi2 && (addr_bef[7:3] == 5'b01011);
+// EXTERNAL_IO and non-I/O banks. zip_regs_en=0 (OSD "ZipGS Registers:
+// Disabled") blocks the unlock sequence so the Zip never becomes visible.
+wire       zip_wr_stb = IO && we && phi2 && (addr_bef[7:3] == 5'b01011) && zip_regs_en;
+// All software-visibility consumers (read overlay, AN3 write guards, fast
+// register timing) key off this; forcing it low with zip_regs_en also covers
+// a mid-session OSD disable while software had the Zip unlocked.
+wire       zip_unlocked = zip_unlocked_raw && zip_regs_en;
 
 zipgs_regs zipgs (
     .clk(CLK_14M),
@@ -2534,7 +2545,7 @@ zipgs_regs zipgs (
     .rd_data(zip_rdata),
     .mtr_slow(~CYAREG[7]),
     .host_speed(host_speed),
-    .zip_unlocked(zip_unlocked),
+    .zip_unlocked(zip_unlocked_raw),
     .accel_en(zip_accel_en),
     .speed_code(zip_speed_code),
     .cache_disable(zip_cache_disable),

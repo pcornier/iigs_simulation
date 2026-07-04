@@ -11,7 +11,7 @@ Three interfaces share ONE state (`rtl/zipgs_regs.sv`), so they always agree:
 | interface | how |
 |---|---|
 | simulator | `./obj_dir/Vemu --speed <0-3 \| 2.8/3.6/4.8/7.2>` |
-| MiSTer OSD | "CPU Speed" menu (status[14:12]) — native-only unless built with `ACCEL_SDRAM` |
+| MiSTer OSD | "CPU Speed" menu (status[14:12]); "ZipGS Registers" toggle (status[15]) hides/shows the software interface |
 | software (ZipGS) | $C058-$C05F protocol, KEGS/GSplus semantics (verified against both) |
 
 ## ZipGS protocol (what period software does)
@@ -61,12 +61,17 @@ All three are no-ops at the native step — native timing is bit-identical
   latency has zero slack; the CPU must stall on misses. That is the
   `ACCEL_SDRAM` burst+cache work (doc/sdram_accel/) — once `cache_stall` is
   wired to the CPU's RDY_IN, unclamp speed code 4 in `rtl/zipgs_regs.sv`.
-- **FPGA**: `accel_capable` (0 unless built with `ACCEL_SDRAM`) hard-gates
-  the speed mux inside iigs.sv, so neither the OSD nor ZipGS software can
-  over-clock the plain single-word SDRAM path (an un-stalled fetch at short
-  cycles is silent corruption). The Zip registers still respond, like a real
-  card with the acceleration jumper off. Bring-up order in
-  HANDOFF_quartus_accelerator.md.
+- **FPGA**: the burst+cache SDRAM path (formerly the `ACCEL_SDRAM` compile
+  option) is now always built in — it was hardware-validated at 7.16 MHz.
+  `accel_capable` is hardwired 1. Two OSD controls:
+  - "CPU Speed" (default 2.8 Std): host-side speed. Works even with the Zip
+    registers disabled (OSD-only turbo, no software-visible footprint — note
+    beam-raced/vaporlock software cannot slow the machine back down in that
+    combination, by design).
+  - "ZipGS Registers" (default Enabled): Disabled = stock IIgs, the
+    $C058-$C05F unlock sequence is ignored (`zip_regs_en` gates the write
+    strobe AND the `zip_unlocked` visibility, so a mid-session disable also
+    re-locks). Enabled = period software (ZipDA, CDevs) can drive the card.
 - $C05C per-slot delay semantics are stored but not yet applied (we slow all
   external-slot accesses when accelerated, which matches Zip defaults).
 - A TransWarp GS detection shim (fake 'TWGS' vector table at $BC/FF00 +
