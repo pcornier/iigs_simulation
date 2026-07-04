@@ -90,6 +90,12 @@ module iigs
    // works -- an OSD-only turbo with no software-visible footprint.
    input              zip_regs_en,
 
+   // 1 = fast cycles are currently configured (by the OSD or by ZipGS
+   // software). The FPGA top selects the CPU read datapath with this:
+   // native -> single-word registered reads (cycle-exact, never stalls),
+   // fast -> burst+cache with stall-on-miss.
+   output             accel_active,
+
    // Memory-path stall (ACCEL_SDRAM cache miss in flight). Gated into the CPU
    // RDY so a fill that cannot meet the current cycle's data deadline holds
    // the CPU for whole ph2_en periods instead of letting it sample stale
@@ -2573,6 +2579,7 @@ wire       slot_delay_this = slot_ce;
 wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0)
                          ? (4'd4 - {1'b0, zip_speed_code})
                          : 4'd4;
+assign accel_active = (fast_thresh != 4'd4);
 
 // Clock divider instance
 clock_divider clk_div_inst (

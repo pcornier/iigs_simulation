@@ -310,6 +310,7 @@ iigs iigs (
 	.selftest_override(selftest_override),
 	.host_speed(host_speed),
 	.accel_capable(accel_capable),
+	.accel_active(accel_active),
 	.zip_regs_en(zip_regs_en),
 	.mem_stall(mem_stall),
 
@@ -369,41 +370,63 @@ reg  [24:1] wr_addr;
 reg         wr_wrl, wr_wrh;
 reg  [15:0] wr_din;
 
-// SDRAM read channel (ch1): launch one clk_sys cycle after the phi2 edge,
-// once the new cycle's address has settled. The req/ack round trip through
-// the 114MHz controller completes in 2-3 clk_sys cycles, so read data is
-// registered here well before the next phi2 pulse samples it through the
-// CPU's D_IN mux.
-// Accelerator read path: burst-8 controller (rtl/sdram_burst.sv) + line buffer
-// (rtl/sdram_cache.sv). ch1 returns a 128-bit aligned line; the cache serves most CPU reads
-// with no SDRAM access.
+// Speed-selected CPU read path. Confirmed on hardware (textfunk / FTA demo
+// bisect, 2026-07-04): the burst+cache miss path is slower than the old
+// single-word read and its mem_stall stretches CPU cycles at NATIVE speed,
+// breaking cycle-exact beam racing. So:
+//   accel_r=0 (native 2.8): ch3 single-word reads, registered byte, NEVER
+//     stalls -- identical semantics/latency class to the old rtl/sdram.sv
+//     path (data registered ~phi2+3, before the native sample point).
+//   accel_r=1 (any fast step): burst-8 (ch1) + line cache + stall-on-miss,
+//     as hardware-validated at 7.16 MHz.
+// accel_r follows the LIVE speed state from iigs.sv (OSD *and* the ZipGS
+// software protocol), registered at phi2 so the path is stable per cycle.
+wire        accel_active;
+reg         accel_r = 0;
+
 wire        rd_req;
 wire        rd_ack;
 wire [24:1] rd_addr;
 wire [127:0] rd_line;
-wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce);
+wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce) & accel_r;
 wire [24:1] cache_addr  = {1'b0, cpu_sdram_addr[23:1]};
 wire [15:0] cache_data;
 wire        cache_hit_now;
 wire [15:0] cache_data_now;
-// CPU read byte, fully combinational through the cache (valid when
-// cache_hit_now; the stall below holds the CPU until then). Meets the data
-// deadline at every speed step — the old registered sdram_dout landed at
-// phi2+3 minimum, which is past the sample point below 5-tick cycles.
-wire [7:0]  sdram_dout  = cpu_sdram_addr[0] ? cache_data_now[15:8] : cache_data_now[7:0];
 wire        cache_ready, cache_stall;
-// Stall rule with the combinational hit path: hold the CPU whenever the
-// current cycle reads fast RAM / ROM and the cache does not (yet) hit. A miss
-// launches its fill from the cache_rd strobe (independent of the stall), the
-// fill lands, hit_now rises, the stall drops and the comb byte is already
-// valid — correct at every clock-enable step with no registered-latency
-// races. Sampled synchronously by the CPU's RDY, so comb glitches are fine.
-assign mem_stall = ~we & (fastram_ce | rom_ce) & ~cache_hit_now;
+// Stall rule with the combinational hit path (accelerated only): hold the
+// CPU whenever the current cycle reads fast RAM / ROM and the cache does not
+// (yet) hit. A miss launches its fill from the cache_rd strobe, the fill
+// lands, hit_now rises, the stall drops and the comb byte is already valid.
+// Sampled synchronously by the CPU's RDY, so comb glitches are fine.
+assign mem_stall = accel_r & ~we & (fastram_ce | rom_ce) & ~cache_hit_now;
 reg         snoop_stb;
+
+// Native single-word read channel (ch3): launch one clk_sys cycle after the
+// phi2 edge, once the new cycle's address has settled; data byte registered
+// continuously from dout3 (no ack wait), exactly like the old sdram.v path.
+reg         nat_req = 0;
+wire        nat_ack;
+reg  [24:1] nat_addr;
+reg         nat_bsel;
+wire [15:0] nat_dout;
+reg  [7:0]  nat_data;
+
+// CPU read byte: comb cache byte when accelerated, registered ch3 byte native
+wire [7:0]  sdram_dout  = accel_r ? (cpu_sdram_addr[0] ? cache_data_now[15:8] : cache_data_now[7:0])
+                                  : nat_data;
 
 reg phi2_d;
 always @(posedge clk_sys) begin
 	phi2_d <= phi2;
+	if (phi2) accel_r <= accel_active;
+
+	if (phi2_d & ~we & (fastram_ce | rom_ce) & ~accel_r) begin
+		nat_addr <= {1'b0, cpu_sdram_addr[23:1]};
+		nat_bsel <= cpu_sdram_addr[0];
+		nat_req  <= ~nat_req;
+	end
+	nat_data <= nat_bsel ? nat_dout[15:8] : nat_dout[7:0];
 
 	if (phi2 & we & fastram_ce) begin
 		wr_addr <= {2'b00, addr_bus[22:1]};
@@ -446,7 +469,8 @@ sdram_burst sdram
 	.init(~locked), .clk(clk_mem),
 	.addr0(wr_addr), .wrl0(wr_wrl), .wrh0(wr_wrh), .din0(wr_din), .dout0(), .req0(wr_req), .ack0(wr_ack),
 	.addr1(rd_addr), .wrl1(1'b0), .wrh1(1'b0), .din1(16'd0), .dout1(rd_line), .req1(rd_req), .ack1(rd_ack),
-	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack)
+	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack),
+	.addr3(nat_addr), .dout3(nat_dout), .req3(nat_req), .ack3(nat_ack)
 );
 
 // Line buffer on the CPU read path. Runs in clk_sys; talks to ch1 via toggle req/ack (the

@@ -11,7 +11,17 @@
 //   ch0 : single-word write (CPU write-through),  highest priority
 //   ch1 : burst-8 read  -> dout1[127:0]           (the line the cache fills with)
 //   ch2 : single-word write (HPS ROM/disk upload)
+//   ch3 : single-word read -> dout3[15:0]         (native-speed CPU reads)
 //   + auto-refresh when idle
+//
+// ch3 exists for cycle-exact NATIVE speed: the burst+cache path's miss
+// latency (full 8-beat line + cache registration) can land past the CPU's
+// data deadline in a 5-tick native cycle, and the resulting mem_stall
+// stretch breaks beam-raced software (textfunk, FTA demos). ch3 issues the
+// READ at the requested column (not line-aligned) and acks on the FIRST
+// data beat -- 7 clk earlier than ch1 -- while the FSM still runs the full
+// burst window for bus discipline. The top level consumes it through a
+// plain registered byte, old rtl/sdram.sv style: no cache, no stall.
 //
 // MANDATORY address remap vs rtl/sdram.sv: column = LOW address bits so the hardware burst
 // walks consecutive words (rtl/sdram.sv puts the row in the low bits, which defeats bursts).
@@ -50,7 +60,10 @@ module sdram_burst #(
     output     [127:0] dout1, input req1, output reg ack1,
     // ch2: single-word write (upload)
     input      [24:1] addr2, input wrl2, input wrh2, input [15:0] din2,
-    output     [15:0] dout2, input req2, output reg ack2
+    output     [15:0] dout2, input req2, output reg ack2,
+    // ch3: single-word read (native-speed CPU reads, early ack)
+    input      [24:1] addr3,
+    output     [15:0] dout3, input req3, output reg ack3
 );
     assign SDRAM_nCS  = 0;
     assign SDRAM_CKE  = 1;
@@ -59,11 +72,17 @@ module sdram_burst #(
     reg [15:0] dq_out; reg dq_oe;
     assign SDRAM_DQ = dq_oe ? dq_out : 16'bzzzz_zzzz_zzzz_zzzz;
 
+    // power-up values for the toggle handshake acks (matches the FPGA's
+    // zero-initialized registers; needed for 4-state simulators)
+    initial begin ack0 = 0; ack1 = 0; ack2 = 0; ack3 = 0; end
+
     reg [127:0] line;
+    reg [15:0]  word3;   // ch3 single-word read capture
     reg [15:0]  dq_in;   // IO-cell input capture register (see burst-beat capture)
     assign dout0 = 16'd0;
     assign dout1 = line;
     assign dout2 = 16'd0;
+    assign dout3 = word3;
 
     localparam BURST_CODE     = 3'b011;       // burst length 8 (reads)
     localparam NO_WRITE_BURST = 1'b1;         // single-location writes
@@ -124,12 +143,17 @@ module sdram_burst #(
         end
     end
 
-    // access manager: ch0 write > ch1 read > ch2 write > refresh
+    // access manager: ch0 write > ch3 read > ch1 read > ch2 write > refresh
+    // (ch3 is the latency-critical native CPU read; ch3 and ch1 are never
+    // both in use -- the top level requests one or the other by speed mode)
     always @(posedge clk) begin
         if (state == STATE_IDLE && mode == MODE_NORMAL) begin
             if (ack0 != req0) begin
                 cur <= addr0; wdata <= din0; wdqm <= ~{wrh0,wrl0};
                 active <= 1; we <= 1; is_read <= 0; serving <= 2'd0; state <= STATE_START;
+            end else if (ack3 != req3) begin
+                cur <= addr3; wdqm <= 2'b00;
+                active <= 1; we <= 0; is_read <= 1; serving <= 2'd3; state <= STATE_START;
             end else if (ack1 != req1) begin
                 cur <= addr1; wdqm <= 2'b00;
                 active <= 1; we <= 0; is_read <= 1; serving <= 2'd1; state <= STATE_START;
@@ -153,12 +177,20 @@ module sdram_burst #(
         // I/O register assignments" warning) and the fabric capture's routing
         // skew produced scattered single-bit read errors on real hardware.
         dq_in <= SDRAM_DQ;
-        if (mode == MODE_NORMAL && is_read && state >= STATE_LDAT0 && state <= STATE_LDATL)
+        if (mode == MODE_NORMAL && is_read && serving == 2'd1
+            && state >= STATE_LDAT0 && state <= STATE_LDATL)
             line[ {(state - STATE_LDAT0), 4'b0} +: 16 ] <= dq_in;
+
+        // ch3 single-word read: the READ was issued at the requested column,
+        // so the FIRST beat is the requested word -- capture and ack early.
+        if (mode == MODE_NORMAL && is_read && serving == 2'd3 && state == STATE_LDAT0) begin
+            word3 <= dq_in;
+            ack3  <= req3;
+        end
 
         // completion acks
         if (mode == MODE_NORMAL && active) begin
-            if (is_read && state == STATE_LDATL) ack1 <= req1;
+            if (is_read && serving == 2'd1 && state == STATE_LDATL) ack1 <= req1;
             if (we && state == STATE_CONT) begin
                 if (serving == 2'd0) ack0 <= req0;
                 else                 ack2 <= req2;
@@ -191,8 +223,11 @@ module sdram_burst #(
         if (mode == MODE_NORMAL) begin
             casex (state)
                 STATE_START: SDRAM_A <= a_row(cur);
-                STATE_CONT:  SDRAM_A <= we ? {wdqm, 2'b10, cur_col}
-                                           : {2'b00, 2'b10, cur_col[8:3], 3'b000};
+                // reads: ch1 line-aligned (burst walks the 8-word line); ch3
+                // at the requested column (first beat = requested word)
+                STATE_CONT:  SDRAM_A <= we             ? {wdqm, 2'b10, cur_col} :
+                                        serving == 2'd3 ? {2'b00, 2'b10, cur_col}
+                                                        : {2'b00, 2'b10, cur_col[8:3], 3'b000};
                 default: ;
             endcase
         end
