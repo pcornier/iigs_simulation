@@ -136,7 +136,7 @@ md5sum screenshot_frame_0438.png   # expect 7abff109f80d62083437e1c379389fb5
 ./obj_dir/Vemu --disk floatbus.po --stop-at-frame 400 --screenshot 390
 ```
 Regression: `./regression.sh` (8/8 — the long-standing WOZ 3.5" Arkanoid FAIL was
-resolved by the RDVBL edge fix, 2026-07-04).
+a corrupt disk image; replaced 2026-07-03, verified independent of RTL changes).
 
 ## Pre-existing baggage (not ours)
 - `output_files/`, `obj_dir_mmu/`, `db/`, screenshots, `scratchpad/` are build

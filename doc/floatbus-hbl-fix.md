@@ -81,8 +81,8 @@ $40..$57 (HBL), cols 25..64 = $58..$7F (active cols 0..39).
 - FLOATBUS: build with `DEBUG_FBSPOT` (rtl/iigs.sv), run
   `--disk floatbus.po --stop-at-frame 1500 --quiet | grep FBSPOT`.
   No regressions vs the per-mode pass/fail table in the session log.
-- Full `./regression.sh` green (8/8 — the RDVBL edge fix also resolved the
-  long-standing WOZ 3.5" Arkanoid "UNABLE TO LOAD PRODOS" failure).
+- Full `./regression.sh` green (8/8 — the long-standing WOZ 3.5" Arkanoid
+  failure turned out to be a corrupt disk image, replaced 2026-07-03).
 
 ## Diagnostic tooling (committed, gated)
 
