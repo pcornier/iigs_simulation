@@ -58,8 +58,11 @@ committed bitstream is the known-good non-accel path).
   1 ms clock) — cosmetic; the measured MHz is correct.
 - $C05C per-slot mask and $C059 C/D-cache-disable are stored/displayed but
   cosmetic (cache-disable is a no-op after the wedge fix).
-- Full FPGA title compatibility sweep at 7.16 (esp. **disk-write DMA**, never
-  tested) is still owed before flipping the default on.
+- **Disk-write validated at 7.16 (2026-07-04, on hardware):** benchmark run,
+  text file created+saved to HDD, blank 3.5" WOZ formatted and written. The
+  accelerator is always built in as of 46f90a9 (OSD default 2.8 Std; "ZipGS
+  Registers" toggle). Remaining: broader game/title sweep at 7.16 (nice-to-
+  have, no longer a ship blocker).
 
 **Test rig (memory `fpga-test-rig`):** `sshpass -p 1 ssh root@192.168.1.196`.
 Screenshot: `POST http://192.168.1.196:8182/api/screenshots`. Launch a disk
