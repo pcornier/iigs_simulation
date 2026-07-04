@@ -1689,6 +1689,7 @@ bram #(.widthad_a(17)) slowram
 video_timing video_timing(
 .clk_vid(clk_vid),
 .ce_pix(ce_pix),
+.pal(C02BVAL[4]),   // LANGSEL 50Hz bit: PAL 312-line scan
 .hsync(HS),
 .vsync(VS),
 .hblank(HBlank),

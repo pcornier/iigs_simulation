@@ -120,11 +120,16 @@ history; `doc/floatbus-hbl-fix.md` now has the corrected analysis):
 floating-bus read with beam position + returned byte; `DEBUG_FBSPOT` logs the
 test's per-mode spot-check results. Both in `rtl/iigs.sv`, off by default.
 
-**Remaining:** (a) modes 3/6/B are **PAL tests** (the shell pokes LANGSEL
-$C02B bit4=50Hz; sysHZ=$85 confirmed) — blocked on implementing 50Hz/PAL
-video timing, a separate feature; (b) SHR spots #7/#8 need the SCB+palette
-prefetch modeled in late HBL; (c) capture-cell↔beam mapping and per-spot
-notes are in `doc/floatbus-hbl-fix.md`.
+**Remaining:** (a) ~~modes 3/6/B PAL~~ **PAL/50Hz implemented 2026-07-04**
+(video_timing v_load 200/312 lines from LANGSEL $C02B bit4; FLOATBUS modes
+3 and 6 pass fully, B aligns and stops at the SHR spot like A — 8/11 modes
+green); (b) mode 9 = text80 main-byte exposure; (c) modes A/B spot #5/#7/#8 =
+SHR SCB/palette fetch cadence; (d) capture-cell↔beam mapping and per-spot
+notes are in `doc/floatbus-hbl-fix.md`. Known FPGA issue under investigation:
+textfunk flashes alternate frames on the always-on cache build (suspect
+mem_stall stretches at native on late SDRAM fills; bisect RBF deployed).
+FTA Xmas Demo: not bootable from HDD mount by design (wants 3.5"); cp2
+PO→WOZ conversion does not boot in sim (WOZ-loader follow-up).
 
 ---
 

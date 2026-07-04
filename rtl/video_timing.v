@@ -4,6 +4,7 @@ module video_timing(
 
   input clk_vid,
   input ce_pix,
+  input pal,     // LANGSEL $C02B bit 4: 1 = 50Hz/PAL scan (312 lines)
 
   output reg hsync,
   output reg vsync,
@@ -118,7 +119,15 @@ parameter V_BLANKING = 22; // Blanking lines
 // during the buffer scanout period. The main downside is that this
 // causes the counter reset to occur during the top border period
 // rather than at a transition.
-parameter V_LOAD = 250;                           // remainder of top border
+parameter V_LOAD = 250;                           // remainder of top border (NTSC)
+// PAL (LANGSEL bit 4): 312 lines/frame. The counter scheme maps directly to
+// the Sather vertical counter presets: NTSC loads $FA (250, 262 lines), PAL
+// loads $C8 (200, 312 lines). Everything else stays anchored at V_SCAN=256:
+// the 50 extra PAL lines (200-249) extend the top border / VBL region, the
+// vsync position is unchanged, and the visible frame grows to ~289 lines --
+// standard PAL. Takes effect at the next frame wrap when software toggles
+// $C02B mid-session (FTA demos, FLOATBUS "Hz" modes).
+wire [9:0] v_load = pal ? 10'd200 : 10'd250;
 parameter V_SCAN = 256;                           // Buffer scanout
 parameter VFP = V_SCAN + B_BORDER + V_ACTIVE - 1; // Front porch
 parameter VSP = VFP + 3;                          // vsync
@@ -146,7 +155,7 @@ always @(posedge clk_vid) if (ce_pix) begin
   if (hcount == H_M2_WRAP) begin
     hidx <= HIDX_AT_H0;
     hsub <= 4'd0;
-    m2_v <= (vcount == V_END) ? V_LOAD : vcount + 10'd1;
+    m2_v <= (vcount == V_END) ? v_load : vcount + 10'd1;
     // Legacy Mega II VBL status ($C019/RDVBL) flips when the Mega II vertical
     // counter increments -- at this wrap point, 266px before the line's end,
     // NOT at the video line boundary. FLOATBUS's IIgs vaporlock cycle-counts
@@ -173,7 +182,7 @@ always @(posedge clk_vid) if (ce_pix && hcount == HWL) begin
     VSP: vsync <= 0;
     VBP: vsync <= 1;
     VTB: vblank <= 0;
-    V_END: vcount <= V_LOAD;
+    V_END: vcount <= v_load;
   endcase // case (vcount)
 end
 

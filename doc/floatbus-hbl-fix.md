@@ -1,8 +1,8 @@
 # FLOATBUS vaporlock test — floating-bus accuracy findings
 
-**Status: modes 1,2,4,5,7,8 pass ALL spot checks** (RDVBL edge fix + IIgs
-open-bus blanking). Modes 3/6/B are PAL tests (blocked on a 50Hz feature),
-mode 9 needs text80 main-byte timing, mode A needs SHR fetch-cadence modeling.
+**Status: modes 1-8 pass ALL spot checks** (RDVBL edge fix + IIgs open-bus
+blanking + PAL/50Hz video timing). Remaining: mode 9 needs text80 main-byte
+timing; modes A/B fail spot #5 (SHR fetch-cadence modeling).
 Test: `vsim/FloatBus_260213/` (arekkusu). Run at **native speed only**.
 
 ## What the test actually measures (corrected understanding)
@@ -49,13 +49,11 @@ $40..$57 (HBL), cols 25..64 = $58..$7F (active cols 0..39).
 
 ## Open items
 
-- **Modes 3/6/B (the "Hz"-tagged modes) are PAL tests — DIAGNOSED, needs a
-  new feature.** The BASIC shell pokes LANGSEL ($C02B) bit 4 = 50Hz for these
-  modes; the ASM re-checks it each syncBeam (sysHZ=$85 confirmed via the FBHZ
-  watch) and cycle-counts 312-line frames. Our core stores the bit (C02BVAL)
-  but the video timing has no PAL mode, so their captures land ~150 lines
-  off. They cannot pass until 50Hz/PAL video timing (312 lines, LANGSEL-
-  driven) is implemented.
+- ~~Modes 3/6/B are PAL tests~~ **FIXED (2026-07-04): PAL/50Hz video timing
+  implemented** — `video_timing.v` loads the Sather PAL vertical preset $C8
+  (200 → 312 lines) when LANGSEL $C02B bit 4 is set, switching at the frame
+  wrap. Modes 3 and 6 pass fully; mode B now aligns and fails only spot #5
+  (the SHR fetch-cadence gap below, same as mode A).
 - **SHR spots #7/#8 (palette/SCB)**: the real VGC fetches the next line's SCB
   + 32 palette bytes in late HBL (capture cols 16-17 ≈ H 872-886) — our VGC
   prefetches them elsewhere in the line, so those cells read open-bus $C0
