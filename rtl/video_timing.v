@@ -147,6 +147,12 @@ always @(posedge clk_vid) if (ce_pix) begin
     hidx <= HIDX_AT_H0;
     hsub <= 4'd0;
     m2_v <= (vcount == V_END) ? V_LOAD : vcount + 10'd1;
+    // Legacy Mega II VBL status ($C019/RDVBL) flips when the Mega II vertical
+    // counter increments -- at this wrap point, 266px before the line's end,
+    // NOT at the video line boundary. FLOATBUS's IIgs vaporlock cycle-counts
+    // its whole capture phase from this edge.
+    if (vcount == V_M2_VBL) mega2_vbl <= 1;
+    if (vcount == V_SCAN - 1) mega2_vbl <= 0;
   end else if (hsub == 4'd13) begin
     hsub <= 4'd0;
     hidx <= (hidx == 7'd64) ? 7'd0 : hidx + 7'd1;
@@ -163,8 +169,6 @@ always @(posedge clk_vid) if (ce_pix && hcount == HWL) begin
   vcount <= vcount + 10'd1;
 
   case (vcount)
-    V_M2_VBL: mega2_vbl <= 1;
-    V_SCAN: mega2_vbl <= 0;
     VFP: vblank <= 1;
     VSP: vsync <= 0;
     VBP: vsync <= 1;
