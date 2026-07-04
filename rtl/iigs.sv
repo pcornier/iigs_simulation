@@ -14,6 +14,10 @@
 // beam position -- for vaporlock / floating-bus video accuracy work.
 // `define DEBUG_FLOATBUS
 
+// Define DEBUG_FBSPOT to log FLOATBUS test spot-check results (mode, failing
+// spot index, and the actual captured byte) for floating-bus accuracy work.
+// `define DEBUG_FBSPOT
+
 module iigs
   (
    input              reset,
@@ -1698,6 +1702,20 @@ always @(posedge clk_vid) if (ce_pix && video_addr[16:0]>=17'h00400 && video_add
 always @(posedge CLK_14M) begin
   if (phi2 && ~we && IO && addr_bef[7:0] == 8'h5A && ~zip_unlocked)
     $display("FBUS V=%0d H=%0d HCHAR=%0d vaddr=%05x vdata=%02x", V, H, H_CHAR, video_addr[16:0], video_data);
+end
+`endif
+`ifdef DEBUG_FBSPOT
+// FLOATBUS test result: it stores the failing spot index at $0302 and the
+// actual (wrong) captured byte at $0303 (0 = that phase passed). Log both so
+// we see exactly which spot fails in which video mode, with the value we
+// produced -- $0301 holds the current video mode (args+1).
+always @(posedge CLK_14M) begin
+  if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h0301)
+    $display("FBSPOT mode=%02x", dout);
+  if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h0302 && dout != 8'h00)
+    $display("FBSPOT   FAIL spot=%02x", dout);
+  if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h0303)
+    $display("FBSPOT   actual=%02x", dout);
 end
 `endif
 // vbl_irq now handled internally in interrupt logic
