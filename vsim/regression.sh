@@ -49,6 +49,24 @@ else
     echo "  SKIP: Total Replay - missing reference image"
 fi
 
+echo "Running A2Desktop mouse test..."
+# Mouse regression guard: inject mouse movement on the A2Desktop desktop (which
+# reads the ADB mouse via the direct $C024 register path) and confirm the
+# cursor actually moves. Guards the ADB mouse-delivery path against regressions.
+# (Note: GEOS uses a different ADB autopoll path that is not yet supported --
+# see doc/geos-mouse-adb-handoff.md.)
+./obj_dir/Vemu --disk A2DeskTop-1.2-alpha42-en_800k.hdv --fixed-time --send-mouse 455:70,50 --send-mouse 460:70,50 --send-mouse 465:70,50 --send-mouse 470:70,50 --stop-at-frame 480 --screenshot 480 &> a2desktop_mouse.txt
+if [ -f "regression_images/a2desktop_mouse_screenshot_frame_0480.png" ]; then
+    if diff screenshot_frame_0480.png regression_images/a2desktop_mouse_screenshot_frame_0480.png > /dev/null 2>&1; then
+        echo "  PASS: A2Desktop mouse (cursor moves on ADB inject)"
+    else
+        echo "  FAIL: A2Desktop mouse - screenshot differs"
+        FAILED=1
+    fi
+else
+    echo "  SKIP: A2Desktop mouse - missing reference image"
+fi
+
 echo "Running A2Desktop test..."
 # DHR (double hi-res) rendering guard, mono/UI flavor -- companion to the
 # Total Replay PoP color-DHR guard: these two must BOTH pass whenever the
