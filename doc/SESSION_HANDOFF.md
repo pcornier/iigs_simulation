@@ -52,19 +52,16 @@ dhr2 is confirmed; `Apple-IIgs.rbf` (Jun 24 release) can be replaced by dhr2.
 
 ## OUTSTANDING
 
-### FLOATBUS — 10/11 modes pass; 1 remaining
+### FLOATBUS — COMPLETE: ALL 11 MODES PASS ALL SPOT CHECKS (2026-07-05)
 Run: enable `` `define DEBUG_FBSPOT `` (iigs.sv ~line 19), rebuild,
-`./obj_dir/Vemu --disk floatbus.po --stop-at-frame 1500 --quiet | grep FBSPOT`.
+`./obj_dir/Vemu --disk floatbus.po --stop-at-frame 1500 --quiet | grep FBSPOT`
+— a full pass prints only the 11 mode markers, no FAIL lines.
 Full per-spot analysis in `doc/floatbus-hbl-fix.md`.
 
-- **Mode 9 (TXT2+COL80), spot #1**: the real 80-col floating bus shows the
-  MAIN-bank byte of the current column; our text80 sub-fetch pipeline never
-  exposes it at the CPU sample point. A `video_data_main` latch was tried
-  with 1- and 2-stage pairing — each fixed one cell and broke another (run-7
-  instrumentation showed no fixed delay works). Real fix: re-time the text80
-  sub-fetches like the Mega II (aux first half-cycle, main second, CPU
-  latches main). Touches the fragile 80-col pipeline — do it with the DHR
-  validator + A2Desktop/PoP guards watching.
+- ~~Mode 9 (TXT2+COL80)~~ **FIXED**: the text path consumes video_data only
+  at xpos 6 (char ROM lookup), so a one-tick fetch-address override there
+  puts the pair's MAIN byte on video_data exactly at the CPU sample tick
+  (xpos 0 of the aux half), invisible to the display (`fb_main_slot`).
 - ~~Modes A/B (SHR)~~ **FIXED (2026-07-05): modes A and B pass ALL spots.**
   Bus model: every fetch group shows its LAST byte (pixels = byte 4k+3 via a
   160-byte replay buffer; palette = 4/slot, cols 9-16 = bytes 3..31; SCB =
@@ -111,7 +108,7 @@ Full per-spot analysis in `doc/floatbus-hbl-fix.md`.
    uses `--fixed-time`).
 2. textfunk: `./obj_dir/Vemu --disk textfunk.po --screenshot 438
    --stop-at-frame 439`, md5 stays `7abff109f80d62083437e1c379389fb5`.
-3. FLOATBUS (when touching timing/bus/video): 10/11 modes green (all but 9).
+3. FLOATBUS (when touching timing/bus/video): 11/11 modes, zero FAIL lines.
 4. DHR pixel truth (when touching vgc): `--disk A2DeskTop... --fixed-time
    --screenshot 450 --memory-dump 450 --stop-at-frame 450` then
    `python3 dhr_validate.py screenshot_frame_0450.png
