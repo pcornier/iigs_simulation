@@ -410,10 +410,13 @@ wire [3:0]  dhr_color = (dhr_nib == 2'd0) ? dhr_hold[15:12] :
                         (dhr_nib == 2'd2) ? dhr_hold[7:4]   : dhr_hold[3:0];
 wire [11:0] dhr_rgb   = dhr_pal(dhr_color);
 
-// Graphics active window: dhires mono has ~0 pipeline latency, dhires color
-// trails by 6px (dhr_lut decode), other GFX modes by 5px (apple2_shift_reg).
-wire [9:0] gfx_lb = dhires_mode ? (DHRG_MONO ? BLE       : BLE + 10'd6) : (BLE + 10'd5);
-wire [9:0] gfx_rb = dhires_mode ? (DHRG_MONO ? BRE-10'd2 : BRE + 10'd5) : (BRE + 10'd4);
+// Graphics active window. Dhires: with the head-start (init emits bits 0/1
+// at BLE-2/BLE-1, pre-shifted preload from bit 2), stream bit j displays at
+// H = BLE-1+j -- window [BLE-1, BRE-2] = the full 560px. The color decode
+// consumes the same corrected stream with its 6px LUT latency next to it.
+// Other GFX modes trail by 5px (apple2_shift_reg).
+wire [9:0] gfx_lb = dhires_mode ? (DHRG_MONO ? BLE-10'd1 : BLE + 10'd4) : (BLE + 10'd5);
+wire [9:0] gfx_rb = dhires_mode ? (DHRG_MONO ? BRE-10'd2 : BRE + 10'd3) : (BRE + 10'd4);
 // ---------------------------------------------------------------------------
 
 // Apple II color generation logic
@@ -432,13 +435,16 @@ always @(*) begin
         if (dhires_mode) begin
             if (DHRG_MONO) begin
                 // Mono double-hi-res (NEWVIDEO[5] set, e.g. A2Desktop): render raw
-                // 1bpp pixels straight from graphics_pixel. Crisp left edge: the
-                // apple2_shift_reg artifact window is a 6-deep delay line that fills
-                // from the left border (zeros), so tapping it at the first byte
-                // yields a transient that mangled fine 1px features (the A2Desktop
-                // mouse cursor / first character). graphics_pixel is the real pixel
-                // with no fill transient. Programs that run hires+80col but with
-                // AN3=1 (e.g. 8bit-Slicks) have dhires_mode=0 and keep artifacting.
+                // 1bpp pixels from the registered graphics_pixel. That stream is
+                // byte-exact but one pixel LATE, with a stale garbage bit landing in
+                // the first displayed column (verified against GSSquared: our pixels
+                // were ground truth >> 1). The display window below starts at BLE+1
+                // to skip the garbage column and show the full 560 real pixels; the
+                // whole image sits 1px right of nominal, which beats the comb tap
+                // (its reload bypass skews mid-byte cadence) and the apple2_shift_reg
+                // artifact window (6-deep fill transient mangled the cursor).
+                // Programs that run hires+80col but with AN3=1 (e.g. 8bit-Slicks)
+                // have dhires_mode=0 and keep artifacting.
                 apple2_r = graphics_pixel ? 8'hff : 8'h00;
                 apple2_g = graphics_pixel ? 8'hff : 8'h00;
                 apple2_b = graphics_pixel ? 8'hff : 8'h00;
@@ -767,7 +773,14 @@ begin
 				// Pre-load the shift register at H=71 so first pixel is ready at H=72
 				// This is the ONLY place where we load during the init block
 				if (hires_mode) begin
-					graphics_pix_shift <= expandHires40(video_data);
+					// Double hi-res: pre-shifted by 2 -- bits 0 and 1 of the first
+					// aux byte are emitted directly through graphics_pixel below
+					// (the registered pixel path otherwise starts 2px late and the
+					// first mid-line reload clips the byte to 5 of its 7 pixels:
+					// the A2Desktop "doubled cursor" / broken left edge).
+					graphics_pix_shift <= dhires_mode
+						? {video_data[6], video_data[6], video_data[6], video_data[6:2]}
+						: expandHires40(video_data);
 					graphics_color <= {3'b0, video_data[7]};
 				end else if (lores_mode) begin
 					graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
@@ -785,6 +798,12 @@ begin
 		apple2_shift_reg <= 6'b0;
 		graphics_pixel <= 1'b0;
 		pixel_counter <= 11'b0;
+		// Double hi-res head start (after the unconditional clear above so it
+		// wins): emit the first aux byte's bits 0/1 directly; the shift-register
+		// path takes over at bit 2 via the pre-shifted preload. video_data holds
+		// aux byte 0 from H=BLE-2 (address set at BLE-4, one BRAM cycle).
+		if (dhires_mode && H == (BLE-2)) graphics_pixel <= video_data[0];
+		if (dhires_mode && H == (BLE-1)) graphics_pixel <= video_data[1];
 		text_shift_reg <= 7'b0;
 		text_load_pending <= 1'b0;
 	end
