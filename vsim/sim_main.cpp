@@ -1039,6 +1039,11 @@ void DumpInstruction() {
 }
 
 
+// --fixed-time: deterministic RTC for regression runs (0 = use host clock).
+// Default epoch when the flag is given with no value: 1986-09-15 12:00:00 UTC
+// (Apple IIgs launch date). Decoded with gmtime so the host TZ can't leak in.
+time_t fixed_time = 0;
+
 void send_clock() {
 	//printf("Update RTC %ld %d\n",main_time,send_clock_done);
 	uint8_t rtc[8];
@@ -1047,11 +1052,15 @@ void send_clock() {
 	
 	time_t t;
 
-	tzset();
-	time(&t);
-
 	struct tm tm;
-        localtime_r(&t,&tm);
+	if (fixed_time) {
+		t = fixed_time;
+		gmtime_r(&t, &tm);
+	} else {
+		tzset();
+		time(&t);
+		localtime_r(&t, &tm);
+	}
 
 	
 	rtc[0] = (tm.tm_sec % 10) | ((tm.tm_sec / 10) << 4);
@@ -4589,6 +4598,7 @@ void show_help() {
 	printf("                                Fast cycles only; I/O + banks E0/E1 stay 1 MHz (ZipGS-style).\n");
 	printf("                                Shares state with the ZipGS $C058-$C05F software interface.\n");
 	printf("  --no-cpu-log                  Disable CPU log storage in memory (saves memory)\n");
+	printf("  --fixed-time [epoch]          Deterministic RTC (default 1986-09-15); for regression\n");
 	printf("  --quiet                       Suppress CPU instruction trace to stdout (faster)\n");
 	printf("  --disk <filename>             Use specified HDD image (slot 7 unit 0, no disk mounted by default)\n");
 	printf("  --disk2 <filename>            Use specified HDD image for slot 7 unit 1\n");
@@ -4843,6 +4853,12 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
 			printf("Self-test mode enabled - will simulate Command+Option+Control+Reset\n");
+		} else if (strcmp(argv[i], "--fixed-time") == 0) {
+			if (i + 1 < argc && argv[i+1][0] >= '0' && argv[i+1][0] <= '9') {
+				fixed_time = (time_t)atoll(argv[++i]);
+			} else {
+				fixed_time = 527169600; // 1986-09-15 12:00:00 UTC
+			}
 		} else if (strcmp(argv[i], "--no-cpu-log") == 0) {
 			debug_6502 = false;
 			printf("CPU log memory storage disabled to save memory (stdout traces still enabled)\n");

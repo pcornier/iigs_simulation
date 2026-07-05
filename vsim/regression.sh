@@ -3,7 +3,7 @@
 
 # Check for required disk images
 MISSING_DISKS=0
-for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv" ../customtests/mmu_test.2mg "Arkanoid IIgs.woz"; do
+for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv" ../customtests/mmu_test.2mg "Arkanoid IIgs.woz" A2DeskTop-1.2-alpha42-en_800k.hdv; do
     if [ ! -f "$disk" ]; then
         echo "ERROR: Missing disk image: $disk"
         MISSING_DISKS=1
@@ -33,16 +33,37 @@ fi
 FAILED=0
 
 echo "Running Total Replay test..."
-./obj_dir/Vemu --disk totalreplay.hdv --stop-at-frame 175 --screenshot 175 &> totalreplay.txt
-if [ -f "regression_images/totalreplay_screenshot_frame_0175.png" ]; then
-    if diff screenshot_frame_0175.png regression_images/totalreplay_screenshot_frame_0175.png > /dev/null 2>&1; then
-        echo "  PASS: Total Replay"
+# Frame 130: game browser menu (boot guard). Keys P,R type-ahead to Prince of
+# Persia; frame 300: its double-hires title preview (DHR rendering guard --
+# currently mono, reference to be re-blessed when 16-color DHR lands).
+./obj_dir/Vemu --disk totalreplay.hdv --send-keys 130:P --send-keys 150:R --stop-at-frame 300 --screenshot 130,300 &> totalreplay.txt
+if [ -f "regression_images/totalreplay_screenshot_frame_0130.png" ] && [ -f "regression_images/totalreplay_screenshot_frame_0300.png" ]; then
+    if diff screenshot_frame_0130.png regression_images/totalreplay_screenshot_frame_0130.png > /dev/null 2>&1 && \
+       diff screenshot_frame_0300.png regression_images/totalreplay_screenshot_frame_0300.png > /dev/null 2>&1; then
+        echo "  PASS: Total Replay (menu + PoP DHR preview)"
     else
         echo "  FAIL: Total Replay - screenshot differs"
         FAILED=1
     fi
 else
     echo "  SKIP: Total Replay - missing reference image"
+fi
+
+echo "Running A2Desktop test..."
+# DHR (double hi-res) rendering guard, mono/UI flavor -- companion to the
+# Total Replay PoP color-DHR guard: these two must BOTH pass whenever the
+# DHR pipeline changes (the A2Desktop raw-render fix silently traded away
+# PoP's color because only a menu frame was guarded at the time).
+./obj_dir/Vemu --disk A2DeskTop-1.2-alpha42-en_800k.hdv --fixed-time --stop-at-frame 450 --screenshot 450 &> a2desktop.txt
+if [ -f "regression_images/a2desktop_screenshot_frame_0450.png" ]; then
+    if diff screenshot_frame_0450.png regression_images/a2desktop_screenshot_frame_0450.png > /dev/null 2>&1; then
+        echo "  PASS: A2Desktop (DHR desktop)"
+    else
+        echo "  FAIL: A2Desktop - screenshot differs"
+        FAILED=1
+    fi
+else
+    echo "  SKIP: A2Desktop - missing reference image"
 fi
 
 echo "Running Pitch Dark test..."
