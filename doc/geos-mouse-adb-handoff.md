@@ -1,6 +1,6 @@
 # GEOS mouse — ADB autopoll delivery gap (diagnosis + plan)
 
-**Status: diagnosed; delivery mechanism CONFIRMED and partially working (GEOS consumes the response but a $C026 byte-sequencing bug crashes it); NOT landed.** The GEOS `geos.hdv` desktop cursor does not
+**Status: NOT FIXABLE at the ADB-hardware level for this GEOS configuration (proven). The firmware mouse-service handlers are not installed.** The GEOS `geos.hdv` desktop cursor does not
 respond to mouse movement. This is **not a regression** — verified by building
 the pre-ADB-rework commit `76cb8d5` and confirming the cursor doesn't move
 there either (byte-identical before/after injection). GEOS mouse has never
@@ -84,7 +84,46 @@ toggles and $C024/$C026/$C027 reads/writes + opcode-fetch PC (capture
 cpu_addr when cpu_vpa && cpu_vda). Key PCs: @66 handler $FFBE67, INTRSPNS
 $FCDB29/$FCDB30, GEOS mouse poll SERVEMOUSE $00C447.
 
-## The correct fix (plan)
+## DEFINITIVE FINDING (2026-07-05): no firmware mouse handler is installed
+
+Fixed the $C026 byte-sequencing bug (the double-post; extra guards make it
+deliver the two distinct bytes correctly -- verified: Y=b2 then X=bc). GEOS
+still crashes ("System error near $C002"). Root cause found by dumping the
+ADB interrupt/completion vectors from E1 RAM after boot:
+
+```
+IRQ_VBL      $E10030 -> $FFBA18   (SECRTL: SEC;RTL -- a DO-NOTHING stub)
+IRQ_MOUSE    $E10034 -> $FFBA18   (same do-nothing stub)
+IRQ_RESPONSE $E10040 -> $FCDB65   (INTRSPNS, valid)
+IRQ_SRQ      $E10044 -> $FCD83A   (INTSRQ, valid)
+VCTRCPLT     $E103DC -> JML $000000  (NULL -- INTRSPNS jumps here -> crash)
+```
+
+So in the mode GEOS configured on this core, NONE of the handlers that would
+consume mouse data are installed:
+- The VBL and mouse-interrupt handlers are the do-nothing stub ($FFBA18), so
+  even if we fired the mouse interrupt (bit 6), nothing would read $C024.
+- The autopoll RESPONSE completion vector (VCTRCPLT) is null, so posting a
+  response crashes (JML $000000).
+- GEOS's slot-4 SERVEMOUSE ($C447) VBL poll requires mouse-int (bit 6), which
+  GEOS left OFF.
+
+**Conclusion: this is not an ADB-hardware bug.** No register-level delivery
+can work because the firmware/software mouse-service handlers were never
+installed in this GEOS's setup. The mouse would only work if GEOS (or GS/OS,
+or the mouse driver) installed a real IRQ_VBL/IRQ_MOUSE handler or the
+absolute-poll completion vector -- which it does not do here. The likely
+explanations: this geos.hdv is not configured for the mouse (a GEOS-side
+input/driver setting), or it depends on a tool/driver-install step this core
+doesn't reproduce. A different GEOS build whose mouse works presumably runs
+the mouse in interrupt mode (bit 6) with IRQ_MOUSE installed, or installs the
+VBL mouse handler.
+
+All three ADB-register paths are now ruled out WITH PROOF: direct $C024
+(GEOS never reads it), SRQ (storm -- device 3 not in SRQ list), RESPONSE
+(crash -- null completion vector). No further ADB-hardware work is warranted.
+
+## The correct fix (plan -- superseded by the DEFINITIVE FINDING above)
 
 Deliver mouse movement as an ADB **autopoll absolute-device RESPONSE**, not an
 SRQ:
