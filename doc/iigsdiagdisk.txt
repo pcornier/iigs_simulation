@@ -1,20 +1,44 @@
 Apple IIgs Diagnostic Disk - Simulation Instructions
 ====================================================
 
-DIAGNOSTIC TEST STATUS (as of 2025-12-28):
-------------------------------------------
+DIAGNOSTIC TEST STATUS (full sweep 2026-07-05; disk "Apple IIgs Diagnostic v3_1.hdv"):
+--------------------------------------------------------------------------------------
 | Test                       | Status | Notes                                    |
 |----------------------------|--------|------------------------------------------|
+| ROM Test                   | PASS   |                                          |
 | System Speed/Interrupts    | PASS   | Timing and interrupt tests               |
-| Serial External Test       | PASS   | Uses cross-channel loopback (A TX->B RX) |
+| MMU/IOU Test               | PASS   |                                          |
+| RAM Main Logic Board       | PASS?  | No error in 6000+ frames; moving-        |
+|                            |        | inversions is too slow to finish in sim  |
+| RAM Memory Expansion Card  | N/A    | Needs an expansion card                  |
+| Clock RAM Test             | FAIL*  | PRAM default values don't match ROM      |
+| Serial External Test       | PASS   | Cross-channel loopback (A TX->B RX);     |
+|                            |        | answer Y to the loopback-cable prompt    |
 | Serial Crystal Test        | PASS   | Baud rate generator timing check         |
 | Serial Internal Test       | FAIL   | Internal loopback mode (WR14[4]) issue   |
-| Clock RAM Test             | FAIL*  | PRAM default values don't match ROM      |
+| Disk Port Test             | PASS   |                                          |
+| Sound Circuitry Test       | PASS   |                                          |
+| Video Pattern Tests (all)  | PASS   | Color Bar, Char Gen, 80/40 Text, Lo-res, |
+|                            |        | Hi-res, DHR (matches gssquared), SHR,    |
+|                            |        | Screen/Text Color -- all render correctly|
+| Keyboard/Mouse Tests (all) | PASS   | Fixed 2026-07-05 (5e92dcd): were wrong   |
+|                            |        | hi-res colors (HIRES40+80COL bug)        |
 | ROM Selftest 07 (Clock)    | PASS   | Basic clock/PRTC read/write works        |
+
+Only two tests fail, both pre-existing/documented (not core video/logic bugs):
+Serial Internal (WR14[4] internal loopback) and Clock RAM (PRAM default mismatch).
 
 * The diagnostic disk Clock RAM test compares PRAM values against ROM defaults
   at $FF893D. Our PRAM initialization may not match exactly. The ROM selftest07
   (which tests basic PRTC functionality) passes, indicating the protocol is correct.
+
+Menu navigation (Vemu or GSSquared --send-keys; frames approximate):
+  Main menu ~frame 160. Choose Tests = 'c'. Then a folder letter enters it,
+  a test letter + RETURN selects it, ESC backs out. Return to Main and 'b'
+  (Execute Selected Tests) runs the selection. A pass shows "Testing finished.";
+  a fail shows "<Test> Test Failed" on a repair-form screen. GSSquared (accurate
+  reference for A/B video comparison) gained --send-keys 2026-07-05 -- see
+  COMPARING_WITH_VSIM.md / memory gssquared-reference.
 
 RUNNING SYSTEM SPEED/INTERRUPTS TEST:
 -------------------------------------
