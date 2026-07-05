@@ -347,6 +347,75 @@ wire [1:0] color_phase = (color_phase_base + {1'b0, graphics_color[0]}) & 2'b11;
 wire consistent_tint = (apple2_shift_reg[0] == apple2_shift_reg[4]) & 
                        (apple2_shift_reg[5] == apple2_shift_reg[1]);
 
+// --- Double hi-res 16-color decode (AppleColor RGB card behavior) ----------
+// Ported from gssquared displaypp (VideoScanGenerator_RGB + HiresColorTable):
+// an 11-bit sliding window over the 560-bit DHR pixel stream (oldest bit at
+// [10], matching the reference's shiftreg<<1) indexes a 2048x16 LUT that
+// yields four 4-bit colors per 4 pixels consumed (MSB nibble = leftmost).
+// A group lookup latches every 4th pixel; the decoded image therefore trails
+// the bit stream by 6 pixels and the dhires-color display window is shifted
+// to match. NEWVIDEO[5] (DHRG_MONO) = 1 keeps the raw 1bpp mono rendering.
+reg [15:0] dhr_lut [0:2047];
+`include "dhr_lut.vh"
+
+// GSHGR 16-color palette (4 bits/channel), index 0 = white .. 15 = black
+function automatic [11:0] dhr_pal(input [3:0] c);
+    case (c)
+        4'h0: dhr_pal = 12'hFFF; // white
+        4'h1: dhr_pal = 12'hFF0; // yellow
+        4'h2: dhr_pal = 12'hF60; // orange
+        4'h3: dhr_pal = 12'hD03; // deep red
+        4'h4: dhr_pal = 12'hF98; // pink
+        4'h5: dhr_pal = 12'hD2D; // purple
+        4'h6: dhr_pal = 12'h009; // dark blue
+        4'h7: dhr_pal = 12'h6AF; // light blue
+        4'h8: dhr_pal = 12'h1D0; // green
+        4'h9: dhr_pal = 12'h072; // dark green
+        4'hA: dhr_pal = 12'h850; // brown
+        4'hB: dhr_pal = 12'h4F9; // aquamarine
+        4'hC: dhr_pal = 12'hAAA; // light gray
+        4'hD: dhr_pal = 12'h22F; // medium blue
+        4'hE: dhr_pal = 12'h555; // dark gray
+        4'hF: dhr_pal = 12'h000; // black
+    endcase
+endfunction
+
+// Group latch phase: the reference preloads 3-phase_offset bits (DHR
+// phase_offset=1 -> 2), making lookups land on stream index 4k+5 -- but our
+// graphics_pixel is registered (one tick behind graphics_pix_shift[0]), so
+// the matching H phase is one later, wrapping to H[1:0] == 0. Verified
+// against the real Prince of Persia title screen (phase sweep: 1,2,3 all
+// produce rotated hues; 0 matches orange dome / dark blue tapestry / red
+// borders exactly).
+localparam [1:0] DHR_PHASE = 2'b00;
+
+reg [10:0] dhr_win;
+reg [15:0] dhr_hold;
+reg [1:0]  dhr_nib;
+always @(posedge clk_vid) if (ce_pix) begin
+    if (H < BLE || H >= BRE + 10'd8) begin
+        dhr_win  <= 11'd0;
+        dhr_nib  <= 2'd0;
+    end else begin
+        dhr_win <= {dhr_win[9:0], graphics_pixel};
+        if (H[1:0] == DHR_PHASE && H >= BLE + 10'd5) begin
+            dhr_hold <= dhr_lut[{dhr_win[9:0], graphics_pixel}];
+            dhr_nib  <= 2'd0;
+        end else
+            dhr_nib  <= dhr_nib + 2'd1;
+    end
+end
+wire [3:0]  dhr_color = (dhr_nib == 2'd0) ? dhr_hold[15:12] :
+                        (dhr_nib == 2'd1) ? dhr_hold[11:8]  :
+                        (dhr_nib == 2'd2) ? dhr_hold[7:4]   : dhr_hold[3:0];
+wire [11:0] dhr_rgb   = dhr_pal(dhr_color);
+
+// Graphics active window: dhires mono has ~0 pipeline latency, dhires color
+// trails by 6px (dhr_lut decode), other GFX modes by 5px (apple2_shift_reg).
+wire [9:0] gfx_lb = dhires_mode ? (DHRG_MONO ? BLE       : BLE + 10'd6) : (BLE + 10'd5);
+wire [9:0] gfx_rb = dhires_mode ? (DHRG_MONO ? BRE-10'd2 : BRE + 10'd5) : (BRE + 10'd4);
+// ---------------------------------------------------------------------------
+
 // Apple II color generation logic
 reg [7:0] apple2_r, apple2_g, apple2_b;
 always @(*) begin
@@ -361,17 +430,26 @@ always @(*) begin
         // that run in standard HIRES but with EIGHTYCOL left set by menu software.
         // True DHIRES color (16-color) mode would need different handling.
         if (dhires_mode) begin
-            // True double-hi-res (hires+80col+AN3=0, e.g. A2Desktop): render raw 1bpp
-            // pixels straight from graphics_pixel rather than NTSC color artifacting.
-            // Matches GSSquared and gives a crisp left edge: the apple2_shift_reg artifact
-            // window is a 6-deep delay line that fills from the left border (zeros), so
-            // tapping it at the first byte yields a transient that mangled fine 1px
-            // features (the A2Desktop mouse cursor / first character). graphics_pixel is
-            // the real pixel with no fill transient. Programs that run hires+80col but
-            // with AN3=1 (e.g. 8bit-Slicks) have dhires_mode=0 and keep color artifacting.
-            apple2_r = graphics_pixel ? 8'hff : 8'h00;
-            apple2_g = graphics_pixel ? 8'hff : 8'h00;
-            apple2_b = graphics_pixel ? 8'hff : 8'h00;
+            if (DHRG_MONO) begin
+                // Mono double-hi-res (NEWVIDEO[5] set, e.g. A2Desktop): render raw
+                // 1bpp pixels straight from graphics_pixel. Crisp left edge: the
+                // apple2_shift_reg artifact window is a 6-deep delay line that fills
+                // from the left border (zeros), so tapping it at the first byte
+                // yields a transient that mangled fine 1px features (the A2Desktop
+                // mouse cursor / first character). graphics_pixel is the real pixel
+                // with no fill transient. Programs that run hires+80col but with
+                // AN3=1 (e.g. 8bit-Slicks) have dhires_mode=0 and keep artifacting.
+                apple2_r = graphics_pixel ? 8'hff : 8'h00;
+                apple2_g = graphics_pixel ? 8'hff : 8'h00;
+                apple2_b = graphics_pixel ? 8'hff : 8'h00;
+            end else begin
+                // Color double-hi-res: AppleColor RGB 16-color decode (see the
+                // dhr_lut pipeline above). 6px decode latency; the dhires-color
+                // border window below is shifted to match.
+                apple2_r = {dhr_rgb[11:8], dhr_rgb[11:8]};
+                apple2_g = {dhr_rgb[7:4],  dhr_rgb[7:4]};
+                apple2_b = {dhr_rgb[3:0],  dhr_rgb[3:0]};
+            end
         end
         else if (consistent_tint) begin
             // Regular hires with consistent tint: display color using basis vectors
@@ -884,7 +962,7 @@ begin
 // Apple II TEXT: active display H=72-631 (560 pixels), V=16-207 (192 lines)
 // Apple II GFX:  active display H=77-636 (560 pixels), V=16-207 (192 lines)
 // SHRG modes:    active display H=32-671 (640 pixels), V=16-215 (200 lines)
-if ((!SHRG && GR && ((H < (dhires_mode ? BLE : (BLE+5)) || H > (dhires_mode ? (BRE-2) : (BRE+4))) || (V < V_SCAN || V >= BBE))) ||
+if ((!SHRG && GR && ((H < gfx_lb || H > gfx_rb) || (V < V_SCAN || V >= BBE))) ||
     (!SHRG && !GR && ((H < BLE || H >= BRE) || (V < V_SCAN || V >= BBE))) ||
     (SHRG && ((H < (BL+1) || H >= BR || V < V_SCAN || V >= BB))))  // SHRG: 33px left border (mem latency), 639px active
 begin
