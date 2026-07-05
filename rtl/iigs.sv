@@ -2576,7 +2576,25 @@ wire       slot_delay_this = slot_ce;
 // a real ZipGS/TWGS (I/O and Mega II accesses stay at stock speed).
 // accel_capable gates BOTH control paths (OSD and ZipGS software): on a
 // memory path that cannot sustain short cycles this must never leave native.
-wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0)
+// ZipGS IWM compatibility hold-off: a real accelerator drops to native speed
+// around floppy activity -- the IWM and the ROM disk drivers' cycle-counted
+// delays (spin-up, head settle) cannot be accelerated. Any CPU access to the
+// IWM ($C0E0-$C0EF) arms a ~2 ms native window, refreshed per access, so the
+// whole driver runs at the speed it was written for while the disk is being
+// worked, and acceleration resumes between disk phases. (Without this the
+// ROM3 3.5" driver mis-times the drive at 7.16 MHz: "Check startup device".)
+reg [14:0] iwm_holdoff;
+always @(posedge CLK_14M) begin
+  if (reset)
+    iwm_holdoff <= 15'd0;
+  else if (phi2 && IO && addr_bef[7:4] == 4'hE)
+    iwm_holdoff <= 15'd28636;               // 2 ms at 14.318 MHz
+  else if (iwm_holdoff != 15'd0)
+    iwm_holdoff <= iwm_holdoff - 15'd1;
+end
+
+wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0
+                          && iwm_holdoff == 15'd0)
                          ? (4'd4 - {1'b0, zip_speed_code})
                          : 4'd4;
 assign accel_active = (fast_thresh != 4'd4);
