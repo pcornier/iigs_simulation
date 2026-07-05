@@ -662,7 +662,8 @@ module iigs
     // 1MHz), but our text80 sub-fetch pipeline does not expose it at the
     // CPU sample point -- FLOATBUS mode 9 (TXT2+COL80) trips on this.
     always_comb begin: io_read
-        io_dout = m2_bus_driven ? video_data : cpu_last_bus;
+        io_dout = !m2_bus_driven               ? cpu_last_bus :
+                  (NEWVIDEO[7] && shr_pix_win) ? shr_bus_byte : video_data;
         case (addr[11:0])
           12'h011: io_dout = {LCRAM2, 7'h00};
           12'h012: io_dout = {~RDROM, 7'h00};
@@ -1715,6 +1716,7 @@ video_timing video_timing(
 
 wire [22:0] video_addr;
 wire [7:0] video_data;
+wire [7:0] shr_bus_byte;   // SHR pixel byte on the real fetch schedule (vgc)
 
 `ifdef DEBUG_VGC_TXT
 // Beam-race analysis (textfunk): log every VGC text-page-1 fetch near the
@@ -1753,6 +1755,9 @@ always @(posedge CLK_14M) begin
   // Temp: watch the test-phase arg ($300): 128=unpk, 0=snap, 64=test, 1=pack.
   if (phi2 && we && bank_bef == 8'h00 && addr_bef == 16'h0300)
     $display("FBARG phase=%02x V=%0d H=%0d", dout, V, H);
+  // Temp: watch FLOATBUS spot-7 capture cells (16, rows 98-101) = $5112-$5115.
+  if (phi2 && we && bank_bef == 8'h00 && addr_bef >= 16'h5112 && addr_bef <= 16'h5115)
+    $display("FBP7 cell=%0d dout=%02x V=%0d H=%0d", addr_bef - 16'h5112, dout, V, H);
 end
 `endif
 // vbl_irq now handled internally in interrupt logic
@@ -1785,7 +1790,8 @@ vgc vgc(
         .TEXTG(TEXTG),
         .MIXG(MIXG),
         .SHRG(NEWVIDEO[7]),
-        .DHRG_MONO(NEWVIDEO[5])
+        .DHRG_MONO(NEWVIDEO[5]),
+        .shr_bus_byte(shr_bus_byte)
 );
 
 
@@ -1806,13 +1812,17 @@ wire [7:0] din =
   wire [7:0] cpu_din = IO ? ((adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
 
   // Mega II bus-drive window (see io_read): video data is driven during the
-  // 40 active chars (the VGC fetches all 160 SHR bytes in that window too, 4
-  // per cycle) of the active rows -- 192 for Apple II modes, 200 for SHR.
-  // Everything else is refresh -> open bus. (Real SHR hardware also drives
-  // SCB+palette fetches in late HBL -- FLOATBUS spots #7/#8 -- not yet
-  // modeled; our VGC prefetches those elsewhere in the line.)
-  assign m2_bus_driven = (H >= 10'd84) && (H < 10'd644) &&
-                         (V >= 9'd256) && (V < (NEWVIDEO[7] ? 9'd456 : 9'd448));
+  // 40 active chars of the active rows -- 192 for Apple II modes, 200 for
+  // SHR (the VGC fetches all 160 SHR bytes in that window, 4 per cycle; the
+  // bus view replays them from vgc's shr_line buffer on the real schedule).
+  // SHR additionally drives the next line's SCB + 32 palette bytes in LATE
+  // HBL (vgc's bus-visible prefetch walk, FLOATBUS spots #7/#8) -- there the
+  // live video_data IS the real fetch. Everything else is refresh -> open bus.
+  wire shr_pix_win = (H >= 10'd84)  && (H < 10'd644) && (V >= 9'd256) && (V < 9'd456);
+  wire shr_pre_win = (H >= 10'd770) && (H < 10'd898) && (V >= 9'd255) && (V < 9'd455);
+  assign m2_bus_driven = NEWVIDEO[7]
+      ? (shr_pix_win | shr_pre_win)
+      : ((H >= 10'd84) && (H < 10'd644) && (V >= 9'd256) && (V < 9'd448));
 
   // Last byte the CPU transferred on its data bus (operand fetches included):
   // the value a floating-bus read sees when the Mega II is not driving.

@@ -25,7 +25,10 @@ input PAGE2,
 input TEXTG,
 input MIXG,
 input SHRG,
-input DHRG_MONO
+input DHRG_MONO,
+// SHR pixel byte on the real Mega II fetch schedule (floating-bus view;
+// see the shr_line buffer below)
+output [7:0] shr_bus_byte
 );
 
 // Counter values for the border boundaries
@@ -62,6 +65,38 @@ reg [22:0] video_addr_shrg;
 reg [3:0] r_shrg[16];
 reg [3:0] g_shrg[16];
 reg [3:0] b_shrg[16];
+
+// --- SHR floating-bus schedule (FLOATBUS modes A/B, spots #5/#7/#8) --------
+// The real VGC fetches the 160 pixel bytes during the 40 active Mega II
+// chars (4 per 1MHz slot, H 84..644) and the NEXT line's SCB + 32 palette
+// bytes in LATE HBL (palette visible at capture col 16 ~H872, SCB at col 17
+// ~H886). Our display pipeline fetches on its own earlier schedule; to keep
+// the display byte-identical, pixel bytes are captured into a line buffer
+// during the display walk and replayed for the bus on the real schedule,
+// and the SCB/palette get an ADDITIONAL bus-visible address walk in late
+// HBL -- the display still latches from its existing HTOTAL-4/H<32 pass, so
+// scanline-IRQ timing and palette latching are unchanged.
+reg [7:0] shr_line [0:159];
+reg [7:0] shr_wr_idx;
+reg [22:0] shr_pal_base;   // late-HBL palette base ($9E00 + SCB[3:0]*32)
+reg [2:0]  shr_pal_slot;   // palette slot 0..7 (4 bytes each)
+reg [5:0] shr_rd_char;   // active Mega II char 0..39
+reg [3:0] shr_rd_sub;    // pixel within char 0..13
+always @(posedge clk_vid) if (ce_pix) begin
+    if (H == BLE-1) begin
+        shr_rd_char <= 6'd0;
+        shr_rd_sub  <= 4'd0;
+    end else if (shr_rd_sub == 4'd13) begin
+        shr_rd_sub  <= 4'd0;
+        shr_rd_char <= shr_rd_char + 6'd1;
+    end else
+        shr_rd_sub <= shr_rd_sub + 4'd1;
+end
+// The VGC completes the slot's 4 fetches early in the slot, so the byte on
+// the bus at the CPU sample point is the LAST of the group (4k+3) -- verified
+// against FLOATBUS spot #5 (expected $0F = byte 3 of its row, not byte 0).
+assign shr_bus_byte = shr_line[{shr_rd_char, 2'b11}];
+// ---------------------------------------------------------------------------
 
 
 // debug with a fixed palette
@@ -185,6 +220,7 @@ begin
 	   video_addr_shrg_1 <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
 	   video_addr_shrg <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
 	   h_counter<=0;
+	   shr_wr_idx<=0;
 	end else if (H < BR) begin
 		h_counter<=h_counter+1'b1;
 		// Only advance address for first 159 advances (byte 0->159), skip the 160th
@@ -192,6 +228,12 @@ begin
 		if (h_counter==2'd2 && H < (BR-4)) begin
 			video_addr_shrg <= video_addr_shrg + 1'b1;
 			video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
+		end
+		// Capture each pixel byte for the floating-bus replay (h_counter=='b01:
+		// video_data holds byte shr_wr_idx, one tick after the address settled)
+		if (h_counter==2'b01 && shr_wr_idx < 8'd160) begin
+			shr_line[shr_wr_idx] <= video_data;
+			shr_wr_idx <= shr_wr_idx + 8'd1;
 		end
 		if (scb[7]) begin
 			case(h_counter)
@@ -253,6 +295,30 @@ begin
 			endcase
 		end
 
+	end else if (H == 10'd750) begin
+		// --- bus-visible late-HBL prefetch (real VGC bus schedule; the
+		// display keeps latching from the existing HTOTAL-4 / H<32 pass).
+		// Everything on this bus shows the LAST byte of its fetch group
+		// (like the pixel slots' byte 4k+3): the palette moves 4 bytes per
+		// 1MHz slot (samples at capture cols 9-16 = bytes 3,7,...,31), and
+		// the SCB is fetched as an even/odd pair for the CURRENT row, the
+		// odd byte visible at col 17 ($9D00 + (nextrow|1)). Palette select
+		// keys off the NEXT row's SCB -- these fetches prepare the row about
+		// to be displayed (capture cells for row r read at the end of line
+		// r-1). Verified against FLOATBUS expct7/expct8 with the test's own
+		// SCB table. ---
+		video_addr_shrg <= 'h19D00 + {14'b0, (V[7:0]+8'd1)};      // SCB(next row)
+	end else if (H == 10'd752) begin
+		shr_pal_base <= 'h19E00 + {14'b0, video_data[3:0], 5'b00000};
+		shr_pal_slot <= 3'd0;
+	end else if (H == 10'd758 || H == 10'd772 || H == 10'd786 || H == 10'd800
+	          || H == 10'd814 || H == 10'd828 || H == 10'd842 || H == 10'd856) begin
+		video_addr_shrg <= shr_pal_base + {14'b0, shr_pal_slot, 2'b11};  // byte 4m+3
+		shr_pal_slot <= shr_pal_slot + 3'd1;
+	end else if (H == 10'd870) begin
+		// SCB even/odd pair for the NEXT row; the odd byte is what the CPU
+		// samples at capture col 17
+		video_addr_shrg <= 'h19D00 + {14'b0, (V[7:0]+8'd1) | 8'd1};
 	end
 
 	// Clear SHRG pixel registers during left border to ensure clean start
