@@ -52,7 +52,7 @@ dhr2 is confirmed; `Apple-IIgs.rbf` (Jun 24 release) can be replaced by dhr2.
 
 ## OUTSTANDING
 
-### FLOATBUS — 8/11 modes pass; 3 remaining, all diagnosed
+### FLOATBUS — 10/11 modes pass; 1 remaining
 Run: enable `` `define DEBUG_FBSPOT `` (iigs.sv ~line 19), rebuild,
 `./obj_dir/Vemu --disk floatbus.po --stop-at-frame 1500 --quiet | grep FBSPOT`.
 Full per-spot analysis in `doc/floatbus-hbl-fix.md`.
@@ -65,13 +65,12 @@ Full per-spot analysis in `doc/floatbus-hbl-fix.md`.
   sub-fetches like the Mega II (aux first half-cycle, main second, CPU
   latches main). Touches the fragile 80-col pipeline — do it with the DHR
   validator + A2Desktop/PoP guards watching.
-- **Modes A/B (SHR), spot #5 (then #7/#8)**: the real VGC fetches all 160
-  pixel bytes during the 40 active chars (4/cycle) and the next line's SCB +
-  32 palette bytes in LATE HBL (capture cols 16-17 ≈ H 872-886). Our VGC
-  fetches pixels across H 44-684 and SCB/palette early. Needs the SHR
-  prefetch re-timed to the real cadence (display-safe: prefetch must finish
-  before the next line's pixels). Expected values: #5=$0F, #7=0F FF 00 0F,
-  #8=80 08 08 80 (FLOATBUS.S).
+- ~~Modes A/B (SHR)~~ **FIXED (2026-07-05): modes A and B pass ALL spots.**
+  Bus model: every fetch group shows its LAST byte (pixels = byte 4k+3 via a
+  160-byte replay buffer; palette = 4/slot, cols 9-16 = bytes 3..31; SCB =
+  even/odd pair for the NEXT row, odd byte at col 17). Display pipeline
+  untouched. Note the capture geometry trap: cells (c, r) for the late-HBL
+  columns read at the END of line r-1.
 - Minor: $C061-$C067 reads splice `video_data[6:0]` into bits 6:0 during
   blanking; real HW would show open-bus bits there.
 
@@ -112,8 +111,7 @@ Full per-spot analysis in `doc/floatbus-hbl-fix.md`.
    uses `--fixed-time`).
 2. textfunk: `./obj_dir/Vemu --disk textfunk.po --screenshot 438
    --stop-at-frame 439`, md5 stays `7abff109f80d62083437e1c379389fb5`.
-3. FLOATBUS (when touching timing/bus/video): no regressions vs the 8/11
-   table above.
+3. FLOATBUS (when touching timing/bus/video): 10/11 modes green (all but 9).
 4. DHR pixel truth (when touching vgc): `--disk A2DeskTop... --fixed-time
    --screenshot 450 --memory-dump 450 --stop-at-frame 450` then
    `python3 dhr_validate.py screenshot_frame_0450.png
