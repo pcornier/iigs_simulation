@@ -1,151 +1,128 @@
-# Session Handoff — MMU refactor, ZipGS accelerator, FloatBus accuracy
+# Session Handoff — 2026-07-04/05
 
-**Branch:** `feat/zipgs-speed` (pushed to origin, 25 commits ahead of master).
-**Last commit:** `9f6c112`. **Working tree clean.**
-
-This session did three big pieces of work in sequence. They're independent;
-restart on whichever you want. The **live/unfinished** work is the FloatBus
-floating-bus accuracy (bottom section) — everything above it is done.
-
----
-
-## 1. MMU extraction (DONE, on branch `refactor/mmu-extraction`, merged in here)
-
-Pulled the memory decode out of `iigs.sv` into pure-combinational
-`rtl/mmu.sv` (translation, aux select, IO/slot decode, fast/slow CE, ROM CEs).
-Replaced the `addr - 16'h1000 + 24'h10000` arithmetic with explicit bit ops.
-Unit test: `cd vsim && make mmutest` (48M vectors vs a golden C++ model,
-0 failures). Also fixed: E1 slow-cycle speed classification, three RDROM
-mapping divergences. See memory `mmu-extraction.md`. Regression byte-identical.
+**Branch:** `master` == `feat/zipgs-speed`, both pushed (HEAD `fe69596`).
+**Working tree:** clean of source changes (untracked disks/artifacts remain).
+**Board (192.168.1.196):** latest build = `_Computer/Apple-IIgs_dhr2.rbf`.
+Superseded diagnostics still on the SD: `Apple-IIgs_bisect.rbf`,
+`Apple-IIgs_zipgs_test.rbf`, `Apple-IIgs_natfix.rbf` — safe to delete once
+dhr2 is confirmed; `Apple-IIgs.rbf` (Jun 24 release) can be replaced by dhr2.
 
 ---
 
-## 2. ZipGS / TransWarp CPU accelerator (DONE and hardware-validated)
+## DONE this session (each hardware- or pixel-validated)
 
-Full ZipGS-compatible CPU speed control: **OSD menu, `--speed` sim flag, and
-the real ZipGS $C058-$C05F software protocol all share one state**
-(`rtl/zipgs_regs.sv`). Speeds: 2.8 (native) / 3.6 / 4.8 / **7.16 MHz max**.
-Doc: `doc/zipgs_speed.md`, memory `zipgs-speed.md`.
-
-**Hardware state (MiSTer DE10-Nano, 192.168.1.196):** boots GS/OS 6.0.1 to the
-desktop at 7.16 MHz reliably; the real ZipDA CDA reads 6.70-6.93 MHz; the
-ZipGS.CDev control panel opens without lockup. Enable on FPGA = one qsf line:
-`set_global_assignment -name VERILOG_MACRO "ACCEL_SDRAM=1"` (default OFF; the
-committed bitstream is the known-good non-accel path).
-
-**Bugs found + fixed on hardware, in order (each its own commit):**
-- Combinational cache hit path (`b63f4d0`) — registered path missed the
-  deadline above native.
-- $C036 override (`d44f5bb`) — the Zip keeps the CPU fast regardless of the
-  motherboard speed bit; ANY code that dropped to 1 MHz via $C036 was losing
-  acceleration.
-- $C05A bit7 = 1 ms clock (`d44f5bb`) — the CDA measures speed by polling
-  $C05A bit 7, NOT $C05B as the FAQ/KEGS say (found by disassembling ZipDA).
-- Per-slot delay reverted to always-slow (`5f76880`) — slot-ROM-fast crashed
-  the slot-7 SmartPort/HDD firmware (beep + crash).
-- **2-FF synchronizer on cache mem_ack** (`31fbf1a`) — THE 7.16 crash: single-FF
-  CDC sample of the 114 MHz mem_ack was metastable, corrupting fills
-  intermittently. This is the big one.
-- Control-panel lockup fix (`c5e40f0`) — reverted an over-clever $C05A gate
-  and neutralized the cache-disable path (it wedged the CPU: mem_stall =
-  reading && !hit_now, hit_now forced low = never released).
-
-**Known limits / TODO:**
-- **14.32 MHz is sim-only.** On hardware the 1-tick step passes static timing
-  but crashes under load (cycle-level posted-write / miss-stall race). Clamped
-  off the hardware OSD (`e95310a`); available via sim `--speed 4`.
-- $C05A speed-nibble display in the CDA jitters 100%/50% (bit 7 shares the
-  1 ms clock) — cosmetic; the measured MHz is correct.
-- $C05C per-slot mask and $C059 C/D-cache-disable are stored/displayed but
-  cosmetic (cache-disable is a no-op after the wedge fix).
-- **Disk-write validated at 7.16 (2026-07-04, on hardware):** benchmark run,
-  text file created+saved to HDD, blank 3.5" WOZ formatted and written. The
-  accelerator is always built in as of 46f90a9 (OSD default 2.8 Std; "ZipGS
-  Registers" toggle). Remaining: broader game/title sweep at 7.16 (nice-to-
-  have, no longer a ship blocker).
-
-**Test rig (memory `fpga-test-rig`):** `sshpass -p 1 ssh root@192.168.1.196`.
-Screenshot: `POST http://192.168.1.196:8182/api/screenshots`. Launch a disk
-via MGL (`doc/mgl_fpga_testing.md`). Quartus: `~/intelFPGA_lite/quartus/bin`,
-`quartus_sh --flow compile Apple-IIgs` (~7 min). **Gotchas:** the keyboard-raw
-API reaches the CORE only, NOT the MiSTer OSD (can't drive the OSD remotely —
-set speed via a 16-byte little-endian status CFG at
-`/media/fat/config/Apple-IIgs.CFG`, speed in byte1 as `speed<<4`; an all-zero
-CFG == native ROM3). SignalTap `.stp` hand-authoring is rejected by Quartus 17
-headless — use an on-screen debug overlay decoded from HDMI screenshots
-(`scratchpad/decode_overlay.py` technique) instead.
+1. **Floating-bus accuracy** — RDVBL/$C019 edge moved to the Mega II counter
+   wrap (266px earlier, `video_timing.v`); IIgs blanking = open bus
+   (`m2_bus_driven` + `cpu_last_bus`, `iigs.sv`). FLOATBUS spots #1-#4 pass.
+2. **PAL/50Hz scan** — LANGSEL $C02B bit 4 → 312-line frames (Sather preset
+   $C8), switches at frame wrap. FLOATBUS modes 3/6 pass.
+3. **ZipGS shipping config** — accelerator always built in (single RBF); OSD
+   "CPU Speed" live (default 2.8 Std); new OSD "ZipGS Registers:
+   Enabled/Disabled" (status[15]); speed menu NOT grayed when registers off
+   (host-only turbo is a feature). ZipDA reads 6.7MHz; Disabled → "no ZipGS
+   present". Disk-write DMA validated at 7.16 (HDD save, 3.5" format+write).
+4. **Native-speed memory path (ch3)** — hardware bisect proved the always-on
+   burst+cache stalls broke cycle exactness at 2.8 (textfunk flashing, FTA
+   demo). New `sdram_burst` ch3 single-word read channel (first-beat ack);
+   top selects datapath by live speed (`accel_active`). tb_ch3 53/53
+   (Icarus — NOTE: local verilator is 4.204; the `--binary` TB scripts need
+   v5, use `iverilog -g2012`).
+5. **IWM hold-off** — any $C0E0-EF access forces native for ~2ms (refreshed),
+   like a real Zip; fixes ROM3 3.5" boot at 7.16 ("Check startup device").
+   Slot-7 HDD ($C0Fx) stays accelerated.
+6. **16-color DHR** — AppleColor RGB decode (gssquared HiresColorTable →
+   `rtl/dhr_lut.vh`, 11-bit window, DHR_PHASE=0 verified against a real PoP
+   title photo). NEWVIDEO[5] honored (set=mono; A2Desktop sets it itself).
+7. **DHR first-byte truncation** — every DHR line's first aux byte rendered
+   5-of-7 px shifted right 2 (long-standing, pre-78c4d27). Init region now
+   emits bits 0/1 directly + pre-shifted preload; window [BLE-1, BRE-2].
+   A2Desktop = 12/12 rows pixel-perfect vs video memory.
+8. **Regression suite hardened** — 9 tests: Total Replay now types P,R and
+   guards the PoP color-DHR preview (frame 300) + menu (130); new A2Desktop
+   DHR cell (frame 450); new sim `--fixed-time` flag (RTC determinism, epoch
+   1986-09-15); WOZ Arkanoid green (old FAIL was a corrupt disk image, not
+   RTL — replaced 2026-07-03).
+9. **New tools** — `vsim/dhr_validate.py` (renders-vs-memory pixel checker;
+   needs `--memory-dump` + screenshot from the SAME run — the cursor draws
+   into video memory). GSSquared headless works as ground truth:
+   `SDL_VIDEODRIVER=dummy .../GSSquared -p 5 --disk X --screenshot N
+   --stop-at-frame N`.
 
 ---
 
-## 3. FloatBus vaporlock / floating-bus accuracy (LIVE — restart here)
+## OUTSTANDING
 
-**Goal:** make the floating bus cycle-exact to real Mega II hardware, passing
-arekkusu's FLOATBUS test in `vsim/FloatBus_260213/`. **Run at NATIVE speed only**
-(the accelerator's $C036 override breaks the cycle-exact 1 MHz timing — which
-is correct behavior; the test is a good turbo regression).
+### FLOATBUS — 8/11 modes pass; 3 remaining, all diagnosed
+Run: enable `` `define DEBUG_FBSPOT `` (iigs.sv ~line 19), rebuild,
+`./obj_dir/Vemu --disk floatbus.po --stop-at-frame 1500 --quiet | grep FBSPOT`.
+Full per-spot analysis in `doc/floatbus-hbl-fix.md`.
 
-**Current state — modes 1,2,4,5,7,8 pass ALL spot checks.** Two root causes
-were found and fixed, and they were NOT the ones this section previously
-described (the old text and the old fix spec are preserved only in git
-history; `doc/floatbus-hbl-fix.md` now has the corrected analysis):
+- **Mode 9 (TXT2+COL80), spot #1**: the real 80-col floating bus shows the
+  MAIN-bank byte of the current column; our text80 sub-fetch pipeline never
+  exposes it at the CPU sample point. A `video_data_main` latch was tried
+  with 1- and 2-stage pairing — each fixed one cell and broke another (run-7
+  instrumentation showed no fixed delay works). Real fix: re-time the text80
+  sub-fetches like the Mega II (aux first half-cycle, main second, CPU
+  latches main). Touches the fragile 80-col pipeline — do it with the DHR
+  validator + A2Desktop/PoP guards watching.
+- **Modes A/B (SHR), spot #5 (then #7/#8)**: the real VGC fetches all 160
+  pixel bytes during the 40 active chars (4/cycle) and the next line's SCB +
+  32 palette bytes in LATE HBL (capture cols 16-17 ≈ H 872-886). Our VGC
+  fetches pixels across H 44-684 and SCB/palette early. Needs the SHR
+  prefetch re-timed to the real cadence (display-safe: prefetch must finish
+  before the next line's pixels). Expected values: #5=$0F, #7=0F FF 00 0F,
+  #8=80 08 08 80 (FLOATBUS.S).
+- Minor: $C061-$C067 reads splice `video_data[6:0]` into bits 6:0 during
+  blanking; real HW would show open-bus bits there.
 
-1. **RDVBL ($C019) edge was 266px late** (`rtl/video_timing.v`): the flag
-   flipped at the line boundary (hcount==HWL) instead of at the Mega II
-   counter wrap (H_M2_WRAP, where m2_v increments). On IIgs the FLOATBUS
-   sync is pure RDVBL cycle-counting, so our whole capture was phase-shifted
-   ~19 chars — spot #1 (col 63,row 11) is really ACTIVE col 38 of line 11
-   ($2CA6=$3E for HGR p1), not an HBL cell.
-2. **IIgs blanking = open bus, not scan bytes** (`rtl/iigs.sv`): the Mega II
-   refreshes slow RAM during HBL/VBL and drives nothing; a floating-bus read
-   returns the CPU's own last bus byte (operand $C0 of `LDA $C05A`, $5A for
-   the DP form — the test's `MG2gs` routine). Implemented as `m2_bus_driven`
-   window (II modes: V∈[256,448) ∧ H∈[84,644); SHR: V∈[256,456)) +
-   `cpu_last_bus` register. The Sather HBL scan address (old plan) is real
-   IIe behavior but UNOBSERVABLE on a IIgs — implemented, verified
-   display-safe, then removed as dead logic.
+### ZipGS / accelerator
+- Broader title sweep at 7.16 (casual; disk-write DMA + GS/OS already pass).
+- 14.32 MHz remains sim-only (1-tick posted-write/miss-stall race on HW).
+- $C05C per-slot mask + $C059 cache-disable stored but cosmetic.
+- $C05A speed-nibble jitter in the CDA display (cosmetic).
 
-**GUARDS (both must hold at every commit):**
-1. **textfunk** — `cd vsim && ./obj_dir/Vemu --disk textfunk.po --screenshot 438
-   --stop-at-frame 439`, md5 of `screenshot_frame_0438.png` must stay
-   **`7abff109f80d62083437e1c379389fb5`** (clean tunnel/grid; the beam-race
-   regression).
-2. **FLOATBUS** — enable `` `define DEBUG_FBSPOT `` in `rtl/iigs.sv` (line ~17),
-   rebuild, `./obj_dir/Vemu --disk floatbus.po --stop-at-frame 1100 --quiet |
-   grep FBSPOT`. Spot #1 `actual` must move toward the `expct1` table in
-   `src/FLOATBUS.S` (`3E 00 3E 00 DF 00 DF A0 A0 FF FF` for modes 1..B). Full
-   pass = no `FAIL` lines.
-3. Full `./regression.sh` byte-identical (native path unchanged).
+### PAL
+- Optional OSD "Region: NTSC/PAL" = C02BVAL[4] reset value (a real PAL IIgs
+  powers up at 50Hz; useful for European software that doesn't poke $C02B).
+- Pixel clock is NTSC-derived → 50.3Hz vs true 50.08 (cosmetic).
+- Verify FTA Xmas Demo runs at correct 50Hz pace on the dhr2 RBF (it ran on
+  the no-PAL bisect build, just ~20% fast).
 
-**Diagnostic tooling (committed, gated):** `DEBUG_FLOATBUS` logs each $C05A
-floating-bus read with beam position + returned byte; `DEBUG_FBSPOT` logs the
-test's per-mode spot-check results. Both in `rtl/iigs.sv`, off by default.
+### Sim gaps
+- cp2-generated WOZs don't boot in sim (Applesauce WOZs do) — WOZ loader
+  follow-up. Workaround for .po floppies: `--woz file.po` auto-converts.
+- FTA Xmas Demo in sim: HDD mount hangs by design (wants a 3.5" drive);
+  cp2-conversion doesn't boot (above). Boots fine on FPGA S2.
+- `--screenshot-name` is single-shot (last frame wins) — fine, just know it.
 
-**Remaining:** (a) ~~modes 3/6/B PAL~~ **PAL/50Hz implemented 2026-07-04**
-(video_timing v_load 200/312 lines from LANGSEL $C02B bit4; FLOATBUS modes
-3 and 6 pass fully, B aligns and stops at the SHR spot like A — 8/11 modes
-green); (b) mode 9 = text80 main-byte exposure; (c) modes A/B spot #5/#7/#8 =
-SHR SCB/palette fetch cadence; (d) capture-cell↔beam mapping and per-spot
-notes are in `doc/floatbus-hbl-fix.md`. Known FPGA issue under investigation:
-textfunk flashes alternate frames on the always-on cache build (suspect
-mem_stall stretches at native on late SDRAM fills; bisect RBF deployed).
-FTA Xmas Demo: not bootable from HDD mount by design (wants 3.5"); cp2
-PO→WOZ conversion does not boot in sim (WOZ-loader follow-up).
+### Hardware validation owed (dhr2 RBF)
+- A2Desktop corner cursor clean; PoP preview colors; textfunk still solid;
+  quick hires-game glance (vgc.v was touched).
+
+### Older threads (untouched this session)
+- Wolf3D ADB/SRQ WIP — `doc/wolfenstein-3d-iigs-adb-handoff.md`.
+- hires40 could share the 11-bit LUT decode (gssquared does, phase_offset=0)
+  instead of the basis-vector artifacting — potential quality upgrade.
+- `.gitignore` for build artifacts (output_files/, db/, obj_dir*, screenshots).
 
 ---
 
-## Quick restart checklist
+## GUARDS (all must hold at every commit)
+1. `cd vsim && ./regression.sh` — 9/9 (includes both DHR cells; A2Desktop
+   uses `--fixed-time`).
+2. textfunk: `./obj_dir/Vemu --disk textfunk.po --screenshot 438
+   --stop-at-frame 439`, md5 stays `7abff109f80d62083437e1c379389fb5`.
+3. FLOATBUS (when touching timing/bus/video): no regressions vs the 8/11
+   table above.
+4. DHR pixel truth (when touching vgc): `--disk A2DeskTop... --fixed-time
+   --screenshot 450 --memory-dump 450 --stop-at-frame 450` then
+   `python3 dhr_validate.py screenshot_frame_0450.png
+   memdump_frame_0450_slowram.bin 84 12` → 12/12.
+
+## Quick restart
 ```bash
-cd ~/mister/iigs_simulation && git checkout feat/zipgs-speed && git pull
-cd vsim && make
-# textfunk guard baseline:
-./obj_dir/Vemu --disk textfunk.po --screenshot 438 --stop-at-frame 439 --quiet
-md5sum screenshot_frame_0438.png   # expect 7abff109f80d62083437e1c379389fb5
-# floatbus (needs FloatBus_260213/FloatBus_260213.po copied to vsim/floatbus.po):
-./obj_dir/Vemu --disk floatbus.po --stop-at-frame 400 --screenshot 390
+cd ~/mister/iigs_simulation && git pull && cd vsim && make -j8
+./regression.sh                            # expect 9/9
+# FPGA: quartus_sh --flow compile Apple-IIgs  (~7 min, PATH+=~/intelFPGA_lite/quartus/bin)
+# deploy: sshpass -p 1 scp output_files/Apple-IIgs.rbf root@192.168.1.196:/media/fat/_Computer/...
 ```
-Regression: `./regression.sh` (8/8 — the long-standing WOZ 3.5" Arkanoid FAIL was
-a corrupt disk image; replaced 2026-07-03, verified independent of RTL changes).
-
-## Pre-existing baggage (not ours)
-- `output_files/`, `obj_dir_mmu/`, `db/`, screenshots, `scratchpad/` are build
-  artifacts — consider `.gitignore` before merging to master.
