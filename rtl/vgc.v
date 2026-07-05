@@ -734,6 +734,15 @@ wire [2:0] line_type_w = (!GR & !EIGHTYCOL) ? TEXT40_LINE :
         (GR & HIRES_MODE & !AN3 & EIGHTYCOL) ? HIRES80_LINE :     // IIgs double hires (AN3=0 AND EIGHTYCOL=1)
         TEXT40_LINE;
 
+// True when THIS line uses 80-column (1:1, no pixel-doubling) pixel timing:
+// text80, lores80, and dhires. Standard hi-res/lores with EIGHTYCOL set but
+// AN3=1 is a 40-column line and must NOT use the 80-column pixel cadence --
+// the pixel pipeline keys off this, not the raw EIGHTYCOL bit, so that
+// HIRES40+EIGHTYCOL=1 (e.g. the diagnostic keyboard test, 8bit-Slicks) keeps
+// correct pixel doubling and hi-res color artifacting.
+wire line_is_80 = (line_type_w == TEXT80_LINE) | (line_type_w == LORES80_LINE) |
+                  (line_type_w == HIRES80_LINE);
+
 //
 // Apple II Graphics Mode Support - Pixel Buffer System
 //
@@ -784,8 +793,9 @@ wire ldps_load;
 assign ldps_load = (SHRG) ?
                    // SHRG mode timing
                    ((H >= (BL-4) && H < BL) || (H >= BL && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12))))) :
-                   // Apple II mode timing
-                   ((H >= (BLE-4) && H < BLE) || (H >= BLE && ((EIGHTYCOL && (xpos == 3)) || (!EIGHTYCOL && (xpos == 12)))));
+                   // Apple II mode timing (line_is_80: text80/lores80/dhires use the
+                   // 80-col cadence; HIRES40+EIGHTYCOL=1 stays on the 40-col cadence)
+                   ((H >= (BLE-4) && H < BLE) || (H >= BLE && ((line_is_80 && (xpos == 3)) || (!line_is_80 && (xpos == 12)))));
 
 reg [3:0] xpos;
 reg [16:0] aux;
@@ -824,7 +834,7 @@ begin
 			// Apple II modes: start loading at H=68
 			// Pre-fetch timing: chram_x=0 at H=68, reload at H=71, data ready at H=72
 			if (H == BLE-4) begin
-				if (EIGHTYCOL) begin
+				if (line_is_80) begin
 					chram_x <= 0;
 					chram_x_early <= 0;
 					aux[16] <= 1'b1;
@@ -887,7 +897,7 @@ begin
 			// Only reload if chram_x is within valid range (0-39 for 40-col, 0-59 for 80-col)
 			if (buffer_needs_reload) begin
 				// Only load valid data if chram_x is within valid range (0-59 for 40-col, 0-79 for 80-col)
-				if ((EIGHTYCOL && chram_x < 60) || (!EIGHTYCOL && chram_x < 40)) begin
+				if ((line_is_80 && chram_x < 60) || (!line_is_80 && chram_x < 40)) begin
 					if (lores_mode) begin
 						// Lores: expand nibbles based on line position
 						graphics_pix_shift <= {expandLores40(video_data, window_y_w[2]), 1'b0};
@@ -909,7 +919,7 @@ begin
 			end else begin
 				// Shift pixels out: every clock in 80-col, every 2 clocks in 40-col (pixel doubling)
 				// In 40-col mode: shift on odd xpos (1,3,5,7,9,11,13) so each pixel displays twice
-                if (EIGHTYCOL || xpos[0] == 1'b1) begin
+                if (line_is_80 || xpos[0] == 1'b1) begin
                     // Shift with last-pixel fill to avoid introducing black seams
                     graphics_pix_shift <= {graphics_pix_shift[0], graphics_pix_shift[7:1]};
 `ifdef VGC_DEBUG
@@ -980,7 +990,7 @@ begin
 			end
 		end
 
-		if (EIGHTYCOL) begin
+		if (line_is_80) begin
 		  if (xpos=='d2) begin
 		    // Anticipated bank toggle for the dhires video address (see aux_bank_early
 		    // declaration): 2 cycles ahead of aux[16] so the next byte settles in time.
@@ -1001,7 +1011,7 @@ begin
 		  if (xpos=='d6) begin
 			xpos<=0;
                   end
-        end else if (xpos=='d11 && !EIGHTYCOL) begin
+        end else if (xpos=='d11 && !line_is_80) begin
             // Pre-fetch for 40-column mode: increment address 2 cycles early
             // xpos=11: address changes, xpos=12: video_data ready, xpos=13: ROM ready
             // This gives memory + ROM time to respond before xpos=0
