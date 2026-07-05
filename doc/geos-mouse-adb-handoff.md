@@ -1,6 +1,6 @@
 # GEOS mouse — ADB autopoll delivery gap (diagnosis + plan)
 
-**Status: diagnosed, NOT fixed.** The GEOS `geos.hdv` desktop cursor does not
+**Status: diagnosed; delivery mechanism CONFIRMED and partially working (GEOS consumes the response but a $C026 byte-sequencing bug crashes it); NOT landed.** The GEOS `geos.hdv` desktop cursor does not
 respond to mouse movement. This is **not a regression** — verified by building
 the pre-ADB-rework commit `76cb8d5` and confirming the cursor doesn't move
 there either (byte-identical before/after injection). GEOS mouse has never
@@ -42,6 +42,47 @@ the mouse.
   VBL/transparent mode, not SRQ mode), so it hits `OFLIST` ("no device
   returned data → disable SRQs") while our SRQ stays asserted → spins. Wrong
   mechanism. **Reverted.**
+
+## BREAKTHROUGH (2026-07-05): response path confirmed, GEOS consumes it
+
+Also ruled out: **not joystick mode.** Instrumented input-register poll counts
+show GEOS reads the mouse status $C027 (183x) and the paddles/joystick
+($C064/$C065/$C070) ZERO times. It genuinely uses the ADB mouse.
+
+Implemented the autopoll RESPONSE delivery (uncommitted, reverted): on a mouse
+move in keyboard-autopoll mode, arm a flag; one cycle later, from the IDLE
+command state, post the mouse data as an unsolicited response
+(cmd_response_ready + data={reg[3][1],reg[3][0]} + pending_data=2), and raise
+the data IRQ (mouse_resp_pending & data_int). Format per gsplus
+adb_response_packet: $C026 status byte = 0x80|(N-1).
+
+**Result — GEOS CONSUMES it (huge progress from "nothing happens"):**
+```
+MOUSERD $C027 -> b0 PC=ffbe31   ; firmware sees mouse-valid+data-avail+data-int
+MOUSERD $C026 -> 81 PC=ffbe67   ; @66 reads DATAREG = 0x81 (response, 2 bytes) -> INTRSPNS
+MOUSERD $C027 -> b0 PC=fcdb29   ; INTRSPNS (Bank FC)
+MOUSERD $C026 -> bc PC=fcdb30   ; RCVDATA reads a data byte...
+MOUSERD $C026 -> bc PC=fcdb30   ; ...and reads the SAME byte again  <-- BUG
+```
+Then GEOS crashes: "System error near $C002".
+
+**Exact remaining bug:** the $C026 DATA-state does not advance between
+INTRSPNS's two `RCVDATA` reads — it returns the X byte (0xbc = {1,60}) twice
+instead of the two distinct mouse bytes. The keyboard TALK-R0 path uses the
+same `data`/`pending_data`/`cmd_response_ready`/`c026_status_read_with_data`
+machinery and works, so the difference is that a **spontaneously-posted**
+response (state stays IDLE, posted outside a $C026-write command context)
+doesn't sequence the DATA delivery the same way a command-triggered response
+does. Likely fix: post the response through the same path the keyboard command
+uses (drive the state transition explicitly), or fix the IDLE->DATA hand-off /
+strobe-edge advance for a spontaneous post. There may ALSO be a stale
+completion-vector (VCTRCPLT) issue behind the crash — verify after the
+sequencing is fixed.
+
+Debug build: `\`define DEBUG_MOUSE` in iigs.sv with a trace of ps2_mouse
+toggles and $C024/$C026/$C027 reads/writes + opcode-fetch PC (capture
+cpu_addr when cpu_vpa && cpu_vda). Key PCs: @66 handler $FFBE67, INTRSPNS
+$FCDB29/$FCDB30, GEOS mouse poll SERVEMOUSE $00C447.
 
 ## The correct fix (plan)
 
