@@ -1113,7 +1113,21 @@ wire [22:0] video_addr_ii_base = {7'b0, lineaddr_result} + {17'b0, (dhires_mode 
 wire text80_mode = (!GR & EIGHTYCOL);
 wire dhires_mode = (GR & HIRES_MODE & EIGHTYCOL & !AN3);  // Double Hi-Res mode
 wire use_aux_bank = (text80_mode | dhires_mode) & (dhires_mode ? aux_bank_early : aux[16]);
-wire [22:0] video_addr_ii = use_aux_bank ? video_addr_ii_base + 23'h10000 : video_addr_ii_base;
+// text80 floating-bus fetch: the real Mega II shows the pair's MAIN byte to
+// the CPU ("col80 is a nop" for the FLOATBUS capture), but our schedule has
+// the aux byte on video_data at the CPU sample tick (xpos 0 of the aux
+// half). The text path consumes video_data ONLY at xpos 6 (char ROM lookup;
+// the ROM registers it that tick and xpos 0 loads from chrom_data_out), so
+// overriding the ADDRESS at xpos 6 is invisible to the display -- the main
+// byte lands on video_data at xpos 0, right on the sample tick, and
+// persists through xpos 4 (covering the 2px sample-phase shift the NTSC
+// stretch introduces). aux[16] is already high at the preceding slot's
+// xpos 6 and chram_x already points at the current pair. Text80 only:
+// dhires consumes video_data continuously and must not be disturbed.
+wire fb_main_slot = text80_mode & aux[16] & (xpos == 4'd6);
+wire [22:0] video_addr_ii = fb_main_slot ? video_addr_ii_base :
+                            use_aux_bank ? video_addr_ii_base + 23'h10000 :
+                                           video_addr_ii_base;
 
 // Character Y position within 8-pixel character cell (using clamped coordinates)
 wire [2:0] chpos_y = apple_ii_y_clamped[2:0];
