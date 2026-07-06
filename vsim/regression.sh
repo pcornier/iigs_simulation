@@ -98,7 +98,9 @@ else
 fi
 
 echo "Running GS/OS test..."
-./obj_dir/Vemu --disk gsos.hdv --stop-at-frame 320 --screenshot 320 &> gsos.txt
+# --fixed-time: GS/OS boot progress depends on the RTC; without it the progress
+# bar at frame 320 jitters by one tick run-to-run and the pixel diff is flaky.
+./obj_dir/Vemu --disk gsos.hdv --fixed-time --stop-at-frame 320 --screenshot 320 &> gsos.txt
 if [ -f "regression_images/gsos_screenshot_frame_0320.png" ]; then
     if diff screenshot_frame_0320.png regression_images/gsos_screenshot_frame_0320.png > /dev/null 2>&1; then
         echo "  PASS: GS/OS"

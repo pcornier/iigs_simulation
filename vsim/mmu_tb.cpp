@@ -31,9 +31,20 @@ static const bool FIX_BANK01_LC_ROM = true;
 //     SYS_ROM there). Old RTL read the LC RAM contents instead.
 static const bool FIX_E0E1_RDROM_READS = true;
 // D3: banks E0/E1 $Dxxx LC *writes* under RDROM=1 (write RAM while reading
-//     ROM) must still fold A12 when LC bank 2 is selected, like banks 00/01.
-//     Old RTL only folded when RDROM=0, putting such writes in the wrong bank.
+//     ROM) must still fold A12 when the folded bank is selected, like banks
+//     00/01. Old RTL only folded when RDROM=0, putting such writes in the
+//     wrong bank.
 static const bool FIX_E0E1_LC_WRITE_FOLD = true;
+// D4: the $Dxxx A12 fold applies to LC bank 1, not bank 2. Bank 2 is the
+//     primary bank at physical $Dxxx (Sather "bank 2 is the primary bank";
+//     HW Ref "block 1 occupies $C000-$CFFF"; gsplus/clemens/gssquared agree).
+//     Old RTL folded bank 2, swapping the banks' physical homes (observable
+//     through the shadow[6]=1 linear window).
+static const bool FIX_LC_BANK1_FOLD = true;
+// D5: LC write-protect (LC_WE=0) must discard writes to $D000-$FFFF in banks
+//     00/01 (all reference emulators enforce this; ProDOS relies on it).
+//     Old RTL let them land in fast RAM.
+static const bool FIX_LC_WRITE_PROTECT = true;
 
 struct In {
     uint8_t  bank; uint16_t addr;
@@ -90,12 +101,13 @@ static Out ref_mmu(const In& s)
     o.aux = aux;
 
     // --- logical -> physical translation -----------------------------------
-    // LC $Dxxx bank-2 window: fold A12. On the 00/01 (FPI) side the fold also
-    // applies to LC writes under RDROM; the E0/E1 (Mega II) side historically
-    // did not (FIX_E0E1_LC_WRITE_FOLD adds it).
+    // LC $Dxxx bank-1 window: fold A12 (bank 2 = primary at physical $Dxxx).
+    // On the 00/01 (FPI) side the fold also applies to LC writes under RDROM;
+    // the E0/E1 (Mega II) side historically did not (FIX_E0E1_LC_WRITE_FOLD
+    // adds it).
     const bool lc_wr_exc = !s.RDROM || (s.LC_WE && we);
     const bool fold =
-        (a >> 12) == 0xD && s.LCRAM2 &&
+        (a >> 12) == 0xD && (FIX_LC_BANK1_FOLD ? !s.LCRAM2 : s.LCRAM2) &&
         ( ((b == 0xE0 || b == 0xE1) && (FIX_E0E1_LC_WRITE_FOLD ? lc_wr_exc : !s.RDROM)) ||
           ((b == 0x00 || b == 0x01) && !sh6 && lc_wr_exc) );
 
@@ -165,7 +177,9 @@ static Out ref_mmu(const In& s)
     // register access must not also drive fast/slow RAM. Mirrors mmu.sv.
     if (!o.IO && !o.EXTERNAL_IO) {
         if (b == 0x00) {
-            if (s.RDROM && a >= 0xE000 && !o.rom_writethrough && !sh6) {
+            if (FIX_LC_WRITE_PROTECT && we && !s.LC_WE && a >= 0xD000 && !sh6) {
+                // LC write-protected: write discarded
+            } else if (s.RDROM && a >= 0xE000 && !o.rom_writethrough && !sh6) {
                 // ROM window: no RAM
             } else if (txt1 || txt2 || shr || hgr1 || hgr2) {
                 fast = slow = true;             // dual write into the shadow bank
@@ -173,7 +187,9 @@ static Out ref_mmu(const In& s)
                 fast = true;
             }
         } else if (b == 0x01) {
-            if (s.RDROM && a >= 0xE000 && !o.rom_writethrough && !sh6) {
+            if (FIX_LC_WRITE_PROTECT && we && !s.LC_WE && a >= 0xD000 && !sh6) {
+                // LC write-protected: write discarded
+            } else if (s.RDROM && a >= 0xE000 && !o.rom_writethrough && !sh6) {
                 // ROM window: no RAM
             } else if (shr) {
                 fast = slow = true;

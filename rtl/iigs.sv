@@ -797,7 +797,7 @@ module iigs
       INTCXROM<=1'b1;
       RDROM<=1'b1;
       LCRAM2<=1'b1;
-      LC_WE_PRE<=1'b1;  // Per Apple IIgs HW ref: reset enables writing to LC RAM
+      LC_WE_PRE<=1'b0;  // Sather: PRE-WRITE is reset by a system reset (LC_WE itself resets enabled)
 
       DISKREG<=0;
       SLTROMSEL<=0;
@@ -1107,8 +1107,9 @@ module iigs
 `endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b1;
-                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
-                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                    // Sather: a WRITE to an odd $C08x never changes write-enable;
+                    // it clears PRE-WRITE (only two consecutive READs enable)
+                    LC_WE_PRE<=1'b0;
                   end
                 end
             12'h082,	// Read ROM no write
@@ -1133,8 +1134,8 @@ module iigs
 `endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b1;
-                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
-                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                    // Writes never change write-enable; clear PRE-WRITE
+                    LC_WE_PRE<=1'b0;
                   end
                 end
             12'h088,
@@ -1159,8 +1160,8 @@ module iigs
 `endif
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
-                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
-                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                    // Writes never change write-enable; clear PRE-WRITE
+                    LC_WE_PRE<=1'b0;
                   end
                 end
             12'h08A,
@@ -1185,8 +1186,8 @@ module iigs
 `endif
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b0;
-                    LC_WE <= 1'b1;  // FIX: Enable writing (was 1'b0)
-                    LC_WE_PRE<=1'b1;  // FIX: Enable pre-stage (was 1'b0)
+                    // Writes never change write-enable; clear PRE-WRITE
+                    LC_WE_PRE<=1'b0;
                   end
                 end
 
@@ -1415,9 +1416,14 @@ module iigs
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b1;
                   end
-                  if (phi0) begin
-                    LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
+                  if (phi2) begin
+                    // 2nd consecutive odd READ write-enables; an odd read can
+                    // never DISABLE writing (Sather: HRAMWRT' only set by even access).
+                    // phi2 (one pulse per CPU access, like every other soft switch)
+                    // NOT phi0: the free-running 1MHz tick can miss or double-count
+                    // a $C08x access at accelerated speeds / during memory stalls.
+                    if (LC_WE_PRE) LC_WE <= 1'b1;
+                    LC_WE_PRE<=1'b1;  // odd read sets PRE-WRITE
                   end
                 end
             12'h082,	// Read ROM no write
@@ -1443,9 +1449,14 @@ module iigs
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b1;
                   end
-                  if (phi0) begin
-                    LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
+                  if (phi2) begin
+                    // 2nd consecutive odd READ write-enables; an odd read can
+                    // never DISABLE writing (Sather: HRAMWRT' only set by even access).
+                    // phi2 (one pulse per CPU access, like every other soft switch)
+                    // NOT phi0: the free-running 1MHz tick can miss or double-count
+                    // a $C08x access at accelerated speeds / during memory stalls.
+                    if (LC_WE_PRE) LC_WE <= 1'b1;
+                    LC_WE_PRE<=1'b1;  // odd read sets PRE-WRITE
                   end
                 end
             12'h088,
@@ -1471,9 +1482,14 @@ module iigs
                     RDROM <= 1'b1;
                     LCRAM2 <= 1'b0;
                   end
-                  if (phi0) begin
-                    LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
+                  if (phi2) begin
+                    // 2nd consecutive odd READ write-enables; an odd read can
+                    // never DISABLE writing (Sather: HRAMWRT' only set by even access).
+                    // phi2 (one pulse per CPU access, like every other soft switch)
+                    // NOT phi0: the free-running 1MHz tick can miss or double-count
+                    // a $C08x access at accelerated speeds / during memory stalls.
+                    if (LC_WE_PRE) LC_WE <= 1'b1;
+                    LC_WE_PRE<=1'b1;  // odd read sets PRE-WRITE
                   end
                 end
             12'h08A,
@@ -1499,9 +1515,14 @@ module iigs
                     RDROM <= 1'b0;
                     LCRAM2 <= 1'b0;
                   end
-                  if (phi0) begin
-                    LC_WE <= LC_WE_PRE  ;
-                    LC_WE_PRE<=1'b1  ;  // Enable write on 2nd access
+                  if (phi2) begin
+                    // 2nd consecutive odd READ write-enables; an odd read can
+                    // never DISABLE writing (Sather: HRAMWRT' only set by even access).
+                    // phi2 (one pulse per CPU access, like every other soft switch)
+                    // NOT phi0: the free-running 1MHz tick can miss or double-count
+                    // a $C08x access at accelerated speeds / during memory stalls.
+                    if (LC_WE_PRE) LC_WE <= 1'b1;
+                    LC_WE_PRE<=1'b1;  // odd read sets PRE-WRITE
                   end
                 end
 

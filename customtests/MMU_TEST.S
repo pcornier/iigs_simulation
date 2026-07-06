@@ -1140,59 +1140,56 @@ TEST25_FAIL
         JMP   TEST26
 
 ;=============================================================================
-; TEST 26: LC switches work even with IOLC inhibit (shadow bit 6)
-; This is critical for the ROM RAM address test which sets shadow=$7F
+; TEST 26: LC $D000 physical layout - bank 2 is the primary block
 ;
-; Strategy: Use bank 00:D000 for LC verification since E0:D000 is always
-; slow RAM (video bank). RDROM only affects 00/01 D000-FFFF mapping.
+; HW Ref: "If the language card is not enabled, the first of these blocks of
+; RAM, block 1, occupies address space from $C000 to $CFFF." Sather: "Bank 2
+; is the primary bank." With IOLC inhibited (shadow bit 6), banks 00/01
+; become linear 64K RAM: $D000-$DFFF shows the bank-2 block and $C000-$CFFF
+; shows the bank-1 block. (gssquared and Clemens implement the same layout;
+; bank-00 $C0xx is plain RAM under IOLC inhibit, so LC switches must be
+; driven through bank E0 I/O, which is always live.)
 ;
-; 1. Enable LC RAM via E0 (always has I/O) and write marker to 00:D000
-; 2. Switch to ROM via E0, verify 00:D000 returns ROM data
-; 3. Set IOLC inhibit (shadow=$7F) - blocks 00/01 I/O
-; 4. Try to enable LC RAM via bank 00 $C08B (needs LC_IO fix!)
-; 5. Read 00:D000 - if LC enabled, get marker; if ROM, get ROM data
+; 1. Write $5A to LC bank 2 $D000 and $A5 to LC bank 1 $D000 (via E0 I/O)
+; 2. Set IOLC inhibit (shadow=$7F) - banks 00/01 turn into linear RAM
+; 3. Linear 00:D000 must read $5A (bank 2); linear 00:C000 must read $A5
 ;=============================================================================
 TEST26
         INC   TESTNUM
         JSR   SHOWTEST
 
-        ; Step 1: Enable LC RAM bank 1 via E0 and write marker to 00:D000
+        ; Step 1a: LC bank 2, write-enable, marker $5A (lives at phys $D000)
+        LDA   >$E0C083        ; First read - LC bank 2, read RAM
+        LDA   >$E0C083        ; Second read - enable write
+        LDA   #$5A
+        STA   >$00D000
+
+        ; Step 1b: LC bank 1, write-enable, marker $A5 (lives at phys $C000)
         LDA   >$E0C08B        ; First read - LC bank 1
         LDA   >$E0C08B        ; Second read - enable write
-        LDA   #$A5            ; Marker value
-        STA   >$00D000        ; Write to LC RAM (bank 00)
+        LDA   #$A5
+        STA   >$00D000
 
-        ; Step 2: Switch to ROM via E0
-        LDA   >$E0C082        ; RDROM=1 (ROM mapped, not LC RAM)
-
-        ; Verify ROM is mapped - 00:D000 should return ROM data (not $A5)
-        LDA   >$00D000
-        CMP   #$A5
-        BEQ   TEST26_FAIL     ; If still $A5, ROM not properly enabled
-
-        ; Step 3: Enable IOLC inhibit
+        ; Step 2: IOLC inhibit - banks 00/01 are linear RAM
         LDA   #$7F
         STA   >$E0C035
 
-        ; Step 4: Try to enable LC RAM via bank 00 (needs fix!)
-        ; Without fix: IO=0 for bank 00, LC switch ignored, ROM stays mapped
-        ; With fix: LC_IO triggers, LC RAM enabled
-        LDA   >$00C08B        ; First read
-        LDA   >$00C08B        ; Second read enables write
+        ; Step 3: check the linear layout
+        LDA   >$00D000        ; primary block = LC bank 2
+        STA   >$E00503
+        LDA   >$00C000        ; folded block = LC bank 1
+        STA   >$E00504
 
-        ; Step 5: Read 00:D000 to check if LC was enabled
-        ; If LC switch worked: returns $A5 (our marker)
-        ; If LC switch blocked: returns ROM data (not $A5)
-        LDA   >$00D000
-        STA   >$E00503        ; Save result in slow RAM
-
-        ; Cleanup: disable IOLC inhibit, restore ROM
+        ; Cleanup: disable IOLC inhibit, restore ROM read
         LDA   #$08
         STA   >$E0C035
         LDA   >$E0C082
 
-        ; Check result
+        ; Check results
         LDA   >$E00503
+        CMP   #$5A
+        BNE   TEST26_FAIL
+        LDA   >$E00504
         CMP   #$A5
         BNE   TEST26_FAIL
 

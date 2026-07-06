@@ -8,8 +8,10 @@
 // I/O, slots). Neither chip contains an adder in the address path — all
 // remapping is done by gating individual address lines:
 //
-//   - Language-card $Dxxx bank-2 window: force A12 low, so the second $Dxxx
-//     bank lives in the otherwise-unused $Cxxx physical RAM (IIe MMU scheme).
+//   - Language-card $Dxxx bank-1 window: force A12 low, so bank 1 lives in the
+//     otherwise-unused $Cxxx physical RAM. Bank 2 is the primary bank at
+//     physical $Dxxx (Sather UtA2e; HW Ref: "block 1 occupies $C000-$CFFF
+//     when the card is not enabled").
 //   - Main/aux select: force bank bit 0 high (slow-RAM A16 / odd fast bank).
 //
 // Everything here is a pure function of {bank_log, addr_log, we, vpb_n} and
@@ -99,12 +101,13 @@ module mmu #(
   // so this concatenation is exactly "addr_log - 16'h1000".
   wire [15:0] addr_lc_fold = {addr_log[15:13], 1'b0, addr_log[11:0]};
 
-  // Language-card $Dxxx bank-2 window active: fold A12.
+  // Language-card $Dxxx bank-1 window active: fold A12 (bank 2 is the primary
+  // bank and stays at physical $Dxxx — Sather / HW Ref / all ref emulators).
   // Mega II side (E0/E1): IOLC is always present. FPI side (00/01): only when
   // shadow[6]=0. On both sides, under RDROM the fold still applies to
   // language-card WRITES (write RAM while reading ROM) via LC_WE && we.
   wire lc_dxxx_fold =
-      (addr_log[15:12] == 4'hD) && LCRAM2 && (~RDROM || (LC_WE && we)) &&
+      (addr_log[15:12] == 4'hD) && ~LCRAM2 && (~RDROM || (LC_WE && we)) &&
       ( (bank_log == 8'he0 || bank_log == 8'he1) ||
         ((bank_log == 8'h00 || bank_log == 8'h01) && ~shadow[6]) );
 
@@ -232,10 +235,10 @@ module mmu #(
       // I/O space - no RAM access.
       // EXTERNAL_IO covers slot I/O $C090-$C0FF that is NOT decoded as internal
       // IO (IO is only asserted for internal-firmware slots). Those physical
-      // $C0xx addresses can alias the language-card bank-2 window (LC $Dxxx folds
+      // $C0xx addresses can alias the language-card bank-1 window (LC $Dxxx folds
       // A12 low -> physical $C0xx). Without excluding EXTERNAL_IO here, a slot
       // register write (e.g. the slot-7 HDD status/command at $C0F1/$C0F2) would
-      // also assert fastram_ce and clobber the LC bank-2 RAM that lives at the
+      // also assert fastram_ce and clobber the LC bank-1 RAM that lives at the
       // same physical cell -- corrupting data (e.g. Total Replay's preview
       // filename table) stored in LC $D0Fx.
       fastram_ce = 0;
@@ -244,9 +247,14 @@ module mmu #(
       case (bank_log)
         // Bank 00: Main memory with shadow regions
         8'h00: begin
+          // Language-card write-protect: with the LC active (shadow[6]=0) and
+          // LC_WE=0, writes to $D000-$FFFF are discarded on real hardware
+          if (we && !LC_WE && addr_log >= 16'hD000 && !shadow[6]) begin
+            fastram_ce = 0;
+            slowram_ce = 0;
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
           // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
-          if (RDROM && addr_log >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
+          end else if (RDROM && addr_log >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce = 0;
             slowram_ce = 0;
           end else if (txt1_shadow || txt2_shadow || shr_master_shadow || hgr1_shadow || hgr2_shadow) begin
@@ -272,9 +280,13 @@ module mmu #(
 
         // Bank 01: Auxiliary memory with conditional shadow regions
         8'h01: begin
+          // Language-card write-protect (same as bank 00)
+          if (we && !LC_WE && addr_log >= 16'hD000 && !shadow[6]) begin
+            fastram_ce = 0;
+            slowram_ce = 0;
           // In ROM shadow mode, $E000-$FFFF are ROM reads, do not access RAM
           // When shadow[6]=1 (IOLC inhibited), $E000-$FFFF is contiguous RAM, not ROM
-          if (RDROM && addr_log >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
+          end else if (RDROM && addr_log >= 16'hE000 && !rom_writethrough && !shadow[6]) begin
             fastram_ce = 0;
             slowram_ce = 0;
           end else if (shr_master_shadow) begin
