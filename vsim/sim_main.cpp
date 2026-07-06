@@ -278,7 +278,7 @@ static void vsim_trace_open_fresh() {
     g_vsim_trace_csv = fopen("vsim_trace.csv", "w");
     if (g_vsim_trace_csv) {
         fprintf(g_vsim_trace_csv,
-                "seq,phase,type,pc,pbr,ir,a_bank,a_adr,data,mmap,phys,rom,slow,io\n");
+                "seq,phase,type,pc,pbr,ir,a_bank,a_adr,data,mmap,phys,rom,slow,io,a,x,y,sp,p,xf\n");
         fflush(g_vsim_trace_csv);
     }
     g_vsim_seq = 0ULL;
@@ -322,12 +322,22 @@ static void vsim_trace_log(char phase, char type,
         if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x20) mmap |= 0x00200000; // NSHADOW_TXT2
         if (VERTOPINTERN->emu__DOT__iigs__DOT__shadow & 0x40) mmap |= 0x04000000; // NIOLC
     }
+    unsigned rA=0,rX=0,rY=0,rSP=0,rP=0,rXF=0;
+    if (VERTOPINTERN) {
+        rA  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
+        rX  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
+        rY  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
+        rSP = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
+        rP  = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
+        rXF = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__XF ? 1 : 0;
+    }
     fprintf(g_vsim_trace_csv,
-            "%llu,%c,%c,%04X,%02X,%02X,%02X,%04X,%02X,%08X,%02X,%d,%d,%d\n",
+            "%llu,%c,%c,%04X,%02X,%02X,%02X,%04X,%02X,%08X,%02X,%d,%d,%d,%04X,%04X,%04X,%04X,%02X,%d\n",
             (unsigned long long)g_vsim_seq++, phase, type,
             pc & 0xFFFF, pbr & 0xFF, ir & 0xFF,
             a_bank & 0xFF, a_adr & 0xFFFF, data & 0xFF,
-            mmap, phys_bank & 0xFF, is_rom ? 1 : 0, is_slow ? 1 : 0, is_io ? 1 : 0);
+            mmap, phys_bank & 0xFF, is_rom ? 1 : 0, is_slow ? 1 : 0, is_io ? 1 : 0,
+            rA & 0xFFFF, rX & 0xFFFF, rY & 0xFFFF, rSP & 0xFFFF, rP & 0xFF, rXF);
     fflush(g_vsim_trace_csv);
 }
 
@@ -1206,6 +1216,32 @@ int verilate() {
 #else
 			top->eval();
 #endif
+
+			// --- HDD block-read forensics (enable with HDD_READLOG=1) ---
+			// Logs every AppleWin-style block read the `hdd` module starts:
+			// block number, destination bank (DMAREG) + 16-bit addr, unit.
+			{
+				static int g_hdd_readlog = -1;
+				if (g_hdd_readlog < 0) g_hdd_readlog = getenv("HDD_READLOG") ? 1 : 0;
+				if (g_hdd_readlog && CLK_14M.IsRising()) {
+					static unsigned char prev_ds = 0;
+					unsigned char ds = VERTOPINTERN->emu__DOT__iigs__DOT__hdd__DOT__dma_state;
+					if (ds == 1 && prev_ds == 0) {  // ST_IDLE -> ST_RD_ACK: a read began
+						unsigned blk = (VERTOPINTERN->emu__DOT__iigs__DOT__hdd__DOT__reg_block_h << 8)
+						             |  VERTOPINTERN->emu__DOT__iigs__DOT__hdd__DOT__reg_block_l;
+						unsigned mem = (VERTOPINTERN->emu__DOT__iigs__DOT__hdd__DOT__reg_mem_h << 8)
+						             |  VERTOPINTERN->emu__DOT__iigs__DOT__hdd__DOT__reg_mem_l;
+						unsigned bank = VERTOPINTERN->emu__DOT__iigs__DOT__DMAREG;
+						unsigned unit = VERTOPINTERN->emu__DOT__iigs__DOT__hdd__DOT__reg_unit;
+						unsigned rdrom  = VERTOPINTERN->emu__DOT__iigs__DOT__RDROM;
+						unsigned lcram2 = VERTOPINTERN->emu__DOT__iigs__DOT__LCRAM2;
+						unsigned lcwe   = VERTOPINTERN->emu__DOT__iigs__DOT__LC_WE;
+						fprintf(stderr, "HDDREAD frame=%d blk=%u(0x%04X) dst=%02X/%04X unit=%02X  LC[RDROM=%u LCRAM2=%u LC_WE=%u]\n",
+						        video.count_frame, blk, blk, bank, mem, unit, rdrom, lcram2, lcwe);
+					}
+					prev_ds = ds;
+				}
+			}
 
 #if VM_TRACE_VCD
 			if (tfp && video.count_frame >= dump_vcd_after_frame)
