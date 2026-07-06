@@ -2604,6 +2604,16 @@ wire       slot_delay_this = slot_ce;
 // whole driver runs at the speed it was written for while the disk is being
 // worked, and acceleration resumes between disk phases. (Without this the
 // ROM3 3.5" driver mis-times the drive at 7.16 MHz: "Check startup device".)
+//
+// The 2 ms timer alone only covers gaps between IWM register touches; motor
+// spin-up and head-settle waits are plain CPU count-down loops that don't
+// touch $C0E0-$C0EF while waiting and can run well past 2 ms, so the timer
+// can lapse mid-delay and let acceleration resume before the loop is done --
+// desyncing the driver's cycle-counted timing regardless of ROM version or
+// which accelerated step is selected. floppy_motor_on/floppy35_motor_on
+// (rtl/iwm_woz.v) already track real motor state; gate on those too so
+// acceleration stays off for the drive's whole motor-on span, not just the
+// last 2 ms of register activity.
 reg [14:0] iwm_holdoff;
 always @(posedge CLK_14M) begin
   if (reset)
@@ -2615,10 +2625,21 @@ always @(posedge CLK_14M) begin
 end
 
 wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0
-                          && iwm_holdoff == 15'd0)
+                          && iwm_holdoff == 15'd0
+                          && !floppy_motor_on && !floppy35_motor_on)
                          ? (4'd4 - {1'b0, zip_speed_code})
                          : 4'd4;
-assign accel_active = (fast_thresh != 4'd4);
+// accel_active also gates the top-level SDRAM read-path mux (Apple-IIgs.sv
+// accel_r): accel_r=1 selects the burst+cache line-buffer path, accel_r=0
+// the native single-word ch3 path the HDD DMA data pipeline is built for
+// ("the DMA data path is a 2-edge registered chain that corrupts below
+// 3-tick cycles" -- doc/zipgs_speed.md). dma_active/hdd_dma already forces
+// the CPU bus-cycle LENGTH back to native in clock_divider, but that never
+// fed back into accel_active, so a DMA transfer at any accelerated step
+// still serviced its reads through the accelerated cache path. Excluding
+// hdd_dma here keeps the read-path selection in sync with the cycle-length
+// forcing that already happens for DMA.
+assign accel_active = (fast_thresh != 4'd4) && !hdd_dma;
 
 // Clock divider instance
 clock_divider clk_div_inst (
