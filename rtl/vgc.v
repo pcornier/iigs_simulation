@@ -601,11 +601,17 @@ always @(*) begin
 	endcase
 end
 
+// ce(ce_pix): gate the char-ROM read to the pixel-clock enable so it samples
+// chrom_addr once per pipeline step, aligned with the ce_pix-gated text logic.
+// With ce(1'b1) the ROM reads every clk_vid (2x ce_pix); on silicon the extra
+// intermediate read latches a transitional address, so consecutive 80-col
+// characters load the SAME glyph (aux char doubled, main dropped) -- garbled
+// text on FPGA that the sim can't reproduce (SignalTap-confirmed 2026-07-06).
 rom #(.memfile("chr.mem"),.AW(12)) charrom(
   .clock(clk_vid),
   .address(chrom_addr),
   .q(chrom_data_out),
-  .ce(1'b1)
+  .ce(ce_pix)
 );
 
 wire [7:0] chrom_data_out;
