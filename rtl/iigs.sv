@@ -237,7 +237,7 @@ module iigs
 
   logic [23:0]        cpu_addr;
   logic [7:0]         cpu_dout;
-  logic [23:0]        addr_bus;
+  logic [23:0]        addr_bus /* verilator public_flat */;
   logic [23:0]        fastram_addr_bus;
   logic [15:0]        hdd_dma_addr;
   logic               cpu_vpa, cpu_vpb;
