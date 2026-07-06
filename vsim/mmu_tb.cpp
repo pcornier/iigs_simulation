@@ -160,7 +160,10 @@ static Out ref_mmu(const In& s)
     const bool shr  = !sh3 && bphys == 0x01 && a >= 0x2000 && a <= 0x9FFF;
 
     bool fast = false, slow = false;
-    if (!o.IO) {
+    // External slot I/O ($C090-$C0FF, not internal firmware) never enables RAM --
+    // its physical $C0xx address can alias the LC bank-2 window, so a slot
+    // register access must not also drive fast/slow RAM. Mirrors mmu.sv.
+    if (!o.IO && !o.EXTERNAL_IO) {
         if (b == 0x00) {
             if (s.RDROM && a >= 0xE000 && !o.rom_writethrough && !sh6) {
                 // ROM window: no RAM

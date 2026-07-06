@@ -228,8 +228,16 @@ module mmu #(
     fastram_ce = 0;
     slowram_ce = 0;
 
-    if (IO) begin
-      // I/O space - no RAM access
+    if (IO || EXTERNAL_IO) begin
+      // I/O space - no RAM access.
+      // EXTERNAL_IO covers slot I/O $C090-$C0FF that is NOT decoded as internal
+      // IO (IO is only asserted for internal-firmware slots). Those physical
+      // $C0xx addresses can alias the language-card bank-2 window (LC $Dxxx folds
+      // A12 low -> physical $C0xx). Without excluding EXTERNAL_IO here, a slot
+      // register write (e.g. the slot-7 HDD status/command at $C0F1/$C0F2) would
+      // also assert fastram_ce and clobber the LC bank-2 RAM that lives at the
+      // same physical cell -- corrupting data (e.g. Total Replay's preview
+      // filename table) stored in LC $D0Fx.
       fastram_ce = 0;
       slowram_ce = 0;
     end else begin
