@@ -161,7 +161,19 @@ module scc
 	wire		ex_irq_pend_b;
 	reg		ex_irq_ip_a;
 	reg		ex_irq_ip_b;
-	wire [2:0] 	rr2_vec_stat;	
+	wire [2:0] 	rr2_vec_stat;
+
+	/* Baud Rate Generator zero-count state (WR12/WR13 16-bit down counter).
+	 * Free-runs on clk so the Zero Count external/status interrupt can fire
+	 * while the CPU spins without accessing the SCC. */
+	reg [1:0]	brg_pre_a;    // ~/4 prescale to approximate PCLK from clk_14m
+	reg [1:0]	brg_pre_b;
+	reg [15:0]	brg_cnt_a;
+	reg [15:0]	brg_cnt_b;
+	reg		zc_status_a;  // RR0 D1 (Zero Count) - latched until Reset Ext/Status
+	reg		zc_status_b;
+	reg		zc_irq_ip_a;  // ext/status IP set on zero count when enabled
+	reg		zc_irq_ip_b;
 
 	// TX Buffer architecture (like Z8530 WR8 register)
 	reg [7:0] tx_data_a;        // 1-byte transmit buffer for channel A
@@ -633,16 +645,17 @@ module scc
 	end
 
 	/* WR14
-	 * Reset: Full reset maintains  top 2 bits,
-	 * Chan reset also maitains bottom 2 bits, bit 4 also
-	 * reset to a different value
+	 * Reset: Full reset maintains top 2 bits. Local Loopback (D4), Auto Echo
+	 * (D3) and BR Generator Enable (D0) must be OFF after reset per the Zilog
+	 * spec -- so D4 stays 0 (do NOT power up in local loopback).
+	 * Chan reset also maintains bottom 2 bits.
 	 */
 	always@(posedge clk or posedge reset_hw) begin
 		if (reset_hw)
 		  wr14_a <= 0;
 		else if(cen) begin
 			if (reset)
-			  wr14_a <= { wr14_a[7:6], 6'b110000 };
+			  wr14_a <= { wr14_a[7:6], 6'b100000 };
 			else if (reset_a)
 			  wr14_a <= { wr14_a[7:6], 4'b1000, wr14_a[1:0] };
 			else if (wreg_a && rindex_latch == 14) begin
@@ -659,7 +672,7 @@ module scc
 		  wr14_b <= 0;
 		else if(cen) begin
 			if (reset)
-			  wr14_b <= { wr14_b[7:6], 6'b110000 };
+			  wr14_b <= { wr14_b[7:6], 6'b100000 };
 			else if (reset_b)
 			  wr14_b <= { wr14_b[7:6], 4'b1000, wr14_b[1:0] };
 			else if (wreg_b && rindex_latch == 14)
@@ -751,7 +764,7 @@ module scc
 			 1'b0, /* Sync/Hunt */
 			 1'b1, /* DCD - hardcode to 1 (carrier detected) */
 			 tx_empty_latch_a, /* Tx Empty - use latch like Clemens does */
-			 1'b0, /* Zero Count */
+			 zc_status_a, /* Zero Count - BRG down-counter reached 0 */
 			 (rx_queue_pos_a > 0)  /* Rx Available - based on FIFO not empty */
 			 };
 
@@ -770,7 +783,7 @@ module scc
 			 1'b0, /* Sync/Hunt */
 			 1'b1, /* DCD - HARDCODED to 1 (no modem on channel B) */
 			 tx_empty_latch_b, /* Tx Empty - use latch */
-			 1'b0, /* Zero Count */
+			 zc_status_b, /* Zero Count - BRG down-counter reached 0 */
 			 (rx_queue_pos_b > 0)  /* Rx Available - based on FIFO not empty */
 			 };
 
@@ -818,27 +831,28 @@ assign rr1_b = { 1'b0, /* End of frame */
 	 * D7: One Clock Missing
 	 * D6: Two Clocks Missing
 	 * D5: Reserved (0)
-	 * D4: Loop Sending - set when transmitting in loopback mode
+	 * D4: Loop Sending - SDLC Loop mode only (WR10); not local loopback
 	 * D3-D2: Reserved (0)
-	 * D1: On Loop - set when local loopback is enabled (WR14[4]=1)
+	 * D1: On Loop - SDLC Loop mode only (WR10); not local loopback (WR14[4])
 	 * D0: Reserved (0)
+	 * We do not implement SDLC Loop mode, so On Loop / Loop Sending read 0.
 	 */
 	assign rr10_a = { 1'b0, /* One clock missing */
 			  1'b0, /* Two clocks missing */
 			  1'b0,
-			  local_loopback_a & tx_busy_a, /* Loop sending - transmitting in loopback */
+			  1'b0, /* Loop Sending - SDLC loop mode (not implemented) */
 			  1'b0,
 			  1'b0,
-			  local_loopback_a, /* On Loop - local loopback enabled */
+			  1'b0, /* On Loop - SDLC loop mode (not implemented) */
 			  1'b0
 			  };
 	assign rr10_b = { 1'b0, /* One clock missing */
 			  1'b0, /* Two clocks missing */
 			  1'b0,
-			  local_loopback_b & tx_busy_b, /* Loop sending - transmitting in loopback */
+			  1'b0, /* Loop Sending - SDLC loop mode (not implemented) */
 			  1'b0,
 			  1'b0,
-			  local_loopback_b, /* On Loop - local loopback enabled */
+			  1'b0, /* On Loop - SDLC loop mode (not implemented) */
 			  1'b0
 			  };
 	
@@ -1009,13 +1023,13 @@ end
 
    wire cts_interrupt = wr1_a[0] &&  wr15_a[5] || (tx_busy_a_r ==1 && tx_busy_a==0) || (tx_busy_a_r ==0 && tx_busy_a==1);/* if cts changes */
 
-	assign ex_irq_pend_a = ex_irq_ip_a ;
+	assign ex_irq_pend_a = ex_irq_ip_a | zc_irq_ip_a ;
 	// Channel B RX interrupt: same logic as Channel A
 	//                         rx enable   char waiting           01,10 only             first char
 	assign rx_irq_pend_b =   wr3_b[0] & (rx_queue_pos_b > 0) & (wr1_b[3] ^ wr1_b[4]) & ((wr1_b[3] & rx_first_b )|(wr1_b[4]));
 	// Channel B TX interrupt: use falling-edge TX latch (buffer empty)
 	assign tx_irq_pend_b = wr1_b[1] & tx_int_latch_b;
-	assign ex_irq_pend_b = ex_irq_ip_b;
+	assign ex_irq_pend_b = ex_irq_ip_b | zc_irq_ip_b;
 
 	assign _irq = ~(wr9[3] & (rx_irq_pend_a |
 				  
@@ -1070,6 +1084,85 @@ end
 			  ex_irq_ip_b <= 0;
 			else if (do_latch_b && wr1_b[0])
 			  ex_irq_ip_b <= 1;
+		end
+	end
+
+	/* Baud Rate Generator 16-bit down counter + Zero Count (per Zilog spec:
+	 * BRG = 16-bit down counter with time constant WR12/WR13; a "zero count"
+	 * External/Status condition is generated each time it counts through 0).
+	 *
+	 * This free-runs on clk (NOT gated by cep/bus access) so the Zero Count
+	 * interrupt fires while the CPU spins -- e.g. the IIgs Diagnostic "Serial
+	 * Internal Test", which enables the BRG (WR14 D0) with Zero Count IE
+	 * (WR15 D1) and waits for two ZC interrupts. ~/4 prescale of the 14.32MHz
+	 * clk approximates the SCC PCLK. The ZC interrupt only asserts when
+	 * WR15 D1 (ZC IE) and WR1 D0 (ext/status master IE) are set, so normal
+	 * serial (which never enables ZC IE) is unaffected. */
+	always@(posedge clk or posedge reset_hw) begin
+		if (reset_hw) begin
+			brg_pre_a   <= 2'd0;
+			brg_cnt_a   <= 16'd0;
+			zc_status_a <= 1'b0;
+			zc_irq_ip_a <= 1'b0;
+		end else if (reset || reset_a) begin
+			brg_pre_a   <= 2'd0;
+			brg_cnt_a   <= { wr13_a, wr12_a };
+			zc_status_a <= 1'b0;
+			zc_irq_ip_a <= 1'b0;
+		end else begin
+			/* Reset Ext/Status Interrupts (WR0 cmd 010) clears the latch */
+			if (do_extreset_a) begin
+				zc_status_a <= 1'b0;
+				zc_irq_ip_a <= 1'b0;
+			end
+			if (!wr14_a[0]) begin
+				brg_pre_a <= 2'd0;
+				brg_cnt_a <= { wr13_a, wr12_a };   /* BRG disabled: hold reloaded */
+			end else begin
+				brg_pre_a <= brg_pre_a + 2'd1;
+				if (brg_pre_a == 2'd3) begin
+					if (brg_cnt_a == 16'd0) begin
+						brg_cnt_a   <= { wr13_a, wr12_a };  /* reload time constant */
+						zc_status_a <= 1'b1;                /* set Zero Count (RR0 D1) */
+						if (wr15_a[1] & wr1_a[0])           /* ZC IE & ext/status IE */
+						  zc_irq_ip_a <= 1'b1;
+					end else
+						brg_cnt_a <= brg_cnt_a - 16'd1;
+				end
+			end
+		end
+	end
+	always@(posedge clk or posedge reset_hw) begin
+		if (reset_hw) begin
+			brg_pre_b   <= 2'd0;
+			brg_cnt_b   <= 16'd0;
+			zc_status_b <= 1'b0;
+			zc_irq_ip_b <= 1'b0;
+		end else if (reset || reset_b) begin
+			brg_pre_b   <= 2'd0;
+			brg_cnt_b   <= { wr13_b, wr12_b };
+			zc_status_b <= 1'b0;
+			zc_irq_ip_b <= 1'b0;
+		end else begin
+			if (do_extreset_b) begin
+				zc_status_b <= 1'b0;
+				zc_irq_ip_b <= 1'b0;
+			end
+			if (!wr14_b[0]) begin
+				brg_pre_b <= 2'd0;
+				brg_cnt_b <= { wr13_b, wr12_b };
+			end else begin
+				brg_pre_b <= brg_pre_b + 2'd1;
+				if (brg_pre_b == 2'd3) begin
+					if (brg_cnt_b == 16'd0) begin
+						brg_cnt_b   <= { wr13_b, wr12_b };
+						zc_status_b <= 1'b1;
+						if (wr15_b[1] & wr1_b[0])
+						  zc_irq_ip_b <= 1'b1;
+					end else
+						brg_cnt_b <= brg_cnt_b - 16'd1;
+				end
+			end
 		end
 	end
 

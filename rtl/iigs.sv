@@ -169,6 +169,10 @@ module iigs
     output        UART_RTS,
     input         UART_CTS,
 
+    // Sim-only: cross-wire SCC channel A<->B (TXD<->RXD) to emulate an
+    // external serial loopback cable (for the diagnostic External Serial test).
+    input         serial_loopback,
+
    // Floppy motor status (for dirty track flush on motor-off)
    output             floppy_motor_on,
    output             floppy35_motor_on,
@@ -2430,6 +2434,13 @@ wire ready_out;
   //   Printer port (Port 2, Slot 2) = SCC Channel A (C039/C03B)
   // ROM selftest uses internal loopback (WR14 bit 4), not cross-channel,
   // so external wiring doesn't affect selftest results.
+  // SCC serial data lines. In --serial-loopback mode each channel's TXD is
+  // routed to the other channel's RXD (what a physical loopback cable does),
+  // so the diagnostic External Serial test can run headlessly.
+  wire scc_txd_a;
+  wire scc_txd_b;
+  assign UART_TXD = scc_txd_b;   // Channel B still drives the MiSTer UART
+
   scc_iigs_wrapper scc_inst(
             .clk_14m(CLK_14M),
             .ph0_en(phi0),
@@ -2443,13 +2454,13 @@ wire ready_out;
             .rdata(scc_dout),
             .irq_n(scc_irq_n),
             // Channel A = Printer port (no external connection)
-            .txd_a(),
-            .rxd_a(1'b1),       // Idle (mark state) - no external input
+            .txd_a(scc_txd_a),
+            .rxd_a(serial_loopback ? scc_txd_b : 1'b1),  // loopback: A RX <- B TX
             .rts_a(),
             .cts_a(1'b0),       // Always clear to send
             // Channel B = Modem port → MiSTer UART
-            .txd_b(UART_TXD),
-            .rxd_b(UART_RXD),
+            .txd_b(scc_txd_b),
+            .rxd_b(serial_loopback ? scc_txd_a : UART_RXD),  // loopback: B RX <- A TX
             .rts_b(UART_RTS),
             .cts_b(UART_CTS),
             .dsr_a(1'b0)        // DSR asserted (active low on real hardware)

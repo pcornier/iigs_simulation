@@ -12,10 +12,11 @@ DIAGNOSTIC TEST STATUS (full sweep 2026-07-05; disk "Apple IIgs Diagnostic v3_1.
 |                            |        | inversions is too slow to finish in sim  |
 | RAM Memory Expansion Card  | N/A    | Needs an expansion card                  |
 | Clock RAM Test             | FAIL*  | PRAM default values don't match ROM      |
-| Serial External Test       | PASS   | Cross-channel loopback (A TX->B RX);     |
-|                            |        | answer Y to the loopback-cable prompt    |
+| Serial External Test       | PASS   | Needs --serial-loopback (cross-wires A<->B|
+|                            |        | as a loopback cable); answer Y to prompt |
 | Serial Crystal Test        | PASS   | Baud rate generator timing check         |
-| Serial Internal Test       | FAIL   | Internal loopback mode (WR14[4]) issue   |
+| Serial Internal Test       | PASS   | Fixed 2026-07-05: BRG Zero-Count irq      |
+|                            |        | (WR12/13 down counter -> ext/status int) |
 | Disk Port Test             | PASS   |                                          |
 | Sound Circuitry Test       | PASS   |                                          |
 | Video Pattern Tests (all)  | PASS   | Color Bar, Char Gen, 80/40 Text, Lo-res, |
@@ -25,8 +26,12 @@ DIAGNOSTIC TEST STATUS (full sweep 2026-07-05; disk "Apple IIgs Diagnostic v3_1.
 |                            |        | hi-res colors (HIRES40+80COL bug)        |
 | ROM Selftest 07 (Clock)    | PASS   | Basic clock/PRTC read/write works        |
 
-Only two tests fail, both pre-existing/documented (not core video/logic bugs):
-Serial Internal (WR14[4] internal loopback) and Clock RAM (PRAM default mismatch).
+Only one test now fails: Clock RAM (PRAM default mismatch, documented below).
+The Serial Internal test was fixed 2026-07-05 by implementing the SCC Baud
+Rate Generator's Zero-Count external/status interrupt (the test enables the BRG
+with Zero-Count IE and waits for two ZC interrupts; see rtl/scc8530.v). The
+Serial External test passes when run with --serial-loopback, which cross-wires
+SCC channel A<->B TXD/RXD to emulate the required loopback cable.
 
 * The diagnostic disk Clock RAM test compares PRAM values against ROM defaults
   at $FF893D. Our PRAM initialization may not match exactly. The ROM selftest07
@@ -54,7 +59,7 @@ cd vsim
 
 RUNNING SERIAL EXTERNAL TEST:
 -----------------------------
-./obj_dir/Vemu --disk iigsdiag.hdv \
+./obj_dir/Vemu --serial-loopback --disk iigsdiag.hdv \
   --send-keys '170:c\n' \
   --send-keys '185:e\n' \
   --send-keys '200:b\n' \
@@ -65,10 +70,13 @@ RUNNING SERIAL EXTERNAL TEST:
   --screenshot 300,400 \
   --stop-at-frame 450
 
-Note: The external test uses bidirectional cross-channel loopback:
-  - Channel A TX -> Channel B RX
-  - Channel B TX -> Channel A RX
-This is configured in rtl/iigs.sv at the SCC instantiation.
+Note: The external test needs a physical loopback cable between the two serial
+ports. In the sim, pass --serial-loopback to cross-wire the SCC channels:
+  - Channel A TXD -> Channel B RXD
+  - Channel B TXD -> Channel A RXD
+This is gated by the `serial_loopback` input in rtl/iigs.sv at the SCC
+instantiation (driven by --serial-loopback via sim.v / sim_main.cpp). Without
+the flag the test correctly fails (no cable). Answer Y to the cable prompt.
 
 RUNNING SERIAL CRYSTAL TEST:
 ----------------------------
@@ -95,8 +103,11 @@ RUNNING SERIAL INTERNAL TEST:
   --screenshot 450,500 \
   --stop-at-frame 550
 
-Note: This test currently FAILS. It tests the SCC's internal loopback mode
-(WR14 bit 4) which loops TX->RX within the same channel.
+Note: This test PASSES (fixed 2026-07-05). Despite the name it is not a TX->RX
+data loopback -- it enables the SCC Baud Rate Generator (WR14=03) with Zero
+Count Interrupt Enable (WR15=02) and waits for two Zero-Count external/status
+interrupts. rtl/scc8530.v now implements the BRG 16-bit down counter (WR12/13)
+and its Zero-Count interrupt (gated on WR15[1], so normal serial is unaffected).
 
 RUNNING CLOCK RAM TEST:
 -----------------------

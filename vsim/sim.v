@@ -61,6 +61,9 @@ module emu (
         // Self-test mode override
         input selftest_override,
 
+        // Sim-only: cross-wire SCC channels as an external serial loopback cable
+        input serial_loopback,
+
         // CPU speed control (--speed flag): 0=native 2.86MHz .. 4=14.32MHz.
         // Shares state with the ZipGS $C058-$C05F software interface.
         input [2:0] host_speed,
@@ -313,6 +316,7 @@ iigs  iigs(
         .ps2_key(ps2_key),
         .ps2_mouse(ps2_mouse),
         .selftest_override(selftest_override),
+        .serial_loopback(serial_loopback),
         .host_speed(host_speed),
         .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
         .zip_regs_en(1'b1),    // ZipGS software interface always present in sim

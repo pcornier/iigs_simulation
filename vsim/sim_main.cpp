@@ -195,6 +195,9 @@ bool selftest_mode = false;
 bool selftest_override_active = false;
 bool selftest_override_started = false;
 vluint64_t selftest_start_time = 0;
+
+// --serial-loopback: cross-wire SCC channel A<->B (external loopback cable)
+bool serial_loopback_flag = false;
 const vluint64_t SELFTEST_OVERRIDE_DURATION = 10000000; // 10 seconds in simulation time (much longer)
 
 // HPS emulator
@@ -1183,6 +1186,7 @@ int verilate() {
 		
 		// Set self-test override signal to hardware
 		top->selftest_override = selftest_override_active ? 1 : 0;
+		top->serial_loopback = serial_loopback_flag ? 1 : 0;
 
 		// CPU speed step (--speed). Level signal; zipgs_regs applies it on change.
 		top->host_speed = host_speed;
@@ -4630,6 +4634,7 @@ void show_help() {
 	printf("  --cold-reset-at-frame <frame> Trigger cold reset at specified frame\n");
 	printf("  --rom <1|3|rom1|rom3>         Select ROM version (default: rom3)\n");
 	printf("  --selftest                    Enable self-test mode\n");
+	printf("  --serial-loopback             Cross-wire SCC ports A<->B (external loopback cable)\n");
 	printf("  --speed <step|MHz>            CPU accelerator speed: 0-4 or 2.8/3.6/4.8/7.2/14.3 (MHz).\n");
 	printf("                                Fast cycles only; I/O + banks E0/E1 stay 1 MHz (ZipGS-style).\n");
 	printf("                                Shares state with the ZipGS $C058-$C05F software interface.\n");
@@ -4889,6 +4894,9 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--selftest") == 0) {
 			selftest_mode = true;
 			printf("Self-test mode enabled - will simulate Command+Option+Control+Reset\n");
+		} else if (strcmp(argv[i], "--serial-loopback") == 0) {
+			serial_loopback_flag = true;
+			printf("Serial loopback enabled - SCC channels A<->B cross-wired (external loopback cable)\n");
 		} else if (strcmp(argv[i], "--fixed-time") == 0) {
 			if (i + 1 < argc && argv[i+1][0] >= '0' && argv[i+1][0] <= '9') {
 				fixed_time = (time_t)atoll(argv[++i]);
