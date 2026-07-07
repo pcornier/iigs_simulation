@@ -60,7 +60,7 @@ module clock_divider (
     output reg         clk_14M_en,     // 14M enable (always high)
     output reg         clk_7M_en,      // 7M enable (~7.159 MHz)
     output reg         ph0_en,         // PH0 enable (~1 MHz, compatible with Apple II)
-    output reg         ph2_en,         // PH2 enable (variable rate for fast/sync cycles) (FAST CLK)
+    output wire        ph2_en,         // PH2 enable (variable rate for fast/sync cycles) (FAST CLK)
     output reg         q3_en,          // Q3 enable (quadrature timing)
     
     // Clock states for debugging/interfacing
@@ -214,6 +214,25 @@ end
 // (fast_thresh != native); when native the term is unchanged, so the default
 // machine is bit-identical.
 wire accel_active = (fast_thresh != 4'd4);
+
+// --- 1-tick fast-escape guard (14.32 MHz step; doc/zipgs-14mhz-plan.md, B) ---
+// ph2_en is a REGISTERED enable: the pulse that completes a CPU cycle is
+// decided at the edge BEFORE that cycle's address is valid. At >=2-tick fast
+// cycles the slow_class_now fire-hold (fast branch below) reroutes a
+// slow-classified access in time, but at the 1-tick step there is no spare
+// edge -- the enable is already high when the address appears, so the first
+// access of every slow run (I/O, E0/E1, shadowed write, slot) would complete
+// as a 69ns fast cycle (wrong Mega II sync timing, stale data from
+// registered-output devices). Suppress the pulse combinationally in that
+// window; the access stays uncommitted (CPU CE low), the registered slowMem
+// then reroutes it to a proper sync cycle. Provably a no-op at native
+// (accel_active=0) and at 2..5-tick steps (there the fire-hold already
+// prevents ph2_en_r from rising while slow_class_now is set, so the gate
+// never sees a 1 to suppress).
+reg  ph2_en_r;
+wire fast_escape = accel_active && !dma_active && !slow && !slowMem && slow_class_now;
+assign ph2_en = ph2_en_r & ~fast_escape;
+
 wire slow_request = (cyareg[7] == 1'b0 && !accel_active) ||
                    (waitforC0C8 && cyareg[0]) ||
                    (waitforC0D8 && cyareg[1]) ||
@@ -322,7 +341,7 @@ always @(posedge clk_14M) begin
         clk_14M_en <= 1'b0;
         clk_7M_en <= 1'b0;
         ph0_en <= 1'b0;
-        ph2_en <= 1'b0;
+        ph2_en_r <= 1'b0;
         q3_en <= 1'b0;
         
         // Reset states
@@ -481,7 +500,7 @@ always @(posedge clk_14M) begin
 		// Fire ph2_en on every PHI0 boundary.
 		sync_aligned <= 1'b0;  // Keep clean for fast+sync transitions
 		if (ph0_counter_next == 4'd0) begin
-			ph2_en <= 1'b1;
+			ph2_en_r <= 1'b1;
 			ph2_counter <= 4'd0;
 			ph2_sync_pulse <= 1'b1;
 			// Refresh cadence counts this slow cycle too (hidden here); see the
@@ -492,7 +511,7 @@ always @(posedge clk_14M) begin
 				refresh_counter <= refresh_counter + 4'd1;
 			cycle_is_refresh <= 1'b0;
 		end else begin
-			ph2_en <= 1'b0;
+			ph2_en_r <= 1'b0;
 			ph2_counter <= 4'd0;
 			ph2_sync_pulse <= 1'b0;
 		end
@@ -508,7 +527,7 @@ always @(posedge clk_14M) begin
 			ph2_counter <= ph2_counter + 4'd1;
 
 		if (ph0_counter_next == 4'd0 && ph2_counter >= 4'd13) begin
-			ph2_en <= 1'b1;
+			ph2_en_r <= 1'b1;
 			ph2_counter <= 4'd0;
 			ph2_sync_pulse <= 1'b1;
 			// +ph0_dbg=1: CPU-PH0 vs beam-PH0 phase at each sync fire
@@ -529,7 +548,7 @@ always @(posedge clk_14M) begin
 				refresh_counter <= refresh_counter + 4'd1;
 			cycle_is_refresh <= 1'b0;
 		end else begin
-			ph2_en <= 1'b0;
+			ph2_en_r <= 1'b0;
 			ph2_sync_pulse <= 1'b0;
 		end
 	end else begin
@@ -543,12 +562,12 @@ always @(posedge clk_14M) begin
             // Refresh cycle: 10 ticks (12 if it absorbs the per-scanline NTSC stretch)
             if (ph2_counter >= (fast_stretch ? 4'd11 : 4'd9)) begin
                 ph2_counter <= 4'd0;
-                ph2_en <= 1'b1;
+                ph2_en_r <= 1'b1;
                 cycle_is_refresh <= 1'b0;
                 refresh_counter <= 4'd0;
                 fast_stretch <= 1'b0;       // stretch consumed
             end else begin
-                ph2_en <= 1'b0;
+                ph2_en_r <= 1'b0;
             end
         end else begin
             // Normal fast cycle: eff_thresh+1 ticks (5 at native), +2 if it
@@ -559,7 +578,7 @@ always @(posedge clk_14M) begin
             if (ph2_counter >= (fast_stretch ? (eff_thresh + 4'd2) : eff_thresh)
                 && !(slow_class_now && eff_thresh != 4'd4)) begin
                 ph2_counter <= 4'd0;
-                ph2_en <= 1'b1;
+                ph2_en_r <= 1'b1;
                 fast_stretch <= 1'b0;       // stretch consumed
                 // Decide next cycle:
                 if (is_rom_access) begin
@@ -578,7 +597,7 @@ always @(posedge clk_14M) begin
                     cycle_is_refresh <= 1'b0;
                 end
             end else begin
-                ph2_en <= 1'b0;
+                ph2_en_r <= 1'b0;
             end
         end
         ph2_sync_pulse <= 1'b0;
@@ -593,7 +612,7 @@ always @(posedge clk_14M) begin
             knob_stall <= cpu_knob_val;
         if (knob_stall != 16'd0) begin
             knob_stall <= knob_stall - 16'd1;
-            ph2_en <= 1'b0;
+            ph2_en_r <= 1'b0;
             ph2_counter <= ph2_counter;
         end
 

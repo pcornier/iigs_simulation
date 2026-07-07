@@ -55,7 +55,7 @@ localparam CONF_STR = {
 	"-;",
 	"OA,Force Self Test,OFF,ON;",
 	"OB,ROM Version,ROM1,ROM3;",
-	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz;",
+	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz,14.3 MHz;",
 	"O[15],ZipGS Registers,Enabled,Disabled;",
 	"-;",
 
@@ -202,12 +202,11 @@ wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
 // always built in; it was hardware-validated at 7.16 MHz (2-FF mem_ack
 // synchronizer fix). Default OSD speed is native 2.8 MHz.
 wire cache_disable;   // ZipGS $C059 bit 7 -> sdram_cache bypass
-// Hardware speed cap: 7.16 MHz (step 3) is the fastest step validated on the
-// board. The 14.32 MHz 1-tick step (step 4) passes static timing but has a
-// cycle-level race under load (crashes into self-test); it stays sim-only
-// until the posted-write / miss-stall path is hardened at 1 tick. Clamp
-// defensively even though the OSD menu no longer offers step 4.
-wire [2:0] host_speed = (status[14:12] > 3'd3) ? 3'd3 : status[14:12];
+// 14.32 MHz (step 4) re-enabled: the 1-tick races the old cap protected
+// against are now closed (doc/zipgs-14mhz-plan.md) -- write back-pressure
+// into mem_stall, cache write-forwarding, and the clock_divider fast-escape
+// gate. Clamp anything above step 4 (3-bit status can encode 5-7).
+wire [2:0] host_speed = (status[14:12] > 3'd4) ? 3'd4 : status[14:12];
 wire accel_capable = 1'b1;
 wire mem_stall;   // driven by the icache (cache miss in flight)
 // OSD "ZipGS Registers": 0 = Enabled (default, a ZipGS is present and period
@@ -399,7 +398,22 @@ wire        cache_ready, cache_stall;
 // (yet) hit. A miss launches its fill from the cache_rd strobe, the fill
 // lands, hit_now rises, the stall drops and the comb byte is already valid.
 // Sampled synchronously by the CPU's RDY, so comb glitches are fine.
-assign mem_stall = accel_r & ~we & (fastram_ce | rom_ce) & ~cache_hit_now;
+//
+// Write back-pressure (the 14.3 MHz killer -- doc/zipgs-14mhz-plan.md, A):
+// the write channel is fire-and-forget, but one controller write takes
+// ~9 clk_mem (~78.6ns) while a 1-tick CPU can commit one write per 69.8ns.
+// Without back-pressure a second wr_req toggle lands while the first write
+// is in flight and the controller's "ack0 <= req0" silently absorbs it --
+// the write never reaches SDRAM (the cache snoop masks it until the line is
+// evicted: delayed corruption under load). So: hold the CPU on an
+// accelerated fastram WRITE while the previously posted write is still
+// unacknowledged. wr_ack toggles in clk_mem; 2-FF sync like mem_ack in
+// sdram_cache (31bf1a lesson). Native (accel_r=0) is untouched: a write
+// retires in ~1.2 ticks, far inside the 5-tick cycle.
+reg         wr_ack_s1, wr_ack_s2;
+wire        wr_pending = (wr_req != wr_ack_s2);
+assign mem_stall = accel_r & ( (~we & (fastram_ce | rom_ce) & ~cache_hit_now)
+                             | ( we & fastram_ce & wr_pending) );
 reg         snoop_stb;
 
 // Native single-word read channel (ch3): launch one clk_sys cycle after the
@@ -420,6 +434,8 @@ reg phi2_d;
 always @(posedge clk_sys) begin
 	phi2_d <= phi2;
 	if (phi2) accel_r <= accel_active;
+	wr_ack_s1 <= wr_ack;
+	wr_ack_s2 <= wr_ack_s1;
 
 	if (phi2_d & ~we & (fastram_ce | rom_ce) & ~accel_r) begin
 		nat_addr <= {1'b0, cpu_sdram_addr[23:1]};
@@ -428,7 +444,12 @@ always @(posedge clk_sys) begin
 	end
 	nat_data <= nat_bsel ? nat_dout[15:8] : nat_dout[7:0];
 
-	if (phi2 & we & fastram_ce) begin
+	// Post gate mirrors the write-stall: while accelerated and a prior write
+	// is pending, RDY is held low so this cycle has NOT committed -- do not
+	// post (or snoop) it yet. When wr_pending clears, the next phi2 commits
+	// the held cycle and posts it exactly once. At native (accel_r=0) the
+	// condition is identical to the original unconditional post.
+	if (phi2 & we & fastram_ce & ~(accel_r & wr_pending)) begin
 		wr_addr <= {2'b00, addr_bus[22:1]};
 		wr_din  <= {iigs_dout, iigs_dout};
 		wr_wrl  <= ~addr_bus[0];
@@ -437,7 +458,7 @@ always @(posedge clk_sys) begin
 	end
 
 	// snoop ch0 writes one cycle late, when wr_addr/wr_din hold the committed write
-	snoop_stb <= phi2 & we & fastram_ce;
+	snoop_stb <= phi2 & we & fastram_ce & ~(accel_r & wr_pending);
 end
 
 // SDRAM upload channel (ch2): HPS ROM upload, throttled via ioctl_wait

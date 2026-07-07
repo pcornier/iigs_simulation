@@ -146,7 +146,17 @@ wire [23:0] mem_addr = rom3_loading                  ? {6'b111111, ioctl_addr[17
                        (rom_ce & ~we &  rom_select)  ? {7'b1111100, rom_bankaddr[0], addr_bus[15:0]} :
                        {1'b0, addr_bus[22:0]};
 
-assign iigs_din = fastram_dout;
+// Speed-selected CPU read byte, mirroring the FPGA datapath selection in
+// Apple-IIgs.sv (accel_r mux): native uses the REGISTERED BRAM output --
+// bit-identical to the historical sim path (the HDD DMA readback alignment
+// depends on it, so regression stays byte-exact) -- while any accelerated
+// step uses the COMB read mirror, like the sdram_cache comb hit port. The
+// registered output is one CLK_14M tick late, which is invisible at >=2-tick
+// CPU cycles but returns the PREVIOUS address's byte at the 1-tick 14.32 MHz
+// step (instant BRK-loop derail at reset).
+wire accel_active_w;
+wire [7:0] fastram_dout_comb;
+assign iigs_din = accel_active_w ? fastram_dout_comb : fastram_dout;
 
 // WOZ bit interfaces for flux-based IWM
 // 3.5" drive 1 WOZ bit interface
@@ -320,7 +330,7 @@ iigs  iigs(
         .host_speed(host_speed),
         .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
         .zip_regs_en(1'b1),    // ZipGS software interface always present in sim
-        .accel_active(),       // FPGA-only: selects the SDRAM read datapath
+        .accel_active(accel_active_w),  // selects registered vs comb fastram read (as on FPGA)
         .mem_stall(1'b0),      // sim BRAM always meets the deadline
 
         .FLOPPY_WP(1'b1),
@@ -364,12 +374,13 @@ iigs  iigs(
    //dpram #(.widthad_a(24),.prefix("fast")) fastram - unified ROM+RAM
 
 
-dpram #(.widthad_a(24),.prefix("fast")) fastram
+dpram #(.widthad_a(24),.prefix("fast"),.sim_async_a(1)) fastram
 (
         .clock_a(clk_sys),
         .address_a( mem_addr ),
         .data_a(ioctl_download ? ioctl_dout : iigs_dout),
         .q_a(fastram_dout),
+        .q_a_comb(fastram_dout_comb),
         .wren_a((we & fastram_ce) | ioctl_wr),
         .ce_a(fastram_ce | rom_ce | ioctl_download),
         .clock_b(clk_sys),

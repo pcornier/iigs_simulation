@@ -78,7 +78,19 @@ module sdram_cache #(
     // is added. cache_off is intentionally unused.
     wire hit = valid[c_idx] && (tag[c_idx] == c_tag);
     assign hit_now      = hit;
-    assign cpu_data_now = data[c_idx][{c_word,4'b0} +: 16];
+
+    // Write-forwarding (doc/zipgs-14mhz-plan.md, C): the snoop below applies
+    // the committed write to the line array at the END of the wr_stb cycle,
+    // but at the 1-tick (14.32 MHz) step the very next CPU read completes on
+    // that same edge -- a hit read of the just-written address would sample
+    // the PRE-write array content. During the one wr_stb cycle where the
+    // array is stale, forward the pending write's bytes combinationally.
+    // (wr_addr/wr_data hold the most recent committed write, so forwarding
+    // is by construction the newest data for that address.)
+    wire        fwd_hit   = wr_stb && (wr_addr == cpu_addr);
+    wire [15:0] line_word = data[c_idx][{c_word,4'b0} +: 16];
+    assign cpu_data_now = { (fwd_hit && wr_be[1]) ? wr_data[15:8] : line_word[15:8],
+                            (fwd_hit && wr_be[0]) ? wr_data[7:0]  : line_word[7:0] };
 
     // miss FSM
     localparam S_IDLE = 1'b0, S_FILL = 1'b1;

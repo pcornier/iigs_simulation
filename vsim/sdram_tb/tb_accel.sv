@@ -43,8 +43,9 @@ module tb_accel;
     reg  [24:1] cpu_addr=0; reg cpu_rd=0; wire [15:0] cpu_data; wire cpu_ready, cpu_stall;
     reg  [24:1] snp_addr=0; reg [15:0] snp_data=0; reg [1:0] snp_be=0; reg snp_stb=0;
 
+    reg cache_rst = 1;   // iverilog: cache regs power up X (verilator zero-inits); real reset needed
     sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) cache (
-        .clk(clk), .reset(1'b0),
+        .clk(clk), .reset(cache_rst),
         .cpu_addr(cpu_addr), .cpu_rd(cpu_rd), .cpu_data(cpu_data),
         .cpu_ready(cpu_ready), .cpu_stall(cpu_stall),
         .wr_addr(snp_addr), .wr_data(snp_data), .wr_be(snp_be), .wr_stb(snp_stb),
@@ -57,26 +58,31 @@ module tb_accel;
             $display("  FAIL %-20s got=%04h exp=%04h", what, got, exp); end end
     endtask
 
+    // NOTE: all tasks drive stimulus and sample results on the NEGEDGE so the
+    // DUT's posedge always sees settled values (this TB was written for
+    // verilator v5 --timing; under iverilog's 4-state scheduler, driving in
+    // the same delta as the posedge races the DUT and skews every check).
     // ch2 upload write (single word) -- mirrors Apple-IIgs.sv ch2
     task automatic upload(input [24:1] a, input [15:0] d);
-        begin @(posedge clk); up_addr=a; up_din=d; up_wrl=1; up_wrh=1; up_req=~up_req;
-              @(posedge clk); while (up_ack!==up_req) @(posedge clk); up_wrl=0; up_wrh=0; end
+        begin @(negedge clk); up_addr=a; up_din=d; up_wrl=1; up_wrh=1; up_req=~up_req;
+              @(negedge clk); while (up_ack!==up_req) @(negedge clk); up_wrl=0; up_wrh=0; end
     endtask
     // ch0 CPU write (single word) + cache snoop -- mirrors Apple-IIgs.sv ch0 + planned snoop
     task automatic cpuwrite(input [24:1] a, input [15:0] d);
-        begin @(posedge clk); wr_addr=a; wr_din=d; wr_wrl=1; wr_wrh=1; wr_req=~wr_req;
+        begin @(negedge clk); wr_addr=a; wr_din=d; wr_wrl=1; wr_wrh=1; wr_req=~wr_req;
               snp_addr=a; snp_data=d; snp_be=2'b11; snp_stb=1;
-              @(posedge clk); snp_stb=0; while (wr_ack!==wr_req) @(posedge clk); wr_wrl=0; wr_wrh=0; end
+              @(negedge clk); snp_stb=0; while (wr_ack!==wr_req) @(negedge clk); wr_wrl=0; wr_wrh=0; end
     endtask
     // CPU read through the cache
     task automatic cpuread(input [24:1] a);
-        begin @(posedge clk); cpu_addr=a; cpu_rd=1; @(posedge clk); cpu_rd=0;
-              while (cpu_ready!==1'b1) @(posedge clk); end
+        begin @(negedge clk); cpu_addr=a; cpu_rd=1; @(negedge clk); cpu_rd=0;
+              while (cpu_ready!==1'b1) @(negedge clk); end
     endtask
 
     integer i;
     initial begin
         @(posedge clk); init=0;                      // release init; controller runs power-on seq
+        repeat (32) @(posedge clk); cache_rst=0;
         repeat (800) @(posedge clk);
 
         // 1) upload (ch2) a region, read it back through the cache (ch1 burst)

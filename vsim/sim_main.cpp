@@ -4925,8 +4925,6 @@ int main(int argc, char** argv, char** env) {
 			}
 			printf("CPU speed: step %d (%s MHz fast cycles; I/O and Mega II stay 1 MHz)\n",
 			       host_speed, speed_mhz[host_speed]);
-			if (host_speed == 4)
-				printf("Note: 14.3 MHz is sim-only; the FPGA 1-tick step has a cycle-level race under load\n");
 			i++;
         } else if (strcmp(argv[i], "--headless") == 0) {
             headless = true;
