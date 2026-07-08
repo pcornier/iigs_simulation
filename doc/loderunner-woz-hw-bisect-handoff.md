@@ -4,9 +4,12 @@
 14.3 MHz on both the Verilator sim and the DE10-Nano board.
 
 - **BUG #1 — 14.3 MHz IWM wedge: FIXED (sim).** Committed on branch `fix/lc-registers`.
-- **BUG #2 — protected 5.25" flux read hangs on real hardware: OPEN.** Sim reproduction is
-  **exhausted** (every modelable/analyzable cause ruled out — see below). The only lead left is a
-  **hardware git-bisect**, which this document sets up so a fresh context can start it cold.
+- **BUG #2 — protected 5.25" flux read hangs on real hardware: OPEN, but NOT in the core RTL.**
+  Sim reproduction is **exhausted** (every modelable/analyzable cause ruled out — see below), and the
+  **hardware git-bisect below was RUN and INVALIDATED the core-RTL hypothesis**: the supposed-good
+  endpoint `74e3dfd` hangs identically to HEAD (6 builds, all hang; 5/5 repeat boots hang). See the
+  "BISECT RESULT" section at the bottom — the regression is **outside the FPGA bitstream** (MiSTer
+  HPS/OS environment or the disk image), so a future session should look there, NOT re-bisect the RTL.
 
 This doc supersedes the pre-resolution hypotheses in `doc/loderunner_fpga_debug.md` (that doc's 2026-06-21
 "RESOLVED" note was for the OLD pre-accelerator build).
@@ -21,8 +24,9 @@ the **accelerator board build (`ec729648`)** it hangs at the black load screen. 
 (816 Paint, Beagle BASIC) boot fine on the board, so the 5.25 flux path is healthy — only this
 protection fails, and only on silicon. The old pre-accelerator build ran it to gameplay on HW.
 
-**⇒ It is a real-silicon-only regression introduced somewhere in the accelerator/MMU/LC work
-(`74e3dfd..HEAD`). Bisect on hardware to find the commit.**
+**⇒ UPDATE: the hardware bisect (below) ran and DISPROVED this — `74e3dfd` hangs too. It is NOT a
+core-RTL regression. The cause is outside the bitstream (MiSTer HPS/OS or disk image). See "BISECT
+RESULT" at the bottom.**
 
 ---
 
@@ -167,3 +171,71 @@ Q6 was never set, and the loop never matched. Fix: ported the 2-cycle accel-swit
 Verified: CPU decodes `bit $c0ed`; Lode Runner boots to gameplay at `--speed 4`; **all 10 regression
 tests pass** (guard is dormant at native → byte-identical). This was a SIM-ONLY path bug; the FPGA
 already has the guard, so it is unrelated to BUG #2.
+
+---
+
+## BISECT RESULT (2026-07-08): NOT a core-RTL regression — look outside the bitstream
+
+Ran the hardware bisect above (6 Quartus builds, ~6 min each). **Every commit tested hangs LR on
+current hardware, including `74e3dfd` — the supposed-good endpoint.** Results (all black-box HANG,
+~3191-byte screenshot): `74d3b23`, `220a7aa`, `e811002`, `0c3783f`, and `74e3dfd`. Plus 5/5 repeat
+boots of the current build all hang (not a marginal weak-bit coin-flip).
+
+`sys/` (the MiSTer framework) IS git-tracked, so the `74e3dfd` build used `74e3dfd`'s framework too —
+so this is **not** a framework regression either.
+
+**Conclusion:** LR's copy protection fails consistently on the current board across the *entire* core
+RTL history (`74e3dfd..HEAD`) while passing in every sim mode. Since it worked on this exact board on
+2026-06-21, the regression is **outside the FPGA bitstream / this git repo** — i.e. the **MiSTer Main
+(HPS) binary or the SD-card OS/environment** (which serves the raw WOZ `sd_buff` blocks and is not
+versioned here), or the specific `.woz` on the SD.
+
+### Where to look next (all non-RTL)
+1. **MiSTer OS / `Main_MiSTer`**: was it updated on the SD since 2026-06-21? The HPS binary serves the
+   WOZ block reads (`sd_lba`/`sd_buff`). A change to its floppy/`sd_rd` timing or block serving would
+   hit LR's marginal protection but not normal disks. Try reverting/pinning `/media/fat/MiSTer` to a
+   June build.
+2. **Different `Lode Runner.woz`**: try another dump of the disk on HW. The current one
+   (`f491b82b944c8d55c7ce82c3056df556`) passes in sim, but a different pressing/dump might behave
+   differently on silicon.
+3. **Compare the board's SD contents / config** to the 2026-06-21 state if any backup exists.
+4. Re-confirm the 2026-06-21 "works on HW" observation was this exact disk + board + launch.
+
+The build/deploy/test harness (`scratchpad/bisect_step.sh`) and per-step screenshots
+(`vsim/lr_shots/bisect_*.png`) are kept for reference. **Do not re-bisect the core RTL — it's proven
+the bug is not there.**
+
+---
+
+## PROTECTION ALGORITHM STUDY (2026-07-08)
+
+Studied the protection to look for a targeted flux-model fix (no builds). Findings:
+
+- **The protection IS the data placement.** Parsing the WOZ1 TMAP (`scratchpad/wozparse.py`) shows the
+  game data is stored on **quarter/half-tracks** a whole-track bit-copier misses: track 13 has data at
+  `.00/.25/.50` (TRKS 11,12,13), track 14 has data ONLY at `.50/.75` (TRKS 14,15) — nothing at
+  14.00/14.25 — and this pattern repeats up the disk. There is no separate "check + branch"; the
+  loader simply must reach these fractional tracks to load the game.
+- **Sim reads them correctly.** A head-position trace (`WOZ_TRACK1_QTRACK`) over the LR boot shows the
+  loader sweeping quarter-track by quarter-track; `woz_track1_id = qtrack-2` maps each to the right
+  TMAP index and the sim reads every data track, reaching the title screen (protection passes).
+- **The flux model is deterministic RTL.** The 5.25 4-phase stepper (`flux_drive.v` ~L664), flux
+  playback (`flux_phase_accum`, inc=1000/mod=1790), and weak-bit injection (`0xACE1` LFSR, triggers on
+  >=4 zero-run) are all clocked on `CLK_14M` — no analog/timing dependence in the model, which is
+  exactly why sim faithfully reproduces the protection.
+- **The RE repo** (github.com/XekriRedmane/lode_runner_reveng) is a **cracked** disk
+  (`..._cr_Reset_Vector`) re-mastered onto normal tracks; `main.asm` documents the game (standard
+  track/sector RWTS for level/hi-score data on tracks 3+) but NOT the original half-track protection.
+- **Latency stress is confounded.** Raising `WOZ_ACK_DELAY` (2 -> 1200 -> 8000) just stretches the
+  whole boot (the load finishes at a later frame), so it can't cleanly reproduce a *hang* vs slow-load;
+  it does not reproduce the HW failure.
+
+**Study conclusion:** our flux model is a faithful, deterministic implementation of the half-track +
+weak-bit read (hence sim passes at every latency). There is **no statically-identifiable RTL fix** —
+the silicon failure is a physical flux/stepper/sampling-timing effect on the FPGA that a zero-delay
+simulator cannot reproduce and STA does not flag. Combined with the bisect (fails at every commit
+incl. the old good one) and the user's report that a fresh disk copy changes nothing, the most likely
+truth is that LR's fractional-track protection **has never reliably worked on this silicon** — a
+known sim-vs-FPGA fidelity limitation, not a regression. Closing it out requires on-hardware
+observability (pixel-overlay/LED probe of head qtrack + address-mark-found + flux-read state during
+the protected read), which this project's HW debug tooling has historically made unreliable.
