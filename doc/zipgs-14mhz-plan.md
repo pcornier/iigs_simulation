@@ -91,6 +91,68 @@ Subsequent accesses in a slow run classify correctly (predecessor is same class)
    - Timing: the new comb terms feed the same addr→MMU→classify→RDY path that closed at +0.525ns — check slack after each fix.
    - Hardware: rebuild, verify board md5 vs output_files (see floppy35-72mhz lesson), then soak at 14.3: GS/OS desktop, ROM self-test loop, interrupt-heavy titles. Note this retest also carries the post-revert CDC (31fbf1a) and LC (7b98fde) fixes for the first time at 14.3.
 
-## 8. Expected outcome
+## 8. Problem E (found on hardware 2026-07-07, root-caused in the new SDRAM-accurate sim):
+## speed transitions shorten the in-flight cycle before the datapath catches up
+
+**Hardware symptom:** GS/OS System 6.0.1 crashes during boot at sustained 14.3 (Zip registers
+disabled; with them enabled the on-disk ZipGS.CDev re-clocks to 7.16 mid-boot, masking it).
+Live-monitor forensics: BRK at $09/3925; exactly one byte of loaded code wrong vs the disk
+($3924: $29→$85); the byte HEALED after a cache-eviction sweep — cache/SDRAM divergence.
+
+**Root cause (caught by the `make SDRAM=sim` coherency checker, deterministic at boot):**
+`fast_thresh` reverts combinationally when an IWM hold-off expires / HDD-DMA ends. The clock
+divider's in-flight fire compare (`ph2_counter >= eff_thresh`) snaps to the accelerated value
+immediately, producing 1-tick cycles while the top-level datapath select `accel_r` (latched at
+phi2) is still NATIVE — so reads run 1-tick through the never-stalling ch3 path, whose
+`nat_data` register is cold (no ch3 launches happen while accelerated). Stale bytes, no stall:
+`SDRAMSIM_VIOLATION addr=ff59be got=fa exp=8f accel_r=0` right after the boot floppy-scan
+hold-off. Boot toggles hold-offs constantly (floppy scan, every HDD sector), each expiry a
+roulette spin — matches "boots sometimes, corrupts under disk-heavy load".
+
+**Fix:** latch `eff_thresh` in clock_divider on each (gated) `ph2_en` fire — the same edge
+where Apple-IIgs.sv latches `accel_r` — so cycle length and datapath select always change as
+a matched pair and no in-flight cycle can shorten. `fast_escape` keys off the latched value
+too. Native-neutral by construction (latch value is always 4 at native).
+
+**Problem F (introduced by the E fix, caught on HW + reproduced deterministically in sim):**
+with cycle length and `accel_r` now correctly paired, the FIRST native-path reads right
+after a fast→native switch still lose: ch3 wasn't launching while accelerated (`nat_data`
+cold) and its first request can queue behind an in-flight line fill. Boot wedge, 100%
+reproducible: at the drive scan's first IWM access (`BIT $C0E8` → hold-off → switch), the
+next instruction's operands fetched stale (`BIT $C0ED` executed as `BIT $2C8F`), skipping a
+Sony-drive register access, after which the ROM's IWM handshake loop (`FF:4720 STY $C0EF /
+EOR $C0EE / BNE`) spins forever → "stuck at the splash" at 14.3 on hardware, identical wedge
+in `make SDRAM=sim` (violation showed `accel_r=0 hit_now=1` — the cache had the right bytes;
+the mux pointed at cold nat_data).
+
+**Fix (datapath-switch guard):** for the first 2 committed cycles after any `accel_r`
+change, keep serving reads through the CACHE path — `use_cache_path = accel_r ||
+guard_counter != 0` applied to the data mux, the stall rule, and the fill strobe — comb-hit
++ stall-on-miss is correct at any cycle length, and ch3 warms up underneath. Native-only
+operation never transitions, so the guard is structurally inert there. Verified in the
+SDRAM-accurate sim: 0 violations, the drive scan proceeds, HDD boot engages at speed 4.
+
+**HARDWARE CONFIRMED (2026-07-08 00:52):** the latch+guard build (ec729648) boots GS/OS to
+the Finder desktop at PURE 14.32 MHz (Zip registers disabled), 3/3 cold boots pixel-identical
+plus a 3-minute soak. Note: an intervening debugging day was consumed by a **deployment
+trap** — a stale RBF at `/media/fat/Apple-IIgs.rbf` (the SD root) shadowed every deploy to
+`_Computer/`, because MiSTer Main resolves an MGL's `<rbf>` from the root first. Every "the
+guard doesn't work on HW" observation and every "invisible debug instrumentation" mystery
+was that. RULE: deploy to the root path (or both) and verify with an unmistakable marker
+build when instrumentation seems dead. Side deliverables of the hunt, all kept: the
+`DEBUG_PIXEL_OVERLAY` on-screen state overlay and `DEBUG_DDR_TRACE` (wickerwaka ddr_trace)
+deep bus capture in Apple-IIgs.sv (ifdef'd off; note ddr_trace produced no DDR writes through
+this framework's ram1 port even with trigger=1 — debug that before relying on it), the
+`--speed-after` sim option, the sim_bus one-shot ioctl strobes, and the `--headless`
+video-clock fix in sim_main.
+
+**Tooling built for this (permanent):** `make SDRAM=sim` integrates the production
+`sdram_burst` + `sdram_cache` + behavioral chip model into the Vemu sim with a verbatim copy
+of the Apple-IIgs.sv bridge, an 8x clk_mem from sim_main, and a golden-model coherency
+checker (`SDRAMSIM_VIOLATION` lines). Also fixed `sim_bus.cpp` to emit HPS-accurate one-shot
+`ioctl_wr` strobes (was held-level, which deadlocks req/ack-toggle consumers). This closes
+the "works in sim, fails on FPGA" gap called out in doc/sdram_accel/02_sim_model_spec.md.
+
+## 9. Expected outcome
 
 Problems A–C are all consistent with the e95310a symptom, and A alone fully explains "boots to desktop, corrupts memory under load." With back-pressure, snoop forwarding, and the classification hold in place — plus the since-landed CDC and LC fixes — there is no remaining *known* mechanism by which a 1-tick cycle differs unsafely from a 2-tick cycle: every data deadline is either met combinationally or covered by an RDY stall.
