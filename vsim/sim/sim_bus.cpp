@@ -73,7 +73,15 @@ void SimBus::BeforeEval()
 
 	if (ioctl_file) {
 		//console.AddLog("ioctl_download addr %x  ioctl_wait %x", *ioctl_addr, *ioctl_wait);
-		if (*ioctl_wait == 0) {
+		if (*ioctl_wait != 0) {
+			// Match the real HPS (data_io.v): ioctl_wr is a one-shot strobe
+			// per byte, deasserted while the core throttles via ioctl_wait.
+			// Holding it high across wait cycles (the old behavior) breaks
+			// any core logic that treats each wr assertion as a new byte
+			// (e.g. the SDRAM_SIM ch2 upload channel's req/ack toggle).
+			*ioctl_wr = 0;
+		}
+		else {
 			*ioctl_download = 1;
 			*ioctl_wr = 1;
 			if (feof(ioctl_file)) {

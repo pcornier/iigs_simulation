@@ -205,6 +205,34 @@ module tb_wstream;
         for (j = 0; j < 128; j = j + 1)
             pw(BASE + 15'h0300 + j[14:0], 16'h9000 + j[15:0], 2'b11);
 
+        // --- 3b) loader-style patterns hunting the stale-line bug seen on HW
+        //         (GS/OS boot at 14.3: valid cache line kept a pre-write byte
+        //          while SDRAM was correct; healed on eviction) ---
+        // MVN-style alternating read/write at 1-tick, source cached, dest
+        // sweeping lines; interleave conflict misses (same index, different
+        // tag) at every offset relative to the writes.
+        for (j = 0; j < 200; j = j + 1) begin
+            pr(BASE + ((j * 3) % 64));                      // src read (mostly hits)
+            pw(BASE + 15'h0080 + j[14:0], 16'h6000 + j[15:0], (j % 3 == 0) ? 2'b01 : 2'b11);
+            if ((j % 5) == 2) pr(BASE + 15'h0400 + ((j * 16) % 256)); // conflict miss (idx alias of 0x080 region? sweep)
+            if ((j % 7) == 3) pr(BASE + 15'h0080 + j[14:0]);          // read-back just-written
+        end
+        // write-then-conflict-miss-same-index at every 1-tick offset:
+        // W hits cached line L, next cycle a read misses line M with the SAME
+        // index (evicts L mid-snoop window), then read back W through SDRAM.
+        for (j = 0; j < 64; j = j + 1) begin
+            pr(BASE + 15'h0010 + ((j * 2) % 16));            // ensure L cached (idx 1)
+            pw(BASE + 15'h0010 + ((j * 2) % 16), 16'h7A00 + j[15:0], 2'b11);
+            pr(BASE + 15'h0090 + ((j * 2) % 16));            // M: same idx, tag+1 (0x90>>4=9? idx bits [6:4]: 0x10 idx=1, 0x90 idx=1 tag differs) -> evict L
+            pr(BASE + 15'h0010 + ((j * 2) % 16));            // refetch L from SDRAM: must show the write
+        end
+        // miss-fill racing a write to the SAME line posted 1 tick earlier
+        for (j = 0; j < 64; j = j + 1) begin
+            pr(BASE + 15'h0110 + ((j * 8) % 128));           // churn: keep target line out of cache
+            pw(BASE + 15'h0200 + j[14:0], 16'h8B00 + j[15:0], 2'b11); // write to (likely uncached) line
+            pr(BASE + 15'h0200 + j[14:0]);                   // immediate miss-fill of that line
+        end
+
         // --- 4) evict everything (8 conflicting tags per index), then read back
         //        the whole window THROUGH SDRAM: a dropped write shows here ---
         for (j = 0; j < 16; j = j + 1) pr(BASE + 15'h1000 + j[14:0] * 64);

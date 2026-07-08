@@ -23,6 +23,17 @@
 #define VERTOPINTERN top
 #endif
 
+// Fast-RAM backing array for debug tools (memory dumps, CSV trace, forensics).
+// Normal build: the instant dpram's array. SDRAM_SIM build: the dpram is
+// optimized away (iigs_din comes from the sdram_burst+cache path), so use the
+// golden coherency mirror -- it holds every committed byte, which is exactly
+// what the debug tools want to see.
+#ifdef SDRAM_SIM
+#define FASTRAM_ARRAY emu__DOT__golden_mem
+#else
+#define FASTRAM_ARRAY emu__DOT__fastram__DOT__ram
+#endif
+
 #include "sim_console.h"
 #include "sim_bus.h"
 #include "sim_blkdevice.h"
@@ -189,6 +200,8 @@ int initial_rom_select = 0;
 // --speed CPU speed step (shared state with the ZipGS $C058-$C05F interface):
 // 0=native 2.86MHz, 1=3.58, 2=4.77, 3=7.16, 4=14.32
 int host_speed = 0;
+int speed_after_frame = -1;   // --speed-after <frame>:<code>
+int speed_after_code  = 0;
 
 // Self-test mode support
 bool selftest_mode = false;
@@ -1189,6 +1202,17 @@ int verilate() {
 		top->serial_loopback = serial_loopback_flag ? 1 : 0;
 
 		// CPU speed step (--speed). Level signal; zipgs_regs applies it on change.
+		// --speed-after <frame>:<code> models the REAL MiSTer boot, where the
+		// OSD status word (and thus the speed step) arrives from the HPS a
+		// moment AFTER the core is already running -- a live native->fast
+		// switch mid-ROM-boot that a static --speed never exercises.
+		if (speed_after_frame >= 0 && (long)g_tick14 >= (long)speed_after_frame) {
+			if (host_speed != speed_after_code) {
+				host_speed = speed_after_code;
+				printf("SPEED-AFTER: host_speed -> %d at tick %ld (t=%0.2fms)\n",
+				       host_speed, (long)g_tick14, (double)g_tick14 / 14318.0);
+			}
+		}
 		top->host_speed = host_speed;
 
 		// Clock dividers
@@ -1207,7 +1231,16 @@ int verilate() {
 				input.BeforeEval();
 				bus.BeforeEval();
 			}
-#ifdef DUALRATE
+#ifdef SDRAM_SIM
+			// FPGA-accurate memory clock: 4 full clk_mem cycles per CLK_14M
+			// half-cycle (8 per full cycle = 114.5 MHz model). The first
+			// clk_mem posedge lands in the same eval as the CLK_14M edge,
+			// matching the hardware's same-PLL edge alignment.
+			for (int m = 0; m < 4; m++) {
+				top->clk_mem_ext = 1; top->eval();
+				top->clk_mem_ext = 0; top->eval();
+			}
+#elif defined(DUALRATE)
 			// True dual-rate video: the CPU/memory clock (CLK_14M) is held constant
 			// across this pair of evals while clk_vid_ext completes one full cycle,
 			// giving the VGC a 28.6MHz clock (2x CLK_14M). The clk_vid POSEDGE (2nd
@@ -1788,7 +1821,7 @@ int verilate() {
                             static bool code_integrity_done = false;
                             if (!code_integrity_done && video.count_frame == 870 && vpa) {
                                 code_integrity_done = true;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
                                 printf("CODE_INTEGRITY at frame=%d:\n", video.count_frame);
                                 // Bank 02 at 27F0
@@ -1838,7 +1871,7 @@ int verilate() {
                             unsigned short pc_gs = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                             unsigned char pbr_gs = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                             if (vpa && pbr_gs == 0xE1 && (pc_gs == 0x00A8 || pc_gs == 0x00B0) && gsos_call_count < 500) {
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
                                 uint16_t sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
                                 uint8_t ret_pcl = fastram[sp + 1];
@@ -2044,7 +2077,7 @@ int verilate() {
                                     fulltrace_done = true;
                                     // Dump parm block state at end of trace
                                     uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                    uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                     printf("FULLTRACE END: PC=%02X:%04X SP=%04X frame=%d\n",
                                            bank, addr16, sp, video.count_frame);
                                     printf("  Parm block (slow E0:E168): ");
@@ -2066,7 +2099,7 @@ int verilate() {
                             static int parm_wp_count = 0;
                             if (video.count_frame >= 760 && video.count_frame <= 800 && parm_wp_count < 50) {
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 if (!parm_wp_init) {
                                     parm_wp_init = true;
                                     for (int i = 0; i < 24; i++) {
@@ -2124,7 +2157,7 @@ int verilate() {
                                 unsigned char dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
                                 printf("  REGS: A=%04X X=%04X Y=%04X P=%02X SP=%04X D=%04X DBR=%02X\n",
                                        a, x, y, p, sp, d, dbr);
-                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 printf("  STK@SP: ");
                                 for (int i = -2; i <= 16; i++) {
                                     unsigned short saddr = (sp + i) & 0xFFFF;
@@ -2199,7 +2232,7 @@ int verilate() {
                             static bool dumped_hotspots = false;
                             if (video.count_frame == 800 && vpa && !dumped_hotspots) {
                                 dumped_hotspots = true;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
                                 printf("GSOS_STARTUP_DUMP at frame=%d:\n", video.count_frame);
                                 // GS/OS startup code at E0:E800-E840
@@ -2316,7 +2349,7 @@ int verilate() {
                                 // When BFA5 is first executed, dump the actual opcode
                                 if (!bfa5_checked && pbr_s == 0x00 && pc_s == 0xBFA5) {
                                     bfa5_checked = true;
-                                    uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                     uint8_t ir = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__IR;
                                     printf("BFA5_OPCODE: IR=%02X fastram[BFA5]=%02X fastram[BFA6]=%02X fastram[BFA7]=%02X frame=%d\n",
                                            ir, fastram[0xBFA5], fastram[0xBFA6], fastram[0xBFA7], video.count_frame);
@@ -2361,7 +2394,7 @@ int verilate() {
                             unsigned short pc_now_dr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                             unsigned char pbr_now_dr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                             if (pbr_now_dr == 0xFF && pc_now_dr == 0x3C40 && vpa && driver_ret_count >= 170 && driver_ret_count < 250) {
-                                uint8_t* mainram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* mainram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint16_t sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
                                 // RTS pops 2 bytes (PCL, PCH), adds 1
                                 uint8_t ret_lo = mainram[sp + 1];
@@ -2391,7 +2424,7 @@ int verilate() {
                             unsigned char pbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
                             if (pbr_now == 0xFF && pc_now == 0x5D65 && vpa && appledisk_call_count < 500) {
                                 appledisk_call_count++;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 // At this point, NONtoEXT may have already run (if non-extended cmd)
                                 // Extended format: $42-$44=buf, $45=cmdcode, $46=pcount,
                                 //   $47=unused, $48-$4B=block(32bit)
@@ -2550,7 +2583,7 @@ int verilate() {
                                     uint8_t dbr = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
                                     // Read block and buffer from BOTH main RAM (bank 0) and slow RAM (bank E1)
                                     // using DP-relative offsets
-                                    uint8_t* mainram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    uint8_t* mainram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                     // cmdblockl at DP+$48 in bank 0
                                     uint16_t dp_blk_off = dp_reg + 0x48;
                                     uint32_t dp_blk = mainram[dp_blk_off] | (mainram[dp_blk_off+1] << 8) |
@@ -2575,7 +2608,7 @@ int verilate() {
                                     const int bank_e1_offset = 0x10000;
                                     uint8_t error2 = slowram[bank_e1_offset + 0x0F44];
                                     // Read DP values for block number and buffer
-                                    uint8_t* mainram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    uint8_t* mainram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                     uint16_t dp_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
                                     uint16_t dp_buf_off = dp_reg + 0x42;
                                     uint32_t buf_addr = mainram[dp_buf_off] | (mainram[dp_buf_off+1] << 8) |
@@ -2865,7 +2898,7 @@ int verilate() {
                                     if (buf_dump_count < 300) {
                                         buf_dump_count++;
                                         uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                        uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                        uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                         const int bank_e1_offset = 0x10000;
                                         unsigned short d_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
                                         unsigned char altzp = VERTOPINTERN->emu__DOT__iigs__DOT__ALTZP;
@@ -2928,7 +2961,7 @@ int verilate() {
                             static int aede_count2 = 0;
                             if (pc_now_ae == 0xAEDE && pbr_now_ae == 0x00 && vpa && aede_count2 < 300) {
                                 aede_count2++;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
                                 unsigned short a_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
                                 unsigned char p_reg = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
@@ -2964,7 +2997,7 @@ int verilate() {
                         {
                             unsigned short pc_f4 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PC;
                             unsigned char pbr_f4 = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__PBR;
-                            uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                             uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
                             // Trap at key points in E0:F4xx loop during stuck calls
                             {
@@ -3164,7 +3197,7 @@ int verilate() {
                         {
                             static uint8_t prev_07f8 = 0xFF;
                             static int w07f8_count = 0;
-                            uint8_t* fastram_07 = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* fastram_07 = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                             uint8_t cur_07f8 = fastram_07[0x07F8];
                             if (cur_07f8 != prev_07f8 && w07f8_count < 30) {
                                 w07f8_count++;
@@ -3193,7 +3226,7 @@ int verilate() {
                         {
                             static uint8_t prev_7758 = 0xFF;
                             static int w7758_count = 0;
-                            uint8_t* fastram_7758 = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* fastram_7758 = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                             uint8_t cur_7758 = fastram_7758[0x7758];
                             if (cur_7758 != prev_7758 && w7758_count < 30) {
                                 w7758_count++;
@@ -3225,7 +3258,7 @@ int verilate() {
                         {
                             static uint16_t prev_bd04 = 0xFFFF;
                             static int bd04_count = 0;
-                            uint8_t* fastram_bd04 = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* fastram_bd04 = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                             uint16_t cur_bd04 = fastram_bd04[0xBD04] | (fastram_bd04[0xBD05] << 8);
                             if (cur_bd04 != prev_bd04 && bd04_count < 30) {
                                 bd04_count++;
@@ -3266,7 +3299,7 @@ int verilate() {
                         {
                             static uint16_t prev_bd28 = 0xFFFF;
                             static int bd28_count = 0;
-                            uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                             uint16_t cur_bd28 = fastram_wp[0xBD28] | (fastram_wp[0xBD29] << 8);
                             if (cur_bd28 != prev_bd28 && bd28_count < 200) {
                                 bd28_count++;
@@ -3296,7 +3329,7 @@ int verilate() {
                                 unsigned char dbr_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__DBR;
                                 unsigned char p_now = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 printf("WOZ_E455 #%d: A=%04X X=%04X Y=%04X D=%04X SP=%04X DBR=%02X P=%02X\n",
                                        e455_count, a_now, x_now, y_now, d_now, sp_now, dbr_now, p_now);
                                 // Dump 128 bytes of code around E455 (E400-E47F)
@@ -3344,7 +3377,7 @@ int verilate() {
                                 unsigned short a_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
                                 unsigned short d_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__D;
                                 unsigned short sp_wp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
-                                uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 printf("WOZ_VCR2E_CHANGE #%d: %04X -> %04X at PC=%02X:%04X A=%04X D=%04X SP=%04X frame=%d\n",
                                        vcr2e_count, prev_vcr2e, cur_vcr2e, pbr_wp, pc_wp, a_wp, d_wp, sp_wp, video.count_frame);
                                 // Dump code at the PC and surrounding area
@@ -3363,7 +3396,7 @@ int verilate() {
                             static uint16_t prev_vcr42 = 0xFFFF;
                             static int vcr42_count = 0;
                             uint8_t* slowram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                            uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* fastram_wp = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                             uint16_t cur_vcr42 = slowram_wp[0xE128] | (slowram_wp[0xE129] << 8);
                             if (cur_vcr42 != prev_vcr42 && vcr42_count < 200) {
                                 vcr42_count++;
@@ -3513,7 +3546,7 @@ int verilate() {
                                 f571_count++;
                                 unsigned char p = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__P;
                                 unsigned short a = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__A;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint8_t aa00 = fastram[0xAA00];
                                 uint8_t aa01 = fastram[0xAA01];
                                 printf("GSOS_F571 #%d: carry=%d A=%04X $AA00=%02X %02X frame=%d\n",
@@ -3527,7 +3560,7 @@ int verilate() {
                             if (bank == 0xE0 && (addr16 == 0xF54A || addr16 == 0xF538) && vpa && f54a_count < 20) {
                                 f54a_count++;
                                 unsigned short sp = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__SP;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 // RTS return addr is at SP+1,SP+2 (lo,hi), RTS adds 1
                                 uint8_t ret_lo = fastram[(sp+1) & 0xFFFF];
                                 uint8_t ret_hi = fastram[(sp+2) & 0xFFFF];
@@ -3616,7 +3649,7 @@ int verilate() {
                             static uint16_t prev_9a00 = 0xFFFF;
                             static int w9a_count = 0;
                             static int w9a_armed = 0; // only arm after APPLEDISK fires enough times
-                            uint8_t* fastram_9a = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                            uint8_t* fastram_9a = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                             uint16_t cur_9a00 = fastram_9a[0x9A00] | (fastram_9a[0x9A01] << 8);
                             // Also check bytes 4-5 to detect content changes
                             uint16_t cur_9a04 = fastram_9a[0x9A04] | (fastram_9a[0x9A05] << 8);
@@ -3649,7 +3682,7 @@ int verilate() {
                                 unsigned short x = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__X;
                                 unsigned short y = VERTOPINTERN->emu__DOT__iigs__DOT__cpu__DOT__Y;
                                 uint8_t* slowram = (uint8_t*)&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram;
-                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint8_t shadow_reg = VERTOPINTERN->emu__DOT__iigs__DOT__shadow;
                                 uint8_t retry   = slowram[0x10000 + 0x0FB1]; // Retry
                                 // Get RTL return address from stack (SP+1 = low, SP+2 = high, SP+3 = bank)
@@ -3917,7 +3950,7 @@ int verilate() {
                                 static bool b2_reported = false;
                                 if (!b2_reported && pbr_now == 0x17) {
                                     b2_reported = true;
-                                    uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                    uint8_t* fr = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                     for (int b = 0x02; b <= 0x20; b++) {
                                         int nz = 0, first = -1, last = -1;
                                         for (int o = 0; o < 0x10000; o++) {
@@ -3942,7 +3975,7 @@ int verilate() {
                                 static bool bank17_init = false;
                                 static int bank17_writes_logged = 0;
                                 static int bank17_writes_total = 0;
-                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 uint8_t* bank17 = fr + 0x170000;
                                 if (!bank17_init) {
                                     memcpy(bank17_shadow, bank17, 0x10000);
@@ -3971,7 +4004,7 @@ int verilate() {
                                 static unsigned char prev_17e4 = 0;
                                 static bool prev_init = false;
                                 static int watch_hits = 0;
-                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+                                uint8_t* fr = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
                                 unsigned char v4 = fr[0x17E4];
                                 if (!prev_init) { prev_17e4 = v4; prev_init = true; }
                                 if (v4 != prev_17e4 && v4 == 0x17 && watch_hits < 20) {
@@ -4017,12 +4050,17 @@ int verilate() {
         }
 #endif
 
-		// Output pixels on rising edge of pixel clock
-        if (!headless) {
-            if (CLK_14M.IsRising() && top->CE_PIXEL) {
-                uint32_t colour = 0xFF000000 | top->VGA_B << 16 | top->VGA_G << 8 | top->VGA_R;
-                video.Clock(top->VGA_HB, top->VGA_VB, top->VGA_HS, top->VGA_VS, colour);
-            }
+		// Output pixels on rising edge of pixel clock.
+		// NOTE: video.Clock MUST run in headless mode too -- it drives
+		// video.count_frame (--stop-at-frame / --screenshot / --send-keys
+		// timing) and fills the framebuffer headless mode allocates for
+		// screenshots. Gating it on !headless silently broke every
+		// frame-gated headless run: they "timed out" at frame 0 while the
+		// machine ran fine underneath, and screenshot copies picked up
+		// stale files from earlier windowed runs.
+        if (CLK_14M.IsRising() && top->CE_PIXEL) {
+            uint32_t colour = 0xFF000000 | top->VGA_B << 16 | top->VGA_G << 8 | top->VGA_R;
+            video.Clock(top->VGA_HB, top->VGA_VB, top->VGA_HS, top->VGA_VS, colour);
         }
 
 		if (CLK_14M.IsRising()) {
@@ -4747,7 +4785,7 @@ void save_memory_dump(int frame_number) {
 	snprintf(filename, sizeof(filename), "memdump_frame_%04d_fastram.bin", frame_number);
 	FILE* f = fopen(filename, "wb");
 	if (f) {
-		fwrite(&VERTOPINTERN->emu__DOT__fastram__DOT__ram, 1, 8388608, f);
+		fwrite(&VERTOPINTERN->FASTRAM_ARRAY, 1, 8388608, f);
 		fclose(f);
 		printf("Fast RAM dump saved: %s (8MB)\n", filename);
 	} else {
@@ -4785,7 +4823,7 @@ void save_memory_dump(int frame_number) {
 		}
 		
 		fprintf(f, "\nBank 00 $0600-$06FF (main text screen):\n");
-		uint8_t* fastram = (uint8_t*)&VERTOPINTERN->emu__DOT__fastram__DOT__ram;
+		uint8_t* fastram = (uint8_t*)&VERTOPINTERN->FASTRAM_ARRAY;
 		for (int i = 0; i < 256; i += 16) {
 			fprintf(f, "00:%04X: ", 0x0600 + i);
 			for (int j = 0; j < 16 && (i + j) < 256; j++) {
@@ -4909,6 +4947,16 @@ int main(int argc, char** argv, char** env) {
 		} else if (strcmp(argv[i], "--quiet") == 0) {
 			quiet_mode = true;
 			printf("Quiet mode enabled - CPU instruction trace suppressed\n");
+		} else if (strcmp(argv[i], "--speed-after") == 0 && i + 1 < argc) {
+			// <frame>:<code> -- switch host_speed mid-run, modeling the real
+			// MiSTer where the OSD status word lands after the core is running.
+			if (sscanf(argv[i + 1], "%d:%d", &speed_after_frame, &speed_after_code) == 2) {
+				printf("CPU speed: will switch to step %d at 14M-tick %d (HPS-status-arrival model)\n",
+				       speed_after_code, speed_after_frame);
+			} else {
+				printf("Bad --speed-after (want <frame>:<code>)\n");
+			}
+			i++;
 		} else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
 			// Accelerator speed step (shared with the ZipGS software interface):
 			// accepts a step number 0-4 or a MHz value.
@@ -5523,7 +5571,7 @@ int main(int argc, char** argv, char** env) {
 
 		// Memory debug
 		ImGui::Begin("Fast RAM Editor");
-		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__fastram__DOT__ram, 16777216, 0);
+		mem_edit.DrawContents(&VERTOPINTERN->FASTRAM_ARRAY, 16777216, 0);
 		ImGui::End();
 		ImGui::Begin("Slow RAM Editor");
 		mem_edit.DrawContents(&VERTOPINTERN->emu__DOT__iigs__DOT__slowram__DOT__ram, 131072, 0);
@@ -5531,7 +5579,7 @@ int main(int argc, char** argv, char** env) {
 
                 // ROM is in unified dpram: ROM3 at FC0000-FFFFFF, ROM1 at F80000-F9FFFF
                 // Show the active ROM based on rom_select
-                uint8_t *ramp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->emu__DOT__fastram__DOT__ram);
+                uint8_t *ramp = reinterpret_cast<uint8_t *>(&VERTOPINTERN->FASTRAM_ARRAY);
 		uint8_t *rom_base = ramp + (top->rom_select ? 0xF80000 : 0xFC0000);
 		uint8_t *rom1p = rom_base + (top->rom_select ? 0x00000 : 0x20000);  // Bank FE (ROM3) or F80000 (ROM1)
 		uint8_t *rom2p = rom_base + (top->rom_select ? 0x10000 : 0x30000);  // Bank FF (ROM3) or F90000 (ROM1)

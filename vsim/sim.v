@@ -9,6 +9,7 @@ module emu (
 
         input CLK_14M,
         input clk_vid_ext,     // DUALRATE: 28MHz video clock driven by sim_main (2x CLK_14M); unused otherwise
+        input clk_mem_ext,     // SDRAM_SIM: 114.5MHz memory clock driven by sim_main (8x CLK_14M); unused otherwise
         input reset,
         input cold_reset,      // 1 = cold/power-on reset (full init), 0 = warm reset
         input soft_reset,
@@ -156,7 +157,16 @@ wire [23:0] mem_addr = rom3_loading                  ? {6'b111111, ioctl_addr[17
 // step (instant BRK-loop derail at reset).
 wire accel_active_w;
 wire [7:0] fastram_dout_comb;
+wire phi2_w;
+wire dbg_hdd_dma_w;
+`ifdef SDRAM_SIM
+// FPGA-accurate memory path: iigs_din comes from the sdram_burst+sdram_cache
+// bridge below (exactly the Apple-IIgs.sv datapath); instant dpram unused.
+wire mem_stall_sim;
+`else
+wire mem_stall_sim = 1'b0;
 assign iigs_din = accel_active_w ? fastram_dout_comb : fastram_dout;
+`endif
 
 // WOZ bit interfaces for flux-based IWM
 // 3.5" drive 1 WOZ bit interface
@@ -331,7 +341,9 @@ iigs  iigs(
         .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
         .zip_regs_en(1'b1),    // ZipGS software interface always present in sim
         .accel_active(accel_active_w),  // selects registered vs comb fastram read (as on FPGA)
-        .mem_stall(1'b0),      // sim BRAM always meets the deadline
+        .phi2(phi2_w),
+        .dbg_hdd_dma(dbg_hdd_dma_w),
+        .mem_stall(mem_stall_sim), // SDRAM_SIM: real cache-miss/write-pending stall; else 0 (instant BRAM)
 
         .FLOPPY_WP(1'b1),
         
@@ -391,6 +403,197 @@ dpram #(.widthad_a(24),.prefix("fast"),.sim_async_a(1)) fastram
 );
 
 
+`ifdef SDRAM_SIM
+// ===========================================================================
+// FPGA-ACCURATE MEMORY PATH (make SDRAM=sim)
+//
+// Instantiates the PRODUCTION sdram_burst controller + sdram_cache line
+// buffer against the behavioral chip model, glued with a VERBATIM copy of
+// the Apple-IIgs.sv bridge (accel_r datapath mux, ch0 write post with
+// back-pressure, cache snoop, ch3 native reads, mem_stall into the CPU RDY).
+// clk_mem_ext is driven by sim_main at 8x CLK_14M (114.5 MHz model).
+// This is the path where "works in sim, fails on FPGA" memory bugs live --
+// see doc/sdram_accel/02_sim_model_spec.md and doc/zipgs-14mhz-plan.md.
+//
+// A golden-model coherency checker compares every committed CPU read byte
+// against a mirror of committed writes and prints SDRAMSIM_VIOLATION lines
+// the moment the memory path serves stale data (e.g. the 14.3 MHz stale
+// cache line seen on hardware, GS/OS boot corruption 2026-07-07).
+// ===========================================================================
+wire clk_mem = clk_mem_ext;
+
+// SDRAM pins between the real controller and the behavioral chip
+wire [15:0] SDRAM_DQ; wire [12:0] SDRAM_A;
+wire SDRAM_DQML, SDRAM_DQMH; wire [1:0] SDRAM_BA;
+wire SDRAM_nCS, SDRAM_nWE, SDRAM_nRAS, SDRAM_nCAS, SDRAM_CLK, SDRAM_CKE;
+
+// CPU physical address exactly as Apple-IIgs.sv forms it (no ioctl term --
+// uploads go through ch2 like the real core)
+wire [23:0] cpu_sdram_addr =
+                    (rom_ce & ~we & ~rom_select)  ? {6'b111111, rom_bankaddr, addr_bus[15:0]} :
+                    (rom_ce & ~we &  rom_select)  ? {7'b1111100, rom_bankaddr[0], addr_bus[15:0]} :
+                    {1'b0, addr_bus[22:0]};
+
+// ---- ch0: CPU single-word write-through (posted; see back-pressure below) ----
+reg         wr_req = 0;
+wire        wr_ack;
+reg  [24:1] wr_addr;
+reg         wr_wrl, wr_wrh;
+reg  [15:0] wr_din;
+
+reg         accel_r = 0;
+
+wire        rd_req;
+wire        rd_ack;
+wire [24:1] rd_addr;
+wire [127:0] rd_line;
+wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce) & use_cache_path;
+wire [24:1] cache_addr  = {1'b0, cpu_sdram_addr[23:1]};
+wire [15:0] cache_data;
+wire        cache_hit_now;
+wire [15:0] cache_data_now;
+wire        cache_ready, cache_stall;
+
+// Write back-pressure + stall rule -- verbatim from Apple-IIgs.sv
+reg         wr_ack_s1, wr_ack_s2;
+wire        wr_pending = (wr_req != wr_ack_s2);
+assign mem_stall_sim = use_cache_path & ( (~we & (fastram_ce | rom_ce) & ~cache_hit_now)
+                                        | ( we & fastram_ce & wr_pending) );
+reg         snoop_stb;
+
+// ch3: native single-word read
+reg         nat_req = 0;
+wire        nat_ack;
+reg  [24:1] nat_addr;
+reg         nat_bsel;
+wire [15:0] nat_dout;
+reg  [7:0]  nat_data;
+
+// Datapath-switch guard -- verbatim from Apple-IIgs.sv (see comment there):
+// serve reads through the cache for 2 committed cycles after accel_r changes
+// while the ch3 pipeline warms up.
+reg  [1:0]  accel_switch_guard = 0;
+wire        use_cache_path = accel_r | (accel_switch_guard != 2'd0);
+
+wire [7:0]  sdram_dout  = use_cache_path ? (cpu_sdram_addr[0] ? cache_data_now[15:8] : cache_data_now[7:0])
+                                         : nat_data;
+assign iigs_din = sdram_dout;
+
+reg phi2_d;
+always @(posedge clk_sys) begin
+	phi2_d <= phi2_w;
+	if (phi2_w) begin
+		accel_r <= accel_active_w;
+		if (accel_r != accel_active_w)        accel_switch_guard <= 2'd2;
+		else if (accel_switch_guard != 2'd0)  accel_switch_guard <= accel_switch_guard - 2'd1;
+	end
+	wr_ack_s1 <= wr_ack;
+	wr_ack_s2 <= wr_ack_s1;
+
+	if (phi2_d & ~we & (fastram_ce | rom_ce) & ~accel_r) begin
+		nat_addr <= {1'b0, cpu_sdram_addr[23:1]};
+		nat_bsel <= cpu_sdram_addr[0];
+		nat_req  <= ~nat_req;
+	end
+	nat_data <= nat_bsel ? nat_dout[15:8] : nat_dout[7:0];
+
+	if (phi2_w & we & fastram_ce & ~(accel_r & wr_pending)) begin
+		wr_addr <= {2'b00, addr_bus[22:1]};
+		wr_din  <= {iigs_dout, iigs_dout};
+		wr_wrl  <= ~addr_bus[0];
+		wr_wrh  <=  addr_bus[0];
+		wr_req  <= ~wr_req;
+	end
+
+	snoop_stb <= phi2_w & we & fastram_ce & ~(accel_r & wr_pending);
+end
+
+// ---- ch2: ioctl ROM upload (throttled via ioctl_wait, like the FPGA) ----
+reg         up_req = 0;
+wire        up_ack;
+reg  [24:1] up_addr;
+reg         up_wrl, up_wrh;
+reg  [15:0] up_din;
+
+wire [23:0] ioctl_sdram_addr = rom3_loading ? {6'b111111, ioctl_addr[17:0]}
+                                            : {7'b1111100, ioctl_addr[16:0]};
+// (verbatim from Apple-IIgs.sv; requires the HPS-accurate one-shot ioctl_wr
+// strobe semantics -- see sim_bus.cpp, which deasserts wr while ioctl_wait
+// throttles, exactly like data_io.v on hardware)
+always @(posedge clk_sys) begin
+	if (ioctl_wr & ioctl_download) begin
+		up_addr    <= {1'b0, ioctl_sdram_addr[23:1]};
+		up_din     <= {ioctl_dout, ioctl_dout};
+		up_wrl     <= ~ioctl_sdram_addr[0];
+		up_wrh     <=  ioctl_sdram_addr[0];
+		up_req     <= ~up_req;
+		ioctl_wait <= 1;
+	end
+	else if (up_req == up_ack) ioctl_wait <= 0;
+end
+
+sdram_burst sdram
+(
+	.SDRAM_DQ(SDRAM_DQ), .SDRAM_A(SDRAM_A), .SDRAM_DQML(SDRAM_DQML), .SDRAM_DQMH(SDRAM_DQMH),
+	.SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
+	.SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS), .SDRAM_CLK(SDRAM_CLK), .SDRAM_CKE(SDRAM_CKE),
+	// init falling-edge would RE-RUN the ~300-clk_mem power-on sequence; tying
+	// it to reset made that overlap the CPU's first fetches (ch3 never stalls
+	// -> garbage execution). The controller self-initializes from its declared
+	// power-on state, matching the FPGA where init=~locked ends well before
+	// the CPU leaves reset.
+	.init(1'b0), .clk(clk_mem),
+	.addr0(wr_addr), .wrl0(wr_wrl), .wrh0(wr_wrh), .din0(wr_din), .dout0(), .req0(wr_req), .ack0(wr_ack),
+	.addr1(rd_addr), .wrl1(1'b0), .wrh1(1'b0), .din1(16'd0), .dout1(rd_line), .req1(rd_req), .ack1(rd_ack),
+	.addr2(up_addr), .wrl2(up_wrl), .wrh2(up_wrh), .din2(up_din), .dout2(), .req2(up_req), .ack2(up_ack),
+	.addr3(nat_addr), .dout3(nat_dout), .req3(nat_req), .ack3(nat_ack)
+);
+
+sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) icache
+(
+	.clk(clk_sys), .reset(reset), .cache_off(1'b0),
+	.cpu_addr(cache_addr), .cpu_rd(cache_rd), .cpu_data(cache_data),
+	.cpu_ready(cache_ready), .cpu_stall(cache_stall),
+	.hit_now(cache_hit_now), .cpu_data_now(cache_data_now),
+	.wr_addr(wr_addr), .wr_data(wr_din), .wr_be({wr_wrh, wr_wrl}), .wr_stb(snoop_stb),
+	.mem_addr(rd_addr), .mem_req(rd_req), .mem_ack(rd_ack), .mem_line(rd_line)
+);
+
+sdram_sim_chip #(.CAS(3), .ROWW(13), .COLW(9), .BANKS(4), .RD_LAT(2), .CHECK(1)) sdram_chip (
+	.clk(clk_mem), .dq(SDRAM_DQ), .a(SDRAM_A), .ba(SDRAM_BA),
+	.dqml(SDRAM_DQML), .dqmh(SDRAM_DQMH),
+	.ncs(SDRAM_nCS), .nras(SDRAM_nRAS), .ncas(SDRAM_nCAS), .nwe(SDRAM_nWE)
+);
+
+// ---- golden-model coherency checker ----
+// Mirrors every committed byte (ioctl upload, CPU/DMA write) and checks every
+// committed CPU read against it. A mismatch = the memory path served stale
+// data -- printed immediately with context. DMA reads are excluded (their
+// data path has its own registered alignment checked elsewhere).
+reg [7:0] golden_mem [0:(1<<24)-1] /*verilator public_flat*/;
+reg       golden_v   [0:(1<<24)-1];
+integer   golden_viol = 0;
+always @(posedge clk_sys) begin
+	if (ioctl_wr & ioctl_download) begin
+		golden_mem[ioctl_sdram_addr] <= ioctl_dout;
+		golden_v[ioctl_sdram_addr]   <= 1'b1;
+	end
+	if (phi2_w & we & fastram_ce & ~(accel_r & wr_pending)) begin
+		golden_mem[{1'b0, addr_bus[22:0]}] <= iigs_dout;
+		golden_v[{1'b0, addr_bus[22:0]}]   <= 1'b1;
+	end
+	if (phi2_w & ~we & (fastram_ce | rom_ce) & ~mem_stall_sim & ~dbg_hdd_dma_w
+	    & golden_v[cpu_sdram_addr]) begin
+		if (sdram_dout !== golden_mem[cpu_sdram_addr] && golden_viol < 50) begin
+			golden_viol <= golden_viol + 1;
+			$display("SDRAMSIM_VIOLATION #%0d t=%0t addr=%06x got=%02x exp=%02x accel_r=%b hit_now=%b wr_pending=%b",
+			         golden_viol, $time, cpu_sdram_addr, sdram_dout,
+			         golden_mem[cpu_sdram_addr], accel_r, cache_hit_now, wr_pending);
+		end
+	end
+end
+`endif
+
 // ROM is now loaded via ioctl into the unified dpram at startup
 // (ROM3: 256KB at addr FC0000-FFFFFF, ROM1: 128KB at addr FE0000-FFFFFF)
 
@@ -434,6 +637,10 @@ assign VGA_VS=vsync;
 
 assign VGA_HB=hblank;
 assign VGA_VB=vblank;
+
+
+
+
 
 
 // HARD DRIVE PARTS (supports 2 units - ProDOS limit)

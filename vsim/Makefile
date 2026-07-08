@@ -53,6 +53,20 @@ ifeq ($(VGCTXT),1)
 V_DEFINE += +define+DEBUG_VGC_TXT
 endif
 
+# FPGA-accurate SDRAM memory path: `make SDRAM=sim` replaces the instant-BRAM
+# fast RAM with the PRODUCTION sdram_burst + sdram_cache against the behavioral
+# chip model, glued exactly like Apple-IIgs.sv (accel_r mux, write back-pressure,
+# snoop, ch3, mem_stall->RDY), with clk_mem_ext driven at 8x by sim_main and a
+# golden-model coherency checker (prints SDRAMSIM_VIOLATION on stale reads).
+# ~6x slower; use for accelerator/memory-path debugging (doc/zipgs-14mhz-plan.md).
+# `make clean` first when switching -- make tracks timestamps, not defines.
+ifeq ($(SDRAM),sim)
+V_DEFINE += +define+SDRAM_SIM -CFLAGS "-DSDRAM_SIM"
+V_SRC_SDRAM = $(RTL)/sdram_burst.sv $(RTL)/sdram_cache.sv ../doc/sdram_accel/sdram_sim_chip.sv ../vsim/sdram_tb/altddio_out.v
+else
+V_SRC_SDRAM =
+endif
+
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S), Darwin) #APPLE
@@ -130,7 +144,8 @@ V_SRC = \
 	$(RTL)/scc_iigs_wrapper.v \
 	$(RTL)/mmu.sv \
 	$(RTL)/zipgs_regs.sv \
-	$(RTL)/iigs.sv
+	$(RTL)/iigs.sv \
+	$(V_SRC_SDRAM)
 
 
 
