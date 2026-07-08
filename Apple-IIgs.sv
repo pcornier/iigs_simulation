@@ -1,4 +1,10 @@
 `timescale 1ns / 1ps
+// Debug instrumentation for the 14.3 wedge hunt (pixel overlay + ddr_trace).
+// NOTE: qsf VERILOG_MACRO does not reach SystemVerilog synthesis in this
+// Quartus -- uncomment here to enable. DEPLOY TO /media/fat/Apple-IIgs.rbf
+// (the SD ROOT): Main resolves MGL <rbf> from the root before _Computer/.
+//`define DEBUG_PIXEL_OVERLAY 1
+//`define DEBUG_DDR_TRACE 1
 /*============================================================================
 ===========================================================================*/
 
@@ -15,7 +21,14 @@ assign USER_OUT = '1;
 assign UART_DTR = UART_DSR;
 
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
+`ifdef DEBUG_DDR_TRACE
+// DDRAM is driven by the ddr_trace debug recorder (instantiated near the
+// memory bridge). wickerwaka's technique (github.com/wickerwaka/ddr_trace):
+// on-change signal records stream to HPS DDR3 at 0x30000000; read via
+// /dev/mem over SSH, decode offline with trace2vcd.py.
+`else
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;
+`endif
 
 assign VGA_SL = 0;
 assign VGA_F1 = 0;
@@ -387,7 +400,7 @@ wire        rd_req;
 wire        rd_ack;
 wire [24:1] rd_addr;
 wire [127:0] rd_line;
-wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce) & accel_r;
+wire        cache_rd    = phi2_d & ~we & (fastram_ce | rom_ce) & use_cache_path;
 wire [24:1] cache_addr  = {1'b0, cpu_sdram_addr[23:1]};
 wire [15:0] cache_data;
 wire        cache_hit_now;
@@ -412,8 +425,11 @@ wire        cache_ready, cache_stall;
 // retires in ~1.2 ticks, far inside the 5-tick cycle.
 reg         wr_ack_s1, wr_ack_s2;
 wire        wr_pending = (wr_req != wr_ack_s2);
-assign mem_stall = accel_r & ( (~we & (fastram_ce | rom_ce) & ~cache_hit_now)
-                             | ( we & fastram_ce & wr_pending) );
+// Keyed on use_cache_path (== accel_r, extended 2 cycles past a datapath
+// switch): during the switch guard, reads are served by the cache, so misses
+// must stall exactly as when accelerated.
+assign mem_stall = use_cache_path & ( (~we & (fastram_ce | rom_ce) & ~cache_hit_now)
+                                    | ( we & fastram_ce & wr_pending) );
 reg         snoop_stb;
 
 // Native single-word read channel (ch3): launch one clk_sys cycle after the
@@ -426,14 +442,33 @@ reg         nat_bsel;
 wire [15:0] nat_dout;
 reg  [7:0]  nat_data;
 
-// CPU read byte: comb cache byte when accelerated, registered ch3 byte native
-wire [7:0]  sdram_dout  = accel_r ? (cpu_sdram_addr[0] ? cache_data_now[15:8] : cache_data_now[7:0])
-                                  : nat_data;
+// Datapath-switch guard: for the first 2 committed cycles after accel_r
+// changes, keep serving reads through the CACHE path (comb hit +
+// stall-on-miss is correct at any cycle length) while the ch3 pipeline warms
+// up. Without this, the first native-path reads right after a fast->native
+// switch (IWM hold-off, HDD DMA) sample a cold/late nat_data: ch3 wasn't
+// launching while accelerated, and its first ack can also queue behind an
+// in-flight line fill -- stale operand bytes with no stall (caught by the
+// SDRAM_SIM checker at the boot drive scan: BIT $C0ED fetched as BIT $2C8F,
+// wedging the Sony handshake loop; the 14.3 "stuck at splash" freeze).
+// Native-only operation (accelerator off) never transitions, so this is a
+// structural no-op there and native cycle-exactness is untouched.
+reg  [1:0]  accel_switch_guard = 0;
+wire        use_cache_path = accel_r | (accel_switch_guard != 2'd0);
+
+// CPU read byte: comb cache byte when accelerated (or just after a datapath
+// switch), registered ch3 byte native
+wire [7:0]  sdram_dout  = use_cache_path ? (cpu_sdram_addr[0] ? cache_data_now[15:8] : cache_data_now[7:0])
+                                         : nat_data;
 
 reg phi2_d;
 always @(posedge clk_sys) begin
 	phi2_d <= phi2;
-	if (phi2) accel_r <= accel_active;
+	if (phi2) begin
+		accel_r <= accel_active;
+		if (accel_r != accel_active)          accel_switch_guard <= 2'd2;
+		else if (accel_switch_guard != 2'd0)  accel_switch_guard <= accel_switch_guard - 2'd1;
+	end
 	wr_ack_s1 <= wr_ack;
 	wr_ack_s2 <= wr_ack_s1;
 
@@ -508,9 +543,44 @@ sdram_cache #(.LINES(8), .LINE_WORDS(8), .ADDR_W(24)) icache
 	.mem_addr(rd_addr), .mem_req(rd_req), .mem_ack(rd_ack), .mem_line(rd_line)
 );
 
-assign VGA_R = iigs_r;
-assign VGA_G = iigs_g;
-assign VGA_B = iigs_b;
+`ifdef DEBUG_DDR_TRACE
+// ---- TEMPORARY: 14.3 MHz wedge hunt -- deep bus trace to HPS DDR3 ----
+// Trigger arms at the FIRST IWM access ($C0E0-EF, bank 0) after reset, i.e.
+// the start of the ROM's drive scan where the hardware wedges. From then on
+// every change of the packed bus snapshot is recorded (2M records = 16MB at
+// 0x30000000, ~50-150ms of full-resolution history). Read from the MiSTer:
+//   dd if=/dev/mem of=/tmp/trace.bin bs=1M skip=768 count=16 iflag=skip_bytes
+// then decode offline (trace2vcd.py or scripts/decode).
+wire dtrace_active;
+reg trace_trig = 0;
+reg [24:0] trace_boot_ctr = 0;
+always @(posedge clk_sys) begin
+	if (reset) begin
+		trace_trig <= 0;
+		trace_boot_ctr <= 0;
+	end else begin
+		// IWM access in bank 00 or the E0/E1 fold (physical/translated bus)
+		if (phi2 && addr_bus[15:4] == 12'hC0E &&
+		    (addr_bus[23:16] == 8'h00 || addr_bus[23:16] == 8'hE0 || addr_bus[23:16] == 8'hE1))
+			trace_trig <= 1;
+		// fallback: arm ~1.17s after reset regardless (2^24 clk_sys), so the
+		// wedge steady-state is captured even if the address arm never fires
+		if (!trace_boot_ctr[24]) trace_boot_ctr <= trace_boot_ctr + 25'd1;
+		if (trace_boot_ctr[24]) trace_trig <= 1;
+	end
+end
+ddr_trace #(.CYCLE_BITS(8), .FIFO_BITS(12), .ADDR(32'h3000_0000), .RECORDS('h20_0000)) dtrace (
+	.clk(clk_sys),
+	.data({25'd0, use_cache_path, wr_pending, cache_hit_now, mem_stall, accel_r, we, phi2, addr_bus[23:0]}),
+	.trigger(trace_trig),
+	.DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY), .DDRAM_BURSTCNT(DDRAM_BURSTCNT),
+	.DDRAM_ADDR(DDRAM_ADDR), .DDRAM_RD(DDRAM_RD), .DDRAM_DIN(DDRAM_DIN),
+	.DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE),
+	.dbg_active(dtrace_active)
+);
+`endif
+
+
 /*
 reg ce_pix;
 always @(posedge clk_vid) begin
@@ -535,6 +605,59 @@ assign VGA_VS=vsync;
 //assign VGA_HB=hblank;
 //assign VGA_VB=vblank;
 assign VGA_DE =  ~(vblank | hblank);
+
+`ifdef DEBUG_PIXEL_OVERLAY
+// ---- TEMPORARY: 14.3 MHz wedge hunt (doc/zipgs-14mhz-plan.md) ----
+// One row of 8x8 bit-blocks, drawn at py 40-55 (safely inside the MiSTer
+// scaler's visible window; the first attempt at py 4-12 landed in cropped
+// overscan). Frame-latched sample: {phi2_cnt[3:0], accel_r, mem_stall,
+// addr_latched[23:0]} MSB first. phi2_cnt=0 -> CPU clock-enable dead;
+// addr_latched = bus address at the last committed cycle (samples the wedge
+// loop; take several screenshots for several samples). Logic validated in
+// the Vemu sim (same block renders there).
+reg [23:0] dbg_addr_l;
+reg [3:0]  dbg_phi2_cnt;
+reg        dbg_vs_s1, dbg_vs_s2;
+always @(posedge clk_sys) begin
+	dbg_vs_s1 <= vsync;  dbg_vs_s2 <= dbg_vs_s1;
+	if (phi2) begin
+		dbg_addr_l <= addr_bus[23:0];
+		if (dbg_phi2_cnt != 4'hF) dbg_phi2_cnt <= dbg_phi2_cnt + 4'd1;
+	end
+	if (dbg_vs_s1 & ~dbg_vs_s2) dbg_phi2_cnt <= 4'd0;
+end
+wire vga_de_dbg = ~(vblank | hblank);
+reg [9:0]  dbg_px; reg [8:0] dbg_py;
+reg        dbg_de_d, dbg_vs_d;
+reg [29:0] dbg_sample;
+always @(posedge clk_vid) if (ce_pix) begin
+	dbg_de_d <= vga_de_dbg;  dbg_vs_d <= vsync;
+	if (vsync & ~dbg_vs_d) begin
+		dbg_sample <= {dbg_phi2_cnt, accel_r, mem_stall, dbg_addr_l};
+		dbg_py <= 9'd0;  dbg_px <= 10'd0;
+	end else if (vga_de_dbg) begin
+		dbg_px <= dbg_px + 10'd1;
+	end else if (dbg_de_d & ~vga_de_dbg) begin
+		dbg_px <= 10'd0;  dbg_py <= dbg_py + 9'd1;
+	end
+end
+wire       dbg_area = (dbg_py >= 9'd100) && (dbg_py < 9'd132) &&
+                      (dbg_px >= 10'd16) && (dbg_px < 10'd16 + 10'd480);
+wire [4:0] dbg_idx  = (dbg_px - 10'd16) >> 4;
+wire       dbg_bit  = dbg_sample[5'd29 - dbg_idx];
+// Diagnostic tints (zero-logic liveness probes, one screenshot answers all):
+//   BLUE  tint everywhere  = these assigns are really in the video path
+//   GREEN tint             = ddr_trace trigger is armed
+//   RED   tint             = ddr_trace has captured at least one record
+assign VGA_R = dbg_area ? (dbg_bit ? 8'hFF : 8'h18) : (iigs_r | (dtrace_active ? 8'h60 : 8'h00));
+assign VGA_G = dbg_area ? (dbg_bit ? 8'hFF : 8'h18) : (iigs_g | (trace_trig    ? 8'h60 : 8'h00));
+assign VGA_B = dbg_area ? 8'h00                      : (iigs_b | 8'h40);
+`else
+assign VGA_R = iigs_r;
+assign VGA_G = iigs_g;
+assign VGA_B = iigs_b;
+`endif
+
 assign CLK_VIDEO=clk_vid;
 
 

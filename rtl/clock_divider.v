@@ -76,7 +76,25 @@ reg [3:0]  ph2_counter;        // PH2 cycle counter
 
 // Effective fast threshold: DMA cycles always run at the native pace
 // (registered DMA data paths need the 5-tick window).
-wire [3:0] eff_thresh = dma_active ? 4'd4 : fast_thresh;
+wire [3:0] eff_thresh_now = dma_active ? 4'd4 : fast_thresh;
+
+// Latched at each (gated) PH2 fire -- the SAME edge where the top level
+// latches its datapath select (Apple-IIgs.sv `if (phi2) accel_r <= ...`), so
+// the cycle length and the read-path selection always change as a matched
+// pair and a mid-cycle fast_thresh change (IWM hold-off expiry, HDD-DMA end,
+// $C05D/OSD write) can never SHORTEN the in-flight cycle. Without this, a
+// hold-off expiry mid-cycle snaps the fire compare to the accelerated value
+// while accel_r is still native: the following reads run 1-tick cycles
+// through the never-stalling ch3 path, whose nat_data register is cold
+// during accelerated running -- stale bytes with no stall. Caught by the
+// SDRAM_SIM coherency checker (stale ROM fetch right after a boot
+// floppy-scan hold-off at --speed 4; the 14.3 MHz GS/OS boot corruption).
+// Reset value = native.
+reg [3:0] eff_thresh = 4'd4;
+always @(posedge clk_14M) begin
+    if (reset)       eff_thresh <= 4'd4;
+    else if (ph2_en) eff_thresh <= eff_thresh_now;
+end
 
 // Combinational mirror of the registered slowMem classification below (keep
 // the two in sync; this one uses `we` where the registered one uses we_reg).
@@ -230,7 +248,9 @@ wire accel_active = (fast_thresh != 4'd4);
 // prevents ph2_en_r from rising while slow_class_now is set, so the gate
 // never sees a 1 to suppress).
 reg  ph2_en_r;
-wire fast_escape = accel_active && !dma_active && !slow && !slowMem && slow_class_now;
+// Note: keyed off the LATCHED eff_thresh (not live fast_thresh) so the gate
+// agrees with the cycle length actually in effect for the current cycle.
+wire fast_escape = (eff_thresh != 4'd4) && !dma_active && !slow && !slowMem && slow_class_now;
 assign ph2_en = ph2_en_r & ~fast_escape;
 
 wire slow_request = (cyareg[7] == 1'b0 && !accel_active) ||

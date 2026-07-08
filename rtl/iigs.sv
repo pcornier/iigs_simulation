@@ -102,6 +102,10 @@ module iigs
    // data. Tie 0 when the memory path always meets the native deadline.
    input              mem_stall,
 
+   // HDD DMA in progress (bus owned by the DMA engine, CPU held). Exposed for
+   // the simulation's SDRAM-path coherency checker; may be left unconnected.
+   output             dbg_hdd_dma,
+
    // Floppy write-protect (sim global)
  input              floppy_wp,
    
@@ -1676,6 +1680,7 @@ wire slot_internalrom_ce;
 reg [7:0]  device_select;
 reg [7:0]  io_select;
 wire       hdd_dma;
+assign dbg_hdd_dma = hdd_dma;
 wire [7:0] slowram_dout;
 
 always @(*)
