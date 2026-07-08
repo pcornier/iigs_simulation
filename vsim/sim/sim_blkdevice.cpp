@@ -236,7 +236,13 @@ void SimBlockDevice::BeforeEval(int cycles)
         // WOZ drives (index 4=5.25", index 5=3.5") use minimal ack_delay for instant track loading
         // This simulates having all track data pre-cached in memory
         // Using 2 cycles minimum to allow the protocol handshake to work
-        ack_delay = (i == 4 || i == 5) ? 2 : 1200;
+        // WOZ_ACK_DELAY (env) models realistic HW SD track-load latency for WOZ drives,
+        // so a half-track re-seek's reload takes real time (as on silicon) instead of being
+        // instant. Used to investigate copy-protection timing (see
+        // doc/loderunner-woz-hw-bisect-handoff.md). Default 2 keeps regression fast/identical.
+        static int woz_ack = -1;
+        if (woz_ack < 0) { const char* e = getenv("WOZ_ACK_DELAY"); woz_ack = e ? atoi(e) : 2; }
+        ack_delay = (i == 4 || i == 5) ? woz_ack : 1200;
       }
     }
 

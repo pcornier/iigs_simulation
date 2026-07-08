@@ -164,8 +164,30 @@ wire dbg_hdd_dma_w;
 // bridge below (exactly the Apple-IIgs.sv datapath); instant dpram unused.
 wire mem_stall_sim;
 `else
+// Datapath-switch guard -- the plain-sim analogue of the SDRAM_SIM/Apple-IIgs.sv
+// guard (see `use_cache_path` below). The registered BRAM read (fastram_dout) is
+// one CLK_14M tick late and returns the PREVIOUS address's byte on the first
+// native cycle right after an accelerated (1-tick) cycle. When the IWM $C0Ex
+// hold-off flips accel_active_w 1->0 mid-run, that stale byte corrupts the very
+// next instruction fetch: at 14.32 MHz the operand of `BIT $C0ED` (FF:4715)
+// read back as $2C, so the ROM's SETIWMMODE ran `BIT $C02C`, never set IWM Q6,
+// and the mode-register verify loop at FF:4720 spun forever (Lode Runner and any
+// 5.25" boot hung on the splash). Serve the comb read for 2 committed cycles
+// after accel_active_w changes so the registered path can warm up. Dormant in
+// steady native (guard stays 0 -> registered read -> byte-identical regression;
+// speed-0 never toggles accel_active_w) and in steady accelerated running.
+reg        accel_r_plain    = 1'b0;
+reg [1:0]  accel_guard_plain = 2'd0;
+always @(posedge clk_sys) begin
+    if (phi2_w) begin
+        accel_r_plain <= accel_active_w;
+        if (accel_r_plain != accel_active_w)  accel_guard_plain <= 2'd2;
+        else if (accel_guard_plain != 2'd0)   accel_guard_plain <= accel_guard_plain - 2'd1;
+    end
+end
 wire mem_stall_sim = 1'b0;
-assign iigs_din = accel_active_w ? fastram_dout_comb : fastram_dout;
+assign iigs_din = (accel_active_w | (accel_guard_plain != 2'd0))
+                  ? fastram_dout_comb : fastram_dout;
 `endif
 
 // WOZ bit interfaces for flux-based IWM
