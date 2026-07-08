@@ -1,5 +1,11 @@
 # Session Handoff — 2026-07-04/05 (final)
 
+> **HISTORICAL — superseded 2026-07-08.** 14.32 MHz now works on hardware
+> (see `doc/zipgs-14mhz-plan.md`); the "sim-only 1-tick race" note below is
+> obsolete. Board RBF state has also changed since (old variants live in
+> `_Computer/iigs_old/`; the active core is `/media/fat/Apple-IIgs.rbf` —
+> note Main resolves MGL `<rbf>` from the SD root first).
+
 **Branch:** `master` == `feat/zipgs-speed`, both pushed (HEAD `eb519ec`).
 **Working tree:** clean of source changes (untracked disks/artifacts remain).
 **Board (192.168.1.196):** latest build = **`_Computer/Apple-IIgs_fb11.rbf`**
@@ -81,7 +87,7 @@ What it took (each its own commit):
 ### Nice-to-haves / follow-ups
 - OSD "Region: NTSC/PAL" = C02BVAL[4] reset value (real PAL IIgs powers up
   at 50Hz; useful for EU software that doesn't poke $C02B). One-line-ish.
-- ZipGS: casual game sweep at 7.16; 14.32 stays sim-only (1-tick race);
+- ZipGS: casual game sweep at 7.16; ~~14.32 stays sim-only (1-tick race)~~ (DONE 2026-07-08: 14.32 works on HW — doc/zipgs-14mhz-plan.md);
   $C05C/$C059 cosmetic; $C05A nibble jitter cosmetic.
 - $C061-$C067 reads splice `video_data[6:0]` during blanking; real HW would
   show open-bus bits there (minor fidelity).

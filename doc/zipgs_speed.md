@@ -1,8 +1,8 @@
 # ZipGS-compatible CPU speed control
 
 The core has a ZipGS-style accelerator: the fast (2.86 MHz) CPU cycle can be
-shortened to 3.58 / 4.77 / 7.16 MHz. Slow (1 MHz) and sync cycles — I/O,
-banks E0/E1, shadowed-video writes — are untouched, exactly like a real
+shortened to 3.58 / 4.77 / 7.16 / 14.32 MHz. Slow (1 MHz) and sync cycles —
+I/O, banks E0/E1, shadowed-video writes — are untouched, exactly like a real
 ZipGS/TransWarp, so video timing, beam-racing I/O and Mega II behavior stay
 correct while ordinary code runs faster.
 
@@ -10,7 +10,7 @@ Three interfaces share ONE state (`rtl/zipgs_regs.sv`), so they always agree:
 
 | interface | how |
 |---|---|
-| simulator | `./obj_dir/Vemu --speed <0-3 \| 2.8/3.6/4.8/7.2>` |
+| simulator | `./obj_dir/Vemu --speed <0-4 \| 2.8/3.6/4.8/7.2/14.3>` (`--speed-after <tick>:<code>` switches mid-run) |
 | MiSTer OSD | "CPU Speed" menu (status[14:12]); "ZipGS Registers" toggle (status[15]) hides/shows the software interface |
 | software (ZipGS) | $C058-$C05F protocol, KEGS/GSplus semantics (verified against both) |
 
@@ -35,8 +35,10 @@ The sim prints `ZIPGS: UNLOCKED` / `ZIPGS: speed_code ...` on transitions.
 ## Speed mapping
 
 "100%" = 7.16 MHz (our rated speed, TransWarp-class). Zip percentages map to
-the largest achievable clock-enable step at or below them; the 14.32 MHz
-single-tick step is RESERVED until stall-on-miss exists (see below).
+the largest achievable clock-enable step at or below them. The 14.32 MHz
+single-tick step is an OSD-only host overclock: software ($C05D) caps at step
+3, and Zip software *displays* percent-of-rated, so its panel reads ~6.7 MHz
+even at a true 14.3 — benchmark to measure the real speed.
 
 ## Correctness guards (rtl/clock_divider.v)
 
@@ -54,13 +56,21 @@ All three are no-ops at the native step — native timing is bit-identical
    the registered slowMem reroutes the access to a sync cycle (at 2-tick
    cycles the registered classification lands on the same edge the cycle
    would end — found via the slot-7 HDD C7xx ROM probe reading stale bytes).
+4. For the 1-tick step: `fast_escape` comb-gates the `ph2_en` output so a
+   slow-classified access can never complete as a 1-tick cycle, and
+   `eff_thresh` is latched at each fire (paired with the top level's
+   `accel_r` latch) so speed transitions apply only at cycle boundaries; the
+   memory bridge adds write back-pressure, snoop forwarding, and a 2-cycle
+   datapath-switch guard. Details: `doc/zipgs-14mhz-plan.md`.
 
 ## Limits / next steps
 
-- **14.32 MHz needs stall-on-miss.** At a 1-tick cycle the BRAM/SDRAM read
-  latency has zero slack; the CPU must stall on misses. That is the
-  `ACCEL_SDRAM` burst+cache work (doc/sdram_accel/) — once `cache_stall` is
-  wired to the CPU's RDY_IN, unclamp speed code 4 in `rtl/zipgs_regs.sv`.
+- **14.32 MHz (step 4) works on hardware** (2026-07-08): GS/OS desktop at
+  pure 14.3, 3/3 cold boots + soak, after six 1-tick fixes (write
+  back-pressure, classification escape, snoop forwarding, sim registered-read
+  artifact, and two speed-transition races). Complete analysis and debugging
+  history: `doc/zipgs-14mhz-plan.md`; architecture:
+  `doc/accelerator-architecture.md`.
 - **FPGA**: the burst+cache SDRAM path (formerly the `ACCEL_SDRAM` compile
   option) is now always built in — it was hardware-validated at 7.16 MHz.
   `accel_capable` is hardwired 1. Two OSD controls:

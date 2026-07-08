@@ -1,158 +1,208 @@
-# 14.32 MHz (speed step 4) on FPGA — Failure Analysis & Fix Plan
+# 14.32 MHz (speed step 4): failure analysis, fixes, and debugging history
 
-**Date:** 2026-07-06
-**Branch context:** `fix/lc-registers` (7b98fde); accelerator history on `feat/zipgs-speed`, merged to master
-**Status:** IMPLEMENTED (same day). Fixes 1-4 below are in the tree:
-- Fix A (write back-pressure): `Apple-IIgs.sv` — `wr_pending` (2-FF synced `wr_ack`) into `mem_stall` on accelerated fastram writes; post + snoop gated identically.
-- Fix C (snoop forwarding): `rtl/sdram_cache.sv` — comb forward of the pending write into `cpu_data_now` during the `wr_stb` cycle.
-- Fix B (classification escape): `rtl/clock_divider.v` — `ph2_en` output comb-gated by `fast_escape` (accel && !dma && !slow && !slowMem && slow_class_now).
-- Unclamp: OSD "14.3 MHz" restored, `host_speed` clamps at step 4.
-- Validation: new `vsim/sdram_tb/tb_wstream.sv` reproduces problem A with the pre-fix bridge (29 dropped-write words in SDRAM, masked by the cache until eviction) and passes clean with the fix (450/450). `tb_accel` 36/36, `tb_ch3` 53/53 (both under iverilog; tb_accel needed negedge stimulus + a cache reset to run under a 4-state simulator — TB-only changes).
+**Status: COMPLETE (2026-07-08).** GS/OS 6.0.1 boots to the Finder desktop at pure,
+sustained 14.32 MHz (Zip registers disabled) on real hardware — 3/3 cold boots
+pixel-identical plus soak, native regression 10/10 byte-identical, timing met
+(+0.220ns setup). Fix commits on `fix/lc-registers`: `df5460f` (problems A–D),
+`f3372fa` (problems E–F + debug tooling), `2d55831` (sim infrastructure),
+`a5a9d46` (docs). Architecture reference: `doc/accelerator-architecture.md`.
 
-**HARDWARE VALIDATED (2026-07-07, DE10-Nano):** RBF (md5 0e036527..., timing +0.473ns setup / +0.245ns hold) deployed with CFG pre-seeded to speed 4 (byte1=0x48 = 14.3 MHz + ROM3). GS/OS 6.0.1 boots to the Finder desktop at 14.32 MHz: 3/3 cold boots, pixel-identical desktop screenshots, 3-minute soak clean. This is the configuration that crashed into the ROM self-test under load on the 682a767 build.
+This document is the complete record: six distinct 1-tick bugs (A–F), how each
+was found, and the debugging lessons — several of which cost real time and are
+worth never re-learning.
 
-**Sim-side discovery (problem D, not in the original analysis):** `--speed 4` in the simulator was ALREADY broken (instant BRK-loop at reset, with or without these fixes) — e95310a's "14.3 works in sim" note was stale. Cause: the sim's unified fastram/ROM `dpram` has a registered (1-tick-late) read; at 1-tick cycles the CPU sampled the previous address's byte. Fix: `rtl/dpram.sv` gained a `sim_async_a` parameter exposing a combinational read mirror (`q_a_comb`; default 0, so synthesized instances keep BRAM inference), and `vsim/sim.v` muxes the CPU read byte by live `accel_active` — exactly mirroring the FPGA's accel_r datapath selection. Native MUST keep the registered path: an always-comb read shifted HDD DMA readback timing and moved the GS/OS boot progress bar (regression diff). With the mux, sim at speed 4 passes the full MMU test suite (1A/1A ALL TESTS PASSED at 14.32 MHz).
+---
 
-**Regression caveat:** GS/OS boot writes to `gsos.hdv`, so any speed-4 (or native) boot run mutates the disk image and can shift the blessed frame-320 progress-bar screenshot by one notch. The 10/10 all-pass run was done with all RTL fixes BEFORE the disk was touched; later GS/OS "failures" are disk-state drift, not RTL. Re-bless after confirming two consecutive native boots produce identical screenshots.
+## 1. Background
 
-## 1. History
+The 14.32 MHz step (1-tick fast cycle, `fast_thresh = 0`) was first enabled in
+682a767 (booted GS/OS, timing met) and reverted in e95310a (2026-07-03):
+"crashes into the ROM self-test under load." That revert predated four
+independently crash-causing fixes (sdram_cache mem_ack CDC 31fbf1a, LC phi2
+ladder 7b98fde, IWM hold-off dc6f254, per-slot delay revert 5f76880), so the
+original evidence was contaminated — but a fresh analysis of the RTL at a
+1-tick cycle found real structural problems, and fixing them surfaced more.
 
-The 14.32 MHz step (1-tick fast cycle, `fast_thresh = 0`) was enabled once and reverted:
+**The governing constraint at 1 tick:** the CPU enable is
+`EN = RDY_IN & CE`; `ph2_en` (CE) is registered, decided one edge before the
+cycle's address exists, so **the combinational RDY path is the only control
+that can react to the current cycle's address**. Every fix below either uses
+RDY or arranges for registered state to change only at cycle boundaries.
 
-- **682a767** — OSD 14.3 MHz enabled; boots GS/OS to desktop on DE10-Nano, static timing met (+0.525ns).
-- **e95310a** (2026-07-03) — reverted: "boots to the GS/OS desktop and passes static timing but **crashes into the ROM self-test under load** — a cycle-level race the 2-tick (7.16 MHz) step avoids by having a full extra CLK_14M tick of slack for the posted SDRAM write / miss-stall to settle." OSD clamped to step 3 (7.16); 14.3 left sim-only.
+## 2. The six problems
 
-**The revert predates several major bug fixes**, each of which independently causes "crashes under load at high speed" and contaminated the original 14.3 test:
+### A. Write channel silently drops writes (the original corruption)
+The ch0 write post was fire-and-forget (`wr_req` toggled without checking
+`wr_ack`). One controller write takes ~9 clk_mem ≈ 78.6ns; a 1-tick CPU can
+commit one write per 69.8ns (the 65C816 emits up to 4 back-to-back write
+cycles on interrupt entry). A queued toggle landing mid-service is absorbed by
+`ack0 <= req0` — the write never reaches SDRAM, and the cache snoop masks the
+loss until eviction: delayed, load-dependent corruption. 7.16 has ~2× headroom.
+**Fix:** `wr_pending` (2-FF-synced `wr_ack`) stalls an accelerated fastram
+write through `mem_stall`/RDY; post and snoop gated identically.
+**Proof:** `tb_wstream` — pre-fix bridge loses 29 words to SDRAM
+(interrupt-push patterns swept across refresh phase); with back-pressure
+1239/1239 clean, including a direct chip-memory compare immune to snoop
+masking.
 
-| Commit | Fix | Landed after revert? |
-|--------|-----|---------------------|
-| 31fbf1a | `sdram_cache` mem_ack CDC metastability (2-FF sync) — caused intermittent 7.16 boot crashes by itself | yes |
-| 7b98fde | LC ladder phi0→phi2 gating — the flaky 7MHz "bad memory" | yes |
-| dc6f254 | ZipGS IWM hold-off (native speed around floppy access) | yes |
-| 5f76880 | Per-slot delay revert (7.2 MHz crash/beep) | yes |
+### B. Slow/fast classification one edge late
+The `slow_class_now` fire-hold (which saved 7.16) has no spare edge at 1 tick:
+the enable is already high when the address appears, so the first access of
+every slow run (I/O, E0/E1, shadowed write, slot) would complete as a 69ns
+fast cycle — wrong Mega II sync timing, stale data from registered-output
+devices. **Fix:** `fast_escape` gates the `ph2_en` *output* combinationally;
+the suppressed access stays uncommitted and the registered `slowMem` reroutes
+it to a proper sync cycle. Provably inert at native and at ≥2-tick steps.
 
-So the observed instability had multiple since-fixed contributors. However, a fresh read of the current RTL at a 1-tick cycle finds **three live structural problems**. Problem A is almost certainly the primary killer.
+### C. Cache snoop lands one cycle after the write
+A 1-tick read of the just-written address commits on the same edge the snoop
+updates the array, sampling pre-write data. **Fix:** during the one `wr_stb`
+cycle, the pending write's byte lanes are forwarded combinationally into
+`cpu_data_now`.
 
-## 2. Clocking facts (baseline for the analysis)
+### D. (Simulator) instant-BRAM fastram is registered-read
+e95310a's "14.3 works in sim" was an artifact: the sim's `dpram` read is one
+tick late, so `--speed 4` actually BRK-looped at reset once properly exercised.
+**Fix:** `dpram sim_async_a` comb read mirror (default off — synthesized
+instances keep BRAM inference), muxed in `sim.v` by live `accel_active`,
+mirroring the FPGA datapath selection. Native keeps the registered path — an
+always-comb read shifted HDD-DMA readback timing and broke GS/OS regression
+byte-identity.
 
-- `clk_sys` = 14.318 MHz (PLL outclk_4); `clk_mem` = 114.5 MHz (8× clk_sys, same PLL).
-- At step 4, `clock_divider` fires `ph2_en` on **every** clk_sys edge — every tick is a full CPU cycle.
-- CPU enable: `EN = RDY_IN & CE` (P65C816.sv:117). `RDY_IN = ~hdd_dma & ~mem_stall` (iigs.sv:2004). RDY is **combinational** into the enable — it is the only control that can act within the same 1-tick cycle. Everything registered (including `ph2_en` itself) is decided one cycle before the cycle's address exists.
-- Accelerated read path (already validated at 7.16): burst-8 line fill (`sdram_burst` ch1) → 8-line `sdram_cache`, combinational `hit_now`/`cpu_data_now`, `mem_stall = accel_r & ~we & (fastram_ce|rom_ce) & ~cache_hit_now` (Apple-IIgs.sv:402). Miss stalls are self-covering at any speed — **reads are not the problem**.
+### E. Speed transitions shorten the in-flight cycle (hold-off expiry)
+`fast_thresh` reverts combinationally when an IWM hold-off expires or HDD-DMA
+ends; the divider's in-flight fire compare snapped to the accelerated value
+while the datapath select `accel_r` (latched at phi2) was still native →
+1-tick reads through the never-stalling, **cold** ch3 path (`nat_data` doesn't
+launch while accelerated). Boot toggles hold-offs on every floppy scan and HDD
+sector; each expiry was a corruption roulette spin. Found on hardware as a
+one-byte code corruption (monitor forensics: `$09/3924` read `$85` instead of
+`$29`, healed by cache eviction — cache/SDRAM divergence), then reproduced
+deterministically by the `make SDRAM=sim` coherency checker
+(`SDRAMSIM_VIOLATION addr=ff59be … accel_r=0` right after the boot floppy-scan
+hold-off). **Fix:** `eff_thresh` is latched in clock_divider on each gated
+`ph2_en` fire — the same edge Apple-IIgs.sv latches `accel_r` — so cycle
+length and datapath select change as a matched pair and no in-flight cycle can
+shorten. `fast_escape` keys off the latched value.
 
-## 3. Problem A (smoking gun): SDRAM write channel silently drops writes
+### F. Cold ch3 after a fast→native switch (exposed by the E fix)
+With lengths and datapath correctly paired, the *first* native-path reads
+after a fast→native switch still lose: ch3 wasn't launching while accelerated
+and its first request can queue behind an in-flight line fill. Deterministic
+boot wedge: at the drive scan's first IWM access, `BIT $C0ED`'s operands
+fetched stale (executed as `BIT $2C8F`), skipping a Sony-drive register
+access, after which the ROM's IWM handshake loop (`FF:4720 STY $C0EF /
+EOR $C0EE / BNE`) spins forever — "stuck at the splash." Identical in sim and
+on hardware; the sim violation showed `hit_now=1` (the cache had the correct
+bytes; the mux pointed at cold `nat_data`). **Fix:** a 2-cycle
+**datapath-switch guard** — after any `accel_r` change, reads keep flowing
+through the cache path (`use_cache_path` on the data mux, the stall rule, and
+the fill strobe; comb-hit + stall-on-miss is correct at any cycle length)
+while ch3 warms up. Native-only operation never transitions, so the guard is
+structurally inert there.
 
-**Where:** `Apple-IIgs.sv:431-437` (post), `rtl/sdram_burst.sv:150-205` (service/ack).
+## 3. Non-problems (checked and cleared at 1 tick)
 
-**Mechanism:**
+- **Write-vs-fill ordering:** ch0 has top arbitration priority and a fill
+  request launches ≥1 clk_sys after a posted write — writes always dispatch
+  first, so fills always contain earlier committed writes.
+- **Read misses:** comb `mem_stall` → RDY is self-covering at every step.
+- **HDD DMA / IWM / floppy:** forced to native pace; the CPU is RDY-held for
+  the whole DMA, so DMA never overlaps CPU cache activity.
+- **I/O side-effect repeats during stalls:** the LC $C08x ladder is phi2-gated
+  and stall-guarded (7b98fde); I/O classifies slow, so phi2 fires once per
+  access.
+- **ROM self-test error 05014000/05012B00** at 14.3/7.16 is EXPECTED, not a
+  bug: test 05 is the FPI speed test (`diag.tests.asm:584` FPI_SPEED), which
+  counts loop iterations per VERTCNT line against fixed limits ($19/$1A). Any
+  accelerator fails it; the measured values ($40 at 14.3, $2B at 7.16) even
+  confirm the speed steps are real.
 
-- The glue posts a write by toggling `wr_req` on every `phi2 & we & fastram_ce` — **it never checks `wr_ack`** (no back-pressure).
-- In `sdram_burst`, one write occupies IDLE-dispatch + states 1..8 (`STATE_LAST_WR`) ≈ **9 clk_mem ≈ 78.6ns** of controller throughput. The ack is `ack0 <= req0` at `STATE_CONT` (line 195) — it samples the **live** req0.
-- At 14.3 MHz the CPU can issue one write per **69.8ns** — faster than the controller can retire them. The 65C816 emits up to **4 back-to-back write cycles** (native-mode interrupt entry pushes PB, PCH, PCL, P consecutively; also MVN/MVP, stack-heavy code).
-- When a queued `wr_req` toggle lands while a prior write is still in flight — guaranteed during write streaks, and made worse when a refresh (~70ns) or a burst line fill (~166ns) delays dispatch — `ack0 <= req0` captures the *post-toggle* value: **the queued write is acknowledged without ever reaching SDRAM**, and its data in `wr_addr/wr_din` may already be overwritten by the next post.
+## 4. Validation summary
 
-**Why it presents as "boots, then crashes under load":** the cache **write-snoop still applies the dropped write** to any cached line, so execution continues correctly — until that line is evicted (cache is only 8 lines × 16 bytes) and refetched from SDRAM, returning a stale byte somewhere unrelated, much later. Delayed, load-dependent memory corruption. A RAM self-test under interrupt load is the perfect trigger.
+- `vsim/sdram_tb/tb_wstream.sv` (iverilog, `build_wstream.sh`): 1-tick bridge
+  mirror; reproduces A pre-fix, clean post-fix. `tb_accel` 36/36, `tb_ch3`
+  53/53.
+- `make SDRAM=sim` (see §5): 0 coherency violations through cold boot at
+  speed 4, HPS-late speed arrival (`--speed-after` at multiple ticks), and
+  warm reset; GS/OS boots. The pre-fix builds show the E and F violations
+  deterministically.
+- Native regression 10/10 byte-identical after every change (all fixes are
+  structurally inert with the accelerator off).
+- Hardware (DE10-Nano, build ec729648): GS/OS desktop at pure 14.32 MHz,
+  3/3 cold boots pixel-identical + 3-minute soak; 7.16 unchanged-stable.
+- Benchmarks (Alan's accelerator comparison sheet): MiSTer at 14.3 lands in
+  real TWGS-15/ZipGS-16 territory (Sieve 99 vs 99/98), 6–20% behind real
+  14–16 MHz cards on write-heavy tests — consistent with 1 MHz I/O syncs plus
+  write back-pressure.
 
-**Why 7.16 is immune:** at 139.7ns per write there is ~2× headroom over the 78.6ns service time; even refresh collisions don't accumulate.
+## 5. Tooling built during the hunt (permanent)
 
-## 4. Problem B: fast/sync speed classification is one cycle too late at 1 tick
+- **`make SDRAM=sim`** — the Vemu sim with the PRODUCTION `sdram_burst` +
+  `sdram_cache` + behavioral chip model, glued by a verbatim copy of the
+  Apple-IIgs.sv bridge, `clk_mem_ext` at 8× from sim_main, and a golden-model
+  coherency checker that prints `SDRAMSIM_VIOLATION` the moment any committed
+  CPU read returns stale data. Closes the "works in sim, fails on FPGA" gap
+  for the memory path (doc/sdram_accel/02). ~6× slower than the plain sim.
+- **`--speed-after <tick>:<code>`** — switches `host_speed` mid-run, modeling
+  the real MiSTer where the OSD status word arrives after the ROM is running.
+- **`--headless` fixed** — it had never clocked the video model, so
+  `count_frame` stayed 0: every frame-gated headless run silently never fired
+  its `--stop-at-frame`/`--screenshot` triggers, and screenshot copies picked
+  up stale files. `video.Clock` now runs unconditionally.
+- **`sim_bus` one-shot ioctl strobes** — `ioctl_wr` deasserts while
+  `ioctl_wait` throttles, matching HPS `data_io`; held-level strobes deadlock
+  req/ack-toggle consumers.
+- **`DEBUG_PIXEL_OVERLAY`** (Apple-IIgs.sv, ifdef'd off) — frame-latched
+  {CPU-activity counter, accel_r, mem_stall, bus address} rendered as 8×8
+  bit-blocks in the video output; readable from HDMI screenshots even when
+  the CPU is wedged. Validated by rendering in the sim.
+- **`DEBUG_DDR_TRACE`** (Apple-IIgs.sv, ifdef'd off) — wickerwaka's
+  `ddr_trace` (rtl/ddr_trace.v) on the otherwise-unused DDRAM port: on-change
+  bus records to HPS DDR3 at 0x30000000 (verified free on this system:
+  Linux `mem=511M`, scaler fb at 0x20000000); decode with
+  `tools/decode_ddr_trace.py`. **Caveat:** in the one hardware attempt, no DDR
+  writes appeared even with `trigger=1` — the ram1 bridge path needs its own
+  debugging before this tool can be relied on. Read `/dev/mem` via mmap only
+  (`devmem` / python mmap / wickerwaka's `devmem_read.py`); plain
+  `dd`/`read()`/`write()` are blocked by this kernel.
 
-**Where:** `rtl/clock_divider.v` — `slow_class_now` (line 93), the fire-hold (line 559-560), registered `slowMem`/`we_reg`.
+## 6. Debugging lessons (each cost real time)
 
-**Mechanism:** `ph2_en` is a registered enable. The enable that ends cycle N is decided at the edge *before* cycle N's address is valid. The `slow_class_now` combinational mirror was added precisely because at 2-tick cycles the registered `slowMem` landed on the cycle-ending edge — but at **1-tick cycles even the comb mirror has no spare edge**: the fire it would suppress was already committed one edge earlier.
+1. **MiSTer Main resolves an MGL's `<rbf>` from `/media/fat` (SD root) BEFORE
+   `_Computer/`.** A stale root RBF shadowed every `_Computer/` deploy for a
+   full day, faking "the fix doesn't work on hardware" and making all debug
+   instrumentation invisible (while the fit reports truthfully showed the
+   logic present). Deploy to the root (or both), and when instrumentation
+   looks dead, verify with an unmistakable marker build (e.g. a solid-color
+   video channel).
+2. **`--headless` + frame-gated automation had never worked** (see §5); a
+   `--stop-at-frame` run that exits 124 means the frame gate never fired —
+   suspect the gate before suspecting sim speed, and never trust a copied
+   screenshot without confirming the run reached its stop frame.
+3. **GS/OS boot writes to gsos.hdv.** Any boot run mutates the image and can
+   shift the blessed frame-320 regression screenshot by one notch. Verify two
+   consecutive native boots produce identical screenshots, then re-bless —
+   don't chase RTL.
+4. **Zip software displays % of rated speed** (rated = 7.16), so the control
+   panel reads ~6.7 MHz even at a true 14.3 — benchmarks are the real
+   speedometer. The on-disk ZipGS.CDev also re-clocks the machine to its
+   saved speed during GS/OS boot; test pure 14.3 with the OSD "ZipGS
+   Registers: Disabled".
+5. **Live-monitor forensics work well remotely:** a BRK wedge drops to the
+   monitor; a human typing `<bank>/<addr>.<addr>` dumps plus a disk-image
+   ground-truth search (`grep` the code bytes in the .hdv) pinpointed the E
+   corruption to a single byte, and an eviction-sweep dump (reading 1.5KB
+   through the cache) proved cache/SDRAM divergence.
+6. **Verify which file the board actually loaded** — this project has now hit
+   the stale-bitstream trap twice (see also `floppy35-72mhz` memory);
+   `find /media/fat -maxdepth 3 -iname '*apple*gs*.rbf'` first.
 
-**Consequence:** the *first* access of every slow-classified run — I/O ($C0xx), banks E0/E1, shadowed video writes, slot space — completes as a 69ns fast cycle: wrong Mega II sync timing, and stale data from any device with a registered read path (slow-RAM BRAM, etc.). The registered `slowMem` then asserts one cycle late and imposes a spurious sync on the *following* access. Additionally `we_reg` is misaligned by a full cycle at 1-tick, misclassifying shadowed writes.
+## 7. Remaining known items
 
-Subsequent accesses in a slow run classify correctly (predecessor is same class), which is why the machine could still boot in the 682a767 test — only run boundaries are wrong.
-
-## 5. Problem C: cache write-snoop lands one tick late
-
-**Where:** `Apple-IIgs.sv:440` (`snoop_stb <= phi2 & we & fastram_ce`), `rtl/sdram_cache.sv:119-126`.
-
-**Mechanism:** the snoop strobe is registered one clk after the write commits, and the cache data array updates at the end of the *following* tick (nonblocking). At 1-tick cycles the next CPU read completes on that same edge — a cached read of the just-written address one cycle after the write returns **pre-write data**. The window is narrow (read-same-address exactly one cycle after a write: self-modifying code writing the next instruction byte, tight RMW-adjacent patterns), so this is a secondary contributor. At 2-tick cycles the snoop always lands before the read's sample point.
-
-## 6. Non-problems (checked, OK at 1 tick)
-
-- **Write-vs-read-fill ordering:** ch0 (writes) has top arbitration priority in `sdram_burst`, and a miss's `mem_req` launches ≥1 clk_sys after the write's `wr_req` — the write always dispatches first. The "write before read of following cycle" invariant holds.
-- **Read misses:** stall via comb `mem_stall` → RDY; self-covering at every step.
-- **HDD DMA / IWM / floppy:** already forced to native pace (`dma_active`, IWM hold-off).
-- **I/O side-effect repeats during stalls:** the LC $C08x ladder is phi2-gated and stall-guarded (7b98fde); I/O classifies slow so phi2 fires once per access (modulo Problem B's run-boundary escape).
-
-## 7. Fix plan (in order)
-
-1. **Write back-pressure (fixes A).** Add a `wr_pending` term (wr_req vs wr_ack, ack synced into clk_sys) to the CPU stall: when the current cycle is a fastram **write** and the previous posted write has not been acked, hold RDY low so the post never overruns the controller. Reuses the exact `mem_stall` → `RDY_IN` structure already validated at 7.16. Cost: an occasional 1-tick stall during write streaks; zero effect at native (a write completes in well under 5 ticks).
-   - Alternative considered: a small write FIFO / write-combining ("burst writes"). Correct but more machinery than needed — the sustained deficit is only 69.8 vs 78.6ns and only during short streaks. Back-pressure is sufficient and simpler. A 2-deep FIFO remains an option if benchmarks show the stalls matter.
-2. **Snoop forwarding (fixes C).** In `sdram_cache`, combinationally compare the pending write (`wr_addr/wr_din/wr_be`, plus the not-yet-applied `snoop_stb` cycle) against `cpu_addr` and forward matching bytes into `cpu_data_now`. Byte-granular mux; no state change.
-3. **Comb slow-classification hold (fixes B).** Export a combinational "this access classifies slow but the fast counter would fire" signal from `clock_divider` into the CPU RDY path (alongside `mem_stall`), so a slow-classified access at 1-tick is *held* rather than escaping fast; the registered `slowMem` then reroutes it to a proper sync cycle on the next edge. Align the `we_reg` term (use live `we` in the comb path — already the case in `slow_class_now`).
-   - Deliberately **not** making `ph2_en` itself combinational: a comb enable would ripple into every ph2 consumer in iigs.sv; the RDY-stall reuses the already-proven structure. Must remain a provable no-op at `fast_thresh == 4` (native) — regression must stay byte-identical.
-4. **Unclamp step 4.** `Apple-IIgs.sv:210` clamps `host_speed` to 3; `zipgs_regs.sv` caps software speed at code 3 (7.16 = Zip's rated max — keep that; 14.3 stays an OSD-only overclock as before). Restore the OSD entry removed in e95310a.
-5. **Verify.**
-   - Sim: `regression.sh` byte-identical at native; `--speed 4` boot + selftest + mmutest; targeted TB for the write back-pressure (consecutive-write streak with refresh collision).
-   - Timing: the new comb terms feed the same addr→MMU→classify→RDY path that closed at +0.525ns — check slack after each fix.
-   - Hardware: rebuild, verify board md5 vs output_files (see floppy35-72mhz lesson), then soak at 14.3: GS/OS desktop, ROM self-test loop, interrupt-heavy titles. Note this retest also carries the post-revert CDC (31fbf1a) and LC (7b98fde) fixes for the first time at 14.3.
-
-## 8. Problem E (found on hardware 2026-07-07, root-caused in the new SDRAM-accurate sim):
-## speed transitions shorten the in-flight cycle before the datapath catches up
-
-**Hardware symptom:** GS/OS System 6.0.1 crashes during boot at sustained 14.3 (Zip registers
-disabled; with them enabled the on-disk ZipGS.CDev re-clocks to 7.16 mid-boot, masking it).
-Live-monitor forensics: BRK at $09/3925; exactly one byte of loaded code wrong vs the disk
-($3924: $29→$85); the byte HEALED after a cache-eviction sweep — cache/SDRAM divergence.
-
-**Root cause (caught by the `make SDRAM=sim` coherency checker, deterministic at boot):**
-`fast_thresh` reverts combinationally when an IWM hold-off expires / HDD-DMA ends. The clock
-divider's in-flight fire compare (`ph2_counter >= eff_thresh`) snaps to the accelerated value
-immediately, producing 1-tick cycles while the top-level datapath select `accel_r` (latched at
-phi2) is still NATIVE — so reads run 1-tick through the never-stalling ch3 path, whose
-`nat_data` register is cold (no ch3 launches happen while accelerated). Stale bytes, no stall:
-`SDRAMSIM_VIOLATION addr=ff59be got=fa exp=8f accel_r=0` right after the boot floppy-scan
-hold-off. Boot toggles hold-offs constantly (floppy scan, every HDD sector), each expiry a
-roulette spin — matches "boots sometimes, corrupts under disk-heavy load".
-
-**Fix:** latch `eff_thresh` in clock_divider on each (gated) `ph2_en` fire — the same edge
-where Apple-IIgs.sv latches `accel_r` — so cycle length and datapath select always change as
-a matched pair and no in-flight cycle can shorten. `fast_escape` keys off the latched value
-too. Native-neutral by construction (latch value is always 4 at native).
-
-**Problem F (introduced by the E fix, caught on HW + reproduced deterministically in sim):**
-with cycle length and `accel_r` now correctly paired, the FIRST native-path reads right
-after a fast→native switch still lose: ch3 wasn't launching while accelerated (`nat_data`
-cold) and its first request can queue behind an in-flight line fill. Boot wedge, 100%
-reproducible: at the drive scan's first IWM access (`BIT $C0E8` → hold-off → switch), the
-next instruction's operands fetched stale (`BIT $C0ED` executed as `BIT $2C8F`), skipping a
-Sony-drive register access, after which the ROM's IWM handshake loop (`FF:4720 STY $C0EF /
-EOR $C0EE / BNE`) spins forever → "stuck at the splash" at 14.3 on hardware, identical wedge
-in `make SDRAM=sim` (violation showed `accel_r=0 hit_now=1` — the cache had the right bytes;
-the mux pointed at cold nat_data).
-
-**Fix (datapath-switch guard):** for the first 2 committed cycles after any `accel_r`
-change, keep serving reads through the CACHE path — `use_cache_path = accel_r ||
-guard_counter != 0` applied to the data mux, the stall rule, and the fill strobe — comb-hit
-+ stall-on-miss is correct at any cycle length, and ch3 warms up underneath. Native-only
-operation never transitions, so the guard is structurally inert there. Verified in the
-SDRAM-accurate sim: 0 violations, the drive scan proceeds, HDD boot engages at speed 4.
-
-**HARDWARE CONFIRMED (2026-07-08 00:52):** the latch+guard build (ec729648) boots GS/OS to
-the Finder desktop at PURE 14.32 MHz (Zip registers disabled), 3/3 cold boots pixel-identical
-plus a 3-minute soak. Note: an intervening debugging day was consumed by a **deployment
-trap** — a stale RBF at `/media/fat/Apple-IIgs.rbf` (the SD root) shadowed every deploy to
-`_Computer/`, because MiSTer Main resolves an MGL's `<rbf>` from the root first. Every "the
-guard doesn't work on HW" observation and every "invisible debug instrumentation" mystery
-was that. RULE: deploy to the root path (or both) and verify with an unmistakable marker
-build when instrumentation seems dead. Side deliverables of the hunt, all kept: the
-`DEBUG_PIXEL_OVERLAY` on-screen state overlay and `DEBUG_DDR_TRACE` (wickerwaka ddr_trace)
-deep bus capture in Apple-IIgs.sv (ifdef'd off; note ddr_trace produced no DDR writes through
-this framework's ram1 port even with trigger=1 — debug that before relying on it), the
-`--speed-after` sim option, the sim_bus one-shot ioctl strobes, and the `--headless`
-video-clock fix in sim_main.
-
-**Tooling built for this (permanent):** `make SDRAM=sim` integrates the production
-`sdram_burst` + `sdram_cache` + behavioral chip model into the Vemu sim with a verbatim copy
-of the Apple-IIgs.sv bridge, an 8x clk_mem from sim_main, and a golden-model coherency
-checker (`SDRAMSIM_VIOLATION` lines). Also fixed `sim_bus.cpp` to emit HPS-accurate one-shot
-`ioctl_wr` strobes (was held-level, which deadlocks req/ack-toggle consumers). This closes
-the "works in sim, fails on FPGA" gap called out in doc/sdram_accel/02_sim_model_spec.md.
-
-## 9. Expected outcome
-
-Problems A–C are all consistent with the e95310a symptom, and A alone fully explains "boots to desktop, corrupts memory under load." With back-pressure, snoop forwarding, and the classification hold in place — plus the since-landed CDC and LC fixes — there is no remaining *known* mechanism by which a 1-tick cycle differs unsafely from a 2-tick cycle: every data deadline is either met combinationally or covered by an RDY stall.
+- ddr_trace ram1 writes (§5 caveat) — debug if deep HW tracing is ever needed.
+- The Zip CDA/CDev "% of rated" display clamp at step 4 — cosmetic.
+- $C05C per-slot delay is stored but not applied (all slots slow when
+  accelerated — matches Zip defaults).
+- TWGS detection shim (fake 'TWGS' table + $C06A-$C06D) — follow-on for
+  TWGS-aware titles.

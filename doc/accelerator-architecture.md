@@ -378,6 +378,7 @@ at ≥2-tick cycles and fatal at 1-tick:
 | C | snoop lands one cycle after the write → 1-tick read-after-write sampled pre-write array | comb write-forwarding during the `wr_stb` cycle |
 | D | (sim) instant-BRAM fastram has a registered read, 1 tick late → sim "worked" at 14.3 only as an artifact, then instantly BRK-looped once modeled properly | `dpram sim_async_a` comb mirror muxed by live `accel_active`; and the real fix: `make SDRAM=sim` (§8) |
 | E | speed transitions (IWM hold-off expiry, DMA end) shortened the in-flight cycle combinationally while `accel_r` was still native → 1-tick reads through cold, never-stalling ch3 | latched `eff_thresh` paired with `accel_r` (§2.2) |
+| F | after a fast→native switch, the first ch3 reads sample cold `nat_data` (no launches while accelerated; first ack can queue behind a fill) → deterministic IWM-handshake boot wedge | 2-cycle datapath-switch guard: reads stay on the cache path (`use_cache_path`) while ch3 warms up (§4.1) |
 
 Also fixed en route: the fill-ack CDC metastability (§5.2), and the LC
 $C08x ladder being phi0- instead of phi2-gated (see `lc-register-audit`).
@@ -401,10 +402,20 @@ $C08x ladder being phi0- instead of phi2-gated (see `lc-register-audit`).
   sim_main. A **golden-model coherency checker** mirrors every committed
   byte and prints `SDRAMSIM_VIOLATION addr/got/exp/accel_r/hit_now/...` the
   moment any committed CPU read returns stale data. This is the tool that
-  root-caused bug E deterministically, and closes the "works in sim, fails
-  on FPGA" gap for the memory path. Note `sim_bus.cpp` now emits
+  root-caused bugs E and F deterministically, and closes the "works in sim,
+  fails on FPGA" gap for the memory path. Note `sim_bus.cpp` now emits
   HPS-accurate one-shot `ioctl_wr` strobes (held-level breaks req/ack
-  consumers).
+  consumers), and sim_main's `--headless` mode now clocks the video model
+  (its frame gates had never worked).
+- **On-hardware probes** (Apple-IIgs.sv, ifdef'd off): `DEBUG_PIXEL_OVERLAY`
+  renders frame-latched CPU/bus state as bit-blocks in the video output
+  (readable from HDMI screenshots even when the CPU is wedged);
+  `DEBUG_DDR_TRACE` streams on-change bus records to HPS DDR3 at 0x30000000
+  via wickerwaka's `rtl/ddr_trace.v` (decode: `tools/decode_ddr_trace.py`;
+  caveat: no DDR writes were observed through this framework's ram1 port in
+  the one hardware attempt — debug before relying on it). Deployment rule
+  learned the hard way: MiSTer Main resolves an MGL's `<rbf>` from the SD
+  ROOT (`/media/fat/`) before `_Computer/` — deploy debug builds there.
 - **Regression**: `vsim/regression.sh` must stay byte-identical at native —
   every accelerator feature is gated to be a structural no-op with the
   accelerator off. (Gotcha: GS/OS boot *writes* to gsos.hdv; boot

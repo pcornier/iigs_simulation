@@ -6,14 +6,20 @@ latency, tRCD, tRC, refresh, burst, the req/ack round trip) simply doesn't exist
 CPU "works" in sim and then fails on real FPGA. Every claim in doc `01_*` about timing is
 therefore **unverifiable in the current sim**. This spec fixes that.
 
-Status: PARTIALLY IMPLEMENTED + VERIFIED.
+Status: FULLY IMPLEMENTED (2026-07-07, `make SDRAM=sim`).
 - A **standalone Verilator testbench is built and passing**: `vsim/sdram_tb/` drives the REAL
   `rtl/sdram.sv` against the behavioral chip model `sdram_sim_chip.sv`. Write/read-back
   integrity passes across banks/rows/cols, single-word read accounting is correct, and the
   chip model's timing assertions (tRCD/tRP/tRC/no-open-row/CAS-in-LMR) stay clean. See
   "Results" at the end.
-- Full integration into the **main Vemu sim is NOT done** and is more invasive than first
-  thought — see "Main-sim integration: reality check" below.
+- **Main-sim integration is DONE**: `make SDRAM=sim` builds the Vemu sim with the production
+  `sdram_burst` + `sdram_cache` against `sdram_sim_chip.sv`, glued by a verbatim copy of the
+  Apple-IIgs.sv bridge, with `clk_mem_ext` driven at 8× by sim_main and a golden-model
+  coherency checker (`SDRAMSIM_VIOLATION`). It deterministically root-caused the two 14.3 MHz
+  speed-transition bugs that hardware exposed — exactly the "works in sim, fails on FPGA" gap
+  this spec predicted. See `doc/zipgs-14mhz-plan.md` §5 and `vsim/Makefile` (`SDRAM=sim`).
+  §8 below is retained as the original feasibility analysis (its concerns were real: the
+  8× eval loop, the bridge replication, and ch2 ROM upload were each their own bug hunt).
 
 ---
 
@@ -193,7 +199,7 @@ What this validated / fixed along the way:
   latches at STATE_READY; (c) the burst path issued a spurious extra beat for single-word
   reads — now beat 0 is issued at the command and beats 2..N only when `burst_len>1`.
 
-## 8. Main-sim integration: reality check (NOT done)
+## 8. Main-sim integration: reality check (historical — since implemented, see Status)
 
 Putting the real controller into the *main* Vemu sim is more invasive than §4 implied:
 - `vsim/sim.v:195` ties **all clocks to CLK_14M** (`clk_sys=CLK_14M`; the core gets
