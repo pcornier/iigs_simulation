@@ -2696,8 +2696,10 @@ end
 wire acc_spkr  = phi2 && IO && (addr_bef[7:0] == 8'h30);   // $C030 speaker toggle
 wire acc_ptrig = phi2 && IO && (addr_bef[7:4] == 4'h7);    // $C070-$C07F paddle trigger
 wire acc_pdl   = phi2 && IO && (addr_bef[7:2] == 6'h19);   // $C064-$C067 paddle read
+wire acc_ctr   = phi2 && IO && (addr_bef[7:1] == 7'h17);   // $C02E/$C02F video counter
 reg [15:0] beep_holdoff;
 reg [15:0] pdl_holdoff;
+reg [15:0] counter_holdoff;
 always @(posedge CLK_14M) begin
   if (reset)                      beep_holdoff <= 16'd0;
   else if (acc_spkr)              beep_holdoff <= 16'd28636;   // 2 ms @ 14.318 MHz
@@ -2706,13 +2708,20 @@ always @(posedge CLK_14M) begin
   if (reset)                      pdl_holdoff <= 16'd0;
   else if (acc_ptrig | acc_pdl)   pdl_holdoff <= 16'd57272;    // 4 ms (full paddle scan)
   else if (pdl_holdoff != 16'd0)  pdl_holdoff <= pdl_holdoff - 16'd1;
+
+  // ZipGS "Counter Delay" (SW1/4): 1 MHz around video-counter reads so the IIgs
+  // self-test 05 passes and beam-raced counter loops stay correctly timed.
+  if (reset)                         counter_holdoff <= 16'd0;
+  else if (acc_ctr)                  counter_holdoff <= 16'd14318; // 1 ms, retriggered by the poll loop
+  else if (counter_holdoff != 16'd0) counter_holdoff <= counter_holdoff - 16'd1;
 end
 // Mode gate (OSD): Auto=always, Off=never, ZipGS=follow $C05C speaker-delay bit.
 wire slowdown_en = (beep_fix_mode == 2'd1) ? 1'b0 :               // Off
                    (beep_fix_mode == 2'd2) ? zip_slot_delay[0] :  // ZipGS-reg
                                              1'b1;                 // Auto (default)
 wire io_slow_holdoff = slowdown_en &&
-                       ((beep_holdoff != 16'd0) || (pdl_holdoff != 16'd0));
+                       ((beep_holdoff != 16'd0) || (pdl_holdoff != 16'd0)
+                        || (counter_holdoff != 16'd0));
 
 // Combine the two accelerator front-ends into the one speed engine (both can
 // be active: Zip @ $C05x, TWGS @ bank $BC -- disjoint). Fastest-wins: engage if

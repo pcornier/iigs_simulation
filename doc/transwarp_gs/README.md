@@ -340,6 +340,7 @@ forced-native after any IWM touch — generalized to more addresses.)
 | **Speaker** | `$C030` (SPKR) | tone pitch/length = delay loop between toggles | ~1–2 ms | each `$C030` |
 | **Paddle trigger** | `$C070-$C07F` (PTRIG) | starts the analog one-shots; read loop then counts cycles | ~3–4 ms | `$C070` + the reads |
 | **Paddle read** | `$C064-$C067` (PADDL0-3) | count until bit7 flips = stick position | (extends paddle window) | each `$C064-7` |
+| **Video counter** | `$C02E/$C02F` (VERTCNT/HORIZCNT) | timing loops read the beam; IIgs self-test 05 times it (ZipGS SW1/4) | ~1 ms *(done: `counter_holdoff`)* | each `$C02E/F` read |
 | **Disk / IWM** | `$C0E0-$C0EF` (+3.5/SmartPort) | bit-cell + motor timing is cycle-counted | ~2 ms *(done: `iwm_holdoff`)* | each IWM touch, motor-on |
 | **Interrupt service** | *(not an address)* IRQ/NMI entry → RTI | ISRs (VBL, mouse, players) assume real-time | hold across the ISR | — |
 
@@ -378,10 +379,13 @@ accelerating), arm it unconditionally.
 
 #### ✅ Implemented (branch `transwarp`)
 
-Landed in `rtl/iigs.sv`: `$C030` (speaker, 2 ms) and `$C070-$C07F` + `$C064-$C067`
-(paddle, 4 ms) retriggerable native-speed windows (`beep_holdoff` / `pdl_holdoff`),
-folded into `fast_thresh` via `io_slow_holdoff`. Because Auto/Off/ZipGS all
-matter, the on/off control is a **3-way OSD option** "Beep/Paddle Slowdown"
+Landed in `rtl/iigs.sv`: `$C030` (speaker, 2 ms), `$C070-$C07F` + `$C064-$C067`
+(paddle, 4 ms), and `$C02E/$C02F` (video counter / ZipGS SW1/4, 1 ms)
+retriggerable native-speed windows (`beep_holdoff` / `pdl_holdoff` /
+`counter_holdoff`), folded into `fast_thresh` via `io_slow_holdoff`. The full
+ZipGS DIP-switch mapping and emulator comparison live in
+[`../zipgs_compatibility.md`](../zipgs_compatibility.md). Because Auto/Off/ZipGS
+all matter, the on/off control is a **3-way OSD option** "Beep/Paddle Slowdown"
 (`Apple-IIgs.sv` `status[17:16]` → `beep_fix_mode`):
 
 | Mode | `beep_fix_mode` | Behavior |

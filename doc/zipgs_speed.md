@@ -65,6 +65,11 @@ All three are no-ops at the native step — native timing is bit-identical
 
 ## Limits / next steps
 
+- **Compatibility delays** (speaker/paddle/counter slowdown, CPS-follow,
+  self-test, DIP-switch mapping, emulator comparison) are documented separately
+  in [`zipgs_compatibility.md`](zipgs_compatibility.md). Speaker/paddle/counter
+  windows are implemented (branch `transwarp`); CPS-follow (Apple-keys) and
+  per-slot delay remain.
 - **14.32 MHz (step 4) works on hardware** (2026-07-08): GS/OS desktop at
   pure 14.3, 3/3 cold boots + soak, after six 1-tick fixes (write
   back-pressure, classification escape, snoop forwarding, sim registered-read
