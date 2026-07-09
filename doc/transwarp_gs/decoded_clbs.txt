@@ -1,0 +1,370 @@
+Editblk AA
+Base F
+Config X:G Y:F F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A+C+D+B
+Endblk
+Editblk AB
+Base FG
+Config X:F Y:G F:B G:B Q:LATCH SET: RES: CLK:K
+Equate F = B
+Equate G = B
+Endblk
+Editblk AC
+Base FG
+Config X:G Y:Q F:B:C:Q G:B Q:FF SET: RES: CLK:K
+Equate F = B*C+B*Q+~C*Q
+Equate G = B
+Endblk
+Editblk AD
+Base FG
+Config X:G Y:F F:A:B:D G:A:B:D Q:LATCH SET: RES: CLK:K
+Equate F = A*B*~D
+Equate G = ~A*~B*D
+Endblk
+Editblk AE
+Base F
+Config X:G Y:F F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A+C+D+B
+Endblk
+Editblk AF
+Base F
+Config X:G Y:Q F:A:B:C:Q Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+~C*Q+Q*B+~A*C*~B
+Endblk
+Editblk AG
+Base FG
+Config X:Q Y:G F:B G:A:D Q:FF SET: RES: CLK:K
+Equate F = B
+Equate G = ~A*~D
+Endblk
+Editblk AH
+Base F
+Config X:F Y:G F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A+C+D+B
+Endblk
+Editblk BA
+Base F
+Config X:G Y:Q F:A:B:C:Q Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+C*Q+Q*~B+A*C*B
+Endblk
+Editblk BB
+Base FG
+Config X:G Y:F F:B:D G:A:B:D Q:LATCH SET: RES: CLK:K
+Equate F = ~B*~B*~D
+Equate G = A*~B*D
+Endblk
+Editblk BC
+Base FG
+Config X:G Y:F F:C:D G:A:B:D Q:LATCH SET: RES: CLK:K
+Equate F = ~C*D
+Equate G = A+B*D
+Endblk
+Editblk BD
+Base F
+Config X:G Y:Q F:A:B:D Q:FF SET: RES: CLK:K
+Equate F = A*B*~D
+Endblk
+Editblk BE
+Base FG
+Config X:F Y:G F:A:B:C G:A:B:C Q:LATCH SET: RES: CLK:K
+Equate F = A+B+C
+Equate G = ~A*B*~C
+Endblk
+Editblk BF
+Base F
+Config X:F Y:Q F:A:C:D Q:FF SET: RES: CLK:K
+Equate F = ~A*C*~D
+Endblk
+Editblk BG
+Base FG
+Config X:F Y:G F:B G:A:C:D Q:LATCH SET: RES: CLK:K
+Equate F = ~B*~B
+Equate G = ~A*C*D
+Endblk
+Editblk BH
+Base FGM
+Config X:Q Y:Q F:A:C:D G:Q Q:FF SET: RES: CLK:K
+Equate F = A*~C+A*~D+C*~D
+Equate G = Q
+Endblk
+Editblk CA
+Base FG
+Config X:F Y:G F:B:C:D G:B Q:LATCH SET: RES: CLK:K
+Equate F = C+B*D
+Equate G = B
+Endblk
+Editblk CB
+Base F
+Config X:Q Y:G F:A:B:C:Q Q:FF SET: RES: CLK:K
+Equate F = ~C*Q+A*C*B
+Endblk
+Editblk CC
+Base FG
+Config X:G Y:Q F:A:C:Q G:B Q:FF SET: RES: CLK:K
+Equate F = A*C+A*Q+~C*Q
+Equate G = B
+Endblk
+Editblk CD
+Base FG
+Config X:G Y:F F:A:B:D G:B:D Q:LATCH SET: RES: CLK:K
+Equate F = ~A*B*~D
+Equate G = ~B*~B*~D
+Endblk
+Editblk CE
+Base FG
+Config X:F Y:G F:A:B:C G:A:B:C Q:LATCH SET: RES: CLK:K
+Equate F = ~A*B*~C
+Equate G = A*~B*C
+Endblk
+Editblk CF
+Base F
+Config X:F Y:G F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A*C*~D*B
+Endblk
+Editblk CG
+Base FG
+Config X:G Y:F F:A:B:C G:A:C Q:LATCH SET: RES: CLK:K
+Equate F = ~A+~B+~C
+Equate G = A*~C
+Endblk
+Editblk CH
+Base FG
+Config X:Q Y:G F:A:B G:B Q:FF SET: RES: CLK:K
+Equate F = A+~B
+Equate G = B
+Endblk
+Editblk DA
+Base FGM
+Config X:Q Y:Q F:A:C:Q G:Q Q:FF SET: RES: CLK:K
+Equate F = ~A*~Q+A*C
+Equate G = Q
+Endblk
+Editblk DB
+Base FG
+Config X:G Y:F F:A:B:C G:A:C:D Q:LATCH SET: RES: CLK:K
+Equate F = ~A*B*~C
+Equate G = A*~C*D
+Endblk
+Editblk DC
+Base FG
+Config X:G Y:F F:B:C:D G:B Q:LATCH SET: RES: CLK:K
+Equate F = ~B*~C*D
+Equate G = B
+Endblk
+Editblk DD
+Base F
+Config X:G Y:F F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A+~C*D*B
+Endblk
+Editblk DE
+Base F
+Config X:F Y:G F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A*~C*D+A*D*~B
+Endblk
+Editblk DF
+Base FG
+Config X:Q Y:G F:B:C:Q G:A:D Q:FF SET: RES: CLK:K
+Equate F = ~B*Q+B*C
+Equate G = A+D
+Endblk
+Editblk DG
+Base FG
+Config X:Q Y:G F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+A*B
+Equate G = B
+Endblk
+Editblk DH
+Base FG
+Config X:G Y:Q F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+A*B
+Equate G = B
+Endblk
+Editblk EA
+Base FG
+Config X:G Y:Q F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+A*B
+Equate G = B
+Endblk
+Editblk EB
+Base FG
+Config X:Q Y:G F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+A*B
+Equate G = B
+Endblk
+Editblk EC
+Base F
+Config X:G Y:Q F:A:B:C:D Q:FF SET: RES: CLK:K
+Equate F = ~A*C*~D+~A*~D*B
+Endblk
+Editblk ED
+Base FG
+Config X:Q Y:G F:B:C:Q G:B Q:FF SET: RES: CLK:K
+Equate F = B*C+B*Q+~C*Q
+Equate G = B
+Endblk
+Editblk EE
+Base FG
+Config X:Q Y:G F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = A*B+A*Q+~B*Q
+Equate G = B
+Endblk
+Editblk EF
+Base FG
+Config X:G Y:Q F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = A*B+A*Q+~B*Q
+Equate G = B
+Endblk
+Editblk EG
+Base FG
+Config X:G Y:F F:A:B:D G:B Q:LATCH SET: RES: CLK:K
+Equate F = ~D+A*~B
+Equate G = B
+Endblk
+Editblk EH
+Base FG
+Config X:Q Y:G F:B:C:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~B*Q+B*C
+Equate G = B
+Endblk
+Editblk FA
+Base FGM
+Config X:Q Y:Q F:A:C:D G:Q Q:FF SET: RES: CLK:K
+Equate F = ~A*~C+~A*~D+~C*D
+Equate G = Q
+Endblk
+Editblk FB
+Base FG
+Config X:F Y:G F:A:B:D G:A:B:C Q:LATCH SET: RES: CLK:K
+Equate F = A*B*~D
+Equate G = A*B*~C
+Endblk
+Editblk FC
+Base FG
+Config X:G Y:Q F:A:B:Q G:C:D Q:FF SET: RES: CLK:K
+Equate F = A*B+A*Q+~B*Q
+Equate G = ~C*~D
+Endblk
+Editblk FD
+Base FG
+Config X:F Y:G F:A:C:D G:A:B:C Q:LATCH SET: RES: CLK:K
+Equate F = ~A*C*D
+Equate G = A*B*C
+Endblk
+Editblk FE
+Base FG
+Config X:G Y:Q F:A:B:Q G:A:C Q:FF SET: RES: CLK:K
+Equate F = A*B+A*Q+~B*Q
+Equate G = ~A*~C+A*C
+Endblk
+Editblk FF
+Base F
+Config X:Q Y:G F:A:B:C:Q Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+C*Q+Q*B+A*~C*B
+Endblk
+Editblk FG
+Base FG
+Config X:Q Y:G F:B:C:Q G:A:Q Q:FF SET: RES: CLK:K
+Equate F = ~B*Q+B*C
+Equate G = ~A+~Q
+Endblk
+Editblk FH
+Base F
+Config X:F Y:G F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = ~A+~C+~D+~B
+Endblk
+Editblk GA
+Base FG
+Config X:F Y:G F:B:C G:A:C Q:LATCH SET: RES: CLK:K
+Equate F = B*~C
+Equate G = A*~C
+Endblk
+Editblk GB
+Base FG
+Config X:G Y:F F:A:B:D G:A:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A+B*D
+Equate G = A+C*D
+Endblk
+Editblk GC
+Base FG
+Config X:G Y:F F:B:D G:B:C Q:LATCH SET: RES: CLK:K
+Equate F = ~B*~D
+Equate G = ~B*~C
+Endblk
+Editblk GD
+Base FG
+Config X:G Y:F F:A:B:C G:B Q:LATCH SET: RES: CLK:K
+Equate F = B+A*C
+Equate G = B
+Endblk
+Editblk GE
+Base FGM
+Config X:Q Y:Q F:A:C:D G:Q Q:FF SET: RES: CLK:K
+Equate F = A*C+A*D+~C*D
+Equate G = Q
+Endblk
+Editblk GF
+Base FG
+Config X:F Y:G F:A:B:C G:B Q:LATCH SET: RES: CLK:K
+Equate F = ~A+~B+~C
+Equate G = B
+Endblk
+Editblk GG
+Base FG
+Config X:G Y:Q F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+A*B
+Equate G = B
+Endblk
+Editblk GH
+Base F
+Config X:F Y:G F:A:B:C:D Q:LATCH SET: RES: CLK:K
+Equate F = A*~C+A*~B+~C*~D+~D*~B
+Endblk
+Editblk HA
+Base FG
+Config X:F Y:G F:A:C G:A:C:D Q:LATCH SET: RES: CLK:K
+Equate F = ~A*C
+Equate G = A*C*D
+Endblk
+Editblk HB
+Base FG
+Config X:Q Y:G F:B:C:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~B*Q+B*C
+Equate G = B
+Endblk
+Editblk HC
+Base FGM
+Config X:Q Y:Q F:A:C:D G:Q Q:FF SET: RES: CLK:K
+Equate F = A*~C+A*D+C*D
+Equate G = Q
+Endblk
+Editblk HD
+Base FGM
+Config X:Q Y:Q F:A:C:D G:Q Q:FF SET: RES: CLK:K
+Equate F = A*~C+A*D+C*D
+Equate G = Q
+Endblk
+Editblk HE
+Base FG
+Config X:G Y:Q F:A:B:Q G:B Q:FF SET: RES: CLK:K
+Equate F = ~A*Q+A*B
+Equate G = B
+Endblk
+Editblk HF
+Base FGM
+Config X:Q Y:Q F:A:C:D G:Q Q:FF SET: RES: CLK:K
+Equate F = A*~C+A*~D+C*~D
+Equate G = Q
+Endblk
+Editblk HG
+Base FGM
+Config X:Q Y:Q F:A:C:D G:Q Q:FF SET: RES: CLK:K
+Equate F = A*~C+A*D+C*D
+Equate G = Q
+Endblk
+Editblk HH
+Base F
+Config X:Q Y:G F:A:B:C:Q Q:FF SET: RES: CLK:K
+Equate F = A*Q+C*Q+Q*~B+~A*C*B
+Endblk
+
+; ---- 64 of 64 CLBs configured ----
