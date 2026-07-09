@@ -39,7 +39,7 @@ the delay windows and the software emulators mostly don't (see §5).
 | **SW1/2** Joystick/paddle delay | 1 MHz around `$C070`/`$C064-7` paddle access | *enabled* | ✅ **implemented** (`pdl_holdoff`, branch `transwarp`) |
 | **SW1/3** AppleTalk delay | drop to native during interrupts (AppleTalk timing) | disabled | ❌ missing (no interrupt-service slowdown) |
 | **SW1/4** Counter delay | 1 MHz on `$C02E/$C02F` (VERTCNT/HORIZCNT) access → **self-test 05 passes** | *enabled* | ✅ **implemented** — see §3 |
-| **SW1/5** CPS follow | Zip drops to 1 MHz when the IIgs is at 1 MHz (`$C036` bit7=0) → **Apple keys + floppy** | *enabled* | ⚠️ deliberately NOT followed — see §4 |
+| **SW1/5** CPS follow | Zip drops to 1 MHz when the IIgs is at 1 MHz (`$C036` bit7=0) → **Apple keys + floppy** | *enabled* | ✅ OSD toggle (default OFF) — see §4 |
 | **SW1/6** Disable | power up disabled (slow) | disabled (i.e. powers up **enabled**) | we power up **native/disabled** — deliberate default difference |
 | **SW1/7-8** Cache size | 8/16/32/64 KB | 8K/16K | cache is a no-op; size reporting only |
 | **SW2/1-7** Slot delay | per-slot 1 MHz for `$Cn00` (SW2/2, SW2/6 default slow) | mixed | we over-slow **all** slots when accelerated (safe; `$C05C` mask stored, not applied) |
@@ -100,16 +100,27 @@ Consequences vs. the manual:
   **power up native** (Zip disabled by default), so boot is 1 MHz. If you boot
   *with* acceleration engaged, those keys won't read correctly.
 
-**KEGS/GSplus prove CPS-follow is compatible** and are the reference for fixing
-this: they implement it (default ON, `$C059` bit 3) —
-`sim65816.c`: `zip_follow_cps = (g_zipgs_reg_c059 & 0x8)`,
+**KEGS/GSplus prove CPS-follow is compatible** and are the reference: they
+implement it (default ON, `$C059` bit 3) — `sim65816.c`:
+`zip_follow_cps = (g_zipgs_reg_c059 & 0x8)`,
 `fast = c036.bit7 || (zip_en && !zip_follow_cps)` — while their Zip CDA reads
-speed from the **synthetic 1 ms clock bit in `$C05B` reads**
-(`moremem.c` `read` handler), *not* by staying fast during the bit-7 clear. We
-already generate that same 1 ms bit in `zipgs_regs.sv`. So the path to
-Apple-keys-while-accelerated is: gate acceleration off on `$C036` bit7=0, and
-keep the CDA measuring off the `$C05B`/`$C05A` 1 ms timebase (avoiding the
-lockup we originally hit). Not yet done — tracked as future work.
+speed from the **synthetic 1 ms clock bit in `$C05B` reads**, *not* by staying
+fast during the bit-7 clear. We already generate that same 1 ms bit in
+`zipgs_regs.sv`.
+
+> **✅ Implemented as an OSD toggle** (branch `transwarp`): "CPS Follow (1MHz
+> sync)" (`Apple-IIgs.sv status[19]` → `cps_follow`). ON adds
+> `&& (CYAREG[7] || !cps_follow)` to `fast_thresh` (`rtl/iigs.sv`): when the
+> system enters 1 MHz mode (`$C036` bit7=0) the accelerator goes native, and the
+> existing `clock_divider` `slow_request` takes the CPU to 1 MHz.
+> **Default OFF** — deliberately, because our `clock_divider` note warns the Zip
+> CDA clears `$C036` bit7 while measuring speed, and following it there could
+> make the CDA read 1 MHz. Default-off is a provable no-op (the gate is
+> `(x || 1) = 1`), so it changes nothing until you enable it. **Verify on real
+> hardware:** with it ON, confirm (a) Open/Closed-Apple keys work while
+> accelerated, and (b) the Zip CDA speed readout is still correct (KEGS's 1 ms
+> approach says it should be). If (b) breaks, that's the lockup to solve before
+> defaulting ON.
 
 ---
 
@@ -152,7 +163,7 @@ counters). Details:
 |---|---|
 | Speaker delay (`$C030`), paddle delay (`$C070`/`$C064-7`) | ✅ done (`transwarp`) |
 | **Counter delay (`$C02E/$C02F`) → self-test 05** | ✅ implemented (`transwarp`); test-05 pass runtime-unconfirmed (§3) |
-| CPS follow (`$C036` bit7 → 1 MHz) → Apple keys while accelerated | ❌ future (use KEGS's `$C05B` 1 ms-clock approach to avoid the cdev lockup) |
+| CPS follow (`$C036` bit7 → 1 MHz) → Apple keys while accelerated | ✅ OSD toggle (`transwarp`, default OFF); verify Zip CDA readout on HW before defaulting ON |
 | Per-slot delay granularity (`$C05C` applied) | ❌ future (we over-slow all slots) |
 | AppleTalk/interrupt delay (drop to native in ISRs) | ❌ future |
 | Power-up-enabled default (match real Zip) | ❌ deliberate divergence |

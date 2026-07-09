@@ -101,6 +101,10 @@ module iigs
    // the same speed engine as ZipGS. 0 = absent (bank $BC untouched).
    input              twgs_present,
 
+   // 1 = CPS Follow (ZipGS): drop to 1 MHz when the system does (CYAREG bit7=0)
+   // -- Open/Closed-Apple keys at boot/reset + floppy. Default 0 (don't follow).
+   input              cps_follow,
+
    // 1 = fast cycles are currently configured (by the OSD or by ZipGS
    // software). The FPGA top selects the CPU read datapath with this:
    // native -> single-word registered reads (cycle-exact, never stalls),
@@ -2730,11 +2734,20 @@ wire       eff_accel_en   = zip_accel_en | twgs_accel_en;
 wire [2:0] eff_speed_code = (twgs_speed_code > zip_speed_code) ? twgs_speed_code
                                                               : zip_speed_code;
 
+// CPS Follow (ZipGS SW1/4... SW1/5): when enabled, the accelerator drops to
+// native the moment the system enters 1 MHz mode (CYAREG bit7=0) -- authentic
+// ZipGS behavior, needed for Open/Closed-Apple keys at boot/reset and floppy.
+// Making fast_thresh native here lets the existing clock_divider slow_request
+// (cyareg[7]==0 && !accel_active) take the CPU to 1 MHz. Default OFF: the core
+// otherwise keeps accelerating regardless of CYAREG.7 (so the Zip CDA's speed
+// self-test, which clears CYAREG.7 while measuring, is unaffected). Verify the
+// Zip CDA readout on real hardware before defaulting this on.
 wire [3:0] fast_thresh = (accel_capable && eff_accel_en && eff_speed_code != 3'd0
                           && iwm_holdoff == 15'd0
                           && !floppy_motor_on && !floppy35_motor_on
                           && !io_slow_holdoff
-                          && !(twgs_present && bank_bef == 8'hBC))  // TWGS bank $BC native
+                          && !(twgs_present && bank_bef == 8'hBC)  // TWGS bank $BC native
+                          && (CYAREG[7] || !cps_follow))          // CPS Follow: 1 MHz when sys is
                          ? (4'd4 - {1'b0, eff_speed_code})
                          : 4'd4;
 // accel_active also gates the top-level SDRAM read-path mux (Apple-IIgs.sv

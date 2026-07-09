@@ -72,6 +72,7 @@ localparam CONF_STR = {
 	"O[15],ZipGS Registers,Enabled,Disabled;",
 	"O[17:16],Beep/Paddle Slowdown,Auto,Off,ZipGS;",
 	"O[18],TransWarp GS,Off,On;",
+	"O[19],CPS Follow (1MHz sync),Off,On;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -238,6 +239,12 @@ wire [1:0] beep_fix_mode = status[17:16];
 // $BC0000 latch + NVRAM), riding the same speed engine. 0 (default) = absent.
 wire twgs_present = status[18];
 
+// OSD "CPS Follow": 1 = accelerator drops to 1 MHz when the system does
+// (CYAREG bit7=0) -- authentic ZipGS, for Open/Closed-Apple keys at boot/reset
+// + floppy. 0 (default) = keep accelerating regardless (preserves the Zip CDA
+// speed self-test, which clears CYAREG bit7 while measuring).
+wire cps_follow = status[19];
+
 // Detect ROM version change and trigger cold reset
 reg rom_select_prev;
 always @(posedge clk_sys) rom_select_prev <= rom_select;
@@ -336,6 +343,7 @@ iigs iigs (
 	.zip_regs_en(zip_regs_en),
 	.beep_fix_mode(beep_fix_mode),
 	.twgs_present(twgs_present),
+	.cps_follow(cps_follow),
 	.mem_stall(mem_stall),
 
 	.FLOPPY_WP(1'b1),
