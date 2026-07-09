@@ -70,6 +70,7 @@ localparam CONF_STR = {
 	"OB,ROM Version,ROM1,ROM3;",
 	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz,14.3 MHz;",
 	"O[15],ZipGS Registers,Enabled,Disabled;",
+	"O[17:16],Beep/Paddle Slowdown,Auto,Off,ZipGS;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -228,6 +229,10 @@ wire mem_stall;   // driven by the icache (cache miss in flight)
 // turbo with no software-visible footprint).
 wire zip_regs_en = ~status[15];
 
+// OSD "Beep/Paddle Slowdown": 0=Auto (default, always slow speaker/paddle when
+// accelerated -- the beep/joystick timing fix), 1=Off, 2=follow ZipGS $C05C.
+wire [1:0] beep_fix_mode = status[17:16];
+
 // Detect ROM version change and trigger cold reset
 reg rom_select_prev;
 always @(posedge clk_sys) rom_select_prev <= rom_select;
@@ -324,6 +329,7 @@ iigs iigs (
 	.accel_capable(accel_capable),
 	.accel_active(accel_active),
 	.zip_regs_en(zip_regs_en),
+	.beep_fix_mode(beep_fix_mode),
 	.mem_stall(mem_stall),
 
 	.FLOPPY_WP(1'b1),

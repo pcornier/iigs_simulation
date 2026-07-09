@@ -375,6 +375,26 @@ accelerating), arm it unconditionally.
 > table's durations are standard-practice values, not measured from the card.
 > `INTEGRATION.md §7` gives the implementation.
 
+#### ✅ Implemented (branch `transwarp`)
+
+Landed in `rtl/iigs.sv`: `$C030` (speaker, 2 ms) and `$C070-$C07F` + `$C064-$C067`
+(paddle, 4 ms) retriggerable native-speed windows (`beep_holdoff` / `pdl_holdoff`),
+folded into `fast_thresh` via `io_slow_holdoff`. Because Auto/Off/ZipGS all
+matter, the on/off control is a **3-way OSD option** "Beep/Paddle Slowdown"
+(`Apple-IIgs.sv` `status[17:16]` → `beep_fix_mode`):
+
+| Mode | `beep_fix_mode` | Behavior |
+|---|---|---|
+| **Auto** (default) | 0 | always slow at speaker/paddle when accelerating — the beep/joystick fix, and the TWGS-style "always" |
+| **Off** | 1 | never slow — raw speed, wrong beep/paddle |
+| **ZipGS** | 2 | gate on the ZipGS `$C05C` speaker-delay bit (`zip_slot_delay[0]`) — software/ZipDA-driven, authentic ZipGS |
+
+Auto is the default (not ZipGS) on purpose: `$C05C` powers on as `0` and is
+rarely written, so ZipGS-gating would leave the beep broken by default. The
+window only affects `fast_thresh` while accelerating, so native regression
+timing is untouched. Interrupt-service slowdown (§4.9 last row) is not yet
+implemented — add if music-player / mouse ISRs run fast.
+
 ---
 
 ## 5. Implementing TWGS in this core

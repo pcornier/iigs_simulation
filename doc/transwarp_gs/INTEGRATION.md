@@ -136,11 +136,20 @@ Detection (`'TWGS'` at `$BCFF00`) and speed switching (`$BC0000` bit 2 →
 
 ## 7. Transparent slowdown windows (the beep / paddle / interrupt fix)
 
+> **✅ Landed on branch `transwarp`** — the sketch below is the design; the
+> shipped version (`rtl/iigs.sv` `beep_holdoff`/`pdl_holdoff`/`io_slow_holdoff`)
+> uses a **3-way OSD gate** instead of a fixed policy: `beep_fix_mode`
+> (`Apple-IIgs.sv status[17:16]`) = **Auto** (0, default: always slow —
+> speaker+paddle), **Off** (1), or **ZipGS** (2: follow `zip_slot_delay[0]`).
+> `slowdown_en` picks among those; `io_slow_holdoff = slowdown_en & (window)`.
+> Verilator build + boot verified. See `README.md §4.9`.
+
 Independent of the registers, and the most important thing for compatibility.
 See `README.md §4.9` for the *why*. This generalizes the existing `iwm_holdoff`
 (iigs.sv:2643) into a small set of address-triggered, retriggerable
-"force-native-for-N-ms" windows. **Policy:** ZipGS arms a window only if its
-delay setting is on; TWGS arms unconditionally while accelerating.
+"force-native-for-N-ms" windows. The shipped gate is the 3-way OSD mode above;
+the original per-front-end policy idea (ZipGS gates on its setting, TWGS always
+slows) is captured by the Auto and ZipGS modes.
 
 ```systemverilog
 // --- per-access strobes (IO space, one pulse/cycle via phi2) --------------

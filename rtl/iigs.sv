@@ -90,6 +90,12 @@ module iigs
    // works -- an OSD-only turbo with no software-visible footprint.
    input              zip_regs_en,
 
+   // Speaker/paddle transparent-slowdown control (OSD "Beep/Paddle Slowdown"):
+   //   0 = Auto  (always slow at $C030/paddle when accelerating -- default)
+   //   1 = Off   (never slow -- raw speed, wrong beep/paddle)
+   //   2 = ZipGS (follow the ZipGS $C05C speaker-delay bit, software-driven)
+   input [1:0]        beep_fix_mode,
+
    // 1 = fast cycles are currently configured (by the OSD or by ZipGS
    // software). The FPGA top selects the CPU read datapath with this:
    // native -> single-word registered reads (cycle-exact, never stalls),
@@ -2672,7 +2678,12 @@ always @(posedge CLK_14M) begin
   else if (acc_ptrig | acc_pdl)   pdl_holdoff <= 16'd57272;    // 4 ms (full paddle scan)
   else if (pdl_holdoff != 16'd0)  pdl_holdoff <= pdl_holdoff - 16'd1;
 end
-wire io_slow_holdoff = (beep_holdoff != 16'd0) || (pdl_holdoff != 16'd0);
+// Mode gate (OSD): Auto=always, Off=never, ZipGS=follow $C05C speaker-delay bit.
+wire slowdown_en = (beep_fix_mode == 2'd1) ? 1'b0 :               // Off
+                   (beep_fix_mode == 2'd2) ? zip_slot_delay[0] :  // ZipGS-reg
+                                             1'b1;                 // Auto (default)
+wire io_slow_holdoff = slowdown_en &&
+                       ((beep_holdoff != 16'd0) || (pdl_holdoff != 16'd0));
 
 wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0
                           && iwm_holdoff == 15'd0
