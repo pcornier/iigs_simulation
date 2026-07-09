@@ -5,10 +5,12 @@
 primary sources — the release schematic, the complete v1.8s ROM disassembly
 (assembles bit-exact), and a full decode of the card's on-board FPGA bitstream.
 
-This is a companion to [`../zipgs_speed.md`](../zipgs_speed.md) and
-[`../sdram_accel/`](../sdram_accel/). Where the ZipGS doc describes the speed
-engine you already built, this doc describes the *other* period accelerator and
-how to expose it on top of the same engine.
+This is a companion to the existing accelerator docs — [`../zipgs_speed.md`](../zipgs_speed.md),
+[`../accelerator-architecture.md`](../accelerator-architecture.md),
+[`../zipgs-14mhz-plan.md`](../zipgs-14mhz-plan.md), and [`../sdram_accel/`](../sdram_accel/).
+Where those describe the speed/cache engine you already built (now running at a
+verified **14.32 MHz** via stall-on-miss), this doc describes the *other* period
+accelerator and how to expose it on top of that same engine.
 
 ## Sources
 
@@ -189,8 +191,12 @@ Speed is two bits forming three discrete steps (not a continuous register):
 | 1 | 0 | ~2.6 MHz (stock "fast") | `speed_code = 0` (native 2.86) |
 | 1 | 1 | full TransWarp (~7–8 MHz) | `speed_code = 3` (7.16, your "100%") |
 
-So **`$BC0000` bit 2 selects between your `speed_code` 0 and 3** — simpler than
-ZipGS's 16-step nibble. `GetCurISpeed` decodes exactly this: `CYAREG.7==0`→0,
+So **`$BC0000` bit 2 selects between your native step and the OSD turbo
+ceiling** (`twgs_regs.turbo_code = host_speed`) — authentically that ceiling is
+7.16 (`speed_code 3`), but since the core now runs a verified **14.32 MHz**
+(`speed_code 4`), setting the OSD there lets the TWGS accel bit engage 14.32 too
+(shares the 14.3 wedge still being chased). Simpler than ZipGS's 16-step nibble.
+`GetCurISpeed` decodes exactly this: `CYAREG.7==0`→0,
 else `$BC0000 & $04 ? 2 : 1` (twgs.3.s:2146). Frequency table
 (`_frequencyTable`, twgs.3.s:2109): `1024`, `2600`, `7000` kHz — but index 2's
 real figure comes from the NVRAM-stored *measured* max, not the table

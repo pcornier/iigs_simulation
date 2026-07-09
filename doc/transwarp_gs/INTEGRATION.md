@@ -15,7 +15,7 @@ Files: `twgs_regs.sv`, `twgs_nvram.sv`, `twgs_rom.sv`, `twgs_card.sv`,
   it (Verilator: the sim CWD, i.e. `vsim/`; Quartus: add to project, or fix the
   path in `twgs_rom.sv`). Add the `.sv` to `files.qip` and the `vsim` file list.
 
-## 1. Instantiate the card (rtl/iigs.sv, near the ZipGS block ~line 2551)
+## 1. Instantiate the card (rtl/iigs.sv, near the ZipGS block ~line 2592)
 
 ```systemverilog
 wire        twgs_sel;
@@ -41,10 +41,10 @@ twgs_card twgs (
 
 The `$BC0000.2` accel bit only *engages/disengages* turbo; the OSD `host_speed`
 decides how fast turbo is. So a TWGS-aware program's on/off toggle rides on top
-of whatever ceiling you set in the MiSTer OSD — including 14.32 MHz once that is
-unlocked (see step 3a).
+of whatever ceiling you set in the MiSTer OSD — including 14.32 MHz, which is
+already enabled in the core (see §3a).
 
-## 2. Overlay the CPU read (rtl/iigs.sv:1816)
+## 2. Overlay the CPU read (rtl/iigs.sv:1842)
 
 `twgs_sel`/`twgs_dout` are keyed on `bank_bef`/`addr_bef` exactly like `din`, so
 add the card ahead of the memory read the same way `io_dout` overlays IO:
@@ -55,7 +55,7 @@ wire [7:0] cpu_din = IO ? ((adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_do
                         : (twgs_sel ? twgs_dout : din);
 ```
 
-## 3. Combine into the ONE speed engine (rtl/iigs.sv:2627)
+## 3. Combine into the ONE speed engine (rtl/iigs.sv:2653)
 
 Both accelerators drive the same `fast_thresh` and can be active at once (Zip at
 `$C05x`, TWGS at bank `$BC` — disjoint, no conflict). Combine **fastest-wins**:
@@ -77,20 +77,22 @@ wire [3:0] fast_thresh = (accel_capable && eff_accel_en && eff_speed_code != 3'd
 (If `accel_r` / the SDRAM read-path mux also keys off `zip_accel_en`, switch it
 to `eff_accel_en` too — search near iigs.sv:2632.)
 
-### 3a. Unlocking 14.32 MHz (speed code 4)
+### 3a. 14.32 MHz (speed code 4) — already enabled
 
-`fast_thresh` supports a 1-tick cycle (`4'd4 - 4 = 0`), but 14 MHz is clamped
-until the CPU can stall on cache misses — at a 1-tick cycle the SDRAM/BRAM read
-has zero slack (`doc/zipgs_speed.md`, `doc/sdram_accel/`). To enable it:
-1. Finish stall-on-miss: wire `cache_stall` → the 65C816 `RDY_IN`.
-2. Remove the OSD clamp at `Apple-IIgs.sv:210`
-   (`host_speed = status[14:12]`, no `>3 ? 3` cap) — this is what lets the OSD
-   ceiling (and thus `twgs .turbo_code`) reach 4.
-3. Remove the code-4 clamp in `rtl/zipgs_regs.sv` (host path).
+**This is now done in the core** (`doc/zipgs-14mhz-plan.md`,
+`doc/accelerator-architecture.md`): GS/OS boots at sustained 14.32 MHz on real
+hardware. Stall-on-miss landed as **`mem_stall`** wired to the CPU's ready input
+(`iigs.sv` `.RDY_IN(~hdd_dma & ~mem_stall)`), and the old clamps are gone —
+`host_speed` now allows code 4 (`Apple-IIgs.sv`, `(status[14:12] > 3'd4) ? 4 :
+…`) and `accel_capable = 1'b1`.
 
-Until then everything caps at 7.16 MHz (code 3) — which is the authentic TWGS
-speed, so tier B is fully faithful without doing any of this. 14 MHz is a pure
-overclock on top, shared by both accelerator front-ends.
+So nothing here needs unlocking. Because `twgs .turbo_code(host_speed)`, a TWGS
+accel just rides the OSD ceiling — set the OSD to 14.3 MHz and `$BC0000.2`
+engages it. (The Zip *software* protocol still self-caps at 7.16 in
+`zipgs_regs.sv sp_to_code` — authentic "100% of rated"; 14.32 is an OSD-only
+step by design, and equally reachable through the TWGS front-end via the OSD
+ceiling.) One live caveat: a **14.3 MHz "wedge"** (write back-pressure) is still
+being chased in `Apple-IIgs.sv` — a TWGS turbo at code 4 inherits it.
 
 ## 4. Run bank $BC at native pace (correctness guard)
 
@@ -136,7 +138,7 @@ Detection (`'TWGS'` at `$BCFF00`) and speed switching (`$BC0000` bit 2 →
 
 Independent of the registers, and the most important thing for compatibility.
 See `README.md §4.9` for the *why*. This generalizes the existing `iwm_holdoff`
-(iigs.sv:2617) into a small set of address-triggered, retriggerable
+(iigs.sv:2643) into a small set of address-triggered, retriggerable
 "force-native-for-N-ms" windows. **Policy:** ZipGS arms a window only if its
 delay setting is on; TWGS arms unconditionally while accelerating.
 

@@ -2650,9 +2650,34 @@ always @(posedge CLK_14M) begin
     iwm_holdoff <= iwm_holdoff - 15'd1;
 end
 
+// Speaker + paddle transparent auto-slowdown (TransWarp/ZipGS behavior).
+// Timing-sensitive soft switches are cycle-counted by software loops AROUND the
+// access (a tone's pitch is the delay loop between $C030 toggles; a joystick
+// value is the count of a loop polling $C064 after a $C070 strobe). Slowing
+// only the I/O cycle itself does not fix them -- the loop must run at 1 MHz too.
+// So each access arms a retriggerable native-speed window (same mechanism as
+// iwm_holdoff). Without this the boot beep is ~8x too high and paddles peg when
+// accelerated. Unconditional: it only affects fast_thresh while accelerating.
+wire acc_spkr  = phi2 && IO && (addr_bef[7:0] == 8'h30);   // $C030 speaker toggle
+wire acc_ptrig = phi2 && IO && (addr_bef[7:4] == 4'h7);    // $C070-$C07F paddle trigger
+wire acc_pdl   = phi2 && IO && (addr_bef[7:2] == 6'h19);   // $C064-$C067 paddle read
+reg [15:0] beep_holdoff;
+reg [15:0] pdl_holdoff;
+always @(posedge CLK_14M) begin
+  if (reset)                      beep_holdoff <= 16'd0;
+  else if (acc_spkr)              beep_holdoff <= 16'd28636;   // 2 ms @ 14.318 MHz
+  else if (beep_holdoff != 16'd0) beep_holdoff <= beep_holdoff - 16'd1;
+
+  if (reset)                      pdl_holdoff <= 16'd0;
+  else if (acc_ptrig | acc_pdl)   pdl_holdoff <= 16'd57272;    // 4 ms (full paddle scan)
+  else if (pdl_holdoff != 16'd0)  pdl_holdoff <= pdl_holdoff - 16'd1;
+end
+wire io_slow_holdoff = (beep_holdoff != 16'd0) || (pdl_holdoff != 16'd0);
+
 wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0
                           && iwm_holdoff == 15'd0
-                          && !floppy_motor_on && !floppy35_motor_on)
+                          && !floppy_motor_on && !floppy35_motor_on
+                          && !io_slow_holdoff)
                          ? (4'd4 - {1'b0, zip_speed_code})
                          : 4'd4;
 // accel_active also gates the top-level SDRAM read-path mux (Apple-IIgs.sv
