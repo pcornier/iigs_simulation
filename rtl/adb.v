@@ -6,6 +6,7 @@ module adb(
   input CLK_14M,
   input cen,
   input reset,
+  input cold_reset,           // 1 = cold/power-on reset (wipe keyuc power-up flag)
   input [7:0] addr,
   input rw,
   input [7:0] din,
@@ -136,6 +137,7 @@ reg ctrl_down;            // Bit 1: Control key down
 reg option_down;          // Bit 6: Option key down
 reg cmd_down;             // Bit 7: Command key down
 reg reset_key_down;       // Reset key (F11 mapped to 0x7F) is pressed
+reg selftest_override_prev; // Edge-detect selftest_override to release forced keys
 
 // Reset key output - active when Reset key is pressed
 // The ROM checks for Ctrl+Reset to trigger reset
@@ -208,13 +210,22 @@ reg [7:0] ram_din;
 wire [7:0] ram_dout;
 reg ram_wen;
 
+// READ address is combinational (mirrors adb_rom_addr) so the registered BRAM
+// output ram_dout is valid when CMD_EXEC captures it -- the same one-cycle
+// settle the CMD->CMD_EXEC step gives the ROM. A registered ram_addr would make
+// q_a lag one cycle, so a READ_MEM right after reset (ram_addr==0) returned
+// mem[0] instead of the requested cell. That made ROM1's power-up check read
+// keyuc $51 as $00 and cold-boot on every warm reset. WRITEs still use the
+// registered ram_addr (set with ram_din/ram_wen together in the $08 handler).
+wire [7:0] ram_addr_eff = ram_wen ? ram_addr : cmd_data[15:8];
+
 bram #(
     .width_a(8),
     .widthad_a(8)
 ) adb_ram (
     .clock_a(CLK_14M),
     .wren_a(ram_wen),
-    .address_a(ram_addr),
+    .address_a(ram_addr_eff),
     .data_a(ram_din),
     .q_a(ram_dout),
 
@@ -714,10 +725,22 @@ always @(posedge CLK_14M) begin
     char_set <= 8'd0;
     layout <= 8'd0;
     
-    // Initialize RAM control signals
-    ram_wen <= 1'b0;
-    ram_addr <= 8'h00;
-    ram_din <= 8'h00;
+    // Keyuc (ADB micro) RAM control during reset. On a COLD/power-on reset,
+    // wipe the power-up flag at $51 ($A5) so ROM1's power-up check sees a fresh
+    // machine and does a full cold boot. On a WARM reset (Ctrl-F11) the flag is
+    // PRESERVED -- the real ADB micro keeps power across a Ctrl-Reset -- so ROM1
+    // reads $A5 and warm-boots. (Paired with the READ_MEM 1-cycle latency fix;
+    // without both, ROM1 always cold-boots on every reset.) ROM3 ignores this
+    // and uses CYAREG bit 6 instead, so it is unaffected either way.
+    if (cold_reset) begin
+      ram_addr <= 8'h51;
+      ram_din  <= 8'h00;
+      ram_wen  <= 1'b1;
+    end else begin
+      ram_wen  <= 1'b0;
+      ram_addr <= 8'h00;
+      ram_din  <= 8'h00;
+    end
     
     // PS/2 input tracking
     ps2_key_toggle_prev <= 1'b0;
@@ -730,7 +753,8 @@ always @(posedge CLK_14M) begin
     option_down <= 1'b0;
     caps_lock_state <= 1'b0;
     reset_key_down <= 1'b0;
-    
+    selftest_override_prev <= 1'b0;
+
     // Apple IIe compatibility
     CLR80COL <= 1'b0;
     STORE80 <= 1'b0;
@@ -1124,13 +1148,27 @@ always @(posedge CLK_14M) begin
       cmd_down <= 1'b1;
       option_down <= 1'b1;
       ctrl_down <= 1'b1;
-      
+
       // Also set Apple IIe compatibility flags
       open_apple <= 1'b1;     // Command key maps to open apple
-      closed_apple <= 1'b1;   // Option key maps to closed apple  
+      closed_apple <= 1'b1;   // Option key maps to closed apple
       apple_ctrl <= 1'b1;     // Control key
+    end else if (selftest_override_prev) begin
+      // Force Self Test just turned OFF (1->0 edge): release the forced keys so
+      // they don't stick. Nothing else clears them until a real PS/2 make/break
+      // arrives, so a stuck open_apple leaves Ctrl+F11 reading as
+      // Ctrl+OpenApple+F11 -> COLD reset instead of the intended warm reset
+      // (keyboard_cold_reset = reset_key & ctrl & open_apple in iigs.sv). Clear
+      // all six forced flags here on the edge.
+      cmd_down     <= 1'b0;
+      option_down  <= 1'b0;
+      ctrl_down    <= 1'b0;
+      open_apple   <= 1'b0;
+      closed_apple <= 1'b0;
+      apple_ctrl   <= 1'b0;
     end
-    
+    selftest_override_prev <= selftest_override;
+
     // Key repeat moved back to $C000 reads - no background repeat generation
 
     // DATA state: Complete the IDLE transition after CPU finishes reading (strobe falls)
@@ -1151,7 +1189,7 @@ always @(posedge CLK_14M) begin
 `ifdef DEBUG_ADB
       $display("ADB CMD: All bytes received, transitioning to CMD_EXEC for cmd=0x%02h cmd_data=%016x", cmd, cmd_data);
 `endif
-      state <= CMD_EXEC;  // Wait one cycle for ROM data to be ready
+      state <= CMD_EXEC;  // Wait one cycle for ROM/RAM data to be ready
     end
 
     // CMD_EXEC state: Execute command after ROM data is ready

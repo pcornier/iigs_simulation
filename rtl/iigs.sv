@@ -2301,6 +2301,7 @@ wire ready_out;
           .CLK_14M(CLK_14M),
           .cen(phi2),
           .reset(reset),
+          .cold_reset(cold_reset),
           .rom_select(rom_select),
           .addr(adb_addr_mux),
           .rw(adb_rw_mux),

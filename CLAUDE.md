@@ -14,10 +14,17 @@ The goal is to run this code on an FPGA. Don't make any changes to memory or clo
 
 ```bash
 cd vsim/
-make                    # Build the simulation with ROM3 (default)
-make ROM=rom1          # Build with ROM1 instead
+make                    # Build the simulation (ROM3 and ROM1 both built in)
 make SOUND=stub        # Build with stubbed sound system
 make clean             # Clean build artifacts
+```
+
+**ROM version is selected at runtime, not build time** (both ROMs are compiled
+into the sim):
+
+```bash
+./obj_dir/Vemu                 # ROM3 (default)
+./obj_dir/Vemu --rom 1         # ROM1  (also accepts --rom rom1 / --rom 3 / --rom rom3)
 ```
 
 **Running the simulation:**

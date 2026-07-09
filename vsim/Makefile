@@ -5,7 +5,9 @@ TOP = --top-module emu
 RTL = ../rtl
 V_INC = +incdir+$(RTL)
 
-# ROM selection is now runtime (no build-time ROM3/ROM1 switch needed)
+# ROM selection is runtime, not build-time: both ROM3 and ROM1 are compiled in
+# and chosen at run time with `./obj_dir/Vemu --rom 3|1`. (There is no ROM= make
+# variable; a stray `make ROM=rom1` is silently ignored.)
 
 V_DEFINE = +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -g "  --timescale-override 1ps/1ps -Wno-TIMESCALEMOD -Wno-fatal \
 	-I$(RTL)  \
