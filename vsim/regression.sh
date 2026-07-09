@@ -1,9 +1,22 @@
 #!/bin/bash
 # This will run the vsim and snapshot known working hard disks and compare the images
 
-# Check for required disk images
+# Required disk images -- SINGLE SOURCE OF TRUTH. Every disk any test below
+# mounts must be listed here (keep in sync when adding a test). The existence
+# check and the error message both derive from this list, so they can't drift.
+REQUIRED_DISKS=(
+    totalreplay.hdv
+    Pitch-Dark-20210331.hdv
+    gsos.hdv
+    arkanoid.hdv
+    "Total Replay II v1.0-alpha.4.hdv"
+    ../customtests/mmu_test.2mg
+    "Arkanoid IIgs.woz"
+    A2DeskTop-1.2-alpha42-en_800k.hdv
+)
+
 MISSING_DISKS=0
-for disk in totalreplay.hdv Pitch-Dark-20210331.hdv gsos.hdv arkanoid.hdv "Total Replay II v1.0-alpha.4.hdv" ../customtests/mmu_test.2mg "Arkanoid IIgs.woz" A2DeskTop-1.2-alpha42-en_800k.hdv; do
+for disk in "${REQUIRED_DISKS[@]}"; do
     if [ ! -f "$disk" ]; then
         echo "ERROR: Missing disk image: $disk"
         MISSING_DISKS=1
@@ -12,14 +25,10 @@ done
 
 if [ $MISSING_DISKS -eq 1 ]; then
     echo ""
-    echo "Please ensure all required disk images are in the vsim directory:"
-    echo "  - totalreplay.hdv"
-    echo "  - Pitch-Dark-20210331.hdv"
-    echo "  - gsos.hdv"
-    echo "  - arkanoid.hdv"
-    echo "  - Total Replay II v1.0-alpha.4.hdv"
-    echo "  - ../customtests/mmu_test.2mg"
-    echo "  - Arkanoid IIgs.woz"
+    echo "Please ensure ALL required disk images are present (run from the vsim directory):"
+    for disk in "${REQUIRED_DISKS[@]}"; do
+        echo "  - $disk"
+    done
     exit 1
 fi
 
