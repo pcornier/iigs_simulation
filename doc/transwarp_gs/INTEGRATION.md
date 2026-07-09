@@ -1,10 +1,19 @@
 # TWGS (tier B) integration into this core
 
-Drop-in wiring for the `twgs_*` modules in this folder. Mirrors the existing
-ZipGS block in `rtl/iigs.sv`. All four modules lint clean under Verilator
-`-Wall`. This is **tier B** ("TWGS-lite"): detection + `JSL` API + 3-tier speed,
-reusing the existing speed/cache engine. **No reset-vector overlay** — the TWGS
-ROM does not run at boot, so there is no auto-installed CDA (that is tier C).
+> **✅ Implemented on branch `transwarp`.** The modules now live in `rtl/`
+> (`twgs_regs/nvram/rom/card.sv`, firmware `rtl/roms/twgs_rom.hex` + `vsim/rtl/roms/`
+> mirror), are in `files.qip` + `vsim/Makefile`, and are wired into `rtl/iigs.sv`
+> (`twgs_card` instance, `cpu_din` overlay, fastest-wins `eff_*` speed combine,
+> bank-`$BC` native-pace guard) + `Apple-IIgs.sv` (OSD "TransWarp GS", `status[18]`,
+> default Off) + `vsim/sim.v` (default off; flip `twgs_present` to `1'b1` to test).
+> Verilator build + boot verified (card off and on). The steps below are the
+> reference/rationale; line numbers are pre-implementation.
+
+Mirrors the existing ZipGS block in `rtl/iigs.sv`. All four modules lint clean
+under Verilator `-Wall`. This is **tier B** ("TWGS-lite"): detection + `JSL` API
++ 3-tier speed, reusing the existing speed/cache engine. **No reset-vector
+overlay** — the TWGS ROM does not run at boot, so there is no auto-installed CDA
+(that is tier C).
 
 Files: `twgs_regs.sv`, `twgs_nvram.sv`, `twgs_rom.sv`, `twgs_card.sv`,
 `twgs_rom.hex` (firmware image, 32768 bytes, one hex byte/line for `$readmemh`).

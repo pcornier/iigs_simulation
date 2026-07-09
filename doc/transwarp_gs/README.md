@@ -21,12 +21,13 @@ accelerator and how to expose it on top of that same engine.
 | The card's FPGA config bitstream (`FPGA_Config` in the ROM) | Decoded to logic — see [Appendix A](#appendix-a-the-xc2064-fpga-decoded) |
 | `apple-iigs.info` — *AE TransWarp GS Programmer Reference* | Cross-check of the public API |
 
-Companion files in this folder:
-- **Implementation drafts (tier B):** `twgs_regs.sv`, `twgs_nvram.sv`,
-  `twgs_rom.sv`, `twgs_card.sv` (lint-clean under Verilator `-Wall`),
-  `twgs_rom.hex` (firmware image for `$readmemh`), and
-  [`INTEGRATION.md`](INTEGRATION.md) (exact `rtl/iigs.sv` wiring). See [§5](#5-implementing-twgs-in-this-core).
-- **Reverse-engineering evidence:** `fpga_pinmap.md` (U64 pin→net),
+Companion files:
+- **Implemented tier-B RTL (now live in `rtl/`, branch `transwarp`):**
+  `../../rtl/twgs_regs.sv`, `twgs_nvram.sv`, `twgs_rom.sv`, `twgs_card.sv`
+  (lint-clean under Verilator `-Wall`), firmware at `../../rtl/roms/twgs_rom.hex`
+  (+ `vsim/rtl/roms/` mirror). Wired into `rtl/iigs.sv` + `Apple-IIgs.sv` (OSD
+  "TransWarp GS" toggle); see [`INTEGRATION.md`](INTEGRATION.md) and [§5](#5-implementing-twgs-in-this-core).
+- **Reverse-engineering evidence (in this folder):** `fpga_pinmap.md` (U64 pin→net),
   `decode.py` (validated XC2064 decoder), `decoded_clbs.txt` +
   `twgs_fpga_clbs.v` (decoded controller logic).
 - **Binary artifacts:** `twgs_rom.hex` (the TransWarp GS v1.8s firmware, for
@@ -410,13 +411,15 @@ implemented — add if music-player / mouse ISRs run fast.
 | host/OSD speed override | `host_speed` (`Apple-IIgs.sv:210`, `status[14:12]`) |
 | register-module template | `zipgs_regs.sv` structure & CDC discipline |
 
-### 5.2 New RTL (tier B) — drafted in this folder
+### 5.2 New RTL (tier B) — ✅ implemented (branch `transwarp`)
 
-These modules are written and lint-clean; see [`INTEGRATION.md`](INTEGRATION.md)
-for the exact `rtl/iigs.sv` edits (read overlay, speed combine, native-pace
-guard, OSD toggle).
+These modules are in `rtl/` and wired into the core (read overlay, fastest-wins
+speed combine, bank-`$BC` native-pace guard) behind the OSD "TransWarp GS"
+toggle (default Off). Verilator build + boot verified with the card both off and
+on. Detection (`'TWGS'` at `$BCFF00`) is wired but not yet runtime-verified —
+needs software that probes the signature/`JSL` table. See [`INTEGRATION.md`](INTEGRATION.md).
 
-| File | Role |
+| File (`rtl/`) | Role |
 |---|---|
 | `twgs_card.sv` | Top wrapper: bank-`$BC` decode + read mux + `sel`/`dout`/`accel`/`speed` |
 | `twgs_regs.sv` | `$BC0000` control latch → speed tier (`bit2`+`CYAREG.7`) |

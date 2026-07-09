@@ -24,10 +24,12 @@ module twgs_rom (
     input  wire [14:0] addr,          // CPU addr[14:0] (BC8000 -> 0)
     output reg  [7:0]  dout
 );
-  (* ram_init_file = "twgs_rom.hex" *)   // Quartus hint (optional)
+  (* ram_init_file = "rtl/roms/twgs_rom.hex" *)   // Quartus hint (optional)
   reg [7:0] rom_data [0:32767];
 
-  initial $readmemh("twgs_rom.hex", rom_data);
+  // Path resolves from the build CWD: rtl/roms/ (Quartus root) and
+  // vsim/rtl/roms/ (Verilator run from vsim/). Keep both copies in sync.
+  initial $readmemh("rtl/roms/twgs_rom.hex", rom_data);
 
   always @(posedge clk)
     if (ce) dout <= rom_data[addr];

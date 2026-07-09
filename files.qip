@@ -10,6 +10,10 @@ set_global_assignment -name VERILOG_FILE rtl/rom.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vgc.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mmu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/zipgs_regs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/twgs_regs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/twgs_nvram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/twgs_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/twgs_card.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/iigs.sv
 set_global_assignment -name VERILOG_FILE rtl/soundglu.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/es5503.v

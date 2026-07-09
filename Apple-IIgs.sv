@@ -71,6 +71,7 @@ localparam CONF_STR = {
 	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz,14.3 MHz;",
 	"O[15],ZipGS Registers,Enabled,Disabled;",
 	"O[17:16],Beep/Paddle Slowdown,Auto,Off,ZipGS;",
+	"O[18],TransWarp GS,Off,On;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -233,6 +234,10 @@ wire zip_regs_en = ~status[15];
 // accelerated -- the beep/joystick timing fix), 1=Off, 2=follow ZipGS $C05C.
 wire [1:0] beep_fix_mode = status[17:16];
 
+// OSD "TransWarp GS": 1 = present a TWGS card in bank $BC (detection ROM +
+// $BC0000 latch + NVRAM), riding the same speed engine. 0 (default) = absent.
+wire twgs_present = status[18];
+
 // Detect ROM version change and trigger cold reset
 reg rom_select_prev;
 always @(posedge clk_sys) rom_select_prev <= rom_select;
@@ -330,6 +335,7 @@ iigs iigs (
 	.accel_active(accel_active),
 	.zip_regs_en(zip_regs_en),
 	.beep_fix_mode(beep_fix_mode),
+	.twgs_present(twgs_present),
 	.mem_stall(mem_stall),
 
 	.FLOPPY_WP(1'b1),

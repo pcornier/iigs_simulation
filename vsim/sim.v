@@ -362,6 +362,8 @@ iigs  iigs(
         .host_speed(host_speed),
         .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
         .zip_regs_en(1'b1),    // ZipGS software interface always present in sim
+        .beep_fix_mode(2'b00), // Auto (speaker/paddle timing fix on)
+        .twgs_present(1'b0),   // TWGS card off by default (flip to 1'b1 to test detection)
         .accel_active(accel_active_w),  // selects registered vs comb fastram read (as on FPGA)
         .phi2(phi2_w),
         .dbg_hdd_dma(dbg_hdd_dma_w),

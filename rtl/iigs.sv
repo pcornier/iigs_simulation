@@ -96,6 +96,11 @@ module iigs
    //   2 = ZipGS (follow the ZipGS $C05C speaker-delay bit, software-driven)
    input [1:0]        beep_fix_mode,
 
+   // 1 = present a TransWarp GS card in bank $BC (OSD "TransWarp GS"): ROM
+   // signature/JSL API at $BC8000, $BC0000 control latch, X2444 NVRAM. Rides
+   // the same speed engine as ZipGS. 0 = absent (bank $BC untouched).
+   input              twgs_present,
+
    // 1 = fast cycles are currently configured (by the OSD or by ZipGS
    // software). The FPGA top selects the CPU read datapath with this:
    // native -> single-word registered reads (cycle-exact, never stalls),
@@ -1845,7 +1850,8 @@ wire [7:0] din =
   wire [7:0] HDD_DO;
 
   // CPU data input mux: prioritize ADB reads (combinational), then IWM, then general I/O
-  wire [7:0] cpu_din = IO ? ((adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout))) : din;
+  wire [7:0] cpu_din = IO ? ((adb_read ? adb_dout : (iwm_strobe ? iwm_dout : io_dout)))
+                          : (twgs_sel ? twgs_dout : din);   // TWGS bank $BC overlay (off -> din)
 
   // Mega II bus-drive window (see io_read): video data is driven during the
   // 40 active chars of the active rows -- 192 for Apple II modes, 200 for
@@ -2615,6 +2621,29 @@ zipgs_regs zipgs (
 // Zip cache-disable ($C059 bit 7) out to the SDRAM cache in the top level.
 assign cache_disable = zip_cache_disable;
 
+// ---- TransWarp GS card (bank $BC): detection ROM + $BC0000 latch + NVRAM ----
+// Rides the same speed engine as ZipGS (turbo_code = host_speed, so the accel
+// bit engages whatever the OSD ceiling is). twgs_present=0 -> everything below
+// is a pass-through (sel=0, accel_en=0), so the machine is bit-identical to
+// today when the card is off. Used at the cpu_din overlay (~line 1850) and the
+// fast_thresh combine below.
+wire        twgs_sel;
+wire [7:0]  twgs_dout;
+wire        twgs_accel_en;
+wire [2:0]  twgs_speed_code;
+twgs_card twgs (
+    .clk(CLK_14M), .reset(reset),
+    .enable(twgs_present),
+    .bank(bank_bef), .addr(addr_bef),
+    .we(we), .phi2(phi2),
+    .wr_data(dout),
+    .cyareg7(CYAREG[7]),
+    .turbo_code(host_speed),
+    .sel(twgs_sel), .dout(twgs_dout),
+    .accel_en(twgs_accel_en), .speed_code(twgs_speed_code),
+    .cache_enable(), .irq_logic_en()
+);
+
 // Slot-ROM ($Cn00-$CnFF) timing when accelerated. Slots run at 1 MHz by
 // default -- the slot-7 SmartPort/HDD firmware (and slot ROM generally)
 // returns bad data if fetched at the accelerated rate, faulting the boot /
@@ -2685,11 +2714,19 @@ wire slowdown_en = (beep_fix_mode == 2'd1) ? 1'b0 :               // Off
 wire io_slow_holdoff = slowdown_en &&
                        ((beep_holdoff != 16'd0) || (pdl_holdoff != 16'd0));
 
-wire [3:0] fast_thresh = (accel_capable && zip_accel_en && zip_speed_code != 3'd0
+// Combine the two accelerator front-ends into the one speed engine (both can
+// be active: Zip @ $C05x, TWGS @ bank $BC -- disjoint). Fastest-wins: engage if
+// either does, take the higher requested step (both output 0 when idle).
+wire       eff_accel_en   = zip_accel_en | twgs_accel_en;
+wire [2:0] eff_speed_code = (twgs_speed_code > zip_speed_code) ? twgs_speed_code
+                                                              : zip_speed_code;
+
+wire [3:0] fast_thresh = (accel_capable && eff_accel_en && eff_speed_code != 3'd0
                           && iwm_holdoff == 15'd0
                           && !floppy_motor_on && !floppy35_motor_on
-                          && !io_slow_holdoff)
-                         ? (4'd4 - {1'b0, zip_speed_code})
+                          && !io_slow_holdoff
+                          && !(twgs_present && bank_bef == 8'hBC))  // TWGS bank $BC native
+                         ? (4'd4 - {1'b0, eff_speed_code})
                          : 4'd4;
 // accel_active also gates the top-level SDRAM read-path mux (Apple-IIgs.sv
 // accel_r): accel_r=1 selects the burst+cache line-buffer path, accel_r=0
