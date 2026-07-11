@@ -365,6 +365,8 @@ iigs  iigs(
         .zip_regs_en(1'b1),    // ZipGS software interface always present in sim
         .beep_fix_mode(2'b00), // Auto (speaker/paddle timing fix on)
         .twgs_present(1'b0),   // TWGS card off by default (flip to 1'b1 to test detection)
+        // Detection verified 2026-07-11: with 1'b1, monitor `BC/FF00.FF0F` shows
+        // 'TWGS''SMJS' + the JML table (54 57 47 53 53 4D 4A 53 / 5C 28 FB BC ...)
         .cps_follow(1'b0),     // CPS Follow off by default (flip to 1'b1 to test 1MHz sync)
         .accel_active(accel_active_w),  // selects registered vs comb fastram read (as on FPGA)
         .phi2(phi2_w),
