@@ -78,6 +78,10 @@ localparam CONF_STR = {
 	"P2-;",
 	"P2O[11],ROM Version,ROM1,ROM3;",
 	"P2O[10],Force Self Test,OFF,ON;",
+	"P2-;",
+	"P2S4,RAM,PRAM NVRAM;",
+	"P2R[21],Save NVRAM;",
+	"P2R[22],Load NVRAM;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -92,15 +96,15 @@ wire forced_scandoubler;
 wire  [1:0] buttons;
 wire [127:0] status;
 
-wire [31:0] sd_lba[4];
-reg   [3:0] sd_rd;
+wire [31:0] sd_lba[5];
+reg   [3:0] sd_rd;         // slots 0-3 (disks); slot 4 = bk_sd_rd below
 reg   [3:0] sd_wr;
-wire  [3:0] sd_ack;
+wire  [4:0] sd_ack;
 wire  [8:0] sd_buff_addr;
 wire  [7:0] sd_buff_dout;
-wire  [7:0] sd_buff_din[4];
+wire  [7:0] sd_buff_din[5];
 wire        sd_buff_wr;
-wire  [3:0] img_mounted;
+wire  [4:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;    
 
@@ -122,7 +126,7 @@ wire [7:0] ioctl_dout;
 wire [15:0] ioctl_index;
 reg ioctl_wait = 0;
 
-hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
+hps_io #(.CONF_STR(CONF_STR),.VDNUM(5)) hps_io
 (
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
@@ -132,8 +136,8 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	.forced_scandoubler(forced_scandoubler),
 
 	.sd_lba(sd_lba),
-	.sd_rd(sd_rd),
-	.sd_wr(sd_wr),
+	.sd_rd({bk_sd_rd, sd_rd}),
+	.sd_wr({bk_sd_wr, sd_wr}),
 	.sd_ack(sd_ack),
 	.sd_buff_addr(sd_buff_addr),
 	.sd_buff_dout(sd_buff_dout),
@@ -395,6 +399,10 @@ iigs iigs (
 	.accel_pdl_delay(accel_pdl_delay),
 	.accel_ctr_delay(accel_ctr_delay),
 	.accel_cps_follow(accel_cps_follow),
+	.nv_addr(nv_addr),
+	.nv_wr(nv_wr),
+	.nv_din(nv_din),
+	.nv_dout(nv_dout),
 	.mem_stall(mem_stall),
 
 	.FLOPPY_WP(1'b1),
@@ -765,6 +773,49 @@ assign sd_lba[0] = {16'b0, hdd_sector};  // Unit 0
 assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 1
 assign sd_lba[2] = woz_sd_lba;
 assign sd_lba[3] = woz_sd_525_lba;
+assign sd_lba[4] = 32'd0;                // PRAM NVRAM: single block
+
+// ---- PRAM / TWGS NVRAM save-restore (slot 4) ----------------------------
+// X68000-style: mountable SD file + explicit Save/Load OSD commands, plus
+// auto-load on mount (a zeroed file fails the ROM's PRAM checksum and gets
+// re-defaulted by the Control Panel firmware, so a blank can't brick).
+// One 512-byte block: [0-255]=PRAM, [256-287]=TWGS X2444, rest pads $FF.
+// See doc/pram-nvram-save-handoff.md.
+wire       bk_save_cmd = status[21];
+wire       bk_load_cmd = status[22];
+wire [8:0] nv_addr = sd_buff_addr;
+wire [7:0] nv_din  = sd_buff_dout;
+wire [7:0] nv_dout;
+reg        bk_sd_rd, bk_sd_wr;
+reg        bk_state, bk_loading;
+wire       nv_wr = bk_state & bk_loading & sd_buff_wr & sd_ack[4];
+assign     sd_buff_din[4] = nv_dout;
+
+reg bk_old_load, bk_old_save, bk_old_ack, bk_old_mounted;
+always @(posedge clk_sys) begin
+	bk_old_load    <= bk_load_cmd;
+	bk_old_save    <= bk_save_cmd;
+	bk_old_ack     <= sd_ack[4];
+	bk_old_mounted <= img_mounted[4];
+
+	if (~bk_old_ack & sd_ack[4]) {bk_sd_rd, bk_sd_wr} <= 2'b00;
+
+	if (!bk_state) begin
+		if ((~bk_old_load & bk_load_cmd) ||
+		    (~bk_old_mounted & img_mounted[4] && img_size != 64'd0)) begin
+			bk_state   <= 1'b1;
+			bk_loading <= 1'b1;
+			bk_sd_rd   <= 1'b1;
+		end else if (~bk_old_save & bk_save_cmd) begin
+			bk_state   <= 1'b1;
+			bk_loading <= 1'b0;
+			bk_sd_wr   <= 1'b1;
+		end
+	end else if (bk_old_ack & ~sd_ack[4]) begin
+		bk_state   <= 1'b0;   // single 512-byte block covers everything
+		bk_loading <= 1'b0;
+	end
+end
 
 // HDD RAM output - shared buffer routed to both HDD unit indices
 wire [7:0] hdd_ram_do;

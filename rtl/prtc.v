@@ -12,7 +12,15 @@ module prtc(
   output reg onesecond_irq,
   output reg qtrsecond_irq,
   input rw,
-  input strobe // must be high for one clock enable(cen) only!
+  input strobe, // must be high for one clock enable(cen) only!
+
+  // NVRAM backup port (MiSTer SD save/load; see doc/pram-nvram-save-handoff.md).
+  // bk_wr strobes land while the SD block streams in; folded into the same
+  // always block as the protocol writes (single writer, FPGA-safe).
+  input  [7:0] bk_addr,
+  input        bk_wr,
+  input  [7:0] bk_data,
+  output [7:0] bk_q
 );
 
 reg old_strobe;
@@ -82,6 +90,7 @@ reg [7:0] read_result = 8'h00;
 wire pram_read_now = strobe && cen && (addr == 1'b1) && ~rw && din[7] && (state == PRAM) && din[6];
 wire clock_read_now = strobe && cen && (addr == 1'b1) && ~rw && din[7] && (state == CLOCK) && din[6];
 wire [7:0] pram_read_data = pram[clk_reg1];
+assign bk_q = pram[bk_addr];
 wire [7:0] clock_read_data = clock_data[clk_reg1[1:0]*8+:8];
 
 // Combinational output for dout - must be available immediately, not registered
@@ -415,6 +424,11 @@ end
   end
 
   end // else !reset
+
+  // NVRAM backup load (SD -> pram). Last assignment in the block so it wins
+  // over a same-cycle protocol/checksum write (loads happen at mount/OSD time
+  // while the machine is idle, so collisions are theoretical anyway).
+  if (bk_wr) pram[bk_addr] <= bk_data;
 
 end
 

@@ -1,6 +1,8 @@
 # PRAM / NVRAM Save & Restore — Handoff
 
-**Status:** Planned, not yet implemented. Research complete; design chosen.
+**Status:** IMPLEMENTED (2026-07-11, branch `transwarp`). The block additionally carries
+the TransWarp GS X2444 NVRAM at bytes 256-287. OSD: System page, slot S4 ("PRAM NVRAM")
++ Save NVRAM (status[21]) / Load NVRAM (status[22]), with auto-load on mount.
 **Goal:** Persist the Apple IIgs battery-backed PRAM (256 bytes) across power cycles
 using the standard MiSTer save mechanism (an `hps_io` SD virtual-disk slot).
 

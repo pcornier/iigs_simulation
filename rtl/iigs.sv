@@ -116,6 +116,13 @@ module iigs
    output             accel_ctr_delay,
    output             accel_cps_follow,
 
+   // NVRAM backup port (MiSTer SD slot 4; doc/pram-nvram-save-handoff.md).
+   // 512-byte block: [0-255]=PRAM, [256-287]=TWGS X2444, rest reads $FF.
+   input  [8:0]       nv_addr,
+   input              nv_wr,
+   input  [7:0]       nv_din,
+   output [7:0]       nv_dout,
+
    // 1 = fast cycles are currently configured (by the OSD or by ZipGS
    // software). The FPGA top selects the CPU read datapath with this:
    // native -> single-word registered reads (cycle-exact, never stalls),
@@ -2350,8 +2357,22 @@ wire ready_out;
             .onesecond_irq(onesecond_irq),
             .qtrsecond_irq(qtrsecond_irq),
             .rw(prtc_rw),
-            .strobe(prtc_strobe)
+            .strobe(prtc_strobe),
+            .bk_addr(nv_addr[7:0]),
+            .bk_wr(nv_wr & nv_pram_sel),
+            .bk_data(nv_din),
+            .bk_q(nv_pram_q)
             );
+
+  // NVRAM backup block map (one 512-byte SD block, slot 4 in the top level):
+  //   bytes   0-255  IIgs battery PRAM (prtc)
+  //   bytes 256-287  TransWarp GS X2444 NVRAM (32 bytes)
+  //   bytes 288-511  unused, read back as $FF
+  wire nv_pram_sel = ~nv_addr[8];
+  wire nv_twgs_sel = nv_addr[8] & (nv_addr[7:5] == 3'b000);
+  wire [7:0] nv_pram_q, nv_twgs_q;
+  assign nv_dout = nv_pram_sel ? nv_pram_q :
+                   nv_twgs_sel ? nv_twgs_q : 8'hFF;
 
   // Hardware-accurate IWM with WOZ/flux-based disk interface
   iwm_woz iwmc (
@@ -2676,7 +2697,11 @@ twgs_card twgs (
     .sel(twgs_sel), .dout(twgs_dout),
     .accel_en(twgs_accel_en), .speed_code(twgs_speed_code),
     .cfg_speed_code(twgs_cfg_speed),
-    .cache_enable(), .irq_logic_en()
+    .cache_enable(), .irq_logic_en(),
+    .bk_addr(nv_addr[4:0]),
+    .bk_wr(nv_wr & nv_twgs_sel),
+    .bk_data(nv_din),
+    .bk_q(nv_twgs_q)
 );
 
 // Slot-ROM ($Cn00-$CnFF) timing when accelerated. Slots run at 1 MHz by

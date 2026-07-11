@@ -44,7 +44,13 @@ module twgs_card (
     output wire [2:0]  speed_code,   // 0 native .. 3 = 7.16 MHz
     output wire [2:0]  cfg_speed_code,// configured speed (ignores CYAREG.7) for the OSD mirror
     output wire        cache_enable, // $BC0000.1 (advisory)
-    output wire        irq_logic_en  // ~$BC0000.3 (advisory)
+    output wire        irq_logic_en, // ~$BC0000.3 (advisory)
+
+    // X2444 NVRAM backup port (byte view; MiSTer SD save/load)
+    input  wire [4:0]  bk_addr,
+    input  wire        bk_wr,
+    input  wire [7:0]  bk_data,
+    output wire [7:0]  bk_q
 );
 
   // ---- bank-$BC absolute decode -----------------------------------------
@@ -81,7 +87,8 @@ module twgs_card (
       .clk(clk), .reset(reset),
       .ctrl_wr_stb(ctrl_wr_stb), .ctrl_wr_data(wr_data),
       .data_stb(data_stb), .data_we(we), .data_wr_data(wr_data),
-      .data_dout(nvram_dout)
+      .data_dout(nvram_dout),
+      .bk_addr(bk_addr), .bk_wr(bk_wr), .bk_data(bk_data), .bk_q(bk_q)
   );
 
   twgs_rom rom_i (

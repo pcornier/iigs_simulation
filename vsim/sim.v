@@ -374,6 +374,10 @@ iigs  iigs(
         .accel_pdl_delay(),
         .accel_ctr_delay(),
         .accel_cps_follow(),
+        .nv_addr(9'd0),      // NVRAM backup port unused in sim (HW SD slot 4)
+        .nv_wr(1'b0),
+        .nv_din(8'd0),
+        .nv_dout(),
         .twgs_present(1'b0),   // TWGS card off by default (flip to 1'b1 to test detection)
         // Detection verified 2026-07-11: with 1'b1, monitor `BC/FF00.FF0F` shows
         // 'TWGS''SMJS' + the JML table (54 57 47 53 53 4D 4A 53 / 5C 28 FB BC ...)

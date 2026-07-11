@@ -45,7 +45,14 @@ module twgs_nvram (
     input  wire       data_we,
     input  wire [7:0] data_wr_data,
 
-    output wire [7:0] data_dout        // $BC4000 read value ({DO,7'b0})
+    output wire [7:0] data_dout,       // $BC4000 read value ({DO,7'b0})
+
+    // NVRAM backup port (MiSTer SD save/load): byte view of the 16x16-bit
+    // store, little-endian per word (byte 2i = word i low byte, 2i+1 = high).
+    input  wire [4:0] bk_addr,
+    input  wire       bk_wr,
+    input  wire [7:0] bk_data,
+    output wire [7:0] bk_q
 );
 
   // ---- 16 x 16-bit store, pre-seeded so boot short-circuits --------------
@@ -145,8 +152,17 @@ module twgs_nvram (
           default: ;
         endcase
       end
+
+      // Backup load (SD -> mem): last in the block so it wins over a
+      // same-cycle serial write (loads happen at mount/OSD time).
+      if (bk_wr) begin
+        if (bk_addr[0]) mem[bk_addr[4:1]][15:8] <= bk_data;
+        else            mem[bk_addr[4:1]][7:0]  <= bk_data;
+      end
     end
   end
+
+  assign bk_q = bk_addr[0] ? mem[bk_addr[4:1]][15:8] : mem[bk_addr[4:1]][7:0];
 
   // Only bit7 of the control/data write matters (CE / serial DI, MSB-first);
   // data_we is informational. Sink the rest to keep strict lint quiet.
