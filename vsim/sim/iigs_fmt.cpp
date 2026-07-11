@@ -372,15 +372,26 @@ static int parse_nib_sector(const uint8_t *d, int len, uint8_t *out256, int *tra
 
 // Parse one 6656-byte NIB track into a 4096-byte DOS-order track. Returns the
 // number of sectors recovered.
+//
+// A NIB track is a CIRCULAR dump cut at an arbitrary rotational point, so one
+// sector's nibbles almost always straddle the end->start boundary. Scan an
+// unrolled ring (track + one sector's worth appended) so the wrapped sector
+// parses too, and dedupe by sector number in case a sector is seen twice.
 static int nib_track_to_dsk_track(const uint8_t *nt, uint8_t *dt)
 {
+	static uint8_t ring[A2_NIB_TRACK_SIZE + BYTES_PER_NIB_SECTOR + 64];
+	memcpy(ring, nt, A2_NIB_TRACK_SIZE);
+	memcpy(ring + A2_NIB_TRACK_SIZE, nt, BYTES_PER_NIB_SECTOR + 64);
+
 	int got = 0, pos = 0;
-	while (pos < A2_NIB_TRACK_SIZE - 400) {
+	uint16_t seen = 0;
+	while (pos < A2_NIB_TRACK_SIZE) {
 		uint8_t sec[A2_SECTOR_SIZE];
 		int tr, s;
-		if (parse_nib_sector(nt + pos, A2_NIB_TRACK_SIZE - pos, sec, &tr, &s)) {
-			if (s >= 0 && s < A2_SECTORS_PER_TRACK) {
+		if (parse_nib_sector(ring + pos, (int)sizeof(ring) - pos, sec, &tr, &s)) {
+			if (s >= 0 && s < A2_SECTORS_PER_TRACK && !(seen & (1u << s))) {
 				memcpy(dt + soft_interleave[s] * A2_SECTOR_SIZE, sec, A2_SECTOR_SIZE);
+				seen |= (uint16_t)(1u << s);
 				got++;
 			}
 			pos += BYTES_PER_NIB_SECTOR;
