@@ -168,6 +168,7 @@ module iigs
    // --- WOZ bit interface for 5.25" drive 1 ---
    output [5:0]       WOZ_TRACK1,           // Track number being read
    output [8:0]       WOZ_TRACK1_QTRACK,    // Full quarter-track head position (half-track seeks)
+   input              WOZ_TRACK1_DATA_VALID, // BRAM data matches the requested 5.25" track
    output [15:0]      WOZ_TRACK1_BIT_ADDR,  // Byte address in track bit buffer (16-bit for FLUX)
    input  [7:0]       WOZ_TRACK1_BIT_DATA,  // Byte from track bit buffer
    input  [31:0]      WOZ_TRACK1_BIT_COUNT, // Total bits in track
@@ -296,6 +297,7 @@ module iigs
 
   logic [7:0]         iwm_din;
   logic [7:0]         iwm_dout;
+
   logic [7:0]         iwm_addr;
   logic               iwm_rw, iwm_strobe;
 
@@ -2380,6 +2382,7 @@ wire ready_out;
       // WOZ bit interface for 5.25" drive 1
       .WOZ_TRACK1(WOZ_TRACK1),
       .WOZ_TRACK1_QTRACK(WOZ_TRACK1_QTRACK),
+      .WOZ_TRACK1_DATA_VALID(WOZ_TRACK1_DATA_VALID),
       .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
       .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
       .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),

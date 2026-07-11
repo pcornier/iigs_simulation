@@ -309,6 +309,7 @@ iigs iigs (
 	// 5.25" drive 1
 	.WOZ_TRACK1(WOZ_TRACK1),
 	.WOZ_TRACK1_QTRACK(WOZ_TRACK1_QTRACK),
+	.WOZ_TRACK1_DATA_VALID(WOZ_TRACK1_DATA_VALID),
 	.WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
 	.WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
 	.WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
@@ -627,24 +628,47 @@ assign VGA_VS=vsync;
 assign VGA_DE =  ~(vblank | hblank);
 
 `ifdef DEBUG_PIXEL_OVERLAY
-// ---- TEMPORARY: 14.3 MHz wedge hunt (doc/zipgs-14mhz-plan.md) ----
-// One row of 8x8 bit-blocks, drawn at py 40-55 (safely inside the MiSTer
-// scaler's visible window; the first attempt at py 4-12 landed in cropped
-// overscan). Frame-latched sample: {phi2_cnt[3:0], accel_r, mem_stall,
-// addr_latched[23:0]} MSB first. phi2_cnt=0 -> CPU clock-enable dead;
-// addr_latched = bus address at the last committed cycle (samples the wedge
-// loop; take several screenshots for several samples). Logic validated in
-// the Vemu sim (same block renders there).
-reg [23:0] dbg_addr_l;
-reg [3:0]  dbg_phi2_cnt;
-reg        dbg_vs_s1, dbg_vs_s2;
+// ---- TEMPORARY: floppy-boot chain probe (no floppy boots on HW 2026-07-09) ----
+// One row of 16px bit-blocks at py 100-132, MSB first:
+//   idx 0  img_mounted[3] pulse seen (sticky)      idx 1  woz_ctrl_525_mount (live)
+//   idx 2  woz_ctrl_525_disk_mounted (live)        idx 3  woz_ctrl_525_ready (live)
+//   idx 4  woz_ctrl_525_busy (live)                idx 5  sd_rd[3] seen (sticky)
+//   idx 6  sd_ack[3] seen (sticky)                 idx 7  track_load_complete 525 (live)
+//   idx 8  floppy_motor_on seen (sticky)           idx 9  floppy_motor_on (live)
+//   idx 10 IWM $C0Ex phi2 access seen (sticky)     idx 11 img_mounted[2] seen (sticky)
+//   idx 12 qtrack exceeded clamp (sticky)          idx 13 HPS same-LBA double-serve seen (sticky)
+//   idx 14-21 WOZ_TRACK1_QTRACK[7:0] (live)        idx 22-29 woz_sd_525_lba[7:0] (live)
+reg dbg_mnt3_seen, dbg_rd3_seen, dbg_ack3_seen, dbg_motor_seen;
+reg dbg_iwm_seen, dbg_mnt2_seen;
+// Tear-proof head-position forensics, latched in the SAME clock domain as
+// WOZ_TRACK1_QTRACK (clk_sys) so pixel-sampling artifacts are impossible:
+//   dbg_max_qtrack  - highest head position ever reached
+//   dbg_impossible  - sticky: head exceeded the 5.25" stepper clamp (139+3)
+reg [8:0] dbg_max_qtrack;
+reg       dbg_impossible;
+// HPS double-serve forensics: latch sd_lba at each slot-3 ack RISE. If Main
+// re-serves the same LBA back-to-back, lba_hist0==lba_hist1 and dup_seen sets.
+reg       dbg_ack3_d;
+reg [7:0] dbg_lba_hist0, dbg_lba_hist1;
+reg       dbg_dup_seen;
 always @(posedge clk_sys) begin
-	dbg_vs_s1 <= vsync;  dbg_vs_s2 <= dbg_vs_s1;
-	if (phi2) begin
-		dbg_addr_l <= addr_bus[23:0];
-		if (dbg_phi2_cnt != 4'hF) dbg_phi2_cnt <= dbg_phi2_cnt + 4'd1;
+	if (img_mounted[3])      dbg_mnt3_seen  <= 1'b1;
+	if (sd_rd[3])            dbg_rd3_seen   <= 1'b1;
+	if (sd_ack[3])           dbg_ack3_seen  <= 1'b1;
+	if (floppy_motor_on)     dbg_motor_seen <= 1'b1;
+	if (img_mounted[2])      dbg_mnt2_seen  <= 1'b1;
+	if (WOZ_TRACK1_QTRACK > dbg_max_qtrack) dbg_max_qtrack <= WOZ_TRACK1_QTRACK;
+	if (WOZ_TRACK1_QTRACK > 9'd142)         dbg_impossible <= 1'b1;
+	dbg_ack3_d <= sd_ack[3];
+	if (~dbg_ack3_d & sd_ack[3]) begin
+		dbg_lba_hist1 <= dbg_lba_hist0;
+		dbg_lba_hist0 <= woz_sd_525_lba[7:0];
+		if (woz_sd_525_lba[7:0] == dbg_lba_hist0) dbg_dup_seen <= 1'b1;
 	end
-	if (dbg_vs_s1 & ~dbg_vs_s2) dbg_phi2_cnt <= 4'd0;
+	if (phi2 && addr_bus[15:4] == 12'hC0E &&
+	    (addr_bus[23:16] == 8'h00 || addr_bus[23:16] == 8'h01 ||
+	     addr_bus[23:16] == 8'hE0 || addr_bus[23:16] == 8'hE1))
+		dbg_iwm_seen <= 1'b1;
 end
 wire vga_de_dbg = ~(vblank | hblank);
 reg [9:0]  dbg_px; reg [8:0] dbg_py;
@@ -653,7 +677,12 @@ reg [29:0] dbg_sample;
 always @(posedge clk_vid) if (ce_pix) begin
 	dbg_de_d <= vga_de_dbg;  dbg_vs_d <= vsync;
 	if (vsync & ~dbg_vs_d) begin
-		dbg_sample <= {dbg_phi2_cnt, accel_r, mem_stall, dbg_addr_l};
+		dbg_sample <= {dbg_mnt3_seen, woz_ctrl_525_mount, woz_ctrl_525_disk_mounted,
+		               woz_ctrl_525_ready, woz_ctrl_525_busy, dbg_rd3_seen,
+		               dbg_ack3_seen, woz_ctrl_525_track_load_complete,
+		               dbg_motor_seen, floppy_motor_on, dbg_iwm_seen, dbg_mnt2_seen,
+		               dbg_impossible, dbg_dup_seen,
+		               WOZ_TRACK1_QTRACK[7:0], woz_sd_525_lba[7:0]};
 		dbg_py <= 9'd0;  dbg_px <= 10'd0;
 	end else if (vga_de_dbg) begin
 		dbg_px <= dbg_px + 10'd1;
@@ -665,13 +694,9 @@ wire       dbg_area = (dbg_py >= 9'd100) && (dbg_py < 9'd132) &&
                       (dbg_px >= 10'd16) && (dbg_px < 10'd16 + 10'd480);
 wire [4:0] dbg_idx  = (dbg_px - 10'd16) >> 4;
 wire       dbg_bit  = dbg_sample[5'd29 - dbg_idx];
-// Diagnostic tints (zero-logic liveness probes, one screenshot answers all):
-//   BLUE  tint everywhere  = these assigns are really in the video path
-//   GREEN tint             = ddr_trace trigger is armed
-//   RED   tint             = ddr_trace has captured at least one record
-assign VGA_R = dbg_area ? (dbg_bit ? 8'hFF : 8'h18) : (iigs_r | (dtrace_active ? 8'h60 : 8'h00));
-assign VGA_G = dbg_area ? (dbg_bit ? 8'hFF : 8'h18) : (iigs_g | (trace_trig    ? 8'h60 : 8'h00));
-assign VGA_B = dbg_area ? 8'h00                      : (iigs_b | 8'h40);
+assign VGA_R = dbg_area ? (dbg_bit ? 8'hFF : 8'h18) : iigs_r;
+assign VGA_G = dbg_area ? (dbg_bit ? 8'hFF : 8'h18) : iigs_g;
+assign VGA_B = dbg_area ? 8'h00                     : iigs_b;
 `else
 assign VGA_R = iigs_r;
 assign VGA_G = iigs_g;
@@ -728,6 +753,7 @@ wire [15:0] WOZ_TRACK3_BIT_WR_ADDR;  // Write address (latched)
 // 5.25" drive 1 WOZ bit interface
 wire [5:0]  WOZ_TRACK1;
 wire [8:0]  WOZ_TRACK1_QTRACK;    // Full quarter-track head position (half-track seeks)
+wire        WOZ_TRACK1_DATA_VALID; // BRAM data matches the requested 5.25" track
 // 5.25" TMAP index from the head position, at quarter-track resolution.
 // This drive model's head coordinate sits +2 quarter-tracks above the WOZ TMAP
 // convention (4am/Applesauce): e.g. the loader energizes PH3 for half-track 27
@@ -896,7 +922,10 @@ woz_floppy_controller #(
 	.disk_type_mismatch(),
 
 	// Write-protect flag from WOZ INFO chunk
-	.disk_write_protected(WOZ_TRACK3_WP)
+	.disk_write_protected(WOZ_TRACK3_WP),
+	.dbg_load_sum(),
+	.dbg_load_bytes(),
+	.dbg_load_blocks()
 );
 
 // =========================================================================
@@ -948,13 +977,16 @@ woz_floppy_controller #(
 	.flux_total_ticks(woz_ctrl_525_flux_total_ticks),
 
 	// Track data validity
-	.track_data_valid(),
+	.track_data_valid(WOZ_TRACK1_DATA_VALID),
 
 	// Disk type mismatch
 	.disk_type_mismatch(),
 
 	// Write-protect flag from WOZ INFO chunk
-	.disk_write_protected(WOZ_TRACK1_WP)
+	.disk_write_protected(WOZ_TRACK1_WP),
+	.dbg_load_sum(),
+	.dbg_load_bytes(),
+	.dbg_load_blocks()
 );
 
 endmodule

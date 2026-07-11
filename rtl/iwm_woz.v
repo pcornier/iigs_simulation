@@ -52,6 +52,7 @@ module iwm_woz (
     // WOZ Track bit interface for 5.25" drive 1
     output [5:0]    WOZ_TRACK1,
     output [8:0]    WOZ_TRACK1_QTRACK,   // Full quarter-track head position (half-track seeks)
+    input           WOZ_TRACK1_DATA_VALID,    // BRAM data matches the requested 5.25" track
     output [15:0]   WOZ_TRACK1_BIT_ADDR,
     input  [7:0]    WOZ_TRACK1_BIT_DATA,
     input  [31:0]   WOZ_TRACK1_BIT_COUNT,
@@ -315,7 +316,9 @@ module iwm_woz (
             // Mode register write: see `is_mode_write_access` above.
             if (is_mode_write_access) begin
                 mode_reg <= {3'b000, D_IN[4:0]};
-`ifdef DEBUG_VERBOSE
+`ifndef SYNTHESIS
+                // Always log mode writes: smartport_mode_sense (= !mode[3] && mode[1])
+                // suppresses ALL 5.25" flux at the mux — a wrong value here wedges boots.
                 $display("IWM_WOZ: MODE_REG <= %02h (D_IN=%02h q6=%0d q7=%0d)", {3'b000, D_IN[4:0]}, D_IN, write_mode_q6, write_mode_q7);
 `endif
             end
@@ -723,6 +726,19 @@ module iwm_woz (
     // noise on empty tracks to mimic the random flux that real drives
     // pick up from unformatted regions; gating that path on bit_count
     // would wedge games that step past the last recorded track.
+    // (Empty TMAP entries DO set current_track_id, so DATA_VALID stays 1
+    // for them and the noise path is preserved.)
+    //
+    // WOZ_TRACK1_DATA_VALID gates out the settle/load window after a seek:
+    // without it, the drive plays the PREVIOUS track's bits with valid
+    // sector headers while the new track is still loading over SD -- RWTS
+    // reads a valid-but-wrong track number, treats it as a seek error and
+    // recalibrates, making boots a load-latency race on real hardware
+    // (sim loads are instant so it never showed there). With the gate the
+    // drive emits no flux until the right track is in BRAM, so the ROM
+    // just retries -- like a real head over a still-settling disk.
+    // A/B EXPERIMENT (2026-07-10): playback gate DISABLED — HW went 0/5 with it
+    // (sim passes either way). Re-enable by ANDing WOZ_TRACK1_DATA_VALID.
     wire drive525_track_loaded = DISK_READY[0];
 
     flux_drive drive525 (

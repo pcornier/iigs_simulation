@@ -334,6 +334,7 @@ iigs  iigs(
     // WOZ bit interface for 5.25" drive 1
     .WOZ_TRACK1(WOZ_TRACK1),
     .WOZ_TRACK1_QTRACK(WOZ_TRACK1_QTRACK),
+    .WOZ_TRACK1_DATA_VALID(WOZ_TRACK1_DATA_VALID),
     .WOZ_TRACK1_BIT_ADDR(WOZ_TRACK1_BIT_ADDR),
     .WOZ_TRACK1_BIT_DATA(WOZ_TRACK1_BIT_DATA),
     .WOZ_TRACK1_BIT_COUNT(WOZ_TRACK1_BIT_COUNT),
@@ -803,7 +804,10 @@ woz_floppy_controller #(
     .disk_type_mismatch(woz_35_type_mismatch),
 
     // Write-protect flag from WOZ INFO chunk
-    .disk_write_protected(WOZ_TRACK3_WP)
+    .disk_write_protected(WOZ_TRACK3_WP),
+    .dbg_load_sum(),
+    .dbg_load_bytes(),
+    .dbg_load_blocks()
 );
 
 // Connect 3.5" WOZ controller outputs to IIgs inputs
@@ -897,13 +901,16 @@ woz_floppy_controller #(
     .flux_total_ticks(woz_ctrl_525_flux_total_ticks),
 
     // Track data validity
-    .track_data_valid(),
+    .track_data_valid(WOZ_TRACK1_DATA_VALID),
 
     // Disk type mismatch
     .disk_type_mismatch(woz_525_type_mismatch),
 
     // Write-protect flag from WOZ INFO chunk
-    .disk_write_protected(WOZ_TRACK1_WP)
+    .disk_write_protected(WOZ_TRACK1_WP),
+    .dbg_load_sum(),
+    .dbg_load_bytes(),
+    .dbg_load_blocks()
 );
 
 // Connect 5.25" WOZ controller outputs to IIgs inputs

@@ -57,7 +57,15 @@ module woz_floppy_controller #(
 
     // Write-protect flag from WOZ INFO chunk (byte offset 2).
     // Some copy-protection (e.g. Wizardry) refuses to boot unless the disk reports WP=1.
-    output wire       disk_write_protected
+    output wire       disk_write_protected,
+
+    // DEBUG: running sum of all sd_buff bytes received during track loads
+    // (S_READ_TRACK). Reset at each load start. Compared between sim (golden)
+    // and FPGA overlay to detect HPS data-delivery corruption.
+    output reg [15:0] dbg_load_sum,
+    // DEBUG: byte count and ack-fall (block) count for the same load window.
+    output reg [13:0] dbg_load_bytes,
+    output reg [7:0]  dbg_load_blocks
 );
 
     //=========================================================================
@@ -259,8 +267,18 @@ module woz_floppy_controller #(
     // IMPORTANT: Use physical track (track_id[7:1]) NOT full track_id,
     // because SEL toggles (track_id[0]) shouldn't reset settling.
     reg [6:0]  last_physical_track;   // Previous physical track for change detection
-    reg [15:0] settle_counter;        // Cycles since last physical track change
-    localparam SETTLE_THRESHOLD = 16'd50000;  // ~3.5ms at 14MHz for head settle (longer to survive fast seeks)
+    reg [19:0] settle_counter;        // Cycles since last physical track change
+    localparam SETTLE_THRESHOLD = 20'd50000;   // 3.5": ~3.5ms head settle
+    // 5.25": with the debounced (physical) head walk, seek code rests ~19ms per
+    // quarter-track transit and the physical-track pair changes every 2 rests
+    // (~38ms). Loading every transit position lets slow real-SD track loads lag
+    // the head (boot read races -> intermittent boots on HW). 45ms only loads
+    // truly settled positions. Half-track hops within the same physical pair
+    // (copy-protection nudges) do NOT reset the counter and still load at once.
+    localparam SETTLE_525 = 20'd50000;         // 3.5ms (same as 3.5"): with the
+    // data-valid playback gate below, transit loads only cost time and never
+    // feed stale data, so no long settle is needed (45ms made boots crawl)
+    wire [19:0] settle_lim = IS_35_INCH ? SETTLE_THRESHOLD : SETTLE_525;
 
     // Dirty flush timer: flush dirty tracks to disk after writes stop
     // Handles the case where the ROM writes to a track and reads back without
@@ -424,7 +442,7 @@ module woz_floppy_controller #(
             loading_second_side <= 1'b0;
             target_physical_track <= 7'h7F;
             last_physical_track <= 7'h7F;
-            settle_counter <= 16'd0;
+            settle_counter <= 20'd0;
             bit_count_side0 <= 32'd0;
             bit_count_side1 <= 32'd0;
             flux_total_ticks_side0 <= 32'd0;
@@ -747,13 +765,13 @@ module woz_floppy_controller #(
                     if (track_id[7:1] != last_physical_track) begin
                         // Physical track changed - reset settle counter
                         last_physical_track <= track_id[7:1];
-                        settle_counter <= 16'd0;
+                        settle_counter <= 20'd0;
                         // Debug: show track change detected
                         if (settle_counter > 16'd100) begin
                             $display("WOZ_SETTLE: Physical track changed %0d -> %0d, resetting settle counter",
                                      last_physical_track, track_id[7:1]);
                         end
-                    end else if (settle_counter < SETTLE_THRESHOLD) begin
+                    end else if (settle_counter < settle_lim) begin
                         // Physical track stable but not yet settled
                         settle_counter <= settle_counter + 1'd1;
                     end
@@ -839,7 +857,7 @@ module woz_floppy_controller #(
                     end else begin
                         // 5.25" SINGLE-SIDED:
                         // Only one side, simpler logic. Also use settling time.
-                        if ((track_id != current_track_id_side0) && (settle_counter >= SETTLE_THRESHOLD)) begin
+                        if ((track_id != current_track_id_side0) && (settle_counter >= settle_lim)) begin
                             $display("WOZ_SETTLE: 5.25\" settled after %0d cycles, starting load for track %0d",
                                      settle_counter, track_id);
                             pending_track_id <= track_id;
@@ -951,7 +969,7 @@ module woz_floppy_controller #(
                                          // Physical track changed - go to IDLE for settling
                                          state <= S_IDLE;
                                          busy <= 0;
-                                         settle_counter <= 16'd0;
+                                         settle_counter <= 20'd0;
                                          $display("WOZ_CTRL: Physical track moved during empty track: %0d -> %0d, waiting for settle",
                                                   target_physical_track, track_id[7:1]);
                                      end else begin
@@ -1100,7 +1118,7 @@ module woz_floppy_controller #(
                                  target_physical_track, track_id[7:1]);
                         state <= S_IDLE;
                         busy <= 0;
-                        settle_counter <= 16'd0;
+                        settle_counter <= 20'd0;
                         sd_rd <= 1'b0;
                         transfer_active <= 1'b0;
                         request_issued <= 1'b0;
@@ -1185,7 +1203,7 @@ module woz_floppy_controller #(
                                     // This prevents thrashing during fast seeks
                                     state <= S_IDLE;
                                     busy <= 0;
-                                    settle_counter <= 16'd0;  // Reset settle counter for new track
+                                    settle_counter <= 20'd0;  // Reset settle counter for new track
                                     $display("WOZ_CTRL: Physical track moved during first side: %0d -> %0d, waiting for settle",
                                              target_physical_track, track_id[7:1]);
                                 end else begin
@@ -1202,6 +1220,8 @@ module woz_floppy_controller #(
                                 // 5.25" single-sided OR 3.5" side 1 complete
                                 loading_second_side <= 1'b0;
                                 track_load_complete <= 1'b1;  // Pulse to signal flux_drive to reset position
+                                $display("WOZ_CTRL: LOAD_SUM track %0d sum=%04x bytes=%0d blocks=%0d",
+                                         pending_track_id, dbg_load_sum, dbg_load_bytes, dbg_load_blocks);
 
                                 // Check if physical track changed during load
                                 // This can happen if the drive head stepped while we were loading
@@ -1210,7 +1230,7 @@ module woz_floppy_controller #(
                                     // This prevents thrashing during fast seeks
                                     state <= S_IDLE;
                                     busy <= 0;
-                                    settle_counter <= 16'd0;  // Reset settle counter for new track
+                                    settle_counter <= 20'd0;  // Reset settle counter for new track
                                     $display("WOZ_CTRL: Physical track moved during load: %0d -> %0d, waiting for settle",
                                              target_physical_track, track_id[7:1]);
                                 end else begin
@@ -1298,9 +1318,28 @@ module woz_floppy_controller #(
             
             // Data Loading/Saving DMA
             // This runs in parallel with state machine waiting for sd_ack
+	            if (state == S_SEEK_LOOKUP) begin
+	                dbg_load_sum    <= 16'd0;   // new track load starting
+	                dbg_load_bytes  <= 14'd0;
+	                dbg_load_blocks <= 8'd0;
+	            end
+	            if (sd_ack && sd_buff_wr && state == S_READ_TRACK &&
+	                (transfer_active || (!old_ack && sd_ack))) begin
+	                dbg_load_sum   <= dbg_load_sum + {8'd0, sd_buff_dout};
+	                dbg_load_bytes <= dbg_load_bytes + 14'd1;
+	            end
+	            if (old_ack && !sd_ack && state == S_READ_TRACK) begin
+	                dbg_load_blocks <= dbg_load_blocks + 8'd1;
+	            end
 	            if (sd_ack) begin
 	                if (sd_buff_wr) begin // Reading from SD -> RAM
-	                     if (state == S_SCAN_WOZ && !scan_skip_discard) begin
+	                     // Gate on transfer_active (like the S_READ_TRACK BRAM path):
+	                     // the real HPS sometimes re-serves the same LBA unsolicited
+	                     // (measured on HW: dup ack with unchanged sd_lba). Without
+	                     // this gate the streaming parser consumes those bytes twice
+	                     // and mis-parses the WOZ chunks.
+	                     if (state == S_SCAN_WOZ && !scan_skip_discard &&
+	                         (transfer_active || (!old_ack && sd_ack))) begin
 	                         // Streaming parser: process file bytes sequentially.
 	                         // Skip processing if scan_skip_discard is set (discarding current block)
 	                         reg [7:0] b;
