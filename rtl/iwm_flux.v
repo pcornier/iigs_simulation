@@ -341,7 +341,8 @@ module iwm_flux (
     wire [7:0] next_rsh_edge1 = {m_rsh[6:0], 1'b1};
     // Simple 5.25" shift register byte completion detection
     wire       sr525_shift_now = sr525_active && (sr525_timer == 6'd1);
-    wire [7:0] sr525_next_rsh = {m_rsh[6:0], sr525_flux_seen ? 1'b1 : 1'b0};
+    // flux_edge folded in: matches the shift branch's same-cycle edge handling
+    wire [7:0] sr525_next_rsh = {m_rsh[6:0], (sr525_flux_seen || flux_edge) ? 1'b1 : 1'b0};
     wire       sr525_byte_completing = DISK_READY && sr525_shift_now && sr525_next_rsh[7];
     wire       byte_completing = DISK_READY &&
                                  (sr525_byte_completing ||
@@ -821,8 +822,16 @@ module iwm_flux (
                     end
 
                     if (sr525_timer == 6'd1) begin
-                        // End of bit cell: shift in the accumulated flux bit
-                        shifted_rsh = {m_rsh[6:0], sr525_flux_seen ? 1'b1 : 1'b0};
+                        // End of bit cell: shift in the accumulated flux bit.
+                        // Include a same-cycle flux_edge: the `sr525_flux_seen <= 1'b0`
+                        // below textually follows the `if (flux_edge)` set above, so a
+                        // pulse landing on the shift cycle would otherwise be swallowed
+                        // (last nonblocking assign wins). The drive's bit-cell timer and
+                        // this timer are both free-running mod-56 counters, so a boot can
+                        // phase-lock EVERY edge onto shift cycles — zeros shift forever
+                        // (HW-only LR black-screen wedge; sim phases never align).
+                        // The 3.5" window path already handles this via flux_now.
+                        shifted_rsh = {m_rsh[6:0], (sr525_flux_seen || flux_edge) ? 1'b1 : 1'b0};
                         m_rsh <= shifted_rsh;
                         sr525_flux_seen <= 1'b0;
                         sr525_timer <= SR525_BIT_CELL;
