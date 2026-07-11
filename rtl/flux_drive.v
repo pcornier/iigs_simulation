@@ -665,14 +665,31 @@ module flux_drive (
     // 3.5" drives: CA0=direction, CA1=step pulse (Sony mechanism)
 
     reg prev_step;  // For 3.5" edge detection on CA1
+    reg [3:0] prev_phases_525;  // 5.25" stepper: last PHASES value (debounce)
+    reg [3:0] last_valid_phases; // last debounced non-zero PHASES (snap target)
+    // 5.25" phase-state debounce: ~20 us at 14.318 MHz. Blips that must NOT
+    // move the head (ROM drive-detect pulses, RWTS phase-off tails) measure
+    // 3-17 us; every real seek pulse is >=42 us EVEN on hardware where the
+    // ROM's WAIT delays collapse ~69x (stack read-back corruption under
+    // investigation shortens LDA #$56/JSR wait from 19.3 ms to 280 us, and
+    // loader seek pulses from 2.9 ms to ~42 us). 20 us sits between the two
+    // populations in BOTH worlds. (100 us worked in sim but filtered the
+    // collapsed hardware seek pulses -> head never moved -> boot hang.)
+    localparam PHASE_DEBOUNCE = 14'd286;
+    reg [13:0] step_hold_cnt;
 
     always @(posedge CLK_14M or posedge RESET) begin
         integer phase_change;
         integer new_phase;
+        integer snap_diff;
         reg [3:0] rel_phase;
+        reg [3:0] snap_pole;
 
         if (RESET) begin
             head_phase <= 9'd0;
+            prev_phases_525 <= 4'b0000;
+            last_valid_phases <= 4'b0000;
+            step_hold_cnt <= 14'd0;
             prev_step <= 1'b0;
             step_direction_slot <= 2'b00;  // Default: toward higher tracks (matches MAME m_dir=0)
             prev_lstrb <= 1'b0;            // No strobe active initially
@@ -869,7 +886,17 @@ module flux_drive (
             // implemented in the sony_cmd_strobe handler above.
             // Only 5.25" drives use the traditional 4-phase stepper logic below.
             if (!IS_35_INCH) begin
-                // 5.25" 4-phase stepper logic
+                // 5.25" 4-phase stepper logic.
+                //
+                // Apply the phase table ONCE PER PHASE-LINE TRANSITION (edge-
+                // triggered), not continuously. A continuous attractor snaps the
+                // head fully onto the last energized phase within ~2 clocks, so a
+                // brief trailing pulse in a seek's phase-off sequence (e.g. the
+                // RWTS overlap tail ph1+ph2 -> ph1 -> off) drags the head half a
+                // track off its destination -- landing in a TMAP gap and breaking
+                // DOS 3.3 style seeks. A real head has inertia and barely moves on
+                // a microsecond blip; reference emulators (clemens/KEGS) likewise
+                // apply one bounded delta per phase-state change.
                 phase_change = 0;
                 new_phase = head_phase;
                 rel_phase = PHASES;
@@ -910,13 +937,75 @@ module flux_drive (
                     endcase
                 end
 
-                new_phase = head_phase + phase_change;
-                if (new_phase < 0)
-                    head_phase <= 9'd0;
-                else if (new_phase > max_phase)
-                    head_phase <= max_phase;
-                else
-                    head_phase <= new_phase;
+                // Phase-state debounce: only react to a PHASES state that has
+                // been held for PHASE_DEBOUNCE (~100 us). A real head barely
+                // moves on microsecond pulses, but an instant-settle servo snaps
+                // to the pole of every transient state: the ROM's drive-detect
+                // blips (3-40 us) and the RWTS seek phase-off tails (6-17 us)
+                // were flinging the head half a track off its rest position, so
+                // DOS 3.3-style seeks landed in TMAP gaps. Real seek states are
+                // held much longer (LR fast slew ~2.9 ms/state, its half-track
+                // protection nudges ~150 us, firmware recal ~19 ms) and behave
+                // exactly as before.
+                if (PHASES != prev_phases_525)
+                    step_hold_cnt <= 14'd0;
+                else if (step_hold_cnt < PHASE_DEBOUNCE)
+                    step_hold_cnt <= step_hold_cnt + 14'd1;
+                prev_phases_525 <= PHASES;
+
+                if (step_hold_cnt >= PHASE_DEBOUNCE) begin
+                    new_phase = head_phase + phase_change;
+                    if (new_phase < 0)
+                        head_phase <= 9'd0;
+                    else if (new_phase > max_phase)
+                        head_phase <= max_phase;
+                    else
+                        head_phase <= new_phase;
+                    // Remember the last VALIDLY-HELD (debounced) phase state for
+                    // the release snap below. Blips shorter than the debounce
+                    // never become a snap target.
+                    if (PHASES != 4'b0000)
+                        last_valid_phases <= PHASES;
+                end
+
+                // SNAP ON RELEASE: when all phase lines drop, park the head
+                // exactly on the pole of the last validly-held phase state --
+                // like a real detented stepper, whose REST position depends on
+                // WHICH phase was last energized, not for HOW LONG. This makes
+                // the landing position immune to pulse-width variation (on
+                // hardware the seek pulses measure shorter than in sim, which
+                // left the head 2 quarter-tracks short of the rest convention:
+                // measured qtrack 54 instead of 56 at LR's protection track).
+                // Poles (model convention): single phase P -> 2P+2 (mod 8);
+                // two adjacent phases -> the odd midpoint (quarter-track hold).
+                if (PHASES == 4'b0000 && prev_phases_525 != 4'b0000
+                    && step_hold_cnt >= PHASE_DEBOUNCE) begin
+                    snap_pole = 4'd15;   // 15 = no snap
+                    case (last_valid_phases)
+                        4'b0001: snap_pole = 4'd2;   // PH0 -> qtrack ≡ 2 (mod 8)
+                        4'b0010: snap_pole = 4'd4;   // PH1 -> 4
+                        4'b0100: snap_pole = 4'd6;   // PH2 -> 6
+                        4'b1000: snap_pole = 4'd0;   // PH3 -> 0
+                        4'b0011: snap_pole = 4'd3;   // PH0+1 -> 3 (quarter)
+                        4'b0110: snap_pole = 4'd5;   // PH1+2 -> 5
+                        4'b1100: snap_pole = 4'd7;   // PH2+3 -> 7
+                        4'b1001: snap_pole = 4'd1;   // PH3+0 -> 1
+                        default: snap_pole = 4'd15;  // odd combos: leave as-is
+                    endcase
+                    if (snap_pole != 4'd15) begin
+                        // move to the nearest qtrack ≡ snap_pole (mod 8)
+                        snap_diff = snap_pole - {29'd0, head_phase[2:0]};
+                        if (snap_diff > 3)  snap_diff = snap_diff - 8;
+                        if (snap_diff < -4) snap_diff = snap_diff + 8;
+                        new_phase = head_phase + snap_diff;
+                        if (new_phase < 0)
+                            head_phase <= 9'd0;
+                        else if (new_phase > max_phase)
+                            head_phase <= max_phase;
+                        else
+                            head_phase <= new_phase;
+                    end
+                end
             end
             end  // motor_spinning
         end  // !RESET
