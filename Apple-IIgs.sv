@@ -66,13 +66,17 @@ localparam CONF_STR = {
 	"S2,WOZPO 2MG,WOZ 3.5;",
 	"S3,WOZDSKDO PO NIB2MG,WOZ 5.25;",
 	"-;",
-	"OA,Force Self Test,OFF,ON;",
-	"OB,ROM Version,ROM1,ROM3;",
 	"O[14:12],CPU Speed,2.8 MHz (Std),3.6 MHz,4.8 MHz,7.2 MHz,14.3 MHz;",
-	"O[15],ZipGS Registers,Enabled,Disabled;",
-	"O[17:16],Beep/Paddle Slowdown,Auto,Off,ZipGS;",
-	"O[18],TransWarp GS,Off,On;",
-	"O[19],CPS Follow (1MHz sync),Off,On;",
+	"P1,Accelerator;",
+	"P1-;",
+	"P1O[16:15],Card,ZipGS,TransWarp GS,None (OSD speed only);",
+	"H0P1O[18:17],Beep/Paddle Slowdown,Auto,Off,ZipGS $C05C;",
+	"h0P1O[18:17],Beep/Paddle Slowdown,Auto,Off;",
+	"P1O[19],Sync to Sys 1MHz (CPS),Off,On;",
+	"P2,System;",
+	"P2-;",
+	"P2O[11],ROM Version,ROM1,ROM3;",
+	"P2O[10],Force Self Test,OFF,ON;",
 	"-;",
 
 	"R0,Warm Reset;",
@@ -142,7 +146,9 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({status[5]}),
+	// bit0: 1 = ZipGS card NOT selected -> the H0 Beep/Paddle line (with the
+	// "ZipGS $C05C" mode) hides and the h0 two-option variant shows instead.
+	.status_menumask({15'd0, accel_card != 2'd0}),
 
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
@@ -210,7 +216,7 @@ wire reset = RESET | ~locked | warm_reset_trigger | cold_reset_trigger | buttons
 wire cold_reset = RESET | ~locked | cold_reset_trigger;
 
 wire selftest_override = status[10];
-wire rom_select = ~status[11];  // 1=ROM3, 0=ROM1
+wire rom_select = ~status[11];  // iigs.sv: 0=ROM3, 1=ROM1 (status=0 default -> ROM1)
 
 // OSD CPU speed (shares state with the ZipGS $C058-$C05F software interface):
 // 0 = native 2.86 MHz, 1 = 3.58, 2 = 4.77, 3 = 7.16, 4 = 14.32.
@@ -225,21 +231,23 @@ wire cache_disable;   // ZipGS $C059 bit 7 -> sdram_cache bypass
 wire [2:0] host_speed = (status[14:12] > 3'd4) ? 3'd4 : status[14:12];
 wire accel_capable = 1'b1;
 wire mem_stall;   // driven by the icache (cache miss in flight)
-// OSD "ZipGS Registers": 0 = Enabled (default, a ZipGS is present and period
-// software can drive it), 1 = Disabled (stock IIgs: the $C058-$C05F unlock
-// sequence is ignored; the OSD CPU Speed above still works as a host-only
-// turbo with no software-visible footprint).
-wire zip_regs_en = ~status[15];
+// OSD "Accelerator > Card": which accelerator the software can SEE. Mutually
+// exclusive (a real machine holds one card); the OSD CPU Speed above works
+// with any of them (it is the card's host/hardware speed, or a footprint-free
+// host-only turbo when no card is present).
+//   0 = ZipGS (default): $C058-$C05F register interface
+//   1 = TransWarp GS:    bank $BC detection ROM + $BC0000 latch + NVRAM
+//   2 = None:            OSD speed only, no software-visible accelerator
+wire [1:0] accel_card = status[16:15];
+wire zip_regs_en  = (accel_card == 2'd0);
+wire twgs_present = (accel_card == 2'd1);
 
 // OSD "Beep/Paddle Slowdown": 0=Auto (default, always slow speaker/paddle when
-// accelerated -- the beep/joystick timing fix), 1=Off, 2=follow ZipGS $C05C.
-wire [1:0] beep_fix_mode = status[17:16];
+// accelerated -- the beep/joystick timing fix), 1=Off, 2=follow ZipGS $C05C
+// (inert unless the ZipGS card is selected: the register can't be written).
+wire [1:0] beep_fix_mode = status[18:17];
 
-// OSD "TransWarp GS": 1 = present a TWGS card in bank $BC (detection ROM +
-// $BC0000 latch + NVRAM), riding the same speed engine. 0 (default) = absent.
-wire twgs_present = status[18];
-
-// OSD "CPS Follow": 1 = accelerator drops to 1 MHz when the system does
+// OSD "Sync to Sys 1MHz (CPS)": 1 = accelerator drops to 1 MHz when the system does
 // (CYAREG bit7=0) -- authentic ZipGS, for Open/Closed-Apple keys at boot/reset
 // + floppy. 0 (default) = keep accelerating regardless (preserves the Zip CDA
 // speed self-test, which clears CYAREG bit7 while measuring).

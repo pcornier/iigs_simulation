@@ -35,13 +35,13 @@ the delay windows and the software emulators mostly don't (see §5).
 
 | Switch | Behavior | Default | Our status |
 |---|---|---|---|
-| **SW1/1** Cxxx/Dxxx cache disable | cache-coherency escape for shadow flips (`$C059`-ish) | disabled | register exists; cache is a no-op in our SDRAM core |
+| **SW1/1** Cxxx/Dxxx cache disable | cache-coherency escape for shadow flips (`$C059`-ish) | disabled | ✅ functional: `$C059` bit7 bypasses our SDRAM burst cache (`cache_off`) |
 | **SW1/2** Joystick/paddle delay | 1 MHz around `$C070`/`$C064-7` paddle access | *enabled* | ✅ **implemented** (`pdl_holdoff`, branch `transwarp`) |
 | **SW1/3** AppleTalk delay | drop to native during interrupts (AppleTalk timing) | disabled | ❌ missing (no interrupt-service slowdown) |
 | **SW1/4** Counter delay | 1 MHz on `$C02E/$C02F` (VERTCNT/HORIZCNT) access → **self-test 05 passes** | *enabled* | ✅ **implemented** — see §3 |
 | **SW1/5** CPS follow | Zip drops to 1 MHz when the IIgs is at 1 MHz (`$C036` bit7=0) → **Apple keys + floppy** | *enabled* | ✅ OSD toggle (default OFF) — see §4 |
 | **SW1/6** Disable | power up disabled (slow) | disabled (i.e. powers up **enabled**) | we power up **native/disabled** — deliberate default difference |
-| **SW1/7-8** Cache size | 8/16/32/64 KB | 8K/16K | cache is a no-op; size reporting only |
+| **SW1/7-8** Cache size | 8/16/32/64 KB | 8K/16K | our cache is fixed-size (SDRAM burst icache); size bits are reporting only |
 | **SW2/1-7** Slot delay | per-slot 1 MHz for `$Cn00` (SW2/2, SW2/6 default slow) | mixed | we over-slow **all** slots when accelerated (safe; `$C05C` mask stored, not applied) |
 | **SW2/8** Speaker delay | 1 MHz around `$C030` | *enabled* | ✅ **implemented** (`beep_holdoff`, branch `transwarp`) |
 
@@ -108,8 +108,8 @@ speed from the **synthetic 1 ms clock bit in `$C05B` reads**, *not* by staying
 fast during the bit-7 clear. We already generate that same 1 ms bit in
 `zipgs_regs.sv`.
 
-> **✅ Implemented as an OSD toggle** (branch `transwarp`): "CPS Follow (1MHz
-> sync)" (`Apple-IIgs.sv status[19]` → `cps_follow`). ON adds
+> **✅ Implemented as an OSD toggle** (branch `transwarp`): "Sync to Sys 1MHz
+> (CPS)" (Accelerator submenu) (`Apple-IIgs.sv status[19]` → `cps_follow`). ON adds
 > `&& (CYAREG[7] || !cps_follow)` to `fast_thresh` (`rtl/iigs.sv`): when the
 > system enters 1 MHz mode (`$C036` bit7=0) the accelerator goes native, and the
 > existing `clock_divider` `slow_request` takes the CPU to 1 MHz.

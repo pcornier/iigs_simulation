@@ -84,10 +84,10 @@ module iigs
    // respond (like a real Zip with the acceleration jumper disabled).
    input              accel_capable,
 
-   // 1 = the ZipGS $C058-$C05F software interface is present (OSD "ZipGS
-   // Registers"). 0 = stock IIgs: the unlock sequence is ignored and the
-   // registers never overlay the annunciators, but host_speed above still
-   // works -- an OSD-only turbo with no software-visible footprint.
+   // 1 = the ZipGS $C058-$C05F software interface is present (OSD
+   // "Accelerator > Card: ZipGS"). 0 = no Zip: the unlock sequence is ignored
+   // and the registers never overlay the annunciators, but host_speed above
+   // still works -- an OSD-only turbo with no software-visible footprint.
    input              zip_regs_en,
 
    // Speaker/paddle transparent-slowdown control (OSD "Beep/Paddle Slowdown"):
@@ -96,7 +96,7 @@ module iigs
    //   2 = ZipGS (follow the ZipGS $C05C speaker-delay bit, software-driven)
    input [1:0]        beep_fix_mode,
 
-   // 1 = present a TransWarp GS card in bank $BC (OSD "TransWarp GS"): ROM
+   // 1 = present a TransWarp GS card in bank $BC (OSD "Accelerator > Card"): ROM
    // signature/JSL API at $BC8000, $BC0000 control latch, X2444 NVRAM. Rides
    // the same speed engine as ZipGS. 0 = absent (bank $BC untouched).
    input              twgs_present,
@@ -2601,8 +2601,8 @@ wire       zip_cache_disable;
 wire [7:0] zip_slot_delay;
 // One write strobe per CPU I/O write to $C058-$C05F (phi2 = one pulse per CPU
 // cycle, same pattern as the $C030 speaker toggle). IO already excludes
-// EXTERNAL_IO and non-I/O banks. zip_regs_en=0 (OSD "ZipGS Registers:
-// Disabled") blocks the unlock sequence so the Zip never becomes visible.
+// EXTERNAL_IO and non-I/O banks. zip_regs_en=0 (OSD Card is not ZipGS)
+// blocks the unlock sequence so the Zip never becomes visible.
 wire       zip_wr_stb = IO && we && phi2 && (addr_bef[7:3] == 5'b01011) && zip_regs_en;
 // All software-visibility consumers (read overlay, AN3 write guards, fast
 // register timing) key off this; forcing it low with zip_regs_en also covers

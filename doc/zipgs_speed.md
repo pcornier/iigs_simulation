@@ -11,7 +11,7 @@ Three interfaces share ONE state (`rtl/zipgs_regs.sv`), so they always agree:
 | interface | how |
 |---|---|
 | simulator | `./obj_dir/Vemu --speed <0-4 \| 2.8/3.6/4.8/7.2/14.3>` (`--speed-after <tick>:<code>` switches mid-run) |
-| MiSTer OSD | "CPU Speed" menu (status[14:12]); "ZipGS Registers" toggle (status[15]) hides/shows the software interface |
+| MiSTer OSD | "CPU Speed" menu (status[14:12], top level); "Accelerator > Card" (status[16:15]: ZipGS / TransWarp GS / None) selects which software interface is visible |
 | software (ZipGS) | $C058-$C05F protocol, KEGS/GSplus semantics (verified against both) |
 
 ## ZipGS protocol (what period software does)
@@ -83,10 +83,12 @@ All three are no-ops at the native step — native timing is bit-identical
     registers disabled (OSD-only turbo, no software-visible footprint — note
     beam-raced/vaporlock software cannot slow the machine back down in that
     combination, by design).
-  - "ZipGS Registers" (default Enabled): Disabled = stock IIgs, the
-    $C058-$C05F unlock sequence is ignored (`zip_regs_en` gates the write
-    strobe AND the `zip_unlocked` visibility, so a mid-session disable also
-    re-locks). Enabled = period software (ZipDA, CDevs) can drive the card.
+  - "Accelerator > Card" (default ZipGS): selects the ONE software-visible
+    accelerator. ZipGS = period software (ZipDA, CDevs) can drive $C058-$C05F.
+    TransWarp GS = bank $BC card instead. None = stock IIgs; the $C058-$C05F
+    unlock sequence is ignored (`zip_regs_en` gates the write strobe AND the
+    `zip_unlocked` visibility, so a mid-session switch also re-locks) and the
+    OSD CPU Speed remains a footprint-free host turbo.
 - $C05C per-slot delay semantics are stored but not yet applied (we slow all
   external-slot accesses when accelerated, which matches Zip defaults).
 - A TransWarp GS detection shim (fake 'TWGS' vector table at $BC/FF00 +
