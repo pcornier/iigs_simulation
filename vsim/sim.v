@@ -363,11 +363,20 @@ iigs  iigs(
         .host_speed(host_speed),
         .accel_capable(1'b1),  // sim fast RAM is single-cycle BRAM: all speed steps safe
         .zip_regs_en(1'b1),    // ZipGS software interface always present in sim
-        .beep_fix_mode(2'b00), // Auto (speaker/paddle timing fix on)
+        // OSD delay-toggle views: match the zipgs_regs power-on values so no
+        // edge-apply fires (delays enabled, CPS off = the old "Auto" behavior)
+        .osd_spkr_delay(1'b1),
+        .osd_pdl_delay(1'b1),
+        .osd_ctr_delay(1'b1),
+        .osd_cps_follow(1'b0), // flip to 1'b1 to test 1MHz sync
+        .accel_cfg_speed(),
+        .accel_spkr_delay(),
+        .accel_pdl_delay(),
+        .accel_ctr_delay(),
+        .accel_cps_follow(),
         .twgs_present(1'b0),   // TWGS card off by default (flip to 1'b1 to test detection)
         // Detection verified 2026-07-11: with 1'b1, monitor `BC/FF00.FF0F` shows
         // 'TWGS''SMJS' + the JML table (54 57 47 53 53 4D 4A 53 / 5C 28 FB BC ...)
-        .cps_follow(1'b0),     // CPS Follow off by default (flip to 1'b1 to test 1MHz sync)
         .accel_active(accel_active_w),  // selects registered vs comb fastram read (as on FPGA)
         .phi2(phi2_w),
         .dbg_hdd_dma(dbg_hdd_dma_w),

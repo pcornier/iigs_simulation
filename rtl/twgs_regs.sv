@@ -43,28 +43,51 @@ module twgs_regs (
     input  wire [2:0] turbo_code,
 
     output wire       accel_en,      // 1 = TWGS acceleration engaged
-    output wire [2:0] speed_code,    // 0 native .. = turbo_code when accelerating
+    output wire [2:0] speed_code,    // 0 native .. = turbo step when accelerating
+    output wire [2:0] cfg_speed_code,// CONFIGURED speed (ignores CYAREG.7) — for
+                                     // the OSD mirror: what the card would run
+                                     // at System Speed Fast
     output wire       cache_enable,  // $BC0000 bit1 (advisory; cache is always on)
     output wire       irq_logic_en   // ~$BC0000 bit3 (advisory)
 );
 
+  // Host (OSD) speed: edge-applied into the accelerate bit, mirroring the
+  // zipgs_regs host path. Nonzero -> engage ($BC0000.2 = 1) at that step;
+  // zero -> disengage. A change equal to the current configured speed is a
+  // no-op so OSD-mirror write-backs of software changes are absorbed.
+  reg [2:0] host_prev;
+
   always @(posedge clk) begin
-    if (reset)
-      cfg_reg <= 8'h00;              // power-on: not accelerating, cache off
-    else if (cfg_wr_stb)
-      cfg_reg <= cfg_wr_data;
+    if (reset) begin
+      cfg_reg   <= 8'h00;            // power-on: not accelerating, cache off
+      host_prev <= 3'd0;
+    end else begin
+      if (turbo_code != host_prev) begin
+        host_prev <= turbo_code;
+        if (turbo_code != cfg_speed_code)
+          cfg_reg[2] <= (turbo_code != 3'd0);
+      end
+      if (cfg_wr_stb)
+        cfg_reg <= cfg_wr_data;      // software wins on collision cycles
+    end
   end
 
   wire accel = cfg_reg[2];           // $BC0000 bit 2
 
+  // Engaged speed: the OSD sets the step; with the OSD at native (0) a
+  // software engage runs at the card's rated speed (7.16 MHz, code 3) — a real
+  // TWGS's "TransWarp" speed is fixed hardware, not host-dependent.
+  wire [2:0] turbo_eff = (turbo_code == 3'd0) ? 3'd3 : turbo_code;
+
   // Engage turbo only when BOTH the GS Fast bit and the TWGS accel bit are set
-  // — exactly GetCurISpeed's decode. Engaged -> run at the OSD ceiling
-  // (turbo_code); off -> the core's native fast step (0). The ~1 MHz tier is
-  // CYAREG.7=0, handled by the core's normal slow/sync cycle timing (not here).
-  assign accel_en     = cyareg7 & accel;
-  assign speed_code   = accel_en ? turbo_code : 3'd0;
-  assign cache_enable = cfg_reg[1];
-  assign irq_logic_en = ~cfg_reg[3];
+  // — exactly GetCurISpeed's decode. The ~1 MHz tier is CYAREG.7=0, handled by
+  // the core's normal slow/sync cycle timing (and by speed_code dropping to 0
+  // here, which is the TWGS's built-in "never override System Speed Normal").
+  assign accel_en       = cyareg7 & accel;
+  assign speed_code     = accel_en ? turbo_eff : 3'd0;
+  assign cfg_speed_code = accel    ? turbo_eff : 3'd0;
+  assign cache_enable   = cfg_reg[1];
+  assign irq_logic_en   = ~cfg_reg[3];
 
 `ifdef VERILATOR
   reg accel_prev;

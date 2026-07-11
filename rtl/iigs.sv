@@ -90,20 +90,31 @@ module iigs
    // still works -- an OSD-only turbo with no software-visible footprint.
    input              zip_regs_en,
 
-   // Speaker/paddle transparent-slowdown control (OSD "Beep/Paddle Slowdown"):
-   //   0 = Auto  (always slow at $C030/paddle when accelerating -- default)
-   //   1 = Off   (never slow -- raw speed, wrong beep/paddle)
-   //   2 = ZipGS (follow the ZipGS $C05C speaker-delay bit, software-driven)
-   input [1:0]        beep_fix_mode,
+   // OSD views of the accelerator compatibility-delay enables. These are
+   // edge-applied into the ZipGS registers (zipgs_regs host_* inputs), which
+   // are the single source of truth the slowdown windows key off — so the OSD
+   // and the Zip Control Panel stay in sync (either can flip them). With the
+   // TWGS card selected the windows are forced on (a real TransWarp's
+   // slowdowns are automatic and non-configurable).
+   input              osd_spkr_delay,  // $C05C bit 0 (speaker)
+   input              osd_pdl_delay,   // $C059 bit 6 (joystick/paddle)
+   input              osd_ctr_delay,   // $C059 bit 4 (video counter)
+   input              osd_cps_follow,  // $C059 bit 3 (CPS follow)
 
    // 1 = present a TransWarp GS card in bank $BC (OSD "Accelerator > Card"): ROM
    // signature/JSL API at $BC8000, $BC0000 control latch, X2444 NVRAM. Rides
    // the same speed engine as ZipGS. 0 = absent (bank $BC untouched).
    input              twgs_present,
 
-   // 1 = CPS Follow (ZipGS): drop to 1 MHz when the system does (CYAREG bit7=0)
-   // -- Open/Closed-Apple keys at boot/reset + floppy. Default 0 (don't follow).
-   input              cps_follow,
+   // Live accelerator configuration, for the OSD status write-back mirror:
+   // the speed the selected card is configured for (ignores CYAREG gating)
+   // and the delay-enable register bits. The top level pushes these into the
+   // MiSTer status word when software changes them.
+   output [2:0]       accel_cfg_speed,
+   output             accel_spkr_delay,
+   output             accel_pdl_delay,
+   output             accel_ctr_delay,
+   output             accel_cps_follow,
 
    // 1 = fast cycles are currently configured (by the OSD or by ZipGS
    // software). The FPGA top selects the CPU read datapath with this:
@@ -2609,6 +2620,12 @@ wire       zip_wr_stb = IO && we && phi2 && (addr_bef[7:3] == 5'b01011) && zip_r
 // a mid-session OSD disable while software had the Zip unlocked.
 wire       zip_unlocked = zip_unlocked_raw && zip_regs_en;
 
+// The zipgs_regs state doubles as the delay-enable store for the "None (OSD
+// speed only)" card mode: the registers exist either way, software just can't
+// see them unless the ZipGS card is selected. The host path is disabled while
+// the TWGS card is selected (host_speed forced 0) so only ONE front-end drives
+// the speed engine — a real machine holds one accelerator.
+wire zip_spkr_delay_en, zip_pdl_delay_en, zip_ctr_delay_en, zip_cps_follow_en;
 zipgs_regs zipgs (
     .clk(CLK_14M),
     .reset(reset),
@@ -2618,12 +2635,20 @@ zipgs_regs zipgs (
     .rd_addr(addr_bef[2:0]),
     .rd_data(zip_rdata),
     .mtr_slow(~CYAREG[7]),
-    .host_speed(host_speed),
+    .host_speed(twgs_present ? 3'd0 : host_speed),
+    .host_spkr_en(osd_spkr_delay),
+    .host_pdl_en(osd_pdl_delay),
+    .host_ctr_en(osd_ctr_delay),
+    .host_cps_en(osd_cps_follow),
     .zip_unlocked(zip_unlocked_raw),
     .accel_en(zip_accel_en),
     .speed_code(zip_speed_code),
     .cache_disable(zip_cache_disable),
-    .slot_delay(zip_slot_delay)
+    .slot_delay(zip_slot_delay),
+    .spkr_delay_en(zip_spkr_delay_en),
+    .pdl_delay_en(zip_pdl_delay_en),
+    .ctr_delay_en(zip_ctr_delay_en),
+    .cps_follow_en(zip_cps_follow_en)
 );
 
 // Zip cache-disable ($C059 bit 7) out to the SDRAM cache in the top level.
@@ -2639,6 +2664,7 @@ wire        twgs_sel;
 wire [7:0]  twgs_dout;
 wire        twgs_accel_en;
 wire [2:0]  twgs_speed_code;
+wire [2:0]  twgs_cfg_speed;
 twgs_card twgs (
     .clk(CLK_14M), .reset(reset),
     .enable(twgs_present),
@@ -2649,6 +2675,7 @@ twgs_card twgs (
     .turbo_code(host_speed),
     .sel(twgs_sel), .dout(twgs_dout),
     .accel_en(twgs_accel_en), .speed_code(twgs_speed_code),
+    .cfg_speed_code(twgs_cfg_speed),
     .cache_enable(), .irq_logic_en()
 );
 
@@ -2723,35 +2750,50 @@ always @(posedge CLK_14M) begin
   else if (acc_ctr)                  counter_holdoff <= 16'd14318; // 1 ms, retriggered by the poll loop
   else if (counter_holdoff != 16'd0) counter_holdoff <= counter_holdoff - 16'd1;
 end
-// Mode gate (OSD): Auto=always, Off=never, ZipGS=follow $C05C speaker-delay bit.
-wire slowdown_en = (beep_fix_mode == 2'd1) ? 1'b0 :               // Off
-                   (beep_fix_mode == 2'd2) ? zip_slot_delay[0] :  // ZipGS-reg
-                                             1'b1;                 // Auto (default)
-wire io_slow_holdoff = slowdown_en &&
-                       ((beep_holdoff != 16'd0) || (pdl_holdoff != 16'd0)
-                        || (counter_holdoff != 16'd0));
+// Per-window enables: the ZipGS register bits are the single source of truth
+// (the OSD toggles edge-apply into them via zipgs_regs host_* -- either UI can
+// flip them and both read back the same state). With the TWGS card selected
+// the windows are forced on: a real TransWarp's slowdowns are automatic and
+// non-configurable (doc/TransWarpGS_Manual.pdf ch.3).
+wire eff_spkr_en = twgs_present | zip_spkr_delay_en;
+wire eff_pdl_en  = twgs_present | zip_pdl_delay_en;
+wire eff_ctr_en  = twgs_present | zip_ctr_delay_en;
+wire io_slow_holdoff = (eff_spkr_en && beep_holdoff    != 16'd0) ||
+                       (eff_pdl_en  && pdl_holdoff     != 16'd0) ||
+                       (eff_ctr_en  && counter_holdoff != 16'd0);
 
-// Combine the two accelerator front-ends into the one speed engine (both can
-// be active: Zip @ $C05x, TWGS @ bank $BC -- disjoint). Fastest-wins: engage if
-// either does, take the higher requested step (both output 0 when idle).
-wire       eff_accel_en   = zip_accel_en | twgs_accel_en;
-wire [2:0] eff_speed_code = (twgs_speed_code > zip_speed_code) ? twgs_speed_code
-                                                              : zip_speed_code;
+// One accelerator front-end at a time (a real machine holds one card): the
+// TWGS drives the engine when selected, otherwise the ZipGS state does --
+// which also carries the OSD-only turbo when no card is selected (the zip
+// host path stays live with the registers software-invisible).
+wire       eff_accel_en   = twgs_present ? twgs_accel_en   : zip_accel_en;
+wire [2:0] eff_speed_code = twgs_present ? twgs_speed_code : zip_speed_code;
 
-// CPS Follow (ZipGS SW1/4... SW1/5): when enabled, the accelerator drops to
-// native the moment the system enters 1 MHz mode (CYAREG bit7=0) -- authentic
-// ZipGS behavior, needed for Open/Closed-Apple keys at boot/reset and floppy.
-// Making fast_thresh native here lets the existing clock_divider slow_request
-// (cyareg[7]==0 && !accel_active) take the CPU to 1 MHz. Default OFF: the core
-// otherwise keeps accelerating regardless of CYAREG.7 (so the Zip CDA's speed
-// self-test, which clears CYAREG.7 while measuring, is unaffected). Verify the
-// Zip CDA readout on real hardware before defaulting this on.
+// Mirror outputs for the OSD status write-back: CONFIGURED state (what the
+// user/software set), not the live CYAREG-gated speed.
+assign accel_cfg_speed  = twgs_present ? twgs_cfg_speed : zip_speed_code;
+assign accel_spkr_delay = zip_spkr_delay_en;
+assign accel_pdl_delay  = zip_pdl_delay_en;
+assign accel_ctr_delay  = zip_ctr_delay_en;
+assign accel_cps_follow = zip_cps_follow_en;
+
+// CPS Follow ($C059 bit 3 = ZipGS SW1/5): when enabled, the accelerator drops
+// to native the moment the system enters 1 MHz mode (CYAREG bit7=0) --
+// authentic ZipGS behavior, needed for Open/Closed-Apple keys at boot/reset
+// and floppy. Making fast_thresh native here lets the existing clock_divider
+// slow_request (cyareg[7]==0 && !accel_active) take the CPU to 1 MHz.
+// Powers up OFF (zipgs_regs resets $C059.3 = 0, diverging from KEGS's $5F):
+// the Zip CDA's speed self-test clears CYAREG.7 while measuring -- verify the
+// CDA readout on real hardware before defaulting on. The TWGS needs no term
+// here: its accel_en already includes CYAREG.7 ("the TWGS will not override"
+// System Speed Normal -- manual ch.3).
+wire cps_gate = twgs_present ? 1'b1 : (CYAREG[7] || !zip_cps_follow_en);
 wire [3:0] fast_thresh = (accel_capable && eff_accel_en && eff_speed_code != 3'd0
                           && iwm_holdoff == 15'd0
                           && !floppy_motor_on && !floppy35_motor_on
                           && !io_slow_holdoff
                           && !(twgs_present && bank_bef == 8'hBC)  // TWGS bank $BC native
-                          && (CYAREG[7] || !cps_follow))          // CPS Follow: 1 MHz when sys is
+                          && cps_gate)
                          ? (4'd4 - {1'b0, eff_speed_code})
                          : 4'd4;
 // accel_active also gates the top-level SDRAM read-path mux (Apple-IIgs.sv

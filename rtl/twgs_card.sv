@@ -42,6 +42,7 @@ module twgs_card (
     output wire [7:0]  dout,         // read data for this access
     output wire        accel_en,     // TWGS acceleration engaged
     output wire [2:0]  speed_code,   // 0 native .. 3 = 7.16 MHz
+    output wire [2:0]  cfg_speed_code,// configured speed (ignores CYAREG.7) for the OSD mirror
     output wire        cache_enable, // $BC0000.1 (advisory)
     output wire        irq_logic_en  // ~$BC0000.3 (advisory)
 );
@@ -66,8 +67,13 @@ module twgs_card (
       .cfg_wr_stb(cfg_wr_stb), .cfg_wr_data(wr_data),
       .cfg_reg(cfg_reg),
       .cyareg7(cyareg7),
-      .turbo_code(turbo_code),
+      // enable=0 forces the host input to 0 so the OSD edge-apply can't set
+      // the accelerate bit while the card is absent (keeps the documented
+      // "twgs_present=0 is a pass-through" invariant); a mid-session enable
+      // then edge-applies the current OSD speed, engaging the card.
+      .turbo_code(enable ? turbo_code : 3'd0),
       .accel_en(accel_en), .speed_code(speed_code),
+      .cfg_speed_code(cfg_speed_code),
       .cache_enable(cache_enable), .irq_logic_en(irq_logic_en)
   );
 

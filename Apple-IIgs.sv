@@ -70,9 +70,10 @@ localparam CONF_STR = {
 	"P1,Accelerator;",
 	"P1-;",
 	"P1O[16:15],Card,ZipGS,TransWarp GS,None (OSD speed only);",
-	"H0P1O[18:17],Beep/Paddle Slowdown,Auto,Off,ZipGS $C05C;",
-	"h0P1O[18:17],Beep/Paddle Slowdown,Auto,Off;",
-	"P1O[19],Sync to Sys 1MHz (CPS),Off,On;",
+	"H0P1O[17],Speaker Delay,Enabled,Disabled;",
+	"H0P1O[18],Joystick Delay,Enabled,Disabled;",
+	"H0P1O[20],Counter Delay,Enabled,Disabled;",
+	"H0P1O[19],Sync to Sys 1MHz (CPS),Off,On;",
 	"P2,System;",
 	"P2-;",
 	"P2O[11],ROM Version,ROM1,ROM3;",
@@ -146,9 +147,11 @@ hps_io #(.CONF_STR(CONF_STR),.VDNUM(4)) hps_io
 	
 	.buttons(buttons),
 	.status(status),
-	// bit0: 1 = ZipGS card NOT selected -> the H0 Beep/Paddle line (with the
-	// "ZipGS $C05C" mode) hides and the h0 two-option variant shows instead.
-	.status_menumask({15'd0, accel_card != 2'd0}),
+	// bit0: 1 = TransWarp GS selected -> the delay/CPS toggles hide (a real
+	// TWGS's slowdowns are automatic and always on; the RTL forces them).
+	.status_menumask({15'd0, accel_card == 2'd1}),
+	.status_in(status_mirror),
+	.status_set(status_mirror_set),
 
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
@@ -242,16 +245,48 @@ wire [1:0] accel_card = status[16:15];
 wire zip_regs_en  = (accel_card == 2'd0);
 wire twgs_present = (accel_card == 2'd1);
 
-// OSD "Beep/Paddle Slowdown": 0=Auto (default, always slow speaker/paddle when
-// accelerated -- the beep/joystick timing fix), 1=Off, 2=follow ZipGS $C05C
-// (inert unless the ZipGS card is selected: the register can't be written).
-wire [1:0] beep_fix_mode = status[18:17];
+// Per-delay OSD toggles. These are VIEWS of the ZipGS delay registers (the
+// single source of truth): the OSD value edge-applies into the register, and
+// software writes mirror back into these status bits below -- flip either the
+// OSD or the Zip Control Panel and both stay in sync. Defaults (all-zero
+// status) match the zipgs_regs power-on values: delays enabled, CPS off.
+// Hidden + forced-on with the TWGS card (its slowdowns are non-configurable).
+wire osd_spkr_delay = ~status[17];  // 0 = Enabled
+wire osd_pdl_delay  = ~status[18];  // 0 = Enabled
+wire osd_ctr_delay  = ~status[20];  // 0 = Enabled
+wire osd_cps_follow =  status[19];  // 0 = Off (deliberate divergence from a
+                                    // real Zip's default-on; see iigs.sv)
 
-// OSD "Sync to Sys 1MHz (CPS)": 1 = accelerator drops to 1 MHz when the system does
-// (CYAREG bit7=0) -- authentic ZipGS, for Open/Closed-Apple keys at boot/reset
-// + floppy. 0 (default) = keep accelerating regardless (preserves the Zip CDA
-// speed self-test, which clears CYAREG bit7 while measuring).
-wire cps_follow = status[19];
+// OSD status write-back ("the OSD is a live display"): when software (Zip CP
+// via $C059/$C05C/$C05D, TWGS via $BC0000) changes the accelerator state, push
+// the new values into the MiSTer status word so the menu shows reality. The
+// edge-apply guards in zipgs_regs/twgs_regs absorb the resulting status
+// change (it equals the card state by construction), so no feedback loop.
+wire [2:0] accel_cfg_speed;
+wire accel_spkr_delay, accel_pdl_delay, accel_ctr_delay, accel_cps_follow;
+wire [127:0] status_mirror_view;
+assign status_mirror_view = {status[127:21], ~accel_ctr_delay, accel_cps_follow,
+                             ~accel_pdl_delay, ~accel_spkr_delay, status[16:15],
+                             accel_cfg_speed, status[11:0]};
+reg  [127:0] status_mirror;
+reg          status_mirror_set;
+reg  [8:0]   mirror_last;   // {ctr,cps,pdl,spkr,card(2),speed(3)} view bits
+wire [8:0]   mirror_now = {~accel_ctr_delay, accel_cps_follow, ~accel_pdl_delay,
+                           ~accel_spkr_delay, status[16:15], accel_cfg_speed};
+wire [8:0]   mirror_osd = {status[20], status[19], status[18],
+                           status[17], status[16:15], status[14:12]};
+always @(posedge clk_sys) begin
+	status_mirror_set <= 1'b0;
+	if (reset) begin
+		mirror_last <= mirror_osd;   // adopt the OSD state at reset: no push
+	end else if (mirror_now != mirror_last) begin
+		mirror_last <= mirror_now;
+		if (mirror_now != mirror_osd) begin
+			status_mirror     <= status_mirror_view;
+			status_mirror_set <= 1'b1;   // rising edge = one status update
+		end
+	end
+end
 
 // Detect ROM version change and trigger cold reset
 reg rom_select_prev;
@@ -350,9 +385,16 @@ iigs iigs (
 	.accel_capable(accel_capable),
 	.accel_active(accel_active),
 	.zip_regs_en(zip_regs_en),
-	.beep_fix_mode(beep_fix_mode),
 	.twgs_present(twgs_present),
-	.cps_follow(cps_follow),
+	.osd_spkr_delay(osd_spkr_delay),
+	.osd_pdl_delay(osd_pdl_delay),
+	.osd_ctr_delay(osd_ctr_delay),
+	.osd_cps_follow(osd_cps_follow),
+	.accel_cfg_speed(accel_cfg_speed),
+	.accel_spkr_delay(accel_spkr_delay),
+	.accel_pdl_delay(accel_pdl_delay),
+	.accel_ctr_delay(accel_ctr_delay),
+	.accel_cps_follow(accel_cps_follow),
 	.mem_stall(mem_stall),
 
 	.FLOPPY_WP(1'b1),

@@ -57,9 +57,21 @@ module zipgs_regs (
 
     // Host (OSD / CLI) speed control. Applied whenever the value changes
     // (and once out of reset), so a mid-session OSD change takes effect.
+    // A change to a value EQUAL to the current configured speed is a no-op:
+    // that lets the OSD mirror (status_set write-back of software-driven
+    // changes) flow through here without disturbing the card state — in
+    // particular a software disable ($C05A) mirrors as 2.8 MHz without
+    // clobbering speed_reg, so a later $C05B enable restores the old speed.
     //   0 = native (acceleration disabled), 1 = 3.58, 2 = 4.77, 3 = 7.16 MHz
-    //   (4 = 14.32 MHz reserved; clamps to 3 until stall-on-miss exists)
     input  wire [2:0] host_speed,
+
+    // Host (OSD) views of the delay-enable bits. Same edge-apply pattern as
+    // host_speed: a CHANGE writes the corresponding register bit, so the OSD
+    // and the Zip Control Panel are two writers of one shared state.
+    input  wire       host_spkr_en,  // -> $C05C bit 0 (speaker delay)
+    input  wire       host_pdl_en,   // -> $C059 bit 6 (joystick/paddle delay)
+    input  wire       host_ctr_en,   // -> $C059 bit 4 (counter delay)
+    input  wire       host_cps_en,   // -> $C059 bit 3 (CPS follow)
 
     output wire       zip_unlocked, // 1 = $C058-$C05F are Zip registers
     output wire       accel_en,     // 1 = acceleration engaged
@@ -73,7 +85,14 @@ module zipgs_regs (
     // Per-slot delay mask ($C05C bits 7..1, one per slot 1..7): 1 = that slot's
     // $Cn00 space runs at 1 MHz (delay enabled) when accelerating. Bit 0 is the
     // speaker delay (handled elsewhere). Default 0 => all slots fast.
-    output wire [7:0] slot_delay
+    output wire [7:0] slot_delay,
+
+    // Live delay-enable bits (KEGS $C059/$C05C map) — the iigs.sv slowdown
+    // windows key off these, and the top level mirrors them into the OSD.
+    output wire       spkr_delay_en, // $C05C bit 0
+    output wire       pdl_delay_en,  // $C059 bit 6
+    output wire       ctr_delay_en,  // $C059 bit 4
+    output wire       cps_follow_en  // $C059 bit 3
 );
 
   reg [2:0] unlock;
@@ -88,6 +107,10 @@ module zipgs_regs (
   assign speed_code   = disabled ? 3'd0 : speed_reg;
   assign cache_disable = ~disabled & reg_c059[7];
   assign slot_delay    = reg_c05c;
+  assign spkr_delay_en = reg_c05c[0];
+  assign pdl_delay_en  = reg_c059[6];
+  assign ctr_delay_en  = reg_c059[4];
+  assign cps_follow_en = reg_c059[3];
 
   // 1.024 ms-period toggle for $C05B bit 7, matching KEGS ((dcycs>>9)&1 =
   // 512 us half-period): 512 us x 14.31818 MHz = 7331 ticks. The Zip CDA
@@ -122,6 +145,7 @@ module zipgs_regs (
   // Host change detection: host_prev resets to 0 (native), so a non-zero
   // boot-time value (sim --speed flag) applies on the first cycle after reset.
   reg [2:0] host_prev;
+  reg       spkr_prev, pdl_prev, ctr_prev, cps_prev;
 
   always @(posedge clk) begin
     if (ms_ctr == 13'd7330) begin
@@ -135,26 +159,49 @@ module zipgs_regs (
       disabled  <= 1'b1;      // power-on: acceleration off (native machine)
       sp        <= 4'd0;      // 100% (of the enabled speed) once engaged
       speed_reg <= 3'd0;
-      reg_c059  <= 8'h5F;     // KEGS/GSplus power-on value: the Zip CDA renders
-                              // these bits as delay/follow-up checkmarks and an
-                              // all-zero register displays as nonsense settings
-      reg_c05c  <= 8'h00;     // all slots fast, no speaker delay
+      reg_c059  <= 8'h57;     // KEGS/GSplus power on with $5F; we clear bit 3
+                              // (CPS follow OFF) as a deliberate divergence —
+                              // following $C036 bit 7 during the Zip CDA speed
+                              // self-test is unverified on hardware (see
+                              // doc/zipgs_compatibility.md §4). Flip in the OSD
+                              // or the Zip CP to get the authentic default.
+      reg_c05c  <= 8'h01;     // all slots fast, SPEAKER DELAY ON (bit 0): KEGS
+                              // resets this to $00 but never implements the
+                              // delay; ours is real and the boot beep needs it
       host_prev <= 3'd0;
+      spkr_prev <= 1'b1;      // match the reset register values above so the
+      pdl_prev  <= 1'b1;      // OSD defaults (same values) don't fire a
+      ctr_prev  <= 1'b1;      // spurious apply on the first cycle
+      cps_prev  <= 1'b0;
     end else begin
       // --- host (OSD / CLI) side ------------------------------------------
       // OSD host_speed IS the clock step directly (0..4), so the OSD can reach
       // the 14.32 MHz overclock (step 4) that software cannot.
+      // Skip when the incoming value already matches the configured speed:
+      // mirror write-backs are absorbed without touching card state.
       if (host_speed != host_prev) begin
         host_prev <= host_speed;
-        if (host_speed == 3'd0) begin
-          disabled  <= 1'b1;
-          speed_reg <= 3'd0;
-        end else begin
-          disabled  <= 1'b0;
-          speed_reg <= host_speed;
-          sp        <= host_to_sp(host_speed);
+        if (host_speed != (disabled ? 3'd0 : speed_reg)) begin
+          if (host_speed == 3'd0) begin
+            disabled  <= 1'b1;
+            speed_reg <= 3'd0;
+          end else begin
+            disabled  <= 1'b0;
+            speed_reg <= host_speed;
+            sp        <= host_to_sp(host_speed);
+          end
         end
       end
+
+      // OSD delay toggles: edge-apply into the shared register bits.
+      spkr_prev <= host_spkr_en;
+      pdl_prev  <= host_pdl_en;
+      ctr_prev  <= host_ctr_en;
+      cps_prev  <= host_cps_en;
+      if (host_spkr_en != spkr_prev) reg_c05c[0] <= host_spkr_en;
+      if (host_pdl_en  != pdl_prev)  reg_c059[6] <= host_pdl_en;
+      if (host_ctr_en  != ctr_prev)  reg_c059[4] <= host_ctr_en;
+      if (host_cps_en  != cps_prev)  reg_c059[3] <= host_cps_en;
 
       // --- software (ZipGS protocol) side ---------------------------------
       if (wr_stb) begin
