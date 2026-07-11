@@ -98,6 +98,15 @@ module twgs_nvram (
       state <= S_IDLE; ce <= 1'b0; we_en <= 1'b0;
       cmd <= 8'h00; bitcnt <= 4'd0; addr <= 4'd0;
       wbuf <= 16'h0000; datacnt <= 5'd0; shiftout <= 8'h00;
+      // Re-seed on reset ONLY if the store is invalid (word0 magic != $AE):
+      // covers hardware power-up when the `initial` block's values don't
+      // survive synthesis, without clobbering a loaded/saved image (any
+      // valid TWGS NVRAM carries the $AE magic the firmware checks).
+      if (mem[0][7:0] != 8'hAE) begin
+        for (i = 0; i < 16; i = i + 1) mem[i] <= 16'h0000;
+        mem[0] <= 16'h00AE; mem[1] <= 16'h0001; mem[2] <= 16'h000D;
+        mem[6] <= 16'h00AE; mem[7] <= 16'h0058; mem[8] <= 16'h001B;
+      end
     end else begin
       // ---- control write: chip-select edge starts a transaction ----------
       if (ctrl_wr_stb) begin

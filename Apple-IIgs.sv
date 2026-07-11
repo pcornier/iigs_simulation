@@ -79,7 +79,7 @@ localparam CONF_STR = {
 	"P2O[11],ROM Version,ROM1,ROM3;",
 	"P2O[10],Force Self Test,OFF,ON;",
 	"P2-;",
-	"P2S4,RAM,PRAM NVRAM;",
+	"P2SC4,RAM,PRAM NVRAM;",
 	"P2R[21],Save NVRAM;",
 	"P2R[22],Load NVRAM;",
 	"-;",
@@ -213,7 +213,7 @@ wire capslock_led;
 
 // Combine all reset sources
 // Include ~locked to hold reset until PLL is stable (critical for FPGA)
-wire warm_reset_trigger = status[0] | keyboard_reset;
+wire warm_reset_trigger = status[0] | keyboard_reset | nv_load_reset;
 // ioctl_download: hold the machine in cold reset while ROM is uploading so
 // CPU SDRAM traffic can't collide with the upload channel
 wire cold_reset_trigger = status[1] | keyboard_cold_reset | rom_switch_reset | ioctl_download;
@@ -773,13 +773,20 @@ assign sd_lba[0] = {16'b0, hdd_sector};  // Unit 0
 assign sd_lba[1] = {16'b0, hdd_sector};  // Unit 1
 assign sd_lba[2] = woz_sd_lba;
 assign sd_lba[3] = woz_sd_525_lba;
-assign sd_lba[4] = 32'd0;                // PRAM NVRAM: single block
+// Per-ROM image: ROM1 and ROM3 use different PRAM layouts/checksums, so each
+// would invalidate (and re-default) the other's saved image. The file is two
+// 512-byte blocks — block 0 = ROM3, block 1 = ROM1 — selected by the live ROM
+// switch, so each ROM only ever sees its own image.
+assign sd_lba[4] = {31'd0, rom_select};  // rom_select: 0=ROM3, 1=ROM1
 
 // ---- PRAM / TWGS NVRAM save-restore (slot 4) ----------------------------
-// X68000-style: mountable SD file + explicit Save/Load OSD commands, plus
-// auto-load on mount (a zeroed file fails the ROM's PRAM checksum and gets
-// re-defaulted by the Control Panel firmware, so a blank can't brick).
-// One 512-byte block: [0-255]=PRAM, [256-287]=TWGS X2444, rest pads $FF.
+// X68000-style: mountable SD file (SC4: remounted automatically at core
+// start) + explicit Save/Load OSD commands. Auto-load fires on mount and on a
+// ROM-version switch (to fetch that ROM's block); a completed load pulses a
+// warm reset so the ROM re-reads PRAM into its live settings (they are only
+// consulted at boot). A zeroed/blank block fails the ROM's PRAM checksum and
+// the firmware re-defaults itself, so a fresh file can't brick anything.
+// Block layout: [0-255]=PRAM, [256-287]=TWGS X2444, rest pads $FF.
 // See doc/pram-nvram-save-handoff.md.
 wire       bk_save_cmd = status[21];
 wire       bk_load_cmd = status[22];
@@ -788,21 +795,30 @@ wire [7:0] nv_din  = sd_buff_dout;
 wire [7:0] nv_dout;
 reg        bk_sd_rd, bk_sd_wr;
 reg        bk_state, bk_loading;
+reg        bk_mounted;      // slot-4 file currently mounted (nonzero size)
+reg [15:0] nv_reset_cnt;    // stretched (~1ms) warm reset after a load
+wire       nv_load_reset = (nv_reset_cnt != 16'd0);
 wire       nv_wr = bk_state & bk_loading & sd_buff_wr & sd_ack[4];
 assign     sd_buff_din[4] = nv_dout;
 
-reg bk_old_load, bk_old_save, bk_old_ack, bk_old_mounted;
+reg bk_old_load, bk_old_save, bk_old_ack, bk_old_mounted, bk_old_rom;
 always @(posedge clk_sys) begin
 	bk_old_load    <= bk_load_cmd;
 	bk_old_save    <= bk_save_cmd;
 	bk_old_ack     <= sd_ack[4];
 	bk_old_mounted <= img_mounted[4];
+	bk_old_rom     <= rom_select;
+	if (nv_reset_cnt != 16'd0) nv_reset_cnt <= nv_reset_cnt - 16'd1;
+
+	// img_mounted pulses on mount AND unmount; img_size==0 = unmount
+	if (~bk_old_mounted & img_mounted[4]) bk_mounted <= (img_size != 64'd0);
 
 	if (~bk_old_ack & sd_ack[4]) {bk_sd_rd, bk_sd_wr} <= 2'b00;
 
 	if (!bk_state) begin
 		if ((~bk_old_load & bk_load_cmd) ||
-		    (~bk_old_mounted & img_mounted[4] && img_size != 64'd0)) begin
+		    (~bk_old_mounted & img_mounted[4] && img_size != 64'd0) ||
+		    (bk_mounted && (rom_select != bk_old_rom))) begin
 			bk_state   <= 1'b1;
 			bk_loading <= 1'b1;
 			bk_sd_rd   <= 1'b1;
@@ -812,7 +828,8 @@ always @(posedge clk_sys) begin
 			bk_sd_wr   <= 1'b1;
 		end
 	end else if (bk_old_ack & ~sd_ack[4]) begin
-		bk_state   <= 1'b0;   // single 512-byte block covers everything
+		bk_state   <= 1'b0;   // single 512-byte block per transfer
+		if (bk_loading) nv_reset_cnt <= 16'hFFFF;  // warm reset: ROM re-reads PRAM
 		bk_loading <= 1'b0;
 	end
 end
