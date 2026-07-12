@@ -48,6 +48,12 @@ module twgs_card (
     // the normal ROM mapping takes over. See twgs.3.s LFA9A/LFB07.
     input  wire        boot_armed,
 
+    // Phase 2 (CDA install): while nmi_armed, serve ONLY the native NMI
+    // vector ($00FFEA/B -> LFB24) and its 4-byte JMPL ($00FB24-27) from the
+    // card ROM -- a tight window so runtime bank-0 language-card traffic is
+    // untouched (unlike the broad reset overlay, nothing else is remapped).
+    input  wire        nmi_armed,
+
     output wire        sel,          // 1 = TWGS card space -> overlay cpu_din
     output wire [7:0]  dout,         // read data for this access
     output wire        accel_en,     // TWGS acceleration engaged
@@ -67,8 +73,11 @@ module twgs_card (
   wire bc       = enable && (bank == 8'hBC);
   // Reset-overlay window: bank-0 $F800-$FFFF reads -> ROM $BCF800-$BCFFFF
   // (same low 15 bits, addr[15]=1 either way).
-  wire boot_ovl = enable && boot_armed && (bank == 8'h00) &&
-                  (addr[15:11] == 5'b11111);
+  wire boot_ovl = (enable && boot_armed && (bank == 8'h00) &&
+                   (addr[15:11] == 5'b11111)) ||
+                  (enable && nmi_armed && (bank == 8'h00) &&
+                   (addr == 16'hFFEA || addr == 16'hFFEB ||
+                    (addr[15:2] == 14'b11111011001001)));  // $FB24-$FB27
   wire sel_rom  = (bc && addr[15]) || boot_ovl; // $BC8000-$BCFFFF (32 KB)
   wire sel_cfg  = bc && (addr == 16'h0000);    // $BC0000  control latch
   wire sel_sdat = bc && (addr == 16'h4000);    // $BC4000  serial data

@@ -2045,7 +2045,7 @@ wire ready_out;
               .RST_N(~reset),
               .CE(phi2),
               .RDY_IN(~hdd_dma & ~mem_stall),
-              .NMI_N(1'b1),
+              .NMI_N(twgs_nmi_n),
               .IRQ_N(cpu_irq_n),
               .ABORT_N(1'b1),
               .D_IN(cpu_din),
@@ -2705,6 +2705,119 @@ always @(posedge CLK_14M) begin
   else if (twgs_boot_armed && cpu_vpa && cpu_vda && bank_bef == 8'hBC)
     twgs_boot_armed <= 1'b0;
 end
+
+// Phase 2 (WIP): CDA auto-install. STATUS: the NMI fires at the right moment
+// (2.5 s after the genuine handoff -- the countdown pauses while execution is
+// in bank $BC, so the firmware's own early $00FFFC read can't mistime it),
+// the tight vector overlay serves LFB24, and the LFA2F trampoline executes
+// fully (stack shuffle, hw-ack reads, RTI) -- but the RTI resumes the
+// INTERRUPTED code instead of detouring to LFA5D/_InstallCDA: the firmware's
+// stack-relative rewrite offsets assume the real 65C816's native interrupt
+// frame after PHB/PHA/PHA, and on this core the detour address lands off the
+// frame. Benign as-is (machine resumes correctly; no CDA in the menu).
+// NEXT: byte-compare our native-NMI stack frame + stack-relative addressing
+// against real-chip semantics through the LFA2F sequence (twgs.3.s:1954).
+// The firmware's chain-to-IIgs-ROM sequence
+// (LFB07) data-reads the real reset vector at $00FFFC from bank-$BC code --
+// a unique bus signature marking "boot handoff now". Arm a ~2.5 s deferral
+// there (Desk Manager is up well within that, ROM or GS/OS path alike),
+// then pulse NMI once. The card ROM's native NMI vector (overlaid tightly
+// by nmi_armed above) trampolines through LFA2F/LFA5D, which _InstallCDA's
+// the "TransWarp GS" desk accessory and resumes the interrupted code.
+// One-shot per reset, exactly like the real card's boot-time install.
+localparam TWGS_NMI_DELAY = 26'd35_795_453;   // 2.5 s at 14.318 MHz
+localparam TWGS_NMI_RETRY = 26'd34_363_636;   // retry 0.1 s after a miss
+reg  [1:0]  twgs_nmi_state;   // 0 idle, 1 timing, 2 vector window, 3 done
+reg  [25:0] twgs_nmi_cnt;
+reg  [6:0]  twgs_nmi_pulse;   // NMI_N low while nonzero
+reg  [3:0]  twgs_nmi_tries;
+reg  [15:0] twgs_nmi_win;     // vector-window timeout
+// Fetch-bank tracker: the chain signature must be a $00FFFC DATA read issued
+// by code EXECUTING in bank $BC (the firmware's LFB07 handoff) -- the CPU's
+// own vector pulls and the IIgs ROM's reads of the reset vector must not arm.
+reg  [7:0]  twgs_last_pbr;
+// Sample fetches ungated by phi2 with the CPU's raw address (the same
+// pattern as the proven ROM-debug PC tap): vpa/vda describe the live bus
+// cycle, not the phi2-committed snapshot.
+always @(posedge CLK_14M)
+  if (cpu_vpa && cpu_vda) twgs_last_pbr <= cpu_addr[23:16];
+`ifndef SYNTHESIS
+reg [7:0] twgs_lp_d; reg [7:0] twgs_lp_n;
+always @(posedge CLK_14M) begin
+  twgs_lp_d <= twgs_last_pbr;
+  if (twgs_last_pbr != twgs_lp_d && twgs_lp_n < 8'd40) begin
+    twgs_lp_n <= twgs_lp_n + 8'd1;
+    $display("TWGS-PBR: %02x -> %02x t=%0t", twgs_lp_d, twgs_last_pbr, $time);
+  end
+end
+`endif
+wire twgs_chain_sig = twgs_present && !twgs_boot_armed && phi2 &&
+                      cpu_vda && !cpu_vpa && !we &&
+                      bank_bef == 8'h00 && addr_bef == 16'hFFFC &&
+                      twgs_last_pbr == 8'hBC;
+always @(posedge CLK_14M) begin
+  if (reset) begin
+    twgs_nmi_state <= 2'd0;
+    twgs_nmi_cnt   <= 26'd0;
+    twgs_nmi_pulse <= 7'd0;
+    twgs_nmi_tries <= 4'd0;
+    twgs_nmi_win   <= 16'd0;
+  end else begin
+    if (twgs_nmi_pulse != 7'd0) twgs_nmi_pulse <= twgs_nmi_pulse - 7'd1;
+    case (twgs_nmi_state)
+      2'd0: if (twgs_chain_sig) begin
+              twgs_nmi_state <= 2'd1;
+              twgs_nmi_cnt   <= 26'd0;
+              twgs_nmi_tries <= 4'd0;
+            end
+      2'd1: begin
+              // Count only while execution is OUTSIDE bank $BC: the firmware
+              // has an early $00FFFC sanity read too, but it keeps executing
+              // in $BC afterwards -- the countdown holds until the real
+              // handoff (after which the firmware never runs again), so the
+              // NMI lands 2.5 s into the IIgs ROM's own boot.
+              if (twgs_last_pbr != 8'hBC)
+                twgs_nmi_cnt <= twgs_nmi_cnt + 26'd1;
+              if (twgs_nmi_cnt == TWGS_NMI_DELAY) begin
+                twgs_nmi_state <= 2'd2;
+                twgs_nmi_pulse <= 7'd127;   // ~9 us low: clean edge
+                twgs_nmi_win   <= 16'd0;
+              end
+            end
+      2'd2: begin
+              // Vector window: wait for the trampoline's JMPL to land in bank
+              // $BC. If the CPU was in emulation mode it pulled $FFFA (the
+              // real ROM handler; benign) and we missed -- retry shortly,
+              // giving up after 15 tries.
+              twgs_nmi_win <= twgs_nmi_win + 16'd1;
+              // Success = fetching the trampoline itself ($BCFA2F/LFA5D page)
+              if (cpu_vpa && cpu_vda && phi2 &&
+                  bank_bef == 8'hBC && addr_bef[15:8] == 8'hFA)
+                twgs_nmi_state <= 2'd3;
+              else if (twgs_nmi_win == 16'hFFFF) begin
+                if (twgs_nmi_tries == 4'd15)
+                  twgs_nmi_state <= 2'd3;   // give up
+                else begin
+                  twgs_nmi_tries <= twgs_nmi_tries + 4'd1;
+                  twgs_nmi_state <= 2'd1;
+                  twgs_nmi_cnt   <= TWGS_NMI_RETRY;
+                end
+              end
+            end
+      default: ;
+    endcase
+  end
+end
+wire twgs_nmi_armed = (twgs_nmi_state == 2'd2);
+`ifndef SYNTHESIS
+reg [1:0] twgs_nmi_state_d;
+always @(posedge CLK_14M) begin
+  twgs_nmi_state_d <= twgs_nmi_state;
+  if (twgs_nmi_state != twgs_nmi_state_d)
+    $display("TWGS-NMI: state %0d -> %0d t=%0t", twgs_nmi_state_d, twgs_nmi_state, $time);
+end
+`endif
+wire twgs_nmi_n     = (twgs_nmi_pulse == 7'd0);
 twgs_card twgs (
     .clk(CLK_14M), .reset(reset),
     .enable(twgs_present),
@@ -2716,6 +2829,7 @@ twgs_card twgs (
     .turbo_code(host_speed),
     .host_irq_en(osd_irq_delay),
     .boot_armed(twgs_boot_armed),
+    .nmi_armed(twgs_nmi_armed),
     .sel(twgs_sel), .dout(twgs_dout),
     .accel_en(twgs_accel_en), .speed_code(twgs_speed_code),
     .cfg_speed_code(twgs_cfg_speed),
