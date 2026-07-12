@@ -100,6 +100,7 @@ module iigs
    input              osd_pdl_delay,   // $C059 bit 6 (joystick/paddle)
    input              osd_ctr_delay,   // $C059 bit 4 (video counter)
    input              osd_cps_follow,  // $C059 bit 3 (CPS follow)
+   input              osd_irq_delay,   // AppleTalk/IRQ delay (Zip $C059.5 / TWGS $BC0000.3)
 
    // 1 = present a TransWarp GS card in bank $BC (OSD "Accelerator > Card"): ROM
    // signature/JSL API at $BC8000, $BC0000 control latch, X2444 NVRAM. Rides
@@ -115,6 +116,7 @@ module iigs
    output             accel_pdl_delay,
    output             accel_ctr_delay,
    output             accel_cps_follow,
+   output             accel_irq_delay,
 
    // NVRAM backup port (MiSTer SD slot 4; doc/pram-nvram-save-handoff.md).
    // 512-byte block: [0-255]=PRAM, [256-287]=TWGS X2444, rest reads $FF.
@@ -2054,8 +2056,10 @@ wire ready_out;
               .VPA(cpu_vpa),
               .VDA(cpu_vda),
               .MLB(cpu_mlb),
-              .VPB(cpu_vpb)
+              .VPB(cpu_vpb),
+              .I_FLAG(cpu_i_flag)
               );
+  wire cpu_i_flag;
 
   // Centralized IRQ management - matches GSplus/Clemens architecture
   reg [15:0] irq_pending = 0;  // 16-bit interrupt pending register (bit 0=aggregator, 3=VBL, 4=QSEC, 7=SCC)
@@ -2647,6 +2651,7 @@ wire       zip_unlocked = zip_unlocked_raw && zip_regs_en;
 // the TWGS card is selected (host_speed forced 0) so only ONE front-end drives
 // the speed engine — a real machine holds one accelerator.
 wire zip_spkr_delay_en, zip_pdl_delay_en, zip_ctr_delay_en, zip_cps_follow_en;
+wire zip_irq_delay_en;
 zipgs_regs zipgs (
     .clk(CLK_14M),
     .reset(reset),
@@ -2661,6 +2666,7 @@ zipgs_regs zipgs (
     .host_pdl_en(osd_pdl_delay),
     .host_ctr_en(osd_ctr_delay),
     .host_cps_en(osd_cps_follow),
+    .host_irq_en(osd_irq_delay),
     .zip_unlocked(zip_unlocked_raw),
     .accel_en(zip_accel_en),
     .speed_code(zip_speed_code),
@@ -2669,7 +2675,8 @@ zipgs_regs zipgs (
     .spkr_delay_en(zip_spkr_delay_en),
     .pdl_delay_en(zip_pdl_delay_en),
     .ctr_delay_en(zip_ctr_delay_en),
-    .cps_follow_en(zip_cps_follow_en)
+    .cps_follow_en(zip_cps_follow_en),
+    .irq_delay_en(zip_irq_delay_en)
 );
 
 // Zip cache-disable ($C059 bit 7) out to the SDRAM cache in the top level.
@@ -2686,6 +2693,7 @@ wire [7:0]  twgs_dout;
 wire        twgs_accel_en;
 wire [2:0]  twgs_speed_code;
 wire [2:0]  twgs_cfg_speed;
+wire        twgs_irq_logic_en;
 twgs_card twgs (
     .clk(CLK_14M), .reset(reset),
     .enable(twgs_present),
@@ -2694,10 +2702,11 @@ twgs_card twgs (
     .wr_data(dout),
     .cyareg7(CYAREG[7]),
     .turbo_code(host_speed),
+    .host_irq_en(osd_irq_delay),
     .sel(twgs_sel), .dout(twgs_dout),
     .accel_en(twgs_accel_en), .speed_code(twgs_speed_code),
     .cfg_speed_code(twgs_cfg_speed),
-    .cache_enable(), .irq_logic_en(),
+    .cache_enable(), .irq_logic_en(twgs_irq_logic_en),
     .bk_addr(nv_addr[4:0]),
     .bk_wr(nv_wr & nv_twgs_sel),
     .bk_data(nv_din),
@@ -2801,6 +2810,15 @@ assign accel_spkr_delay = zip_spkr_delay_en;
 assign accel_pdl_delay  = zip_pdl_delay_en;
 assign accel_ctr_delay  = zip_ctr_delay_en;
 assign accel_cps_follow = zip_cps_follow_en;
+assign accel_irq_delay  = twgs_present ? twgs_irq_logic_en : zip_irq_delay_en;
+
+// AppleTalk/IRQ delay (ZipGS SW1/3 / TWGS Configure > AppleTalk/IRQ): drop to
+// the system speed while the CPU's interrupt-disable flag is set, so
+// timing-sensitive ISR-era code (AppleTalk et al) runs at the speed it
+// expects. Level-based, exactly the TWGS manual's description ("slows down
+// whenever the interrupts are disabled ... about a 5% decrease").
+wire irq_slowdown = cpu_i_flag &&
+                    (twgs_present ? twgs_irq_logic_en : zip_irq_delay_en);
 
 // CPS Follow ($C059 bit 3 = ZipGS SW1/5): when enabled, the accelerator drops
 // to native the moment the system enters 1 MHz mode (CYAREG bit7=0) --
@@ -2817,6 +2835,7 @@ wire [3:0] fast_thresh = (accel_capable && eff_accel_en && eff_speed_code != 3'd
                           && iwm_holdoff == 15'd0
                           && !floppy_motor_on && !floppy35_motor_on
                           && !io_slow_holdoff
+                          && !irq_slowdown
                           && !(twgs_present && bank_bef == 8'hBC)  // TWGS bank $BC native
                           && cps_gate)
                          ? (4'd4 - {1'b0, eff_speed_code})

@@ -369,6 +369,8 @@ iigs  iigs(
         .osd_pdl_delay(1'b1),
         .osd_ctr_delay(1'b1),
         .osd_cps_follow(1'b0), // flip to 1'b1 to test 1MHz sync
+        .osd_irq_delay(1'b1),  // AppleTalk/IRQ delay enabled (matches reset regs)
+        .accel_irq_delay(),
         .accel_cfg_speed(),
         .accel_spkr_delay(),
         .accel_pdl_delay(),

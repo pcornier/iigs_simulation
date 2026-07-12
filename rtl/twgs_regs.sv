@@ -42,6 +42,11 @@ module twgs_regs (
     // miss + the clamps removed -- see INTEGRATION.md).
     input  wire [2:0] turbo_code,
 
+    // Host (OSD) view of the AppleTalk/IRQ-delay enable. Edge-applied into
+    // $BC0000 bit 3 (inverted: bit3=1 = IRQ logic OFF), same pattern as the
+    // speed path, so the OSD and TWGS software share one state.
+    input  wire       host_irq_en,
+
     output wire       accel_en,      // 1 = TWGS acceleration engaged
     output wire [2:0] speed_code,    // 0 native .. = turbo step when accelerating
     output wire [2:0] cfg_speed_code,// CONFIGURED speed (ignores CYAREG.7) — for
@@ -56,17 +61,23 @@ module twgs_regs (
   // zero -> disengage. A change equal to the current configured speed is a
   // no-op so OSD-mirror write-backs of software changes are absorbed.
   reg [2:0] host_prev;
+  reg       irq_prev;
 
   always @(posedge clk) begin
     if (reset) begin
-      cfg_reg   <= 8'h00;            // power-on: not accelerating, cache off
+      cfg_reg   <= 8'h00;            // power-on: not accelerating, cache off,
+                                     // bit3=0 = IRQ logic ON (manual default)
       host_prev <= 3'd0;
+      irq_prev  <= 1'b1;             // matches cfg_reg[3]=0 (enabled)
     end else begin
       if (turbo_code != host_prev) begin
         host_prev <= turbo_code;
         if (turbo_code != cfg_speed_code)
           cfg_reg[2] <= (turbo_code != 3'd0);
       end
+      irq_prev <= host_irq_en;
+      if (host_irq_en != irq_prev)
+        cfg_reg[3] <= ~host_irq_en;
       if (cfg_wr_stb)
         cfg_reg <= cfg_wr_data;      // software wins on collision cycles
     end

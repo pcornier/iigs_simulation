@@ -18,7 +18,8 @@ module P65C816
    output logic  VPA/*verilator public_flat*/,
    output logic  VDA/*verilator public_flat*/,
    output logic  MLB/*verilator public_flat*/,
-   output logic  VPB/*verilator public_flat*/
+   output logic  VPB/*verilator public_flat*/,
+   output logic  I_FLAG  // P[2] (interrupt disable) — accelerator IRQ-delay tap
    );
 
   logic [15:0]   A/*verilator public_flat*/;
@@ -979,6 +980,8 @@ module P65C816
          VPB = 1'b0;
       else
          VPB = 1'b1;
+
+      I_FLAG = P[2];
 
       if ((MC.ADDR_BUS == 4'b0001 | MC.ADDR_BUS == 4'b0011 | MC.ADDR_BUS == 4'b0111) & rmw == 1'b1)
          MLB = 1'b0;

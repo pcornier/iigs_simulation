@@ -72,6 +72,7 @@ module zipgs_regs (
     input  wire       host_pdl_en,   // -> $C059 bit 6 (joystick/paddle delay)
     input  wire       host_ctr_en,   // -> $C059 bit 4 (counter delay)
     input  wire       host_cps_en,   // -> $C059 bit 3 (CPS follow)
+    input  wire       host_irq_en,   // -> $C059 bit 5 (AppleTalk/IRQ delay; KEGS "ext del")
 
     output wire       zip_unlocked, // 1 = $C058-$C05F are Zip registers
     output wire       accel_en,     // 1 = acceleration engaged
@@ -92,7 +93,8 @@ module zipgs_regs (
     output wire       spkr_delay_en, // $C05C bit 0
     output wire       pdl_delay_en,  // $C059 bit 6
     output wire       ctr_delay_en,  // $C059 bit 4
-    output wire       cps_follow_en  // $C059 bit 3
+    output wire       cps_follow_en, // $C059 bit 3
+    output wire       irq_delay_en   // $C059 bit 5
 );
 
   reg [2:0] unlock;
@@ -111,6 +113,7 @@ module zipgs_regs (
   assign pdl_delay_en  = reg_c059[6];
   assign ctr_delay_en  = reg_c059[4];
   assign cps_follow_en = reg_c059[3];
+  assign irq_delay_en  = reg_c059[5];
 
   // 1.024 ms-period toggle for $C05B bit 7, matching KEGS ((dcycs>>9)&1 =
   // 512 us half-period): 512 us x 14.31818 MHz = 7331 ticks. The Zip CDA
@@ -145,7 +148,7 @@ module zipgs_regs (
   // Host change detection: host_prev resets to 0 (native), so a non-zero
   // boot-time value (sim --speed flag) applies on the first cycle after reset.
   reg [2:0] host_prev;
-  reg       spkr_prev, pdl_prev, ctr_prev, cps_prev;
+  reg       spkr_prev, pdl_prev, ctr_prev, cps_prev, irq_prev;
 
   always @(posedge clk) begin
     if (ms_ctr == 13'd7330) begin
@@ -173,6 +176,7 @@ module zipgs_regs (
       pdl_prev  <= 1'b1;      // OSD defaults (same values) don't fire a
       ctr_prev  <= 1'b1;      // spurious apply on the first cycle
       cps_prev  <= 1'b0;
+      irq_prev  <= 1'b1;      // $57 bit 5 = 1 (delay enabled)
     end else begin
       // --- host (OSD / CLI) side ------------------------------------------
       // OSD host_speed IS the clock step directly (0..4), so the OSD can reach
@@ -202,6 +206,8 @@ module zipgs_regs (
       if (host_pdl_en  != pdl_prev)  reg_c059[6] <= host_pdl_en;
       if (host_ctr_en  != ctr_prev)  reg_c059[4] <= host_ctr_en;
       if (host_cps_en  != cps_prev)  reg_c059[3] <= host_cps_en;
+      irq_prev  <= host_irq_en;
+      if (host_irq_en  != irq_prev)  reg_c059[5] <= host_irq_en;
 
       // --- software (ZipGS protocol) side ---------------------------------
       if (wr_stb) begin

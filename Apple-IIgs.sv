@@ -74,6 +74,7 @@ localparam CONF_STR = {
 	"H0P1O[18],Joystick Delay,Enabled,Disabled;",
 	"H0P1O[20],Counter Delay,Enabled,Disabled;",
 	"H0P1O[19],Sync to Sys 1MHz (CPS),Off,On;",
+	"P1O[23],AppleTalk/IRQ Delay,Enabled,Disabled;",
 	"P2,System;",
 	"P2-;",
 	"P2O[11],ROM Version,ROM1,ROM3;",
@@ -260,6 +261,8 @@ wire osd_pdl_delay  = ~status[18];  // 0 = Enabled
 wire osd_ctr_delay  = ~status[20];  // 0 = Enabled
 wire osd_cps_follow =  status[19];  // 0 = Off (deliberate divergence from a
                                     // real Zip's default-on; see iigs.sv)
+wire osd_irq_delay  = ~status[23];  // 0 = Enabled (visible for all cards: the
+                                    // TWGS CDA exposes this one too)
 
 // OSD status write-back ("the OSD is a live display"): when software (Zip CP
 // via $C059/$C05C/$C05D, TWGS via $BC0000) changes the accelerator state, push
@@ -268,16 +271,19 @@ wire osd_cps_follow =  status[19];  // 0 = Off (deliberate divergence from a
 // change (it equals the card state by construction), so no feedback loop.
 wire [2:0] accel_cfg_speed;
 wire accel_spkr_delay, accel_pdl_delay, accel_ctr_delay, accel_cps_follow;
+wire accel_irq_delay;
 wire [127:0] status_mirror_view;
-assign status_mirror_view = {status[127:21], ~accel_ctr_delay, accel_cps_follow,
+assign status_mirror_view = {status[127:24], ~accel_irq_delay, status[22:21],
+                             ~accel_ctr_delay, accel_cps_follow,
                              ~accel_pdl_delay, ~accel_spkr_delay, status[16:15],
                              accel_cfg_speed, status[11:0]};
 reg  [127:0] status_mirror;
 reg          status_mirror_set;
-reg  [8:0]   mirror_last;   // {ctr,cps,pdl,spkr,card(2),speed(3)} view bits
-wire [8:0]   mirror_now = {~accel_ctr_delay, accel_cps_follow, ~accel_pdl_delay,
-                           ~accel_spkr_delay, status[16:15], accel_cfg_speed};
-wire [8:0]   mirror_osd = {status[20], status[19], status[18],
+reg  [9:0]   mirror_last;   // {irq,ctr,cps,pdl,spkr,card(2),speed(3)} view bits
+wire [9:0]   mirror_now = {~accel_irq_delay, ~accel_ctr_delay, accel_cps_follow,
+                           ~accel_pdl_delay, ~accel_spkr_delay, status[16:15],
+                           accel_cfg_speed};
+wire [9:0]   mirror_osd = {status[23], status[20], status[19], status[18],
                            status[17], status[16:15], status[14:12]};
 always @(posedge clk_sys) begin
 	status_mirror_set <= 1'b0;
@@ -399,6 +405,8 @@ iigs iigs (
 	.accel_pdl_delay(accel_pdl_delay),
 	.accel_ctr_delay(accel_ctr_delay),
 	.accel_cps_follow(accel_cps_follow),
+	.osd_irq_delay(osd_irq_delay),
+	.accel_irq_delay(accel_irq_delay),
 	.nv_addr(nv_addr),
 	.nv_wr(nv_wr),
 	.nv_din(nv_din),

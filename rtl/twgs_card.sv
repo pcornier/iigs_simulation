@@ -37,6 +37,7 @@ module twgs_card (
     input  wire [7:0]  wr_data,      // dout (CPU write data)
     input  wire        cyareg7,      // CYAREG $C036 bit 7 (Fast)
     input  wire [2:0]  turbo_code,   // OSD turbo ceiling (host_speed); step when accel
+    input  wire        host_irq_en,  // OSD AppleTalk/IRQ delay -> $BC0000 bit3 (inverted)
 
     output wire        sel,          // 1 = TWGS card space -> overlay cpu_din
     output wire [7:0]  dout,         // read data for this access
@@ -78,6 +79,7 @@ module twgs_card (
       // "twgs_present=0 is a pass-through" invariant); a mid-session enable
       // then edge-applies the current OSD speed, engaging the card.
       .turbo_code(enable ? turbo_code : 3'd0),
+      .host_irq_en(host_irq_en),
       .accel_en(accel_en), .speed_code(speed_code),
       .cfg_speed_code(cfg_speed_code),
       .cache_enable(cache_enable), .irq_logic_en(irq_logic_en)
