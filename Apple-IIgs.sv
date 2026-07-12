@@ -285,6 +285,7 @@ assign status_mirror_view = {status[127:26], ~accel_twgs_snd, ~accel_twgs_gfx,
                              accel_cfg_speed, status[11:0]};
 reg  [127:0] status_mirror;
 reg          status_mirror_set;
+reg  [7:0]   mirror_hold;   // post-reset grace window (see below)
 reg  [11:0]  mirror_last;   // {snd,gfx,irq,ctr,cps,pdl,spkr,card(2),speed(3)}
 wire [11:0]  mirror_now = {~accel_twgs_snd, ~accel_twgs_gfx,
                            ~accel_irq_delay, ~accel_ctr_delay, accel_cps_follow,
@@ -296,7 +297,18 @@ wire [11:0]  mirror_osd = {status[25], status[24],
 always @(posedge clk_sys) begin
 	status_mirror_set <= 1'b0;
 	if (reset) begin
+		mirror_hold <= 8'd255;
 		mirror_last <= mirror_osd;   // adopt the OSD state at reset: no push
+	end else if (mirror_hold != 8'd0) begin
+		// Keep adopting for a moment after reset deasserts: the card cores
+		// re-apply the OSD speed on their first CLK_14M cycles (host_prev
+		// resets to 0, so a non-zero OSD speed re-engages -- DIP-switch
+		// semantics). Without this window the clk_sys mirror sees the card's
+		// reset state (native) before that re-apply lands and pushes 2.8 MHz
+		// back into the OSD, wiping the user's speed on every reset.
+		// 255 clk_sys cycles ~ 60+ CLK_14M cycles; the re-apply needs ~2.
+		mirror_hold <= mirror_hold - 8'd1;
+		mirror_last <= mirror_osd;
 	end else if (mirror_now != mirror_last) begin
 		mirror_last <= mirror_now;
 		if (mirror_now != mirror_osd) begin
