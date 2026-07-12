@@ -79,3 +79,13 @@ that coverage.
 - Manual: `doc/TransWarpGS_Manual.pdf` ch.2 (CDA menus).
 - Research: `doc/transwarp_gs/README.md` §4.8 (IRQ/reset/NMI/CDA).
 - The state machine + WIP notes: `rtl/iigs.sv` (search `twgs_nmi_state`).
+
+## 2026-07-12 update — machinery DISABLED after hardware crash
+
+First hardware exposure (merged build `79306b19`) crashed **ROM1** boots to
+the monitor (double BRK at 00/03FB and 00/0000, X=$00BC on the stack frame):
+the trampoline's mis-landing RTI is only benign in the ROM3-sim case that was
+tested. The NMI fire is now fenced behind `` `ifdef TWGS_CDA_INSTALL `` in
+`rtl/iigs.sv` (default off — the state machine arms but never counts).
+Define it to resume the investigation, and this time validate on BOTH ROM
+versions in sim before any hardware deploy.

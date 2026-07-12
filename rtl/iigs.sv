@@ -2787,6 +2787,14 @@ always @(posedge CLK_14M) begin
               twgs_nmi_tries <= 4'd0;
             end
       2'd1: begin
+`ifndef TWGS_CDA_INSTALL
+              // DISABLED pending the stack-frame fix (doc/twgs-cda-install-issue.md):
+              // first hardware exposure showed the trampoline's mis-landing RTI is
+              // NOT benign outside the ROM3 sim case -- ROM1 boots crashed to the
+              // monitor (double BRK, X=$00BC). Hold in state 1 without counting;
+              // define TWGS_CDA_INSTALL to resume the phase-2 work.
+              twgs_nmi_cnt <= 26'd0;
+`else
               // Count only while execution is OUTSIDE bank $BC: the firmware
               // has an early $00FFFC sanity read too, but it keeps executing
               // in $BC afterwards -- the countdown holds until the real
@@ -2799,6 +2807,7 @@ always @(posedge CLK_14M) begin
                 twgs_nmi_pulse <= 7'd127;   // ~9 us low: clean edge
                 twgs_nmi_win   <= 16'd0;
               end
+`endif
             end
       2'd2: begin
               // Vector window: wait for the trampoline's JMPL to land in bank
