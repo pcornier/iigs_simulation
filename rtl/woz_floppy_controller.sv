@@ -118,9 +118,9 @@ module woz_floppy_controller #(
     // During S_SAVE_TRACK, sd_buff_addr drives BRAM directly. Port A is synchronous, so
     // q_a updates on clk edges; register the save-side output before handing it to the
     // block device so the address/data pairing is stable at the simulator boundary.
-    wire [BRAM_ADDR_WIDTH-1:0] save_bram_addr = {blocks_processed[6:0], sd_buff_addr};
+    wire [BRAM_ADDR_WIDTH-1:0] save_bram_addr = {blocks_processed[BRAM_ADDR_WIDTH-10:0], sd_buff_addr};
     wire saving_active = (state == S_SAVE_TRACK);
-    wire [BRAM_ADDR_WIDTH-1:0] bram_addr_a = saving_active ? save_bram_addr[BRAM_ADDR_WIDTH-1:0] : track_load_addr;
+    wire [BRAM_ADDR_WIDTH-1:0] bram_addr_a = saving_active ? save_bram_addr : track_load_addr[BRAM_ADDR_WIDTH-1:0];
 
     // sd_buff_din is always registered. In save mode this avoids exposing BRAM q_a as a raw
     // combinational path to the C++ block-device shim, which can otherwise sample stale data
@@ -160,7 +160,7 @@ module woz_floppy_controller #(
         .q_a(track_ram_dout0),
 
         .clock_b(clk),
-        .address_b(bram_addr_b),
+        .address_b(bram_addr_b[BRAM_ADDR_WIDTH-1:0]),
         .wren_b(bit_we && (!IS_35_INCH || (track_id[0] == 1'b0))),
         .data_b(bit_data_in),
         .q_b(bit_data0)
@@ -674,7 +674,7 @@ module woz_floppy_controller #(
 	                            busy <= 0;
 	                            state <= S_IDLE;
 	                            $display("WOZ_CTRL: Parsed INFO/TMAP/TRKS%s (ver=%0d type=%0d timing=%0d flux_block=%0d), entering IDLE",
-	                                     have_flux ? "/FLUX" : "", info_version, info_disk_type, info_bit_timing, info_flux_block);
+	                                     have_flux ? "/FLUX" : "     ", info_version, info_disk_type, info_bit_timing, info_flux_block);
 	                            if ((IS_35_INCH && info_disk_type == 8'd1) || (!IS_35_INCH && info_disk_type == 8'd2))
 	                                $display("WOZ_CTRL: WARNING: disk type mismatch! IS_35_INCH=%0d but WOZ disk_type=%0d (1=5.25\", 2=3.5\")",
 	                                         IS_35_INCH, info_disk_type);
@@ -767,7 +767,7 @@ module woz_floppy_controller #(
                         last_physical_track <= track_id[7:1];
                         settle_counter <= 20'd0;
                         // Debug: show track change detected
-                        if (settle_counter > 16'd100) begin
+                        if (settle_counter > 20'd100) begin
                             $display("WOZ_SETTLE: Physical track changed %0d -> %0d, resetting settle counter",
                                      last_physical_track, track_id[7:1]);
                         end
@@ -1189,7 +1189,7 @@ module woz_floppy_controller #(
                                 $display("WOZ_CTRL: Stored track %0d to side0 RAM, %s=%0d is_flux=%0d%s",
                                          pending_track_id, pending_is_flux ? "flux_bytes" : "bit_count",
                                          is_woz_v1 ? {16'd0, v1_bit_count} : trk_bit_count, pending_is_flux,
-                                         is_woz_v1 ? " (v1)" : "");
+                                         is_woz_v1 ? " (v1)" : "     ");
                             end
                             if (pending_is_flux) begin
                                 $display("WOZ_CTRL: Flux ticks sum=%0d", pending_flux_total_ticks);
@@ -1499,7 +1499,7 @@ module woz_floppy_controller #(
                              track_load_data <= sd_buff_dout;
                              track_load_we <= 1;
                              if (pending_is_flux) begin
-                                 pending_flux_total_ticks <= pending_flux_total_ticks + sd_buff_dout;
+                                 pending_flux_total_ticks <= pending_flux_total_ticks + {24'd0, sd_buff_dout};
                              end
                          end
 	                     end

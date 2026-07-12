@@ -272,7 +272,7 @@ module smartport_dev (
                                 pkt_len_lo <= wr_data;
                                 // Decode payload length from encoded hi/lo
                                 // Encoded: hi = {1, b13..b7}, lo = {1, b6..b0}
-                                payload_len <= {2'b0, wr_data[6:0]} | ({2'b0, pkt_len_hi[6:0]} << 7);
+                                payload_len <= {9'b0, wr_data[6:0]} | ({2'b0, pkt_len_hi[6:0], 7'b0});
                                 payload_idx <= 16'd0;
                                 payload_decoded_cnt <= 16'd0;
                                 group_idx <= 3'd0;
@@ -284,6 +284,7 @@ module smartport_dev (
                                          {2'b0, wr_data[6:0]} | ({2'b0, pkt_len_hi[6:0]} << 7));
 `endif
                             end
+                          default: ;
                         endcase
                         if (header_idx < 3'd6)
                             header_idx <= header_idx + 3'd1;
@@ -326,6 +327,7 @@ module smartport_dev (
                                     // Block number: little-endian (lo, mid, hi)
                                     16'd2: cmd_block[7:0] <= {group_msb[0], wr_data[6:0]};
                                     16'd3: cmd_block[15:8] <= {group_msb[0], wr_data[6:0]};
+                                  default: ;
                                 endcase
                             end
                             payload_decoded_cnt <= payload_decoded_cnt + 16'd1;
@@ -532,6 +534,7 @@ module smartport_dev (
                         state <= SP_IDLE;
                     end
                 end
+              default: ;
             endcase
 
             // If SmartPort mode drops while in the middle of a transaction, reset

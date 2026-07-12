@@ -372,7 +372,7 @@ module flux_drive (
     endtask
 
     wire [15:0] raw_byte_index = {2'b00, effective_bit_position[16:3]};    // effective_bit_position / 8 (14-bit result zero-extended)
-    wire [15:0] max_byte_index = (TRACK_BIT_COUNT > 0) ? ((TRACK_BIT_COUNT - 1) >> 3) : 16'd0;
+    wire [15:0] max_byte_index = (TRACK_BIT_COUNT > 0) ? 16'((TRACK_BIT_COUNT - 32'd1) >> 3) : 16'd0;
     wire [15:0] byte_index = (raw_byte_index > max_byte_index) ? max_byte_index : raw_byte_index;
     wire [2:0]  bit_shift = 3'd7 - effective_bit_position[2:0]; // MSB first (bit 7 = first bit)
 
@@ -393,7 +393,7 @@ module flux_drive (
     // For bit_shift: use current bit_shift directly. At the flux check, bit_position has
     // already advanced so bit_shift reflects the correct bit in the new byte. The look-ahead
     // addressing ensures BRAM_DATA is the correct byte by that time.
-    wire        current_bit = (BRAM_DATA >> bit_shift) & 1'b1;
+    wire        current_bit = BRAM_DATA[bit_shift];
 
     // (Weak-bit detection uses registered zero_run_count / weak_bit_active instead of wires)
 
@@ -482,7 +482,7 @@ module flux_drive (
 
     // Check if next chunk has data (don't request beyond track end)
     wire [15:0] next_chunk_start = {next_chunk, 14'd0};
-    wire next_chunk_valid = (next_chunk_start < FLUX_DATA_SIZE) || (next_chunk == 2'd0);
+    wire next_chunk_valid = ({16'd0, next_chunk_start} < FLUX_DATA_SIZE) || (next_chunk == 2'd0);
 
     // Chunk reload request output
     assign CHUNK_RELOAD_REQ = approaching_boundary && need_next_chunk && next_chunk_valid;
@@ -793,7 +793,7 @@ module flux_drive (
                         // Ignore SEL35 deassertions; the ROM clears $C031 between commands.
                         if (DISK_MOUNTED) begin
                             if (step_direction_slot[DRIVE_SELECT] == 1'b0) begin
-                                if (head_phase < max_phase)
+                                if ({1'b0, head_phase} < max_phase)
                                     head_phase <= head_phase + 9'd4;
                             end else begin
                                 if (head_phase >= 9'd4)
@@ -898,7 +898,7 @@ module flux_drive (
                 // a microsecond blip; reference emulators (clemens/KEGS) likewise
                 // apply one bounded delta per phase-state change.
                 phase_change = 0;
-                new_phase = head_phase;
+                new_phase = {23'd0, head_phase};
                 rel_phase = PHASES;
 
                 case (head_phase[2:1])
@@ -954,13 +954,13 @@ module flux_drive (
                 prev_phases_525 <= PHASES;
 
                 if (step_hold_cnt >= PHASE_DEBOUNCE) begin
-                    new_phase = head_phase + phase_change;
+                    new_phase = {23'd0, head_phase} + phase_change;
                     if (new_phase < 0)
                         head_phase <= 9'd0;
                     else if (new_phase > max_phase)
-                        head_phase <= max_phase;
+                        head_phase <= max_phase[8:0];
                     else
-                        head_phase <= new_phase;
+                        head_phase <= new_phase[8:0];
                     // Remember the last VALIDLY-HELD (debounced) phase state for
                     // the release snap below. Blips shorter than the debounce
                     // never become a snap target.
@@ -994,16 +994,16 @@ module flux_drive (
                     endcase
                     if (snap_pole != 4'd15) begin
                         // move to the nearest qtrack ≡ snap_pole (mod 8)
-                        snap_diff = snap_pole - {29'd0, head_phase[2:0]};
+                        snap_diff = {28'd0, snap_pole} - {29'd0, head_phase[2:0]};
                         if (snap_diff > 3)  snap_diff = snap_diff - 8;
                         if (snap_diff < -4) snap_diff = snap_diff + 8;
-                        new_phase = head_phase + snap_diff;
+                        new_phase = {23'd0, head_phase} + snap_diff;
                         if (new_phase < 0)
                             head_phase <= 9'd0;
                         else if (new_phase > max_phase)
-                            head_phase <= max_phase;
+                            head_phase <= max_phase[8:0];
                         else
-                            head_phase <= new_phase;
+                            head_phase <= new_phase[8:0];
                     end
                 end
             end
@@ -1433,7 +1433,7 @@ module flux_drive (
                         end
 `endif
                         // Advance address for next read
-                        if (flux_byte_addr + 1 >= FLUX_DATA_SIZE) begin
+                        if ({16'd0, flux_byte_addr} + 32'd1 >= FLUX_DATA_SIZE) begin
                             flux_byte_addr <= 16'd0;  // Wrap to start of track
                             rotation_complete <= 1'b1;
                         end else begin
@@ -1721,8 +1721,8 @@ module flux_drive (
 
             // Track change detection - request new track load when head moves
             // (For now, just track the current track for debugging)
-            if (head_phase[8:2] != current_track) begin
-                current_track <= head_phase[8:2];
+            if ({1'b0, head_phase[8:2]} != current_track) begin
+                current_track <= {1'b0, head_phase[8:2]};
                 debug_read_count <= 5'd0;
 `ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: Head moved to track %0d", DRIVE_ID, head_phase[8:2]);

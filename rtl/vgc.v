@@ -313,7 +313,7 @@ begin
 		shr_pal_slot <= 3'd0;
 	end else if (H == 10'd758 || H == 10'd772 || H == 10'd786 || H == 10'd800
 	          || H == 10'd814 || H == 10'd828 || H == 10'd842 || H == 10'd856) begin
-		video_addr_shrg <= shr_pal_base + {14'b0, shr_pal_slot, 2'b11};  // byte 4m+3
+		video_addr_shrg <= shr_pal_base + {18'b0, shr_pal_slot, 2'b11};  // byte 4m+3
 		shr_pal_slot <= shr_pal_slot + 3'd1;
 	end else if (H == 10'd870) begin
 		// SCB even/odd pair for the NEXT row; the odd byte is what the CPU

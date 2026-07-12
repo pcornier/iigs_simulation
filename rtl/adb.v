@@ -902,6 +902,7 @@ always @(posedge CLK_14M) begin
             option_down <= ps2_key[9];
             closed_apple <= ps2_key[9];
           end
+          default: ;
         endcase
       end
       
@@ -1481,6 +1482,7 @@ always @(posedge CLK_14M) begin
                 if (pending_data > 3'd0) pending_data <= pending_data - 3'd1;
               end
             end
+            default: ;
           endcase
           // Note: State transitions for IDLE->DATA moved outside address case block
           // (see c026_status_read_with_data handling below c024_was_read handling)
@@ -1805,6 +1807,7 @@ always @(posedge CLK_14M) begin
                             4'd3: cmd_data[23:16] <= din;
                             4'd2: cmd_data[15:8] <= din;
                             4'd1: cmd_data[7:0] <= din;
+                          default: ;
                         endcase
                     default: ; // Should not happen
                 endcase
@@ -2017,6 +2020,7 @@ always @(posedge CLK_14M) begin
                 end
               endcase
             end
+            default: ;
           endcase
         end else if (strobe) begin
 `ifdef DEBUG_ADB

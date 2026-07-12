@@ -118,6 +118,7 @@ module sound
        .coeff_y2(-0.81781102634857016920))
    psg_iir
      (
+      .cx(), .cx0(), .cx1(), .cx2(), .cy0(), .cy1(), .cy2(),
       .clk(CLK_14M),
       .reset(reset),
 

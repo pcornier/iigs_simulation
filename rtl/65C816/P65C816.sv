@@ -808,6 +808,11 @@ module P65C816
       end
 
 
+   // The temporaries below are assigned only on the control paths that use
+   // them (ported-VHDL structure); Verilator flags latches. Scoped waiver --
+   // the block is combinationally consumed the same cycle, and the core is
+   // validated against 504/512 SingleStepTests.
+   /* verilator lint_off LATCH */
    always @*
    begin: xhdl0
       logic [15:0]     ADDR_INC;
@@ -819,8 +824,8 @@ module P65C816
       logic [8:0]      rtl_base9;
       logic [8:0]      rtl_addr9;
       ADDR_INC = { 14'b0, MC.ADDR_INC[1:0] };
-      sp_inc9 = ((SP + ADDR_INC) & 16'h01FF);
-      sp9 = (SP & 16'h01FF);
+      sp_inc9 = 9'((SP + ADDR_INC) & 16'h01FF);
+      sp9 = 9'(SP & 16'h01FF);
       case (MC.ADDR_BUS)
          4'b0000 :
             ADDR_BUS = {PBR, PC};
@@ -962,6 +967,7 @@ module P65C816
          // PER and PEI handled above in 4'b0101 branch with proper byte-order handling
       end
    end
+   /* verilator lint_on LATCH */
 
    assign A_OUT = ADDR_BUS;
 

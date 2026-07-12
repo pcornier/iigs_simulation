@@ -438,6 +438,7 @@ end
     // DEVICE_SELECT/IO_SELECT
     // RESET
     // cpu_interface
+/* verilator lint_off PINMISSING */
 `ifdef VERILATOR
 dpram #(.widthad_a(9),.prefix("hdd"),.p(" a")) sector_ram
 `else
@@ -467,6 +468,7 @@ bram #(.widthad_a(9)) sector_ram
         .enable_b(1'b1)
 `endif
 );
+/* verilator lint_on PINMISSING */
 
     // Registered DMA readback
     always @(posedge CLK_14M) begin

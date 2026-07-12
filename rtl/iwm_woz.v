@@ -493,6 +493,7 @@ module iwm_woz (
     wire drive35_track_loaded = WOZ_TRACK3_DATA_VALID;
 
     flux_drive drive35 (
+        .HEAD_QTRACK(),
         .IS_35_INCH(1'b1),
         .DRIVE_ID(2'd1),
         .CLK_14M(CLK_14M),
@@ -644,6 +645,7 @@ module iwm_woz (
     wire        drive35_2_at_track0;
 
     flux_drive drive35_2 (
+        .HEAD_QTRACK(),
         .IS_35_INCH(1'b1),
         .DRIVE_ID(2'd2),
         .CLK_14M(CLK_14M),
@@ -1231,7 +1233,8 @@ module iwm_woz (
         .SP_REQ(sp_req),
         .CBUS_ENABLE2(cbus_enable2),
         .DEBUG_RSH(),
-        .DEBUG_STATE()
+        .DEBUG_STATE(),
+        .DEBUG_BYTE_VALID()
     );
 
     assign D_OUT = iwm_data_out;

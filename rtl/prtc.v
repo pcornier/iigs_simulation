@@ -200,7 +200,7 @@ end
       checksum_writes <= 2'd0;
     end
     2'd2: begin
-      checksum <= checksum[31:16] + { checksum[14:0], 1'b0 } + { pram[counter+1], pram[counter] };
+      checksum <= {16'd0, checksum[31:16]} + {16'd0, checksum[14:0], 1'b0} + {16'd0, pram[counter+1], pram[counter]};
       if (counter == 8'd0) begin
         checksum <= { checksum[15:0] ^ 16'haaaa, checksum[15:0] };
         checksum_state <= 2'd3;
@@ -210,10 +210,11 @@ end
       end
     end
     2'd3: begin
-      pram[252+checksum_writes] <= checksum[(checksum_writes*8)-1+:8];
+      pram[8'd252 + {6'd0, checksum_writes}] <= checksum[({3'd0, checksum_writes}*8)-1+:8];
       checksum_writes <= checksum_writes + 2'd1;
       if (checksum_writes == 2'd3) checksum_state <= 2'd0;
     end
+    default: ;
   endcase
 
 
@@ -257,7 +258,7 @@ end
         $display("PRTC [%0d] C034 WRITE: %02x (bit7=%d bit6=%d) state=%s c033=%02x",
                  prtc_txn_count, din, din[7], din[6], state_name(state), c033);
 `endif
-      c034 <= din[6:0];
+      c034 <= {1'b0, din[6:0]};
     end
   end
 
@@ -344,6 +345,7 @@ end
 `endif
                 state <= PRAM;
               end
+              default: ;
             endcase
           end
 
@@ -411,6 +413,7 @@ end
             // Internal registers are no-ops
           end
 
+          default: ;
         endcase
 
       end else begin

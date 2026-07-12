@@ -19,13 +19,6 @@ module rom
     initial begin
         $display("rom Loading rom: %s", memfile);
         $readmemh(memfile, d);
-        // Debug: show loaded data for chr.mem
-        if (memfile == "chr.mem") begin
-            $display("  chr.mem[0x000] = %h", d[12'h000]);
-            $display("  chr.mem[0x200] = %h", d[12'h200]);
-            $display("  chr.mem[0x2F8] = %h", d[12'h2F8]);
-            $display("  chr.mem[0x2F9] = %h", d[12'h2F9]);
-        end
     end
 
 reg[DW-1:0] d[(2**AW)-1:0];
