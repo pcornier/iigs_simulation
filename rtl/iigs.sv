@@ -2694,15 +2694,28 @@ wire        twgs_accel_en;
 wire [2:0]  twgs_speed_code;
 wire [2:0]  twgs_cfg_speed;
 wire        twgs_irq_logic_en;
+// Tier C reset overlay arming: every reset re-arms (warm and cold -- a real
+// TWGS owns the reset vector always); the first instruction fetch from bank
+// $BC (the vector's JMPL $BCFA9A landing) disarms. With the card off this
+// never arms and the boot is bit-identical to a machine without the card.
+reg         twgs_boot_armed;
+always @(posedge CLK_14M) begin
+  if (reset)
+    twgs_boot_armed <= twgs_present;
+  else if (twgs_boot_armed && cpu_vpa && cpu_vda && bank_bef == 8'hBC)
+    twgs_boot_armed <= 1'b0;
+end
 twgs_card twgs (
     .clk(CLK_14M), .reset(reset),
     .enable(twgs_present),
     .bank(bank_bef), .addr(addr_bef),
     .we(we), .phi2(phi2),
+    .vda(cpu_vda), .vpa(cpu_vpa),
     .wr_data(dout),
     .cyareg7(CYAREG[7]),
     .turbo_code(host_speed),
     .host_irq_en(osd_irq_delay),
+    .boot_armed(twgs_boot_armed),
     .sel(twgs_sel), .dout(twgs_dout),
     .accel_en(twgs_accel_en), .speed_code(twgs_speed_code),
     .cfg_speed_code(twgs_cfg_speed),
@@ -2836,7 +2849,9 @@ wire [3:0] fast_thresh = (accel_capable && eff_accel_en && eff_speed_code != 3'd
                           && !floppy_motor_on && !floppy35_motor_on
                           && !io_slow_holdoff
                           && !irq_slowdown
-                          && !(twgs_present && bank_bef == 8'hBC)  // TWGS bank $BC native
+                          && !(twgs_present && (bank_bef == 8'hBC
+                                             ||  bank_bef[7:1] == 7'b1011111)) // TWGS card banks ($BC/$BE/$BF) native
+                          && !twgs_boot_armed                      // overlay window native
                           && cps_gate)
                          ? (4'd4 - {1'b0, eff_speed_code})
                          : 4'd4;

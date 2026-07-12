@@ -55,27 +55,24 @@ module twgs_nvram (
     output wire [7:0] bk_q
 );
 
-  // ---- 16 x 16-bit store, pre-seeded so boot short-circuits --------------
-  // word0 magic $AE, word1 version $01, word2 config $0D (accel+gfx+snd on),
-  // word6 "card active" $AE, word7/8 = measured max speed low/high bytes
-  // ($58,$1B => $1B58 = 7000 kHz). Only the low byte of each word is consumed
-  // by the ROM's speed/config readers, so high bytes are don't-care.
+  // ---- 16 x 16-bit store ---------------------------------------------------
+  // Powers up ZERO = INVALID (word0 magic != $AE). With the Tier C reset
+  // overlay the firmware itself initializes NVRAM on first boot (diagnostics +
+  // startup intro + speed measurement -> NVRAM_Validate writes the $AE magic),
+  // and the MiSTer NVRAM save slot persists it from then on. The old Tier B
+  // pre-seed (which existed to short-circuit a boot that could never run) is
+  // obsolete.
   reg [15:0] mem [0:15];
   integer i;
   initial begin
     for (i = 0; i < 16; i = i + 1) mem[i] = 16'h0000;
-    mem[0] = 16'h00AE;   // validity magic
-    mem[1] = 16'h0001;   // version
-    mem[2] = 16'h000D;   // TWGS_Config_Byte default
-    mem[6] = 16'h00AE;   // NVRAM_Active flag -> skip diagnostics + intro
-    mem[7] = 16'h0058;   // max speed, low  byte ($58)
-    mem[8] = 16'h001B;   // max speed, high byte ($1B) -> 0x1B58 = 7000 kHz
   end
 
   localparam [1:0] S_IDLE = 2'd0, S_CMD = 2'd1, S_WR = 2'd2, S_RD = 2'd3;
 
   reg [1:0]  state;
   reg        ce;              // chip select (control bit7)
+  reg        rd_dir;          // control bit0 (1 = FPGA readback direction)
   reg        we_en;           // write-enable latch (WREN/WRDI)
   reg [7:0]  cmd;             // command shift-in
   reg [3:0]  bitcnt;          // command bit counter (0..8)
@@ -84,10 +81,14 @@ module twgs_nvram (
   reg [4:0]  datacnt;         // data bit counter (0..16)
   reg [7:0]  shiftout;        // read data shift-out (current byte, MSB1st)
 
-  // Read data: only drive DO while actively reading; otherwise $00 (also covers
-  // the FPGA-readback case $BC4001=$01, where CE=0 -> ROM sees $00 and skips
-  // FPGA_Check_Readback).
-  assign data_dout = (state == S_RD && ce) ? {shiftout[7], 7'h00} : 8'h00;
+  // Read data: drive DO while actively reading NVRAM. In FPGA-readback mode
+  // ($BC4001=$01: CE=0, bit0=1) return DO stuck HIGH ($80): the firmware's
+  // frame assembler inverts the bits (EOR #$FF), so constant-1 reads produce a
+  // $00 frame whose stop bit is CLEAR -> FPGA_Init_Readback returns carry
+  // clear and the boot SKIPS FPGA_Check_Readback (constant-0 reads assemble
+  // to $FF frames with a "valid" stop bit and the checker runs -> error 0001).
+  assign data_dout = (state == S_RD && ce) ? {shiftout[7], 7'h00} :
+                     (!ce && rd_dir)       ? 8'h80 : 8'h00;
 
   // Full 8-bit command as of the 8th (last) command bit: the 7 bits already in
   // `cmd` plus the bit arriving this cycle. op = [2:0], addr = [6:3].
@@ -95,18 +96,9 @@ module twgs_nvram (
 
   always @(posedge clk) begin
     if (reset) begin
-      state <= S_IDLE; ce <= 1'b0; we_en <= 1'b0;
+      state <= S_IDLE; ce <= 1'b0; we_en <= 1'b0; rd_dir <= 1'b0;
       cmd <= 8'h00; bitcnt <= 4'd0; addr <= 4'd0;
       wbuf <= 16'h0000; datacnt <= 5'd0; shiftout <= 8'h00;
-      // Re-seed on reset ONLY if the store is invalid (word0 magic != $AE):
-      // covers hardware power-up when the `initial` block's values don't
-      // survive synthesis, without clobbering a loaded/saved image (any
-      // valid TWGS NVRAM carries the $AE magic the firmware checks).
-      if (mem[0][7:0] != 8'hAE) begin
-        for (i = 0; i < 16; i = i + 1) mem[i] <= 16'h0000;
-        mem[0] <= 16'h00AE; mem[1] <= 16'h0001; mem[2] <= 16'h000D;
-        mem[6] <= 16'h00AE; mem[7] <= 16'h0058; mem[8] <= 16'h001B;
-      end
     end else begin
       // ---- control write: chip-select edge starts a transaction ----------
       if (ctrl_wr_stb) begin
@@ -115,7 +107,8 @@ module twgs_nvram (
         end else if (!ctrl_wr_data[7]) begin   // CE low: end transaction
           state <= S_IDLE;
         end
-        ce <= ctrl_wr_data[7];
+        ce     <= ctrl_wr_data[7];
+        rd_dir <= ctrl_wr_data[0];
       end
 
       // ---- serial bit clock on each $BC4000 access -----------------------
@@ -143,8 +136,12 @@ module twgs_nvram (
             wbuf    <= {wbuf[14:0], data_wr_data[7]};
             datacnt <= datacnt + 5'd1;
             if (datacnt == 5'd15) begin
+              // Include the bit arriving THIS access: wbuf has only 15 bits
+              // shifted in when the 16th lands (committing plain wbuf stored
+              // every word right-shifted by one -- $FFFF read back as $7FFF,
+              // caught by the firmware's own Test_NVRAM).
               if (we_en)
-                mem[addr] <= {wbuf[7:0], wbuf[15:8]};  // {high, low} after 16 shifts
+                mem[addr] <= {wbuf[6:0], data_wr_data[7], wbuf[14:7]}; // {high, low}
               state <= S_IDLE;
             end
           end
@@ -178,10 +175,14 @@ module twgs_nvram (
   wire _unused = &{1'b0, data_we, ctrl_wr_data[6:0], data_wr_data[6:0], cmd[7]};
 
 `ifdef VERILATOR
-  always @(posedge clk)
+  always @(posedge clk) begin
     if (!reset && data_stb && state == S_CMD && bitcnt == 4'd7)
-      $display("TWGS-NVRAM: cmd=%02x op=%b addr=%0d",
-               cmd_final, cmd_final[2:0], cmd_final[6:3]);
+      $display("TWGS-NVRAM: cmd=%02x op=%b addr=%0d mem=%04x",
+               cmd_final, cmd_final[2:0], cmd_final[6:3], mem[cmd_final[6:3]]);
+    if (!reset && data_stb && state == S_WR && datacnt == 5'd15)
+      $display("TWGS-NVRAM: WRITE addr=%0d val=%04x we_en=%0d",
+               addr, {wbuf[6:0], data_wr_data[7], wbuf[14:7]}, we_en);
+  end
 `endif
 
 endmodule

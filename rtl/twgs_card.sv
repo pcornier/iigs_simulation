@@ -34,10 +34,19 @@ module twgs_card (
     input  wire [15:0] addr,         // addr_bef
     input  wire        we,
     input  wire        phi2,         // one pulse per CPU cycle
+    input  wire        vda,          // CPU valid-data-address (this cycle)
+    input  wire        vpa,          // CPU valid-program-address
     input  wire [7:0]  wr_data,      // dout (CPU write data)
     input  wire        cyareg7,      // CYAREG $C036 bit 7 (Fast)
     input  wire [2:0]  turbo_code,   // OSD turbo ceiling (host_speed); step when accel
     input  wire        host_irq_en,  // OSD AppleTalk/IRQ delay -> $BC0000 bit3 (inverted)
+
+    // Tier C reset overlay: while armed (from reset until execution reaches
+    // bank $BC), bank-0 reads of $F800-$FFFF serve the card ROM's top 2 KB --
+    // the CPU's reset vector fetch lands on the firmware's $BCFFFC vector
+    // (LFB20: JMPL $BCFA9A), and the JMPL moves execution into bank $BC where
+    // the normal ROM mapping takes over. See twgs.3.s LFA9A/LFB07.
+    input  wire        boot_armed,
 
     output wire        sel,          // 1 = TWGS card space -> overlay cpu_din
     output wire [7:0]  dout,         // read data for this access
@@ -56,11 +65,70 @@ module twgs_card (
 
   // ---- bank-$BC absolute decode -----------------------------------------
   wire bc       = enable && (bank == 8'hBC);
-  wire sel_rom  = bc && addr[15];              // $BC8000-$BCFFFF (32 KB)
+  // Reset-overlay window: bank-0 $F800-$FFFF reads -> ROM $BCF800-$BCFFFF
+  // (same low 15 bits, addr[15]=1 either way).
+  wire boot_ovl = enable && boot_armed && (bank == 8'h00) &&
+                  (addr[15:11] == 5'b11111);
+  wire sel_rom  = (bc && addr[15]) || boot_ovl; // $BC8000-$BCFFFF (32 KB)
   wire sel_cfg  = bc && (addr == 16'h0000);    // $BC0000  control latch
   wire sel_sdat = bc && (addr == 16'h4000);    // $BC4000  serial data
   wire sel_sctl = bc && (addr == 16'h4001);    // $BC4001  serial control
-  assign sel = sel_rom | sel_cfg | sel_sdat | sel_sctl;
+  assign sel = sel_rom | sel_cfg | sel_sdat | sel_sctl | bf;
+
+  // ---- cache SRAM windows ($BE0000-7FFF tags, $BF0000-7FFF data) ----------
+  // The card's cache RAM is directly addressable in banks $BE/$BF; the
+  // firmware's Check_Cache_Size probes $BF (non-aliasing => 32 KB),
+  // Test_Cache_RAM pattern-tests $BF0200..size, Test_Cache_Flush $BE.
+  // Semantics derived from the diagnostics themselves:
+  //  - plain R/W retention through the windows;
+  //  - DATA reads (VDA & ~VPA) allocate: they visibly dirty the line's
+  //    tag+data bytes (instruction fetches do NOT -- that is what lets the
+  //    tests execute from inside the tested line range). Test_Cache_Rom /
+  //    the flush walk are MVN $BC,$BC self-copies of the card ROM, so card
+  //    ROM data reads allocate too; only the $BE/$BF windows are excluded.
+  //  - writing $BC0000 while CYAREG.7=0 (both flush helpers: set/clear bit1
+  //    at 1 MHz) is a hardware FLUSH: every line invalidates. Modeled as a
+  //    background sweeper that outruns the CPU's fastest verify loop.
+  // The diagnostics only ever check ==pattern / !=pattern, so invalidation
+  // stamps a constant that can never equal the $AA/$55 test patterns.
+  wire bf = enable && (bank[7:1] == 7'b1011111) && !addr[15];  // $BE/$BF
+  wire win_wr      = bf && we && phi2;
+  wire cache_alloc = enable && phi2 && !we && vda && !vpa && !bf;
+  // Flush = instant, O(1): bytes are stored XOR flush_epoch and read back
+  // XOR flush_epoch. A flush bumps the epoch, so every line written before
+  // it reads back changed (old ^ e1 ^ e2, never equal to old since e1 != e2)
+  // while writes after it read back exactly (same epoch both ways). A
+  // sweeper was tried first and lost the race with the CPU's next fill.
+  reg [7:0] flush_epoch;
+  always @(posedge clk) begin
+    if (reset)
+      flush_epoch <= 8'd0;
+    else if (cfg_wr_stb && !cyareg7)   // both flush helpers: cfg write at 1 MHz
+      flush_epoch <= flush_epoch + 8'd1;
+  end
+
+  // Canonical single-port BRAM templates (Quartus-inferable: one write, one
+  // registered read per array, nothing else in the block).
+  reg [7:0] tag_ram  [0:32767];   // bank $BE view
+  reg [7:0] data_ram [0:32767];   // bank $BF view
+  reg [7:0] tag_q, data_q;
+  wire       tag_we  = (win_wr && !bank[0]) || cache_alloc;
+  wire       data_we = (win_wr &&  bank[0]) || cache_alloc;
+  wire [7:0] tag_wd  = (win_wr && !bank[0]) ? (wr_data ^ flush_epoch)
+                                            : (8'hC3   ^ flush_epoch);
+  wire [7:0] data_wd = (win_wr &&  bank[0]) ? (wr_data ^ flush_epoch)
+                                            : (8'hC3   ^ flush_epoch);
+  always @(posedge clk) begin
+    if (tag_we) tag_ram[addr[14:0]] <= tag_wd;
+    tag_q <= tag_ram[addr[14:0]];
+  end
+  always @(posedge clk) begin
+    if (data_we) data_ram[addr[14:0]] <= data_wd;
+    data_q <= data_ram[addr[14:0]];
+  end
+  reg bank0_q;
+  always @(posedge clk) if (bf) bank0_q <= bank[0];
+  wire [7:0] cache_dout = (bank0_q ? data_q : tag_q) ^ flush_epoch;
 
   // one-per-cycle strobes (phi2 already pulses once per CPU cycle)
   wire cfg_wr_stb  = sel_cfg  & we & phi2;
@@ -94,12 +162,25 @@ module twgs_card (
   );
 
   twgs_rom rom_i (
-      .clk(clk), .ce(bc), .addr(addr[14:0]), .dout(rom_dout)
+      .clk(clk), .ce(bc | boot_ovl), .addr(addr[14:0]), .dout(rom_dout)
   );
 
   // read mux: ROM, then registers ($BC4001 read is don't-care -> $FF)
   assign dout = sel_rom  ? rom_dout   :
+                bf       ? cache_dout :
                 sel_cfg  ? cfg_reg    :
                 sel_sdat ? nvram_dout : 8'hFF;
+
+`ifdef VERILATOR
+  reg [15:0] dbg_alloc_cnt;
+  always @(posedge clk) begin
+    if (reset) dbg_alloc_cnt <= 0;
+    else if (cache_alloc) begin
+      dbg_alloc_cnt <= dbg_alloc_cnt + 1;
+      if (dbg_alloc_cnt < 16'd20 || (bank == 8'hBC && dbg_alloc_cnt[9:0] == 0))
+        $display("TWGS-ALLOC #%0d bank=%02x addr=%04x", dbg_alloc_cnt, bank, addr);
+    end
+  end
+`endif
 
 endmodule
