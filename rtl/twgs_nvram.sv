@@ -52,7 +52,17 @@ module twgs_nvram (
     input  wire [4:0] bk_addr,
     input  wire       bk_wr,
     input  wire [7:0] bk_data,
-    output wire [7:0] bk_q
+    output wire [7:0] bk_q,
+
+    // Host (OSD) views of the TWGS_Config_Byte startup bits (NVRAM word 2:
+    // bit2 = Startup Graphics, bit3 = Startup Sound -- twgs.3.s:580 checks
+    // #$0004; default config $0D has both set). Edge-applied like every other
+    // shared setting; the firmware/CDA writing NVRAM mirrors back via the
+    // gfx_en/snd_en outputs.
+    input  wire       host_gfx_en,
+    input  wire       host_snd_en,
+    output wire       gfx_en,
+    output wire       snd_en
 );
 
   // ---- 16 x 16-bit store ---------------------------------------------------
@@ -80,6 +90,7 @@ module twgs_nvram (
   reg [15:0] wbuf;            // write data shift-in (low byte first, MSB1st)
   reg [4:0]  datacnt;         // data bit counter (0..16)
   reg [7:0]  shiftout;        // read data shift-out (current byte, MSB1st)
+  reg        gfx_prev, snd_prev;
 
   // Read data: drive DO while actively reading NVRAM. In FPGA-readback mode
   // ($BC4001=$01: CE=0, bit0=1) return DO stuck HIGH ($80): the firmware's
@@ -97,6 +108,7 @@ module twgs_nvram (
   always @(posedge clk) begin
     if (reset) begin
       state <= S_IDLE; ce <= 1'b0; we_en <= 1'b0; rd_dir <= 1'b0;
+      gfx_prev <= 1'b1; snd_prev <= 1'b1;   // match the OSD defaults (On)
       cmd <= 8'h00; bitcnt <= 4'd0; addr <= 4'd0;
       wbuf <= 16'h0000; datacnt <= 5'd0; shiftout <= 8'h00;
     end else begin
@@ -159,6 +171,12 @@ module twgs_nvram (
         endcase
       end
 
+      // OSD startup-bit toggles: edge-apply into the config word.
+      gfx_prev <= host_gfx_en;
+      snd_prev <= host_snd_en;
+      if (host_gfx_en != gfx_prev) mem[2][2] <= host_gfx_en;
+      if (host_snd_en != snd_prev) mem[2][3] <= host_snd_en;
+
       // Backup load (SD -> mem): last in the block so it wins over a
       // same-cycle serial write (loads happen at mount/OSD time).
       if (bk_wr) begin
@@ -169,6 +187,8 @@ module twgs_nvram (
   end
 
   assign bk_q = bk_addr[0] ? mem[bk_addr[4:1]][15:8] : mem[bk_addr[4:1]][7:0];
+  assign gfx_en = mem[2][2];
+  assign snd_en = mem[2][3];
 
   // Only bit7 of the control/data write matters (CE / serial DI, MSB-first);
   // data_we is informational. Sink the rest to keep strict lint quiet.

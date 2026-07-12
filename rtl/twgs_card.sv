@@ -40,6 +40,10 @@ module twgs_card (
     input  wire        cyareg7,      // CYAREG $C036 bit 7 (Fast)
     input  wire [2:0]  turbo_code,   // OSD turbo ceiling (host_speed); step when accel
     input  wire        host_irq_en,  // OSD AppleTalk/IRQ delay -> $BC0000 bit3 (inverted)
+    input  wire        host_gfx_en,  // OSD Startup Graphics -> NVRAM word2 bit2
+    input  wire        host_snd_en,  // OSD Startup Sound    -> NVRAM word2 bit3
+    output wire        gfx_en,       // live NVRAM config bits, for the OSD mirror
+    output wire        snd_en,
 
     // Tier C reset overlay: while armed (from reset until execution reaches
     // bank $BC), bank-0 reads of $F800-$FFFF serve the card ROM's top 2 KB --
@@ -167,7 +171,9 @@ module twgs_card (
       .ctrl_wr_stb(ctrl_wr_stb), .ctrl_wr_data(wr_data),
       .data_stb(data_stb), .data_we(we), .data_wr_data(wr_data),
       .data_dout(nvram_dout),
-      .bk_addr(bk_addr), .bk_wr(bk_wr), .bk_data(bk_data), .bk_q(bk_q)
+      .bk_addr(bk_addr), .bk_wr(bk_wr), .bk_data(bk_data), .bk_q(bk_q),
+      .host_gfx_en(host_gfx_en), .host_snd_en(host_snd_en),
+      .gfx_en(gfx_en), .snd_en(snd_en)
   );
 
   twgs_rom rom_i (

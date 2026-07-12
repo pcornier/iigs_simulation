@@ -101,6 +101,8 @@ module iigs
    input              osd_ctr_delay,   // $C059 bit 4 (video counter)
    input              osd_cps_follow,  // $C059 bit 3 (CPS follow)
    input              osd_irq_delay,   // AppleTalk/IRQ delay (Zip $C059.5 / TWGS $BC0000.3)
+   input              osd_twgs_gfx,    // TWGS Startup Graphics (NVRAM word2 bit2)
+   input              osd_twgs_snd,    // TWGS Startup Sound    (NVRAM word2 bit3)
 
    // 1 = present a TransWarp GS card in bank $BC (OSD "Accelerator > Card"): ROM
    // signature/JSL API at $BC8000, $BC0000 control latch, X2444 NVRAM. Rides
@@ -117,6 +119,8 @@ module iigs
    output             accel_ctr_delay,
    output             accel_cps_follow,
    output             accel_irq_delay,
+   output             accel_twgs_gfx,
+   output             accel_twgs_snd,
 
    // NVRAM backup port (MiSTer SD slot 4; doc/pram-nvram-save-handoff.md).
    // 512-byte block: [0-255]=PRAM, [256-287]=TWGS X2444, rest reads $FF.
@@ -756,7 +760,7 @@ module iigs
           12'h02b: io_dout = C02BVAL; // from gsplus
           12'h02c: io_dout = 'h0; // from gsplus
           12'h02d: io_dout = SLTROMSEL;
-          12'h02e: io_dout = V_M2 >> 1;
+          12'h02e: io_dout = V_M2[8:1];
           12'h02f: io_dout = {V_M2[0], H_CHAR};  // VA (V[0]) + Mega II horiz counter, per TN.IIGS.039
           12'h031: io_dout = DISK35;
           12'h032: io_dout = VGCINT;
@@ -777,6 +781,7 @@ module iigs
           12'h067: io_dout = {~paddle_timer_expired[3], video_data[6:0]};
           12'h068: io_dout = {ALTZP,PAGE2,RAMRD,RAMWRT,
                                RDROM,LCRAM2,ROMBANK,INTCXROM};
+          default: ;
         endcase // case (addr[11:0])
 
         // IRQ dispatch ROM
@@ -1736,6 +1741,7 @@ begin
   end
 end
 
+/* verilator lint_off PINMISSING */
 `ifdef VERILATOR
 dpram #(.widthad_a(17),.prefix("slow"),.p(" e")) slowram
 `else
@@ -1759,7 +1765,15 @@ bram #(.widthad_a(17)) slowram
         .wren_b(1'b0),
         .enable_b(ce_pix)
 );
+/* verilator lint_on PINMISSING */
 
+// video_timing's position ports are one bit wider than the counters this
+// core consumes; take the ports at full width and use the low bits.
+wire [10:0] vt_hpos_pad;
+wire [9:0]  vt_vpos_pad, vt_m2v_pad;
+assign H    = vt_hpos_pad[9:0];
+assign V    = vt_vpos_pad[8:0];
+assign V_M2 = vt_m2v_pad[8:0];
 video_timing video_timing(
 .clk_vid(clk_vid),
 .ce_pix(ce_pix),
@@ -1769,9 +1783,9 @@ video_timing video_timing(
 .hblank(HBlank),
 .vblank(VBlank),
 .mega2_vbl(mega2_vbl),
-.hpos(H),
-.vpos(V),
-.m2_vpos(V_M2),
+.hpos(vt_hpos_pad),
+.vpos(vt_vpos_pad),
+.m2_vpos(vt_m2v_pad),
 .hchar(H_CHAR),
 .ph0_phase(PH0_PHASE_VID),
 .ph0_stb(PH0_STB_VID),
@@ -2327,6 +2341,7 @@ wire ready_out;
           .reset(reset),
           .cold_reset(cold_reset),
           .rom_select(rom_select),
+          .CLR80COL(), .STORE80(), .RAMRD(), .RAMWRT(), .ALTZP(),
           .addr(adb_addr_mux),
           .rw(adb_rw_mux),
           .din(adb_din),
@@ -2392,7 +2407,7 @@ wire ready_out;
       .DEVICE_SELECT(iwm_device_select),
       .WR_CYCLE(cpu_we_n),  // 1 = read, 0 = write (matches cpu_we_n)
       .VDA(cpu_vda),
-      .A(cpu_addr[7:0]),    // Combinational address
+      .A({8'b0, cpu_addr[7:0]}),  // Combinational address (low byte; zero-extended)
       .D_IN(cpu_dout),      // Combinational data
       .D_OUT(iwm_dout),
       // Drive status and control
@@ -2436,12 +2451,12 @@ wire ready_out;
       .DRIVE35_EJECT_REQ(drive35_eject_req)
   );
   // Internal wires not used with flux-based IWM
-  assign TRACK3 = 7'd0;
-  assign TRACK3_ADDR = 14'd0;
-  assign TRACK3_SIDE = 1'b0;
-  assign TRACK3_DI = 8'd0;
-  assign TRACK3_WE = 1'b0;
-  assign FD_DISK_3 = 1'b0;
+  wire [6:0]  TRACK3      = 7'd0;
+  wire [13:0] TRACK3_ADDR = 14'd0;
+  wire        TRACK3_SIDE = 1'b0;
+  wire [7:0]  TRACK3_DI   = 8'd0;
+  wire        TRACK3_WE   = 1'b0;
+  wire        FD_DISK_3   = 1'b0;
 
     // Legacy slot-7 HDD (supports 4 units)
     hdd hdd(
@@ -2495,6 +2510,7 @@ wire ready_out;
     );
 */
   sound snd(
+            .ca(),
             .CLK_14M(CLK_14M),
             .clk_7M_en(clk_7M_en),
             .ph0_en(phi2),    // Gate on CPU clock (ph2_en) not raw ph0 to prevent double-fire during sync waits
@@ -2828,6 +2844,10 @@ twgs_card twgs (
     .cyareg7(CYAREG[7]),
     .turbo_code(host_speed),
     .host_irq_en(osd_irq_delay),
+    .host_gfx_en(osd_twgs_gfx),
+    .host_snd_en(osd_twgs_snd),
+    .gfx_en(accel_twgs_gfx),
+    .snd_en(accel_twgs_snd),
     .boot_armed(twgs_boot_armed),
     .nmi_armed(twgs_nmi_armed),
     .sel(twgs_sel), .dout(twgs_dout),

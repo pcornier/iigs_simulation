@@ -190,6 +190,7 @@ assign iigs_din = (accel_active_w | (accel_guard_plain != 2'd0))
                   ? fastram_dout_comb : fastram_dout;
 `endif
 
+wire WOZ_TRACK1_DATA_VALID;   // BRAM data matches requested 5.25" track
 // WOZ bit interfaces for flux-based IWM
 // 3.5" drive 1 WOZ bit interface
 wire [7:0]  WOZ_TRACK3;           // Track number being read
@@ -371,6 +372,10 @@ iigs  iigs(
         .osd_cps_follow(1'b0), // flip to 1'b1 to test 1MHz sync
         .osd_irq_delay(1'b1),  // AppleTalk/IRQ delay enabled (matches reset regs)
         .accel_irq_delay(),
+        .osd_twgs_gfx(1'b1),
+        .osd_twgs_snd(1'b1),
+        .accel_twgs_gfx(),
+        .accel_twgs_snd(),
         .accel_cfg_speed(),
         .accel_spkr_delay(),
         .accel_pdl_delay(),
@@ -385,6 +390,7 @@ iigs  iigs(
         // 'TWGS''SMJS' + the JML table (54 57 47 53 53 4D 4A 53 / 5C 28 FB BC ...)
         .accel_active(accel_active_w),  // selects registered vs comb fastram read (as on FPGA)
         .phi2(phi2_w),
+        .phi0(), .clk_7M(),
         .dbg_hdd_dma(dbg_hdd_dma_w),
         .mem_stall(mem_stall_sim), // SDRAM_SIM: real cache-miss/write-pending stall; else 0 (instant BRAM)
 
@@ -431,6 +437,7 @@ iigs  iigs(
 
 dpram #(.widthad_a(24),.prefix("fast"),.sim_async_a(1)) fastram
 (
+        .byteena_a(), .byteena_b(), .enable_b(),
         .clock_a(clk_sys),
         .address_a( mem_addr ),
         .data_a(ioctl_download ? ioctl_dout : iigs_dout),
