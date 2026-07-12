@@ -134,18 +134,11 @@ reg [3:0]  refresh_counter;    // Refresh cycle counter (every 9th cycle)
 reg        cycle_is_refresh;   // Next cycle is a refresh (10-tick) cycle
 reg        clk_7M_div;         // 7M divider flip-flop
 reg [3:0]  ph2_gap_count;      // Ticks since last ph2_en (for debug tracking)
-reg        sync_aligned;       // First PHI0 boundary seen during sync wait
 reg [6:0]  scanline_ph0_ctr;   // PH0 cycles since scanline start (0..64); 65 PH0 cycles per scanline
 reg        fast_stretch;       // NTSC per-scanline stretch pending: add 2 ticks to the next fast cycle
 
 // Pipeline registers for clean PH2/PH0 synchronization (Option 3)
-reg [3:0] ph0_counter_prev;     // Previous cycle ph0_counter value
-reg       ph0_en_prev;          // Previous cycle ph0_en value  
-reg       ph0_state_prev;       // Previous cycle ph0_state value
 reg [3:0] ph0_counter_next;     // Next cycle ph0_counter value (for enable calculation)
-reg       slow_prev;            // Previous cycle slow state (to avoid assignment conflicts)  
-reg       ph2_sync_pulse;       // Debug signal to show sync pulses in VCD
-reg       ph2_en_prev;          // Proper variable to track ph2_en changes
 reg       we_reg;              // Registered version of we signal to avoid timing races
 
 // PH0-to-beam anchoring is ON by default: the real FPI recreates PH0 from
@@ -208,12 +201,9 @@ reg waitforC0D8;
 reg waitforC0E8;
 reg waitforC0F8;
 
-reg [7:0]  cyareg_reg;
 always @(posedge clk_14M) begin
     if (reset) begin
-        cyareg_reg <= 8'h80;  // Start in fast mode
     end else begin
-        cyareg_reg <= cyareg;
     end
 end
 
@@ -368,17 +358,10 @@ always @(posedge clk_14M) begin
         ph0_state <= 1'b0;
         slow <= 1'b0;
         slowMem <= 1'b0;
-        slow_prev <= 1'b0;
         
         // Reset pipeline registers
-        ph0_counter_prev <= 4'd0;
-        ph0_en_prev <= 1'b0;
-        ph0_state_prev <= 1'b0;
-        ph2_sync_pulse <= 1'b0;
-        ph2_en_prev <= 1'b0;
         we_reg <= 1'b0;
         ph2_gap_count <= 4'd0;
-        sync_aligned <= 1'b0;
         scanline_ph0_ctr <= 7'd0;
         fast_stretch <= 1'b0;
         knob_stall <= 16'd0;
@@ -395,9 +378,6 @@ always @(posedge clk_14M) begin
 `endif
         
         // Reset pipeline registers (duplicate for safety)
-        ph0_counter_prev <= 4'd0;
-        ph0_en_prev <= 1'b0;
-        ph0_state_prev <= 1'b0;
     end else begin
         // --- Refactored Logic ---
         slow <= slow_request;
@@ -504,10 +484,6 @@ always @(posedge clk_14M) begin
         
         q3_en <= (ph0_counter_next == 4'd0) || (ph0_counter_next == 4'd7);
         
-        ph0_counter_prev <= ph0_counter;
-        ph0_en_prev <= ph0_en;
-        ph0_state_prev <= ph0_state;
-        slow_prev <= slow;
 
         // Track gap since last ph2_en (for mode transition safety)
         if (ph2_en)
@@ -518,11 +494,9 @@ always @(posedge clk_14M) begin
 	if (slow==1'b1) begin
 		// Pure slow mode (C036[7]=0): every cycle runs at PHI0 rate (1.023 MHz)
 		// Fire ph2_en on every PHI0 boundary.
-		sync_aligned <= 1'b0;  // Keep clean for fast+sync transitions
 		if (ph0_counter_next == 4'd0) begin
 			ph2_en_r <= 1'b1;
 			ph2_counter <= 4'd0;
-			ph2_sync_pulse <= 1'b1;
 			// Refresh cadence counts this slow cycle too (hidden here); see the
 			// slowMem note above.
 			if (refresh_counter >= 4'd8)
@@ -533,7 +507,6 @@ always @(posedge clk_14M) begin
 		end else begin
 			ph2_en_r <= 1'b0;
 			ph2_counter <= 4'd0;
-			ph2_sync_pulse <= 1'b0;
 		end
 	end else if (slowMem==1'b1) begin
 		// Sync cycle per krue FPI doc: extend PH2 to overlap one full PH0 cycle.
@@ -542,14 +515,12 @@ always @(posedge clk_14M) begin
 		// ensuring one complete PH0 period is contained within PH2 high.
 		// ph2_counter tracks elapsed ticks since cycle start (inherited from
 		// fast path, keeps counting through sync).
-		sync_aligned <= 1'b0;
 		if (ph2_counter < 4'd15)
 			ph2_counter <= ph2_counter + 4'd1;
 
 		if (ph0_counter_next == 4'd0 && ph2_counter >= 4'd13) begin
 			ph2_en_r <= 1'b1;
 			ph2_counter <= 4'd0;
-			ph2_sync_pulse <= 1'b1;
 			// +ph0_dbg=1: CPU-PH0 vs beam-PH0 phase at each sync fire
 			// (locked = equal; historical bug = phase_vid == ph0_counter+8 mod 14)
 			if (ph0_dbg_en && ph0_dbg_cnt < 16'd300) begin
@@ -569,13 +540,11 @@ always @(posedge clk_14M) begin
 			cycle_is_refresh <= 1'b0;
 		end else begin
 			ph2_en_r <= 1'b0;
-			ph2_sync_pulse <= 1'b0;
 		end
 	end else begin
         // Fast mode with RAM refresh penalty:
         // Every 9th fast RAM cycle takes 10 ticks instead of 5.
         // ROM access hides refresh (stays at full 2.8636 MHz).
-        sync_aligned <= 1'b0;  // Ensure clean state when entering sync
         ph2_counter <= ph2_counter + 1'b1;
 
         if (cycle_is_refresh) begin
@@ -620,7 +589,6 @@ always @(posedge clk_14M) begin
                 ph2_en_r <= 1'b0;
             end
         end
-        ph2_sync_pulse <= 1'b0;
     end
 
         // +cpu_knob=N debug stall: on the slow->fast base-speed transition,
@@ -655,7 +623,6 @@ always @(posedge clk_14M) begin
             prev_slow <= slow;
             prev_slowMem <= slowMem;
         end
-        ph2_en_prev <= ph2_en;
 
 `ifdef DEBUG_VERBOSE
         if (ph2_en && IO && addr == 16'hC0EC && iwm_slow_log_count < 16'd5000) begin

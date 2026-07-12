@@ -219,7 +219,7 @@ module scc
 `endif
 			if (rx_queue_pos_a < 3) begin
 				rx_queue_a[rx_queue_pos_a] <= data_a;
-				rx_queue_pos_a <= rx_queue_pos_a + 1;
+				rx_queue_pos_a <= rx_queue_pos_a + 1'd1;
 `ifdef DEBUG_SCC
 				$display("SCC_RX_FIFO_ENQUEUE: ch=A data=%02x pos=%d->%d", data_a, rx_queue_pos_a, rx_queue_pos_a + 1);
 `endif
@@ -237,7 +237,7 @@ module scc
 `endif
 			if (rx_queue_pos_b < 3) begin
 				rx_queue_b[rx_queue_pos_b] <= data_b;
-				rx_queue_pos_b <= rx_queue_pos_b + 1;
+				rx_queue_pos_b <= rx_queue_pos_b + 1'd1;
 `ifdef DEBUG_SCC
 				$display("SCC_RX_FIFO_ENQUEUE: ch=B data=%02x pos=%d->%d", data_b, rx_queue_pos_b, rx_queue_pos_b + 1);
 `endif
@@ -390,7 +390,7 @@ module scc
 							rx_queue_a[0] <= rx_queue_a[1];
 							rx_queue_a[1] <= rx_queue_a[2];
 							rx_queue_a[2] <= 8'h00;
-							rx_queue_pos_a <= rx_queue_pos_a - 1;
+							rx_queue_pos_a <= rx_queue_pos_a - 1'd1;
 							rx_first_a<=0;
 						end else begin
 							$display("SCC_RX_FIFO_EMPTY: ch=A read from empty FIFO");
@@ -405,7 +405,7 @@ module scc
 					rx_queue_b[0] <= rx_queue_b[1];
 					rx_queue_b[1] <= rx_queue_b[2];
 					rx_queue_b[2] <= 8'h00;
-					rx_queue_pos_b <= rx_queue_pos_b - 1;
+					rx_queue_pos_b <= rx_queue_pos_b - 1'd1;
 					rx_first_b<=0;
 					end else begin
 					$display("SCC_RX_FIFO_EMPTY: ch=B read from empty FIFO");

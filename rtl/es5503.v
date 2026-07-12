@@ -151,7 +151,7 @@ module es5503
 		   if (irq && host_en) begin
 		      data_out <= {~irq, 1'b1, irq_stack[irq_sp - 1], 1'b1};
 		      irq_pending[irq_stack[irq_sp - 1]] <= 1'b0;
-		      irq_sp <= irq_sp - 1;
+		      irq_sp <= irq_sp - 1'd1;
 		   end else begin
 		      data_out <= {~irq, 1'b1, irq_stack[0], 1'b1};
 		   end
@@ -197,7 +197,7 @@ module es5503
 	       if (r_control[current_osc][3] && !irq_pending[current_osc]) begin
 		  irq_pending[current_osc] <= 1;
 		  irq_stack[irq_sp] <= current_osc;
-		  irq_sp <= irq_sp + 1;
+		  irq_sp <= irq_sp + 1'd1;
 	       end
 	    end // if (accumulator_wrapped || r_sample_data[current_osc] == 8'h00)
 

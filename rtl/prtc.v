@@ -175,8 +175,8 @@ always @(posedge CLK_14M) begin
 
 // Use real hardware timing for both FPGA and simulation
 // Modern computers are fast enough to handle this
-clock_counter<=clock_counter+1;
-clock_counter2<=clock_counter2+1;
+clock_counter<=clock_counter+1'd1;
+clock_counter2<=clock_counter2+1'd1;
 if (clock_counter=='d14318181)
 begin
 	clock_counter<=0;

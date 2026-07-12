@@ -49,7 +49,6 @@ module scc_iigs_wrapper
 // This matches the Apple IIgs PCLK timing used by SCC and DOC systems
 // Based on software emulator analysis: PCLK = 14.32MHz/8 ≈ 1.79MHz
 reg [2:0] clk_div;
-wire scc_clk_en;
 
 always @(posedge clk_14m or posedge reset) begin
     if (reset) begin
@@ -61,7 +60,6 @@ end
 
 // Generate clock enable pulses
 // Enable every 8th cycle to create ~1.79MHz PCLK timing from 14.32MHz
-assign scc_clk_en = (clk_div == 3'b000);
 
 // Address decoding for SCC registers
 // rs[1] = 0: Control registers, rs[1] = 1: Data registers  

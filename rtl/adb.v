@@ -95,7 +95,6 @@ reg data_last_byte_read;  // Flag: last DATA byte was output, waiting for strobe
 reg [7:0] adb_mode;
 reg [7:0] kbd_ctl_addr = 8'd2;
 reg [7:0] mouse_ctl_addr = 8'd3;
-reg [7:0] repeat_rate, repeat_delay;
 reg [7:0] char_set = 8'd0;
 reg [7:0] layout = 8'd0;
 reg [7:0] repeat_info = 8'h23;  // Key repeat configuration: delay[6:4], rate[3:0]
@@ -704,8 +703,6 @@ always @(posedge CLK_14M) begin
     initial_cmd_len <= 4'd0;
 
     // Initialize repeat timing registers
-    repeat_rate <= 8'd0;
-    repeat_delay <= 8'd0;
 
     // Initialize Apple IIe compatibility register
     c025 <= 8'd0;
@@ -2113,8 +2110,8 @@ always @(posedge CLK_14M) begin
 
           // Advance FIFO to next character
           if (kbd_fifo_count > 0) begin
-            kbd_fifo_tail <= (kbd_fifo_tail + 1) % MAX_KBD_BUF;
-            kbd_fifo_count <= kbd_fifo_count - 1;
+            kbd_fifo_tail <= (kbd_fifo_tail + 4'd1) & 4'd7;  // MAX_KBD_BUF-1 mask
+            kbd_fifo_count <= kbd_fifo_count - 1'd1;
 
             // Load next character if available (kbd_fifo_count > 1 means there's another after this one)
             if (kbd_fifo_count > 1) begin

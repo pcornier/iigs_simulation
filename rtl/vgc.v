@@ -181,7 +181,7 @@ begin
 		bordercolor_latched <= BORDERCOLOR;
 	// Pre-fetch SCB during HBLANK for next scanline's display
 	if (H==(HTOTAL-4)) begin
-		video_addr_shrg <= 'h19D00+{14'b0,  (V[7:0]+1'b1)};
+		video_addr_shrg <= 23'h19D00+{14'b0,  (V[7:0]+1'b1)};
 	end
 	else if (H==(HTOTAL-2)) begin
 		scb <= video_data;
@@ -196,8 +196,8 @@ begin
 			scanline_irq<=1;
 		// Setup palette base address from SCB palette selector (bits 3:0)
 		// Each palette is 32 bytes at $9E00 + (palette * 32)
-		video_addr_shrg_1 <= 'h19E00 + {14'b0, video_data[3:0], 5'b00000};
-		video_addr_shrg <= 'h19E00 + {14'b0, video_data[3:0], 5'b00000};
+		video_addr_shrg_1 <= 23'h19E00 + {14'b0, video_data[3:0], 5'b00000};
+		video_addr_shrg <= 23'h19E00 + {14'b0, video_data[3:0], 5'b00000};
 	end else if (H==HTOTAL) begin
 		pal_counter<=0;
 		scanline_irq<=0;
@@ -211,14 +211,14 @@ begin
 			g_shrg[pal_counter]<=video_data[7:4];
 		end else begin
 			r_shrg[pal_counter]<=video_data[3:0];
-			pal_counter<=pal_counter+1;
+			pal_counter<=pal_counter+1'd1;
 		end
 		video_addr_shrg <= video_addr_shrg + 1'b1;
 		video_addr_shrg_1 <= video_addr_shrg_1 + 1'b1;
 	end else if (H==(BL-1)) begin
 	   // Setup pixel data address: $2000 + (scanline * 160 bytes/line)
-	   video_addr_shrg_1 <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
-	   video_addr_shrg <= 'h12000 + ({14'd0, V[7:0]} * 'd160);
+	   video_addr_shrg_1 <= 23'h12000 + ({15'd0, V[7:0]} * 23'd160);
+	   video_addr_shrg <= 23'h12000 + ({15'd0, V[7:0]} * 23'd160);
 	   h_counter<=0;
 	   shr_wr_idx<=0;
 	end else if (H < BR) begin
@@ -307,9 +307,9 @@ begin
 		// to be displayed (capture cells for row r read at the end of line
 		// r-1). Verified against FLOATBUS expct7/expct8 with the test's own
 		// SCB table. ---
-		video_addr_shrg <= 'h19D00 + {14'b0, (V[7:0]+8'd1)};      // SCB(next row)
+		video_addr_shrg <= 23'h19D00 + {14'b0, (V[7:0]+8'd1)};      // SCB(next row)
 	end else if (H == 10'd752) begin
-		shr_pal_base <= 'h19E00 + {14'b0, video_data[3:0], 5'b00000};
+		shr_pal_base <= 23'h19E00 + {14'b0, video_data[3:0], 5'b00000};
 		shr_pal_slot <= 3'd0;
 	end else if (H == 10'd758 || H == 10'd772 || H == 10'd786 || H == 10'd800
 	          || H == 10'd814 || H == 10'd828 || H == 10'd842 || H == 10'd856) begin
@@ -318,7 +318,7 @@ begin
 	end else if (H == 10'd870) begin
 		// SCB even/odd pair for the NEXT row; the odd byte is what the CPU
 		// samples at capture col 17
-		video_addr_shrg <= 'h19D00 + {14'b0, (V[7:0]+8'd1) | 8'd1};
+		video_addr_shrg <= 23'h19D00 + {14'b0, (V[7:0]+8'd1) | 8'd1};
 	end
 
 	// Clear SHRG pixel registers during left border to ensure clean start
@@ -360,18 +360,6 @@ reg [11:0] palette_rgb_r[0:15] = '{
     12'hff0, // 13  Yellow
     12'h0f9, // 14  Aquamarine
     12'hfff  // 15  White
-};
-
-// Apple II color artifact table from MAME, reduced to 4 bits
-reg [3:0] artifact_r[0:127] = '{
-    4'h0,4'h0,4'h0,4'h0,4'h8,4'h0,4'h0,4'h0,4'h1,4'h1,4'h5,4'h1,4'h9,4'h9,4'hd,4'hf,
-    4'h2,4'h2,4'h6,4'h6,4'ha,4'ha,4'he,4'he,4'h3,4'h3,4'h3,4'h3,4'hb,4'hb,4'hf,4'hf,
-    4'h0,4'h0,4'h4,4'h4,4'hc,4'hc,4'hc,4'hc,4'h5,4'h5,4'h5,4'h5,4'h9,4'h9,4'hd,4'hf,
-    4'h0,4'h2,4'h6,4'h6,4'he,4'ha,4'he,4'he,4'h7,4'h7,4'h7,4'h7,4'hf,4'hf,4'hf,4'hf,
-    4'h0,4'h0,4'h0,4'h0,4'h8,4'h8,4'h8,4'h8,4'h1,4'h1,4'h5,4'h1,4'h9,4'h9,4'hd,4'hf,
-    4'h0,4'h2,4'h6,4'h6,4'ha,4'ha,4'ha,4'ha,4'h3,4'h3,4'h3,4'h3,4'hb,4'hb,4'hf,4'hf,
-    4'h0,4'h0,4'h4,4'h4,4'hc,4'hc,4'hc,4'hc,4'h1,4'h1,4'h5,4'h5,4'h9,4'h9,4'hd,4'hd,
-    4'h0,4'h2,4'h6,4'h6,4'he,4'ha,4'he,4'he,4'hf,4'hf,4'hf,4'h7,4'hf,4'hf,4'hf,4'hf
 };
 
 // Color lookup functions using IIgs palette
@@ -563,43 +551,8 @@ always @(*) begin
 end
 
 // Graphics RGB calculation - different for lores vs hires
-wire [3:0] final_graphics_color = lores_mode ? graphics_color : hires_artifact_color;
-wire [11:0] graphics_rgb = lores_mode ? palette_rgb_r[final_graphics_color] : 
+wire [11:0] graphics_rgb = lores_mode ? palette_rgb_r[graphics_color] : 
                                        {apple2_r[7:4], apple2_g[7:4], apple2_b[7:4]};
-
-reg [12:0] BASEADDR;
-wire  [ 4:0] vert = V[7:3];
-always @(*) begin
-	case (vert)
-		5'h00: BASEADDR= 13'h000;
-		5'h01: BASEADDR= 13'h080;
-		5'h02: BASEADDR= 13'h100;
-		5'h03: BASEADDR= 13'h180;
-		5'h04: BASEADDR= 13'h200;
-		5'h05: BASEADDR= 13'h280;
-		5'h06: BASEADDR= 13'h300;
-		5'h07: BASEADDR= 13'h380;
-
-		5'h08: BASEADDR= 13'h028;
-		5'h09: BASEADDR= 13'h0A8;
-		5'h0A: BASEADDR= 13'h128;
-		5'h0B: BASEADDR= 13'h1A8;
-		5'h0C: BASEADDR= 13'h228;
-		5'h0D: BASEADDR= 13'h2A8;
-		5'h0E: BASEADDR= 13'h328;
-		5'h0F: BASEADDR= 13'h3A8;
-
-		5'h10: BASEADDR= 13'h050;
-		5'h11: BASEADDR= 13'h0D0;
-		5'h12: BASEADDR= 13'h150;
-		5'h13: BASEADDR= 13'h1D0;
-		5'h14: BASEADDR= 13'h250;
-		5'h15: BASEADDR= 13'h2D0;
-		5'h16: BASEADDR= 13'h350;
-		5'h17: BASEADDR= 13'h3D0;
-		default: BASEADDR = 13'h000;
-	endcase
-end
 
 // ce(ce_pix): gate the char-ROM read to the pixel-clock enable so it samples
 // chrom_addr once per pipeline step, aligned with the ce_pix-gated text logic.
@@ -625,8 +578,6 @@ wire [11:0] chrom_addr;
 // The character ROM has 1-cycle latency, so we need to pre-fetch and buffer
 // Load the ROM data into a shift register, then shift out pixels
 reg [6:0] text_shift_reg;
-reg [7:0] video_data_text;  // Latched video data for character ROM addressing
-reg text_load_pending;      // Flag to load shift register when ROM data is ready
 
 //
 // 40 and 80 column video modes
@@ -760,7 +711,6 @@ reg graphics_pixel;              // Current pixel value
 reg buffer_needs_reload;         // Flag to reload buffer when chram_x increments
 
 // Color artifacting for hires mode (simplified version of apple2hack logic)
-reg [3:0] hires_artifact_color;  // Color from artifacting logic (legacy - for lores fallback)
 
 // Current mode detection using existing line_type_w
 wire lores_mode = (line_type_w == LORES40_LINE) | (line_type_w == LORES80_LINE);
@@ -773,10 +723,6 @@ wire graphics_mode = lores_mode | hires_mode;
 // For hires mode, bit 0 of video_data is first pixel (LSB-first)
 // Note: expandLores40 returns {nibble[3],nibble[2],nibble[1],nibble[0],nibble[3],nibble[2],nibble[1]}
 // so bit 0 is nibble[1], but we just need any valid pixel - use nibble bit directly
-wire lores_reload_pixel = window_y_w[2] ? video_data[5] : video_data[1];  // bit 1 of active nibble
-wire graphics_pixel_out = buffer_needs_reload ?
-    (lores_mode ? lores_reload_pixel : video_data[0]) :
-    graphics_pix_shift[0];
 
 //
 // Text Mode chars are 7 bits wide, not 8
@@ -887,7 +833,6 @@ begin
 		if (dhires_mode && H == (BLE-2)) graphics_pixel <= video_data[0];
 		if (dhires_mode && H == (BLE-1)) graphics_pixel <= video_data[1];
 		text_shift_reg <= 7'b0;
-		text_load_pending <= 1'b0;
 	end
 	else
 	begin
@@ -975,7 +920,6 @@ begin
 					// Load shift register with ROM data (ready from pre-fetch)
 					text_shift_reg <= chrom_data_inv[6:0];
 					// Latch video_data for this character's ROM addressing
-					video_data_text <= video_data;
 				end else begin
 					// Shift out pixels LSB first (shift right, read bit 0)
 					text_shift_reg <= {1'b0, text_shift_reg[6:1]};
@@ -986,7 +930,6 @@ begin
 				if (xpos == 'd0) begin
 					// Load shift register with ROM data
 					text_shift_reg <= chrom_data_inv[6:0];
-					video_data_text <= video_data;
 				end else if (xpos[0] == 1'b0 && xpos != 'd0) begin
 					// Shift on EVEN xpos (2,4,6,8,10,12) for pixel doubling
 					// This way: xpos 0-1 show bit0, xpos 2-3 show bit1, etc.
@@ -1107,9 +1050,6 @@ end
 // Window coordinates derived from H and V
 // Apple II modes: Active display H=72-632 (560 pixels for 40 chars × 14 pixels)
 // SHRG modes: Active display H=32-672 (640 pixels)
-wire [9:0] window_x_w = SHRG ?
-    ((H >= BL) ? H - BL : 10'b0) :          // SHRG: start at H=32
-    ((H >= BLE) ? H - BLE : 10'b0);           // Apple II: start at H=72
 wire [9:0] window_y_w = (V >= V_SCAN) ? {2'b0, V[7:0]} : 10'b0;  // Apple II display starts at V=16 (scanline 0)
 
 // Apple II coordinate mapping: Now properly centered, window_y_w is 0-191 (192 lines)

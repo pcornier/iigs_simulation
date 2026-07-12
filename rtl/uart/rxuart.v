@@ -183,7 +183,7 @@ module rxuart(i_clk, i_reset, i_setup, i_uart_rx, o_wr, o_data, o_break,
 		else if (qq_uart != ck_uart)
 			chg_counter <= 28'h00;
 		else if (chg_counter < break_condition)
-			chg_counter <= chg_counter + 1;
+			chg_counter <= chg_counter + 1'd1;
 
 	// Are we in a break condition?
 	//
@@ -295,7 +295,7 @@ module rxuart(i_clk, i_reset, i_setup, i_uart_rx, o_wr, o_data, o_break,
 				// Data arrives least significant bit first.
 				// By the time this is clocked in, it's what
 				// you'll have.
-				state <= state + 1;
+				state <= state + 1'd1;
 			else if (state == `RXU_BIT_SEVEN)
 				state <= (use_parity) ? `RXU_PARITY:`RXU_STOP;
 			else if (state == `RXU_PARITY)

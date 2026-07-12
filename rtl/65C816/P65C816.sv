@@ -157,12 +157,12 @@ module P65C816
    always_comb
       case (MC.STATE_CTRL)
          3'b000 :
-            NextState = STATE + 1;
+            NextState = STATE + 4'd1;
          3'b001 :
             if (AALCarry == 1'b0 & (XF == 1'b1 | EF == 1'b1))
-               NextState = STATE + 2;
+               NextState = STATE + 4'd2;
             else
-               NextState = STATE + 1;
+               NextState = STATE + 4'd1;
          3'b010 :
             if (IsBranchCycle1 == 1'b1 & JumpTaken == 1'b1)
                NextState = 4'b0010;
@@ -172,27 +172,27 @@ module P65C816
             if (JumpNoOverflow == 1'b1 | EF == 1'b0)
                NextState = 4'b0000;
             else
-               NextState = STATE + 1;
+               NextState = STATE + 4'd1;
          3'b100 :
             if ((MC.LOAD_AXY[1] == 1'b0 & MF == 1'b0 & EF == 1'b0) | (MC.LOAD_AXY[1] == 1'b1 & XF == 1'b0 & EF == 1'b0))
-               NextState = STATE + 1;
+               NextState = STATE + 4'd1;
             else
                NextState = 4'b0000;
          3'b101 :
             if (DLNoZero == 1'b1)
-               NextState = STATE + 1;
+               NextState = STATE + 4'd1;
             else
-               NextState = STATE + 2;
+               NextState = STATE + 4'd2;
          3'b110 :
             if ((MC.LOAD_AXY[1] == 1'b0 & MF == 1'b0 & EF == 1'b0) | (MC.LOAD_AXY[1] == 1'b1 & XF == 1'b0 & EF == 1'b0))
-               NextState = STATE + 1;
+               NextState = STATE + 4'd1;
             else
-               NextState = STATE + 2;
+               NextState = STATE + 4'd2;
          3'b111 :
             if (EF == 1'b0)
-               NextState = STATE + 1;
+               NextState = STATE + 4'd1;
             else
-               NextState = STATE + 2;
+               NextState = STATE + 4'd2;
          default :
             ;
       endcase
@@ -376,23 +376,23 @@ module P65C816
                   ;
                3'b001 :
                   if (EF == 1'b0)
-                     SP <= (SP + 1);
+                     SP <= (SP + 16'd1);
                   else
                      // Emulation: maintain full 16-bit SP for arithmetic
-                     SP <= (SP + 1);
+                     SP <= (SP + 16'd1);
                3'b010 :
                   if (MC.BYTE_SEL[1] == 1'b0 & w16 == 1'b1)
                   begin
                      if (EF == 1'b0)
-                        SP <= (SP + 1);
+                        SP <= (SP + 16'd1);
                      else
-                        SP <= ({8'h01, SP[7:0]} + 1);
+                        SP <= ({8'h01, SP[7:0]} + 16'd1);
                   end
                3'b011 :
                   if (EF == 1'b0)
-                     SP <= (SP - 1);
+                     SP <= (SP - 16'd1);
                   else
-                     SP <= (SP - 1);
+                     SP <= (SP - 16'd1);
                3'b100 :
                   if (EF == 1'b0)
                      SP <= A;
@@ -409,14 +409,14 @@ module P65C816
                   end
                3'b110 :
                   if (EF == 1'b0)
-                     SP <= (SP + 1);
+                     SP <= (SP + 16'd1);
                   else
-                     SP <= (SP + 1);
+                     SP <= (SP + 16'd1);
                3'b111 :
                   if (EF == 1'b0)
-                     SP <= (SP - 1);
+                     SP <= (SP - 16'd1);
                   else
-                     SP <= (SP - 1);
+                     SP <= (SP - 16'd1);
                default :
                   ;
             endcase
@@ -817,7 +817,6 @@ module P65C816
    begin: xhdl0
       logic [15:0]     ADDR_INC;
       logic [8:0]      sp_inc9;
-      logic [8:0]      sp9;
       logic [8:0]      pld_inc9;
       logic [8:0]      rtl_inc9;
       // For RTL (6B) emulation stack read sequencing
@@ -825,7 +824,6 @@ module P65C816
       logic [8:0]      rtl_addr9;
       ADDR_INC = { 14'b0, MC.ADDR_INC[1:0] };
       sp_inc9 = 9'((SP + ADDR_INC) & 16'h01FF);
-      sp9 = 9'(SP & 16'h01FF);
       case (MC.ADDR_BUS)
          4'b0000 :
             ADDR_BUS = {PBR, PC};

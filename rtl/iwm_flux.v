@@ -142,7 +142,6 @@ module iwm_flux (
     reg [2:0]  write_bit_count;     // Bits shifted out this byte (0-7)
     reg [31:0] write_data_gen;      // m_data_gen snapshot at last byte load
     reg [31:0] async_tick_14m;      // 14MHz tick counter for async timing
-    reg [31:0] last_sync_14m;       // Last bit-cell sync tick (approx m_last_sync)
     reg [31:0] async_update_deadline;
     reg        async_update_pending;
     reg [31:0] async_clear_gen;     // m_data_gen snapshot for async clear
@@ -322,7 +321,9 @@ module iwm_flux (
     //=========================================================================
 
     reg        prev_flux;
+`ifdef SIMULATION
     reg        prev_sm_active;  // For debug: track state machine activation
+`endif
     reg        flux_seen;       // Latched at 14M when flux edge detected, cleared after decode
     wire       flux_edge = FLUX_TRANSITION && !prev_flux;
     // Treat a 1-cycle FLUX_TRANSITION pulse as visible to the state machine in the same
@@ -362,7 +363,6 @@ module iwm_flux (
     // the CPU correctly sees 00 after reading a byte (via m_data_read flag), then waits
     // in the polling loop until the next byte completes. This matches ROM expectations.
     // The m_data_read flag provides the necessary "byte consumed" semantics.
-    wire       is_flux_async = is_async && DISK_READY;  // Keep for debug logging
     // Data-ready gating: avoid returning stale bytes after they've been read.
     // SmartPort mode keeps m_data valid even after reads to match firmware expectations.
     wire       smartport_mode_local = (!SW_MODE[3]) && SW_MODE[1];
@@ -491,7 +491,6 @@ module iwm_flux (
             m_data         <= 8'h00;
             m_whd          <= 8'hBF;  // MAME: initialized to 0xBF
             async_tick_14m <= 32'd0;
-            last_sync_14m  <= 32'd0;
             async_update_deadline <= 32'd0;
             async_update_pending <= 1'b0;
             async_clear_gen <= 32'd0;
@@ -504,7 +503,9 @@ module iwm_flux (
             m_decode_was_running <= 1'b0;
             m_data_gen     <= 32'd0;
             prev_flux      <= 1'b0;
+`ifdef SIMULATION
             prev_sm_active <= 1'b0;
+`endif
             flux_seen      <= 1'b0;
             prev_disk_bit_position <= 17'd0;
             window_counter <= 6'd0;
@@ -614,7 +615,6 @@ module iwm_flux (
             async_tick_14m <= async_tick_14m + 1'd1;
             // Approximate MAME's m_last_sync using bit-cell boundaries.
             if (shift_edge0_now || shift_edge1_now) begin
-                last_sync_14m <= async_tick_14m + 1'd1;
             end
             if (clear_rsh_pending) begin
                 clear_rsh_pending <= 1'b0;
@@ -1718,7 +1718,9 @@ module iwm_flux (
                 sync_resync_done <= 1'b0;
             end
 
+`ifdef SIMULATION
             prev_sm_active <= state_machine_ok;
+`endif
 
             // Track CEN (PHI2) edge; the CPU latches read data near the end of PHI2-high.
             // IMPORTANT: Do not clear/acknowledge the data register during PHI2-high,

@@ -78,13 +78,13 @@ module ALU
         end
       3'b110 :
         begin
-          IntR8 = ((R[7:0]) - 1);
-          IntR16 = (R - 1);
+          IntR8 = ((R[7:0]) - 8'd1);
+          IntR16 = (R - 16'd1);
         end
       3'b111 :
         begin
-          IntR8 = ((R[7:0]) + 1);
-          IntR16 = (R + 1);
+          IntR8 = ((R[7:0]) + 8'd1);
+          IntR16 = (R + 16'd1);
         end
     endcase
   end

@@ -37,7 +37,7 @@ module soundglu
       select_d <= select;
 
       if (increment_pending && !select_d && select) begin
-	 sound_addr <= sound_addr + 1;
+	 sound_addr <= sound_addr + 1'd1;
 	 increment_pending <= 0;
       end
 

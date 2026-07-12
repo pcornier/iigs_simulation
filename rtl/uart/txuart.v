@@ -224,7 +224,7 @@ module txuart(i_clk, i_reset, i_setup, i_break, i_wr, i_data,
 			if (state == TXU_BIT_SEVEN)
 				state <= (use_parity)? TXU_PARITY:TXU_STOP;
 			else
-				state <= state + 1;
+				state <= state + 1'd1;
 		end else if (state == TXU_PARITY)
 		begin
 			state <= TXU_STOP;

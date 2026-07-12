@@ -613,7 +613,7 @@ module woz_floppy_controller #(
                 if (bit_we_count < 32'd200 || (bit_we_count & 32'hFFFF) == 0)
                     $display("WOZ_WRITE[%0d]: bit_we #%0d rd_addr=%0d wr_addr=%0d bram_b=%04X data_in=%02X track_id=%0d side=%0d state=%0d dirty_s0=%0d dirty_s1=%0d",
                              IS_35_INCH, bit_we_count, bit_addr, bit_wr_addr, bram_addr_b, bit_data_in, track_id, track_id[0], state, dirty_side0, dirty_side1);
-                bit_we_count <= bit_we_count + 1;
+                bit_we_count <= bit_we_count + 1'd1;
 `endif
             end
             
@@ -703,7 +703,7 @@ module woz_floppy_controller #(
                     if (bit_we)
                         dirty_flush_timer <= DIRTY_FLUSH_DELAY;
                     else if (dirty_flush_timer > 0)
-                        dirty_flush_timer <= dirty_flush_timer - 1;
+                        dirty_flush_timer <= dirty_flush_timer - 1'd1;
 
                     // Dirty flush trigger: timer expired with dirty data
                     if (dirty_flush_timer == 1 && (dirty_side0 || dirty_side1) && woz_valid) begin
@@ -1011,7 +1011,7 @@ module woz_floppy_controller #(
                         end
                         4: begin
                              trk_start_block[7:0] <= meta_read_data;
-                             meta_read_addr <= meta_read_addr + 1; // -> Byte 1
+                             meta_read_addr <= meta_read_addr + 1'd1; // -> Byte 1
                              blocks_processed <= 5;
                         end
                         5: begin // Wait for Byte 1
@@ -1019,7 +1019,7 @@ module woz_floppy_controller #(
                         end
                         6: begin
                              trk_start_block[15:8] <= meta_read_data;
-                             meta_read_addr <= meta_read_addr + 1; // -> Byte 2
+                             meta_read_addr <= meta_read_addr + 1'd1; // -> Byte 2
                              blocks_processed <= 7;
                         end
                         7: begin // Wait for Byte 2
@@ -1027,7 +1027,7 @@ module woz_floppy_controller #(
                         end
                         8: begin
                              trk_block_count[7:0] <= meta_read_data;
-                             meta_read_addr <= meta_read_addr + 1; // -> Byte 3
+                             meta_read_addr <= meta_read_addr + 1'd1; // -> Byte 3
                              blocks_processed <= 9;
                         end
                         9: begin // Wait for Byte 3
@@ -1035,7 +1035,7 @@ module woz_floppy_controller #(
                         end
                         10: begin
                              trk_block_count[15:8] <= meta_read_data;
-                             meta_read_addr <= meta_read_addr + 1; // -> Byte 4
+                             meta_read_addr <= meta_read_addr + 1'd1; // -> Byte 4
                              blocks_processed <= 11;
                         end
                         11: begin // Wait for Byte 4
@@ -1043,7 +1043,7 @@ module woz_floppy_controller #(
                         end
                         12: begin
                              trk_bit_count[7:0] <= meta_read_data;
-                             meta_read_addr <= meta_read_addr + 1; // -> Byte 5
+                             meta_read_addr <= meta_read_addr + 1'd1; // -> Byte 5
                              blocks_processed <= 13;
                         end
                         13: begin // Wait for Byte 5
@@ -1051,7 +1051,7 @@ module woz_floppy_controller #(
                         end
                         14: begin
                              trk_bit_count[15:8] <= meta_read_data;
-                             meta_read_addr <= meta_read_addr + 1; // -> Byte 6
+                             meta_read_addr <= meta_read_addr + 1'd1; // -> Byte 6
                              blocks_processed <= 15;
                         end
                         15: begin // Wait for Byte 6
@@ -1059,7 +1059,7 @@ module woz_floppy_controller #(
                         end
                         16: begin
                              trk_bit_count[23:16] <= meta_read_data;
-                             meta_read_addr <= meta_read_addr + 1; // -> Byte 7
+                             meta_read_addr <= meta_read_addr + 1'd1; // -> Byte 7
                              blocks_processed <= 17;
                         end
                         17: begin // Wait for Byte 7
@@ -1160,7 +1160,7 @@ module woz_floppy_controller #(
                         // Block complete
                         // $display("WOZ_DMA: Block %0d complete for track %0d (lba=%0d)",
                         //          blocks_processed, pending_track_id, sd_lba);
-                        blocks_processed <= blocks_processed + 1;
+                        blocks_processed <= blocks_processed + 1'd1;
                         if (blocks_processed + 1 >= trk_block_count) begin
                             // Track load complete - store to appropriate RAM
                             $display("WOZ_CTRL: Track %0d load complete (%0d blocks)", pending_track_id, blocks_processed + 1);
@@ -1251,7 +1251,7 @@ module woz_floppy_controller #(
                                 dirty_side0 <= 0;
                         end else begin
                             // Next block
-                            sd_lba <= sd_lba + 1;
+                            sd_lba <= sd_lba + 1'd1;
                         end
                     end
                 end
@@ -1273,7 +1273,7 @@ module woz_floppy_controller #(
                     // Only count block completion if we had an active transfer
                     if (old_ack && !sd_ack && transfer_active) begin
                         // Block saved
-                        blocks_processed <= blocks_processed + 1;
+                        blocks_processed <= blocks_processed + 1'd1;
                         if (blocks_processed + 1 >= trk_block_count) begin
                             // Done saving this side
                             if (save_side)
@@ -1309,7 +1309,7 @@ module woz_floppy_controller #(
                             end
                         end else begin
                             // Next block
-                            sd_lba <= sd_lba + 1;
+                            sd_lba <= sd_lba + 1'd1;
                         end
                     end
                 end

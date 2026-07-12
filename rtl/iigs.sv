@@ -268,7 +268,6 @@ module iigs
    logic slow/*verilator public_flat*/;
    logic slowMem/*verilator public_flat*/;
    logic ph0_state;
-   logic VPB;
 
    parameter RAMSIZE = 128; // 16x64k = 1MB, max = 127x64k = 8MB
 
@@ -312,18 +311,15 @@ module iigs
   // Edge-detect for IRQ sources
   logic               vbl_irq_d;
   logic               qtr_irq_d;
-  logic               scc_irq_d;
 
   logic [7:0]         adb_din;
   logic [7:0]         adb_dout;
   logic [7:0]         adb_addr;
   logic               adb_rw, adb_strobe;
 
-  logic [7:0]         iwm_din;
   logic [7:0]         iwm_dout;
 
-  logic [7:0]         iwm_addr;
-  logic               iwm_rw, iwm_strobe;
+  logic               iwm_strobe;
 
   // Slot HDD handled externally in top.v; no internal state here
 
@@ -346,17 +342,13 @@ module iigs
 
   // some fake registers for now
   //logic [7:0] NEWVIDEO;
-  logic [7:0]         STATEREG;
   //logic [7:0]         CYAREG;
-  logic [7:0]         SOUNDCTL;
   logic [7:0]         SOUNDDATA;
-  logic [7:0]         DISKREG;
   //logic [7:0] SLTROMSEL;
   logic [7:0]         SOUNDADRL;
   logic [7:0]         SOUNDADRH;
   //logic [7:0] TEXTCOLOR;
   //logic ;
-  logic [7:0]         SPKR;
   logic               speaker_state;  // Apple II speaker toggle state
   logic [7:0]         DISK35;
   // floppy_motor_on is now a module output (for clock slowdown + dirty track flush)
@@ -375,7 +367,6 @@ module iigs
   //logic               EIGHTYCOL;
   //logic               ALTCHARSET;
   //logic PAGE2;
-  logic [7:0]         MONOCHROME;
   //logic RDROM;
   //logic LCRAM2;
   //logic LC_WE;
@@ -388,8 +379,6 @@ module iigs
   //logic TEXTG;
   //logic MIXG;
 
-  logic               slot_area;
-  logic [3:0]         slotid;
 
   // remap c700 to c500 if slot access and $C02D[7]
   //assign addr_bus =
@@ -405,7 +394,6 @@ module iigs
   // Legacy Mega II VBL status bit for $C019
   wire                mega2_vbl;
 
-  assign VPB=cpu_vpb;
   assign CXROM=INTCXROM;
   assign { bank, addr } = addr_bus;
 
@@ -417,12 +405,8 @@ module iigs
   assign valid = cpu_vpa | cpu_vda;
   
   // φ2 is a clock ENABLE, not a clock - always use CLK_14M as clock
-  wire mem_clk;
-  assign mem_clk = CLK_14M;
 
   wire slowram_we;
-  assign slot_area = addr[15:0] >= 16'hc100 && addr[15:0] <= 16'hcfff;
-  assign slotid = addr[11:8];
 
   // IWM device select ($C0E0-$C0EF)
   wire iwm_device_select = IO & (cpu_addr[7:4] == 4'hE);
@@ -640,8 +624,8 @@ module iigs
                      fastram_ce_int, slowram_ce_int, addr_bus);
             $display("0600_WRITE_ADDR: addr_bus=%06x slowram_addr=bank[0]_addr",
                      addr_bus);
-            $display("0600_WRITE_EN: we=%b slowram_we=%b mem_clk=%b CLK_14M=%b",
-                     we, slowram_we, mem_clk, CLK_14M);
+            $display("0600_WRITE_EN: we=%b slowram_we=%b CLK_14M=%b",
+                     we, slowram_we, CLK_14M);
             $display("0600_WRITE_TIMING: dout=%02x actual_write_data=%02x", 
                      dout, dout);
           end else begin
@@ -825,7 +809,6 @@ module iigs
         $display("RESET_TRACE: *** WARM RESET *** CYAREG=$%02X (preserving bit 6=%b)", {1'b1, CYAREG[6], 6'b000000}, CYAREG[6]);
 `endif
       end
-      STATEREG <=  8'b0000_1101;  // GSPlus: 0x0D (rdrom, lcbank2, intcx, bit2)
       shadow <= 8'b0000_1000;  // Original value: bit 3=1 (SHGR disabled), others=0 (enabled)
       DMAREG <= 8'h00;
 `ifdef DEBUG_RESET
@@ -834,8 +817,6 @@ module iigs
                1'b1, 1'b1, 1'b1, 1'b0, 1'b0, 1'b1, 1'b1);
       $display("  Text/HGR shadowing ACTIVE, Super HiRes shadowing DISABLED");
 `endif
-      SOUNDCTL <= 8'd0;
-      //SOUNDCTL <= 8'h05;
       NEWVIDEO <= 8'h41;
       C02BVAL <= 8'h08;
 
@@ -845,10 +826,8 @@ module iigs
       LCRAM2<=1'b1;
       LC_WE_PRE<=1'b0;  // Sather: PRE-WRITE is reset by a system reset (LC_WE itself resets enabled)
 
-      DISKREG<=0;
       SLTROMSEL<=0;
       TEXTCOLOR<='hf2;
-      SPKR<=0;
       speaker_state<=0;
       DISK35<=0;
       VGCINT<=0; //23
@@ -864,7 +843,6 @@ module iigs
       ALTCHARSET<=0;
       PAGE2<=0;
       AN3<=0;
-      MONOCHROME<=0;
       RDROM<=1;
       LCRAM2<=1;  // Fix: Should be 1 to match STATEREG initialization (bit 1 = LCRAM2)
       LC_WE<=1;  // Per Apple IIgs HW ref: "reset initializes for writing to the RAM"
@@ -984,7 +962,7 @@ module iigs
                 begin
                   //key_reads<=1;
                 end
-            12'h021: MONOCHROME <=dout;
+            12'h021: ;  // MONOCHROME latch removed (write-only, never read)
             12'h022: TEXTCOLOR <= dout;
 `ifdef DEBUG_IO
             12'h023: begin $display("VGCINT 23 2 %x 1 %x",dout[2],dout[1]);VGCINT <= { VGCINT[7:3],dout[2:1],VGCINT[0]} ; end // code can only modify the enable bits
@@ -1008,7 +986,7 @@ module iigs
 `else
             12'h02d: begin SLTROMSEL <= dout; end
 `endif
-            12'h030: begin SPKR <= dout; if (phi2) speaker_state <= ~speaker_state; end
+            12'h030: begin if (phi2) speaker_state <= ~speaker_state; end
             12'h031: begin
               DISK35<= dout & 8'hc0;
 `ifdef DEBUG_VERBOSE
@@ -1242,10 +1220,7 @@ module iigs
               12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
               12'h0ec, 12'h0ed, 12'h0ee, 12'h0ef:
                 begin
-                  iwm_addr <= addr[7:0];
                   iwm_strobe <= 1'b1;
-                  iwm_din <= dout;
-                  iwm_rw <= 1'b0;
 `ifdef DEBUG_IO
                   $display("IWM WR %03h <= %02h", addr[11:0], dout);
 `endif
@@ -1577,9 +1552,7 @@ module iigs
               12'h0e8, 12'h0e9, 12'h0ea, 12'h0eb,
               12'h0ec, 12'h0ed, 12'h0ee, 12'h0ef:
                 begin
-                  iwm_addr <= addr[7:0];
                   iwm_strobe <= 1'b1;
-                  iwm_rw <= 1'b1;
 `ifdef DEBUG_IO
                   $display("IWM RD %03h -> %02h", addr[11:0], iwm_dout);
 `endif
@@ -1641,7 +1614,6 @@ module iigs
     // VBL interrupt logic is now handled by interrupt controller
     
     // Quarter-second and SCC interrupts now handled by interrupt controller
-    scc_irq_d <= ~scc_irq_n;  // Keep SCC edge detection for debugging
     // SCC interrupts disabled - SCC wrapper handles interrupt masking
     // if ((~scc_irq_n & ~scc_irq_d) & INTEN[7]) begin
     //   INTFLAG[7]<=1'b1;
@@ -2079,9 +2051,9 @@ wire ready_out;
   reg [15:0] irq_pending = 0;  // 16-bit interrupt pending register (bit 0=aggregator, 3=VBL, 4=QSEC, 7=SCC)
   reg interrupt_clear_pulse = 0;
   reg qtrsecond_irq_d = 0;
-  reg vbl_started = 0;
+`ifdef DEBUG_VERBOSE
   reg       irq3_prev = 1'b0;
-  reg       inten3_prev = 1'b0;  // track rising edge of VBL enable
+`endif
 
 `ifdef DEBUG_VERBOSE
   // Frame counter for debugging (increments on VBL pulse)
@@ -2096,21 +2068,15 @@ wire ready_out;
 `endif
   
   // Control signals for centralized IRQ management (combinational detection)
-  reg inten_was_written = 0;
-  reg [7:0] inten_prev_data = 0;
-  reg c047_was_written = 0;
   
   // Detect C046 reads combinationally (scope to IO region)  
-  wire c046_read = !we && IO && (addr_bef[11:0] == 12'h046);
 
   // Centralized interrupt management - single always block handles all IRQ sources
   always @(posedge CLK_14M) begin
     if (reset) begin
       irq_pending <= 16'h0000;
       qtrsecond_irq_d <= 1'b0;
-      vbl_started <= 1'b0;
       interrupt_clear_pulse <= 1'b0;
-      inten3_prev <= 1'b0;
 `ifdef DEBUG_VERBOSE
       frame_count <= 16'h0000;
       vgc_vbl_irq_pulse_d <= 1'b0;
@@ -2226,7 +2192,6 @@ wire ready_out;
       // Set aggregator bit (bit 0) - OR of all interrupt sources
       irq_pending[0] <= |irq_pending[15:1];
 
-      inten3_prev <= INTEN[3];
 
       // Debug: track VBL pending transitions explicitly
 `ifdef DEBUG_VERBOSE
@@ -2451,12 +2416,6 @@ wire ready_out;
       .DRIVE35_EJECT_REQ(drive35_eject_req)
   );
   // Internal wires not used with flux-based IWM
-  wire [6:0]  TRACK3      = 7'd0;
-  wire [13:0] TRACK3_ADDR = 14'd0;
-  wire        TRACK3_SIDE = 1'b0;
-  wire [7:0]  TRACK3_DI   = 8'd0;
-  wire        TRACK3_WE   = 1'b0;
-  wire        FD_DISK_3   = 1'b0;
 
     // Legacy slot-7 HDD (supports 4 units)
     hdd hdd(
@@ -2579,7 +2538,6 @@ wire ready_out;
   // `lda [$f3]; and #$00ff; beq` against $C019 and needs the low byte to
   // reach 0). $C000 (line ~2710 onward) keeps the persistent character —
   // that register is the real keyboard data port on both machines.
-  wire [6:0] key_keys = 7'd0;
   //wire       key_anykeydown = adb_akd;     // Any key down from ADB
   wire       open_apple = adb_open_apple;  // Command key from ADB
   wire       closed_apple = adb_closed_apple; // Option key from ADB

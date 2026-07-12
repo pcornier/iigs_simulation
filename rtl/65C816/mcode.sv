@@ -2348,7 +2348,7 @@ localparam logic [52:0] M_TAB[0:2047] = '{
          MI <= {3'b000, 4'b0000, 2'b00, 3'b000, 2'b00, 2'b00, 8'b00000000, 3'b001, 3'b000, 3'b000, 2'b00, 6'b000000, 5'b00000, 2'b00, 3'b000, 2'b11};
       else
       begin
-         STATE2 = STATE - 1;
+         STATE2 = STATE - 4'd1;
          if (EN == 1'b1)
          begin
             if (STATE == 4'b0000)

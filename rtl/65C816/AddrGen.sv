@@ -57,7 +57,7 @@ module AddrGen
         NextPC = PCr;
       3'b001 :
         if (GotInterrupt == 1'b0)
-          NextPC = (PCr + 1);
+          NextPC = (PCr + 16'd1);
         else
           NextPC = PCr;
       3'b010 :
@@ -72,7 +72,7 @@ module AddrGen
         NextPC = {AAH, AAL};
       3'b111 :
         if (PCDec == 1'b1)
-          NextPC = (PCr - 3);
+          NextPC = (PCr - 16'd3);
         else
           NextPC = PCr;
       default :

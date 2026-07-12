@@ -185,7 +185,6 @@ module iwm_woz (
     // MAME behavior: When reading $C0E9 (motor on), the status immediately reflects
     // motor=1. This is critical for the boot ROM which checks status after motor on.
     wire access_motor = (bus_addr[3:1] == 3'b100);  // $C0E8/$C0E9
-    wire immediate_motor = cpu_access_edge && access_motor ? bus_addr[0] : drive_on;
 
     // Immediate mode value for status register
     // MAME behavior: When writing mode register via $C0EF (Q6=1, Q7=1, IWM inactive, odd address),
@@ -868,7 +867,6 @@ module iwm_woz (
                           is_35_inch;  // Fallback only after the 3.5" cleanup window expires
 
     wire selected_drive35_active = drive_sel ? 1'b0 : drive35_active;
-    wire selected_drive35_wp = drive_sel ? drive35_2_wp : drive35_wp;
     wire selected_drive35_spinning = drive_sel ? drive35_2_motor_spinning : drive35_motor_spinning;
     // The 3.5" byte decoder must not treat the drive as "ready" until the currently
     // selected side/track is actually resident in the WOZ track buffer. After a seek or
@@ -880,8 +878,9 @@ module iwm_woz (
     wire selected_drive35_ready = drive_sel ? (drive35_2_ready && DISK_READY[3])
                                             : (drive35_ready && DISK_READY[2] &&
                                                selected_drive35_track_valid);
+`ifdef DEBUG_VERBOSE
     wire drive_active = flux_is_35_inch ? selected_drive35_active : drive525_active;
-    wire current_wp = flux_is_35_inch ? selected_drive35_wp : drive525_wp;
+`endif
 
     // Write signals from iwm_flux
     wire       flux_write_bit;
@@ -897,14 +896,14 @@ module iwm_woz (
     wire       disk_write_mode   = flux_write_mode   && !sp_mode_gate;
 
     // Any disk spinning - used for IWM MOTOR_SPINNING independent of is_35_inch
+`ifdef DEBUG_VERBOSE
     wire any_disk_spinning = drive35_motor_spinning || drive35_2_motor_spinning || drive525_motor_spinning;
+`endif
     // Any disk ready - drive must be spun up AND have track data loaded
     // The state machine should wait until drive_ready is true (spinup complete)
     // This prevents decoding garbage during motor spin-up period
     // NOTE: drive35_2 is not included - it has no separate DISK_READY signal and
     // its motor is gated off when DISK_READY[2]=1 (disk in primary 3.5" drive)
-    wire any_disk_ready = (drive35_ready && DISK_READY[2]) ||
-                          (drive525_ready && DISK_READY[0]);
     // FIX: Removed the side_reset_active check that was causing byte framing corruption.
     // The brief DISK_READY glitch would reset the IWM state machine mid-read, corrupting
     // byte boundaries. The state machine doesn't need to reset on side changes - the flux
@@ -1041,7 +1040,6 @@ module iwm_woz (
                                            (smartport_mode_sense ? 1'b1 :
                                                                    ((drive_sel == 0) ? drive525_sense : 1'b1));
 
-    wire current_sense = drive_sense;
 
     // Sense output: use COMBINATIONAL drive_sense for IWM status reads.
     //

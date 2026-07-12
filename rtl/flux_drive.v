@@ -108,8 +108,8 @@ module flux_drive (
     //=========================================================================
 
     // Drive geometry
-    localparam MAX_PHASE_525 = 139;     // 35 tracks * 4 steps/track - 1
-    localparam MAX_PHASE_35  = 319;     // 80 tracks * 4 steps/track - 1
+    localparam [9:0] MAX_PHASE_525 = 10'd139;     // 35 tracks * 4 steps/track - 1
+    localparam [9:0] MAX_PHASE_35  = 10'd319;     // 80 tracks * 4 steps/track - 1
 
     // Bit cell timing in 14MHz cycles
     // 5.25": 4µs per bit = 56 cycles @14M
@@ -148,11 +148,10 @@ module flux_drive (
     // For 5.25" drives, iwm_woz.v already handles 300ms motor inertia before
     // MOTOR_ON goes high. Real Disk II has no /READY signal — data is available
     // as soon as the motor reaches speed. 5.25" drives skip the spinup counter.
-    parameter SPINUP_BIT_COUNT = 250000;
+    parameter [17:0] SPINUP_BIT_COUNT = 18'd250000;
     reg [17:0]  spinup_bits;            // Count bits during spin-up
     reg         drive_ready;            // True when drive is spun up and ready
     reg [5:0]   spinup_timer;           // 14MHz divider to approximate bit-cell timing for spinup
-    reg         rotation_complete;      // Pulse when disk completes one rotation (for debug)
 
     // Head position (quarter-track)
     reg [8:0]   head_phase;             // 0-319 for 80 tracks (3.5") or 0-139 for 35 tracks (5.25")
@@ -172,10 +171,8 @@ module flux_drive (
 
     // Track loading state
     reg [7:0]   current_track;          // Track currently in buffer
-    reg         track_valid;            // Track data is valid
 
     // Flux generation state
-    reg         prev_flux;              // Previous flux state for edge detection
 
 
     // BRAM first-read wait - wait 1 cycle for registered BRAM data after position reset
@@ -248,7 +245,6 @@ module flux_drive (
     reg         prev_disk_mounted;
     reg         first_mount_done;  // Distinguishes cold-start mount from hot swap
     reg         prev_drive_ready;  // For detecting drive_ready rising edge
-    reg         prev_is_flux_track; // For detecting IS_FLUX_TRACK 0->1 transitions
 
     // Motor sense signal - for sense register 0x2 (MAME m_mon equivalent)
     // This follows the Sony command state, NOT the IWM motor bit
@@ -316,7 +312,6 @@ module flux_drive (
     // Do NOT scale based on FLUX_TOTAL_TICKS - that caused timing mismatch
     // with iwm_flux.v's fixed 28-cycle (2µs) window timing.
     // The track data may not fill a full 200ms rotation, which is fine.
-    wire        flux_use_scaling = 1'b0;  // Disabled - use real 125ns timing
     wire [31:0] flux_phase_inc = 32'd1000;
     wire [31:0] flux_phase_mod = 32'd1790;
     wire [32:0] flux_phase_sum = {1'b0, flux_phase_accum} + {1'b0, flux_phase_inc};
@@ -632,7 +627,7 @@ module flux_drive (
                     $display("FLUX_WRITE_DBG[%0d]: STROBE but WRITE_PROTECT=1 (n=%0d)", DRIVE_ID, flux_write_dbg_count);
                 else if (!TRACK_LOADED)
                     $display("FLUX_WRITE_DBG[%0d]: STROBE but TRACK_LOADED=0 (n=%0d)", DRIVE_ID, flux_write_dbg_count);
-                flux_write_dbg_count <= flux_write_dbg_count + 1;
+                flux_write_dbg_count <= flux_write_dbg_count + 1'd1;
             end
 `endif
 
@@ -645,7 +640,7 @@ module flux_drive (
                     WRITE_BYTE_OUT <= BRAM_DATA & ~(8'd1 << write_shift_d1);
                 WRITE_WE_OUT <= 1'b1;
                 WRITE_ADDR_OUT <= write_addr_d1;  // Use latched address for write
-                write_count <= write_count + 1;
+                write_count <= write_count + 1'd1;
 `ifdef DEBUG_VERBOSE
                 if (write_count < 64)
                     $display("FLUX_WRITE[%0d]: #%0d pos=%0d addr=%04X(latched=%04X) bit=%0d shift=%0d(latched=%0d) bram_in=%02X bram_out=%02X",
@@ -664,7 +659,6 @@ module flux_drive (
     // 5.25" drives: 4-phase stepper (copied from apple_drive.v)
     // 3.5" drives: CA0=direction, CA1=step pulse (Sony mechanism)
 
-    reg prev_step;  // For 3.5" edge detection on CA1
     reg [3:0] prev_phases_525;  // 5.25" stepper: last PHASES value (debounce)
     reg [3:0] last_valid_phases; // last debounced non-zero PHASES (snap target)
     // 5.25" phase-state debounce: ~20 us at 14.318 MHz. Blips that must NOT
@@ -690,7 +684,6 @@ module flux_drive (
             prev_phases_525 <= 4'b0000;
             last_valid_phases <= 4'b0000;
             step_hold_cnt <= 14'd0;
-            prev_step <= 1'b0;
             step_direction_slot <= 2'b00;  // Default: toward higher tracks (matches MAME m_dir=0)
             prev_lstrb <= 1'b0;            // No strobe active initially
             sony_motor_on <= 1'b0;         // Default: motor off
@@ -1138,15 +1131,11 @@ module flux_drive (
             prev_write_mode <= 1'b0;
             write_strobe_steal <= 1'b0;
             FLUX_TRANSITION <= 1'b0;
-            prev_flux <= 1'b0;
             SD_TRACK_REQ <= 8'd0;
             SD_TRACK_STROBE <= 1'b0;
             current_track <= 8'd0;
-            track_valid <= 1'b0;
-            rotation_complete <= 1'b0;
             prev_motor_for_position <= 1'b0;
             prev_drive_ready <= 1'b0;
-            prev_is_flux_track <= 1'b0;
             prev_track_bit_count <= 32'd0;
             // Flux timing playback state
             flux_phase_accum <= 32'd0;
@@ -1173,7 +1162,6 @@ module flux_drive (
             // Default: no flux transition this cycle, no rotation complete
             FLUX_TRANSITION <= 1'b0;
             SD_TRACK_STROBE <= 1'b0;
-            rotation_complete <= 1'b0;
 
             // Advance LFSR every clock cycle for weak-bit randomization.
             // Free-running ensures different state each disk revolution.
@@ -1348,7 +1336,6 @@ module flux_drive (
             end
             prev_track_bit_count <= TRACK_BIT_COUNT;
 
-            prev_is_flux_track <= IS_FLUX_TRACK;
 
 `ifdef DEBUG_VERBOSE
             // Log first 16 bytes after a side transition to verify data
@@ -1435,7 +1422,6 @@ module flux_drive (
                         // Advance address for next read
                         if ({16'd0, flux_byte_addr} + 32'd1 >= FLUX_DATA_SIZE) begin
                             flux_byte_addr <= 16'd0;  // Wrap to start of track
-                            rotation_complete <= 1'b1;
                         end else begin
                             flux_byte_addr <= flux_byte_addr + 1'd1;
                         end
@@ -1692,7 +1678,6 @@ module flux_drive (
                             if (TRACK_BIT_COUNT > 0) begin
                                 if (effective_bit_position + 1 >= track_bit_count_17) begin
                                     bit_position <= 17'd0;
-                                    rotation_complete <= 1'b1;
                                     head_window <= 4'hF;
                                     zero_run_count <= 8'd0;
                                     weak_bit_active <= 1'b0;
@@ -1723,7 +1708,9 @@ module flux_drive (
             // (For now, just track the current track for debugging)
             if ({1'b0, head_phase[8:2]} != current_track) begin
                 current_track <= {1'b0, head_phase[8:2]};
+`ifdef DEBUG_VERBOSE
                 debug_read_count <= 5'd0;
+`endif
 `ifdef DEBUG_VERBOSE
                 $display("FLUX_DRIVE[%0d]: Head moved to track %0d", DRIVE_ID, head_phase[8:2]);
 `endif
@@ -1796,13 +1783,13 @@ module flux_drive (
                          DRIVE_ID, prev_motor_on, MOTOR_ON, DISK_MOUNTED, TRACK_LOADED);
             end
             prev_motor_on <= MOTOR_ON;
-            cycle_count_debug <= cycle_count_debug + 1;
+            cycle_count_debug <= cycle_count_debug + 1'd1;
 
             // Track rotating vs stopped cycles
             if (motor_spinning && TRACK_LOADED) begin
-                rotate_cycles <= rotate_cycles + 1;
+                rotate_cycles <= rotate_cycles + 1'd1;
             end else begin
-                stopped_cycles <= stopped_cycles + 1;
+                stopped_cycles <= stopped_cycles + 1'd1;
             end
 
             // Bitstream reconstruction: sample one bit per bit cell (bit_timer==bit_cell_cycles)
@@ -1840,7 +1827,7 @@ module flux_drive (
 
             // Log first flux transitions
             if (FLUX_TRANSITION) begin
-                flux_count_debug <= flux_count_debug + 1;
+                flux_count_debug <= flux_count_debug + 1'd1;
 `ifdef DEBUG_VERBOSE
                 if (flux_count_debug < 2000000 && head_phase == 0) begin
                     $display("FLUX_DRIVE[%0d]: FLUX #%0d at cycle=%0d bit_pos=%0d byte=%04h data=%02h bit=%0d",
@@ -1857,13 +1844,13 @@ module flux_drive (
                     $display("FLUX_OFFSET: Drive ready, tracking first flux transitions...");
                 end
                 if (dbg_ready_started && dbg_flux_count < 100) begin
-                    dbg_flux_count <= dbg_flux_count + 1;
+                    dbg_flux_count <= dbg_flux_count + 1'd1;
                     $display("FLUX_OFFSET: flux[%0d] at pos=%0d byte_addr=%0d bram_data=0x%02X bit=%0d cycle=%0d",
                              dbg_flux_count, bit_position, byte_index, BRAM_DATA, current_bit, cycle_count_debug);
                     // Track BRAM data at byte boundaries
                     if (bit_position[2:0] == 3'd0 && dbg_bram_idx < 16) begin
                         dbg_bram_history[dbg_bram_idx] <= BRAM_DATA;
-                        dbg_bram_idx <= dbg_bram_idx + 1;
+                        dbg_bram_idx <= dbg_bram_idx + 1'd1;
                         $display("FLUX_OFFSET: BRAM[%0d] at pos=%0d = 0x%02X",
                                  dbg_bram_idx, bit_position, BRAM_DATA);
                     end
